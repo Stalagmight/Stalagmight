@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -18,15 +18,15 @@ import {
  * The shots view renders a SpreadsheetGrid: rows are grid-row-{rowIndex}
  * (index, not shot id), cells grid-cell-{rowIndex}-{colKey}, and editing
  * opens the grid-cell-editor textarea. Frozen rows get the sg-row-frozen
- * class; the lock icon keeps its frozen-{sectionId}-{shotId} testid.
+ * class; the lock icon keeps its frozen-{lineId}-{shotId} testid.
  *
- * Strategy: After seeding sections, open the DataTable, then inject
+ * Strategy: After seeding lines, open the DataTable, then inject
  * frozenShots into the store so the DataTable re-renders with frozen state.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Frozen Test Section',
+    name: 'Frozen Test Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, comment: 'First shot' },
@@ -36,22 +36,22 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-/** Get section and shot IDs. */
+/** Get line and shot IDs. */
 async function getProjectIds(page: Page): Promise<{
-  sectionId: number;
+  lineId: number;
   shotIds: number[];
 }> {
   const ids = await page.evaluate(() => {
     const e2e = (window as any).__E2E_TEST__;
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
-    const section = state.project?.sections?.[0];
+    const line = state.project?.lines?.[0];
     return {
-      sectionId: section?.id ?? 0,
-      shotIds: (section?.shots ?? []).map((s: any) => s.id),
+      lineId: line?.id ?? 0,
+      shotIds: (line?.shots ?? []).map((s: any) => s.id),
     };
   });
-  if (!ids) throw new Error('Could not retrieve section/shot IDs');
+  if (!ids) throw new Error('Could not retrieve line/shot IDs');
   return ids;
 }
 
@@ -61,7 +61,7 @@ async function getProjectIds(page: Page): Promise<{
  */
 async function injectFrozenShots(
   page: Page,
-  frozenShots: Array<{ section_id: number; shot_index: number }>,
+  frozenShots: Array<{ line_id: number; shot_index: number }>,
 ): Promise<void> {
   await page.evaluate(
     (frozen) => {
@@ -79,34 +79,34 @@ async function injectFrozenShots(
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // Wait for grid rows to render (auto-selects first section)
+  // Wait for grid rows to render (auto-selects first line)
   await page.waitForSelector('[data-testid^="grid-row-"]', { timeout: 5000 });
 }
 
 test.describe('Frozen Shots', () => {
-  let sectionId: number;
+  let lineId: number;
   let shotIds: number[];
 
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Frozen Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
 
     const ids = await getProjectIds(page);
-    sectionId = ids.sectionId;
+    lineId = ids.lineId;
     shotIds = ids.shotIds;
 
     // Open DataTable first so it subscribes to store
     await openDataTable(page);
 
     // Then inject frozen shots - DataTable will re-render
-    await injectFrozenShots(page, [{ section_id: sectionId, shot_index: 0 }]);
+    await injectFrozenShots(page, [{ line_id: lineId, shot_index: 0 }]);
   });
 
   test('lock icon visible for frozen shot in warnings column', async ({ page }) => {
-    const frozenIndicator = page.getByTestId(`frozen-${sectionId}-${shotIds[0]}`);
+    const frozenIndicator = page.getByTestId(`frozen-${lineId}-${shotIds[0]}`);
     await expect(frozenIndicator).toBeVisible();
   });
 
@@ -123,7 +123,7 @@ test.describe('Frozen Shots', () => {
 
   test('non-frozen shots do not show lock icon', async ({ page }) => {
     // Shot at index 1 is not frozen - should not have a frozen-* testid
-    const frozenIndicator = page.getByTestId(`frozen-${sectionId}-${shotIds[1]}`);
+    const frozenIndicator = page.getByTestId(`frozen-${lineId}-${shotIds[1]}`);
     await expect(frozenIndicator).toHaveCount(0);
   });
 
@@ -154,22 +154,22 @@ test.describe('Frozen Shots', () => {
     await expect(editor).toBeFocused();
   });
 
-  test('multiple frozen shots in same section all display lock icons', async ({ page }) => {
+  test('multiple frozen shots in same line all display lock icons', async ({ page }) => {
     // Freeze both shot 0 and shot 2
     await injectFrozenShots(page, [
-      { section_id: sectionId, shot_index: 0 },
-      { section_id: sectionId, shot_index: 2 },
+      { line_id: lineId, shot_index: 0 },
+      { line_id: lineId, shot_index: 2 },
     ]);
 
-    const frozen0 = page.getByTestId(`frozen-${sectionId}-${shotIds[0]}`);
-    const frozen2 = page.getByTestId(`frozen-${sectionId}-${shotIds[2]}`);
+    const frozen0 = page.getByTestId(`frozen-${lineId}-${shotIds[0]}`);
+    const frozen2 = page.getByTestId(`frozen-${lineId}-${shotIds[2]}`);
 
     await expect(frozen0).toBeVisible();
     await expect(frozen2).toBeVisible();
   });
 
   test('frozen shot tooltip contains frozen text', async ({ page }) => {
-    const frozenIndicator = page.getByTestId(`frozen-${sectionId}-${shotIds[0]}`);
+    const frozenIndicator = page.getByTestId(`frozen-${lineId}-${shotIds[0]}`);
     const title = await frozenIndicator.getAttribute('title');
     // The tooltip should contain the i18n frozen message: "Geometry locked - part of adjusted network"
     expect(title).toContain('locked');

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
+use crate::models::{GpsCoordinates, Project, LineId, ShotKind, StationRef};
 use crate::persistence::Database;
 
 /// Minimum cosine value to avoid division by near-zero at extreme latitudes.
@@ -27,8 +27,8 @@ pub struct GeometryShot {
     /// references differently, so the full kind crosses the IPC boundary, not
     /// just a virtual-vs-not bool.
     pub kind: ShotKind,
-    /// Section ID this shot belongs to (for coloring/filtering)
-    pub section_id: SectionId,
+    /// Line ID this shot belongs to (for coloring/filtering)
+    pub line_id: LineId,
 }
 
 /// Survey geometry response containing GPS-transformed shot data.
@@ -120,7 +120,7 @@ fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, Surv
 
     // Assign IDs to any legacy closures with id=0 (in-memory only, read-only DB)
     project.assign_closure_ids();
-    // Section offsets are derived: re-solve them so the GlobalView preview renders
+    // Line offsets are derived: re-solve them so the GlobalView preview renders
     // a drifted file the same way the workspace will after it redrives on open
     // (otherwise the two views can disagree). In-memory only - the DB is read-only.
     project.redrive_offsets_after_load();
@@ -177,11 +177,11 @@ fn get_survey_geometry_for_project(
 
     let mut shots = Vec::new();
 
-    // Iterate through sections and shots
-    for section in &project.sections {
-        for (shot_idx, shot) in section.shots.iter().enumerate() {
-            let from_ref = StationRef::new(section.id, shot_idx as u32);
-            let to_ref = StationRef::new(section.id, (shot_idx + 1) as u32);
+    // Iterate through lines and shots
+    for line in &project.lines {
+        for (shot_idx, shot) in line.shots.iter().enumerate() {
+            let from_ref = StationRef::new(line.id, shot_idx as u32);
+            let to_ref = StationRef::new(line.id, (shot_idx + 1) as u32);
 
             let from_station = station_map
                 .get(&from_ref)
@@ -208,7 +208,7 @@ fn get_survey_geometry_for_project(
                 from: [from_gps.0, from_gps.1],
                 to: [to_gps.0, to_gps.1],
                 kind: shot.kind,
-                section_id: section.id,
+                line_id: line.id,
             });
         }
     }
@@ -221,7 +221,7 @@ fn get_survey_geometry_for_project(
 mod tests {
     use super::*;
     use crate::models::gps_to_local;
-    use crate::models::{Project, SectionData, ShotData, StationRef, ZeroDatum};
+    use crate::models::{Project, LineData, ShotData, StationRef, ZeroDatum};
     use crate::persistence::Database;
     use tempfile::TempDir;
 
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_get_survey_geometry_requires_zero_datum() {
         let mut project = Project::new("No Datum".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 0.0,
@@ -385,8 +385,8 @@ mod tests {
     #[test]
     fn test_get_survey_geometry_errors_for_missing_datum_station() {
         let mut project = Project::new("Missing Station".to_string(), None);
-        let section_id = project
-            .add_section(SectionData {
+        let line_id = project
+            .add_line(LineData {
                 shots: vec![ShotData {
                     azimuth_in: 0.0,
                     azimuth_out: 0.0,
@@ -400,7 +400,7 @@ mod tests {
             .id;
 
         project.zero_datums.push(ZeroDatum {
-            station_ref: StationRef::new(section_id, 3).into(),
+            station_ref: StationRef::new(line_id, 3).into(),
             gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
             accuracy_m: None,
             entrance: None,
@@ -423,8 +423,8 @@ mod tests {
             kind: ShotKind::Jump,
             ..Default::default()
         };
-        let section_id = project
-            .add_section(SectionData {
+        let line_id = project
+            .add_line(LineData {
                 shots: vec![shot.clone()],
                 ..Default::default()
             })
@@ -432,7 +432,7 @@ mod tests {
 
         let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
 
         let geometry = get_survey_geometry_for_project(&project).unwrap();
@@ -441,7 +441,7 @@ mod tests {
 
         let geom_shot = &geometry.shots[0];
         assert_eq!(geom_shot.kind, ShotKind::Jump);
-        assert_eq!(geom_shot.section_id, section_id);
+        assert_eq!(geom_shot.line_id, line_id);
         assert!((geom_shot.from[0]).abs() < 1e-9);
         assert!((geom_shot.from[1]).abs() < 1e-9);
 
@@ -495,7 +495,7 @@ mod tests {
         let path = temp_dir.path().join("no-datum.stalx");
 
         let mut project = Project::new("No Datum".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 0.0,

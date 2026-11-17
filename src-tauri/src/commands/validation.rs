@@ -2,7 +2,7 @@ use chrono::Utc;
 use tauri::State;
 
 use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
-use crate::models::{warning_is_ignorable, SectionId, ShotId};
+use crate::models::{warning_is_ignorable, LineId, ShotId};
 use crate::persistence::ResolvedWarning;
 
 // Re-export ProjectWarning from models for backward compatibility
@@ -50,17 +50,17 @@ pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning>
 #[tauri::command]
 pub fn resolve_warning(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
-    resolve_warning_impl(state.inner(), section_id, shot_id, warning_code, comment)
+    resolve_warning_impl(state.inner(), line_id, shot_id, warning_code, comment)
 }
 
 pub(crate) fn resolve_warning_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     warning_code: String,
     comment: Option<String>,
@@ -82,12 +82,12 @@ pub(crate) fn resolve_warning_impl(
 
     // Policy (issue #57): UUID-keyed suppression is the only supported model for
     // new ignores. shot_uuid_for returns None only when no project is open, the
-    // lock is poisoned, or the (section_id, shot_id) shot does not exist - in
+    // lock is poisoned, or the (line_id, shot_id) shot does not exist - in
     // every case we cannot bind a stable identity, so refuse rather than write a
     // position-keyed row that could later suppress an unrelated shot reusing the id.
-    let Some(shot_uuid) = state.shot_uuid_for(section_id, shot_id) else {
+    let Some(shot_uuid) = state.shot_uuid_for(line_id, shot_id) else {
         tracing::warn!(
-            section_id,
+            line_id,
             shot_id,
             warning_code = %warning_code,
             purpose = "reject ignore without stable shot identity",
@@ -96,7 +96,7 @@ pub(crate) fn resolve_warning_impl(
         return Err("Could not ignore this warning: the shot no longer exists.".to_string());
     };
     tracing::info!(
-        section_id = section_id,
+        line_id = line_id,
         shot_id = shot_id,
         warning_code = %warning_code,
         purpose = "acknowledge validation warning",
@@ -109,17 +109,17 @@ pub(crate) fn resolve_warning_impl(
     // Fall back to a legacy position-keyed ignore for such a shot - it survives via
     // the position fallback and the load-time backfill upgrades it once the UUID is
     // persisted (issue #57 / Codex).
-    // Section-scoped: a FILE saved before shot UUIDs were project-wide unique can hold one
-    // id in two sections (the load renames one copy), so an unscoped check would call a UUID
-    // persisted only in ANOTHER section durable and key the ignore by it anyway. A renamed
+    // Line-scoped: a FILE saved before shot UUIDs were project-wide unique can hold one
+    // id in two lines (the load renames one copy), so an unscoped check would call a UUID
+    // persisted only in ANOTHER line durable and key the ignore by it anyway. A renamed
     // shot's derived id counts as persisted: every open derives it again.
-    let shot_uuid = if state.shot_uuid_is_persisted(section_id, &shot_uuid) {
+    let shot_uuid = if state.shot_uuid_is_persisted(line_id, &shot_uuid) {
         Some(shot_uuid)
     } else {
         None
     };
     let warning = ResolvedWarning {
-        section_id,
+        line_id,
         shot_id,
         warning_code,
         resolved_at: Utc::now(),
@@ -131,7 +131,7 @@ pub(crate) fn resolve_warning_impl(
         // project opened without the lock, not a persistence failure worth an error log.
         if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
             tracing::error!(
-                section_id = warning.section_id,
+                line_id = warning.line_id,
                 shot_id = warning.shot_id,
                 warning_code = %warning.warning_code,
                 purpose = "acknowledge validation warning",
@@ -147,35 +147,35 @@ pub(crate) fn resolve_warning_impl(
 #[tauri::command]
 pub fn unresolve_warning(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<(), String> {
-    unresolve_warning_impl(state.inner(), section_id, shot_id, warning_code)
+    unresolve_warning_impl(state.inner(), line_id, shot_id, warning_code)
 }
 
 pub(crate) fn unresolve_warning_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<(), String> {
-    let shot_uuid = state.shot_uuid_for(section_id, shot_id);
+    let shot_uuid = state.shot_uuid_for(line_id, shot_id);
     tracing::info!(
-        section_id = section_id,
+        line_id = line_id,
         shot_id = shot_id,
         warning_code = %warning_code,
         purpose = "reopen validation warning",
         "Unresolving warning"
     );
     state
-        .delete_resolved_warning_gated(section_id, shot_id, &warning_code, shot_uuid.as_deref())
+        .delete_resolved_warning_gated(line_id, shot_id, &warning_code, shot_uuid.as_deref())
         .map_err(|e| {
             // A read-only rejection (EDIT_DISABLED) is expected control flow, not a
             // persistence failure worth an error log.
             if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
                 tracing::error!(
-                    section_id = section_id,
+                    line_id = line_id,
                     shot_id = shot_id,
                     warning_code = %warning_code,
                     purpose = "reopen validation warning",

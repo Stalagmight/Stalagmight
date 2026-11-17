@@ -1,5 +1,5 @@
 use crate::core::{AddedContent, Command, UndoData};
-use crate::models::{ClosureStrategy, Project, SectionId, SectionUpdates, ShotId, ShotUpdates};
+use crate::models::{ClosureStrategy, Project, LineId, LineUpdates, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -16,18 +16,18 @@ impl AppState {
 
         match cmd {
             // For create commands, we'll fill in the ID after execution
-            Command::CreateSection { .. } => UndoData::None, // Will be finalized after execution
+            Command::CreateLine { .. } => UndoData::None, // Will be finalized after execution
             // A STUB, filled in by `finalize_undo_data` once the shot exists -
             // the same shape `ProjectSnapshotPair { after: String::new() }` uses
             // below. It is a stub rather than `UndoData::None` because ONE of its
-            // fields can only be read BEFORE the insert: the `section_offsets` the
+            // fields can only be read BEFORE the insert: the `line_offsets` the
             // insert's cascade can reach, as they stood, which the undo has to
             // hand back rather than let the removal re-derive (#413, finding 27's
             // second arm). Every other field is placeholder and is overwritten; if the
             // finalize cannot find the created shot it yields `UndoData::None`,
             // exactly as this arm used to.
-            Command::CreateShot { section_id, .. } => UndoData::CreatedShotSnapshot {
-                section_id: *section_id,
+            Command::CreateShot { line_id, .. } => UndoData::CreatedShotSnapshot {
+                line_id: *line_id,
                 shot_id: 0,
                 shot_data: crate::models::ShotData::default(),
                 position: 0,
@@ -37,23 +37,23 @@ impl AppState {
                 after_shot_uuid: None,
                 before_shot_uuid: None,
                 uuid: None,
-                previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
-                // Read BEFORE the insert: a first shot takes the section's
+                previous_offsets: project.capture_rigid_connected_line_offsets(*line_id),
+                // Read BEFORE the insert: a first shot takes the line's
                 // legacy pair (`AppState::create_shot`), and only the stub can
                 // still see it.
                 consumed_legacy: project
-                    .get_section(*section_id)
+                    .get_line(*line_id)
                     .filter(|s| s.shots.is_empty())
                     .filter(|s| s.legacy_surveyor.is_some() || s.legacy_date.is_some())
                     .map(|s| (s.legacy_surveyor.clone(), s.legacy_date)),
             },
 
-            // For DeleteSection, capture full project snapshot (before/after pair)
-            // because cleanup_section_references removes merges, closures, offsets, and
-            // zero datums - a SectionSnapshot alone cannot restore those.
-            // Guard: only serialize if section exists (avoids overhead for doomed commands).
-            Command::DeleteSection { section_id } => {
-                if project.get_section(*section_id).is_some() {
+            // For DeleteLine, capture full project snapshot (before/after pair)
+            // because cleanup_line_references removes merges, closures, offsets, and
+            // zero datums - a LineSnapshot alone cannot restore those.
+            // Guard: only serialize if line exists (avoids overhead for doomed commands).
+            Command::DeleteLine { line_id } => {
+                if project.get_line(*line_id).is_some() {
                     match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
@@ -66,21 +66,21 @@ impl AppState {
                 }
             }
 
-            // For ReverseSection, capture full project snapshot (before/after pair).
+            // For ReverseLine, capture full project snapshot (before/after pair).
             // Re-running the reverse would be a valid inverse in exact arithmetic,
             // but the snapshot keeps undo bit-exact (the f64 `(az + 180) % 360`
             // round trip is not - pinned by
             // `reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`)
             // and spares redo from having to reproduce the anchor mirroring, the
-            // section-offset compensation.
-            // A section with no shots is a single station and reverses to itself,
+            // line-offset compensation.
+            // A line with no shots is a single station and reverses to itself,
             // so capturing it would push two identical full-project snapshots and
             // mark the project dirty for an operation that changed nothing. The
             // resulting `None` never reaches the stack - `execute()` drops an
             // unundoable entry rather than wedging every older one under it.
-            Command::ReverseSection { section_id, .. } => {
+            Command::ReverseLine { line_id, .. } => {
                 if project
-                    .get_section(*section_id)
+                    .get_line(*line_id)
                     .is_some_and(|s| !s.shots.is_empty())
                 {
                     match AppState::serialize_project_snapshot(project) {
@@ -99,11 +99,11 @@ impl AppState {
             // because remove_shot shifts station refs - a ShotSnapshot alone cannot
             // restore the original station references.
             Command::DeleteShot {
-                section_id,
+                line_id,
                 shot_id,
             } => {
-                if let Some(section) = project.get_section(*section_id) {
-                    if section.shots.iter().any(|s| s.id == *shot_id) {
+                if let Some(line) = project.get_line(*line_id) {
+                    if line.shots.iter().any(|s| s.id == *shot_id) {
                         match AppState::serialize_project_snapshot(project) {
                             Ok(before) => UndoData::ProjectSnapshotPair {
                                 before,
@@ -121,12 +121,12 @@ impl AppState {
 
             // For update commands, capture previous values
             Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates,
             } => {
-                if let Some(section) = project.get_section(*section_id) {
-                    if let Some(shot) = section.get_shot(*shot_id) {
+                if let Some(line) = project.get_line(*line_id) {
+                    if let Some(shot) = line.get_shot(*shot_id) {
                         // Capture only the fields that are being updated
                         let prev_updates = ShotUpdates {
                             azimuth_in: updates.azimuth_in.map(|_| shot.azimuth_in),
@@ -148,7 +148,7 @@ impl AppState {
 
                         if let Ok(json) = serde_json::to_string(&prev_updates) {
                             UndoData::PreviousValues {
-                                section_id: *section_id,
+                                line_id: *line_id,
                                 shot_id: Some(*shot_id),
                                 // The address that survives a save: the id
                                 // beside it is renumbered on load (#413).
@@ -162,7 +162,7 @@ impl AppState {
                                 // mirrors which fields `updates` sets, so the undo
                                 // realigns exactly when the forward command did.
                                 previous_offsets: if updates.touches_geometry() {
-                                    project.capture_rigid_connected_section_offsets(*section_id)
+                                    project.capture_rigid_connected_line_offsets(*line_id)
                                 } else {
                                     std::collections::HashMap::new()
                                 },
@@ -179,37 +179,37 @@ impl AppState {
             }
 
             // The legacy surveyor/date land on every shot, so the undo has to
-            // record each shot's credit rather than one section value.
-            Command::UpdateSectionMetadata { updates, .. }
+            // record each shot's credit rather than one line value.
+            Command::UpdateLineMetadata { updates, .. }
                 if updates.surveyor.is_some() || updates.date.is_some() =>
             {
                 Self::credit_undo_stub(project, cmd)
             }
             Command::EditShotCredit { .. } => Self::credit_undo_stub(project, cmd),
 
-            Command::UpdateSectionMetadata {
-                section_id,
+            Command::UpdateLineMetadata {
+                line_id,
                 updates,
             } => {
-                if let Some(section) = project.get_section(*section_id) {
-                    // Capture previous section metadata
+                if let Some(line) = project.get_line(*line_id) {
+                    // Capture previous line metadata
                     // surveyor/date are unset here: the arm above takes them.
-                    let prev_updates = SectionUpdates {
-                        name: updates.name.as_ref().map(|_| section.name.clone()),
+                    let prev_updates = LineUpdates {
+                        name: updates.name.as_ref().map(|_| line.name.clone()),
                         surveyor: None,
                         date: None,
-                        color: updates.color.as_ref().map(|_| section.color.clone()),
-                        direction: updates.direction.map(|_| section.direction),
-                        quality: updates.quality.map(|_| section.quality),
+                        color: updates.color.as_ref().map(|_| line.color.clone()),
+                        direction: updates.direction.map(|_| line.direction),
+                        quality: updates.quality.map(|_| line.quality),
                     };
 
                     if let Ok(json) = serde_json::to_string(&prev_updates) {
                         UndoData::PreviousValues {
-                            section_id: *section_id,
+                            line_id: *line_id,
                             shot_id: None,
                             shot_uuid: None,
                             values_json: json,
-                            // `update_section` writes metadata and no geometry, so
+                            // `update_line` writes metadata and no geometry, so
                             // its undo re-derives no offsets to restore.
                             previous_offsets: std::collections::HashMap::new(),
                         }
@@ -239,12 +239,12 @@ impl AppState {
             // save. Persisted `InverseCommand(SetShotKind)` entries still
             // restore through their own arm in `undo_inner`.
             Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 ..
             } => project
-                .get_section(*section_id)
-                .and_then(|section| section.get_shot(*shot_id))
+                .get_line(*line_id)
+                .and_then(|line| line.get_shot(*shot_id))
                 .and_then(|shot| {
                     let prev_updates = ShotUpdates {
                         kind: Some(shot.kind),
@@ -253,7 +253,7 @@ impl AppState {
                     serde_json::to_string(&prev_updates)
                         .ok()
                         .map(|json| UndoData::PreviousValues {
-                            section_id: *section_id,
+                            line_id: *line_id,
                             shot_id: Some(*shot_id),
                             shot_uuid: shot.uuid.clone(),
                             values_json: json,
@@ -265,21 +265,21 @@ impl AppState {
                 })
                 .unwrap_or(UndoData::None),
 
-            // Merge can shift sections BEYOND the two merge groups: after aligning
-            // the groups, cascade_connection_offsets re-anchors any section reachable
-            // through an ALIGNED loop closure (cascade phase 2), and such a section is
+            // Merge can shift lines BEYOND the two merge groups: after aligning
+            // the groups, cascade_connection_offsets re-anchors any line reachable
+            // through an ALIGNED loop closure (cascade phase 2), and such a line is
             // in neither merge group. A lightweight MergeInfo only restores the two
-            // groups' offsets, so that external section stays drifted on undo - and
+            // groups' offsets, so that external line stays drifted on undo - and
             // realign_merges() cannot self-heal it (it checks merge alignment only,
             // never closures). So capture a full before/after pair (like
-            // Delete/Unmerge); undo then restores EVERY section_offset the cascade
+            // Delete/Unmerge); undo then restores EVERY line_offset the cascade
             // could have touched.
             Command::MergeStations {
                 station_a,
                 station_b,
             } => {
-                if project.get_section(station_a.section_id).is_some()
-                    && project.get_section(station_b.section_id).is_some()
+                if project.get_line(station_a.line_id).is_some()
+                    && project.get_line(station_b.line_id).is_some()
                 {
                     match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
@@ -295,13 +295,13 @@ impl AppState {
 
             // For unmerge, we need to know which stations to re-merge
             // Also capture closures that will be removed during unmerge
-            // Unmerge removes a merge edge, which can strand a section so its sole
+            // Unmerge removes a merge edge, which can strand a line so its sole
             // remaining bridge is a loop closure - execute() then converts that
             // closure into a merge and re-derives offsets (#8). A lightweight
             // UnmergeInfo can only re-create the removed merge; it cannot reverse
             // that conversion (the closure would stay a merge, forming a cycle) or
             // restore the pre-unmerge offsets. So capture a full before/after pair
-            // (matching DeleteShot/DeleteSection, which trigger the same side
+            // (matching DeleteShot/DeleteLine, which trigger the same side
             // effect) - undo then restores the merge AND the converted closure AND
             // the original positions atomically.
             Command::UnmergeStations { station_ref } => {
@@ -383,7 +383,7 @@ impl AppState {
                 }
             }
 
-            // For zero datum operations - capture GPS and section offsets
+            // For zero datum operations - capture GPS and line offsets
             Command::SetZeroDatum { station_ref, .. } => {
                 // Find if there was a previous datum for this station, and WHERE
                 // in the list it sat (#413, finding 17).
@@ -393,7 +393,7 @@ impl AppState {
                     .enumerate()
                     .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
 
-                // Capture EVERY section's offset, not the datum's merge group.
+                // Capture EVERY line's offset, not the datum's merge group.
                 // Adding the first datum makes this station the georeference
                 // origin, and undoing that add REMOVES it again - an inverse that
                 // performs a frame change, and the frame is the one thing whose
@@ -405,7 +405,7 @@ impl AppState {
                 // eliminate. Whole-project here is affordable for the same reason
                 // it is not on `UpdateShot`: setting a GPS anchor is a rare,
                 // deliberate act.
-                let previous_offsets = project.capture_all_section_offsets();
+                let previous_offsets = project.capture_all_line_offsets();
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
@@ -472,43 +472,43 @@ impl AppState {
             }
 
             // Move commands use inverse commands
-            // MoveSection and MoveSegment both move the whole rigid-connected group
-            // (MoveSection delegates to move_segment), so both capture every affected
-            // section and its previous offset at execution time - undo/redo stays
+            // MoveLine and MoveSegment both move the whole rigid-connected group
+            // (MoveLine delegates to move_segment), so both capture every affected
+            // line and its previous offset at execution time - undo/redo stays
             // correct even if the connectivity graph changes later. Filter to existing
-            // sections to avoid stale merges/closures referencing deleted sections
+            // lines to avoid stale merges/closures referencing deleted lines
             // (matches move_segment()'s own filtering).
-            Command::MoveSection { section_id, offset }
-            | Command::MoveSegment { section_id, offset } => {
-                let existing: std::collections::HashSet<SectionId> =
-                    project.sections.iter().map(|s| s.id).collect();
-                let connected: Vec<SectionId> = project
-                    .get_rigid_connected_section_ids(*section_id)
+            Command::MoveLine { line_id, offset }
+            | Command::MoveSegment { line_id, offset } => {
+                let existing: std::collections::HashSet<LineId> =
+                    project.lines.iter().map(|s| s.id).collect();
+                let connected: Vec<LineId> = project
+                    .get_rigid_connected_line_ids(*line_id)
                     .into_iter()
                     .filter(|id| existing.contains(id))
                     .collect();
                 let mut previous_offsets = std::collections::HashMap::new();
                 for sid in &connected {
-                    previous_offsets.insert(*sid, project.section_offsets.get(sid).copied());
+                    previous_offsets.insert(*sid, project.line_offsets.get(sid).copied());
                 }
                 UndoData::SegmentMoveInfo {
-                    affected_sections: connected,
+                    affected_lines: connected,
                     previous_offsets,
                     offset: (offset.x, offset.y),
                 }
             }
 
             // MoveStation rewrites the raw geometry of the two adjacent shots and can,
-            // through reconcile, re-anchor sections connected by merges/aligned closures.
+            // through reconcile, re-anchor lines connected by merges/aligned closures.
             // A lightweight StationMoveInfo captured only azimuth/length/depth of two
-            // shots and one section offset - it dropped pitch/lrud/temperature and any
-            // re-cascaded section. Capture a full before/after pair (like Merge/Unmerge)
+            // shots and one line offset - it dropped pitch/lrud/temperature and any
+            // re-cascaded line. Capture a full before/after pair (like Merge/Unmerge)
             // so undo restores every field and every offset the move could have touched.
             Command::MoveStation {
                 station_ref,
                 offset: _,
             } => {
-                if project.get_section(station_ref.section_id).is_some() {
+                if project.get_line(station_ref.line_id).is_some() {
                     match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
@@ -554,21 +554,21 @@ impl AppState {
         };
 
         match cmd {
-            Command::CreateSection { .. } => {
-                // Capture full snapshot of the just-created section (the last one)
+            Command::CreateLine { .. } => {
+                // Capture full snapshot of the just-created line (the last one)
                 // so that redo can restore it with its original ID instead of
-                // re-executing CreateSection (which would assign a new ID).
-                if let Some(section) = project.sections.last() {
-                    UndoData::CreatedSectionSnapshot {
-                        section_id: section.id,
-                        section_data: section.to_section_data(),
-                        // `SectionData` carries no uuid, no reverse parity and
-                        // no gauge pair, so redo would rebuild the section with
+                // re-executing CreateLine (which would assign a new ID).
+                if let Some(line) = project.lines.last() {
+                    UndoData::CreatedLineSnapshot {
+                        line_id: line.id,
+                        line_data: line.to_line_data(),
+                        // `LineData` carries no uuid, no reverse parity and
+                        // no gauge pair, so redo would rebuild the line with
                         // a fresh identity (#413, finding 1). The undo refreshes
-                        // this immediately before it deletes the section, which
+                        // this immediately before it deletes the line, which
                         // is what carries a gauge pair captured by a save that
                         // happened after this push.
-                        identity: crate::models::SectionIdentity::of(section),
+                        identity: crate::models::LineIdentity::of(line),
                     }
                 } else {
                     undo_data
@@ -576,7 +576,7 @@ impl AppState {
             }
 
             Command::CreateShot {
-                section_id,
+                line_id,
                 after_shot_id,
                 before_shot_id,
                 ..
@@ -595,12 +595,12 @@ impl AppState {
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
                 // (which would assign a new ID).
-                if let Some(section) = project.get_section(*section_id) {
+                if let Some(line) = project.get_line(*line_id) {
                     // The just-created shot has ID = next_shot_id - 1
-                    let shot_id = section.next_shot_id - 1;
+                    let shot_id = line.next_shot_id - 1;
                     // Find the shot by ID to get its actual position (not last() which
-                    // would be wrong for mid-section inserts via after_shot_id)
-                    if let Some((position, shot)) = section
+                    // would be wrong for mid-line inserts via after_shot_id)
+                    if let Some((position, shot)) = line
                         .shots
                         .iter()
                         .enumerate()
@@ -618,8 +618,8 @@ impl AppState {
                             // existing ones in the same way. We use position + 1 so that on redo,
                             // refs at station >= position+1 get shifted up (matching insert_after
                             // semantics of shifting >= pos+2, but pos here is already post-insert).
-                            // Actually, for append (end of section), no refs need shifting since
-                            // there are no stations beyond it. Using section.shots.len() as u32
+                            // Actually, for append (end of line), no refs need shifting since
+                            // there are no stations beyond it. Using line.shots.len() as u32
                             // ensures no refs match.
                             (position + 1) as u32
                         };
@@ -629,11 +629,11 @@ impl AppState {
                         // redo puts the shot back (#413, finding 16).
                         let anchor_uuid = |anchor: Option<ShotId>| {
                             anchor
-                                .and_then(|id| section.get_shot(id))
+                                .and_then(|id| line.get_shot(id))
                                 .and_then(|anchor_shot| anchor_shot.uuid.clone())
                         };
                         UndoData::CreatedShotSnapshot {
-                            section_id: *section_id,
+                            line_id: *line_id,
                             shot_id,
                             shot_data: shot.to_shot_data(),
                             position,
@@ -694,14 +694,14 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation/
+            // DeleteLine/DeleteShot/ReverseLine/Merge/Unmerge/MoveStation/
             // RemoveZeroDatum: fill in the "after" snapshot now that the mutation
             // (and any cascade re-anchoring, orphan-closure conversion, and offset
             // reconcile triggered in execute()) is done. `RemoveZeroDatum` is here
             // FOR the conversion - it is the whole reason it records a pair.
-            Command::DeleteSection { .. }
+            Command::DeleteLine { .. }
             | Command::DeleteShot { .. }
-            | Command::ReverseSection { .. }
+            | Command::ReverseLine { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
@@ -718,7 +718,7 @@ impl AppState {
             }
 
             // Read each shot's credit back after the edit, keep what changed.
-            Command::EditShotCredit { .. } | Command::UpdateSectionMetadata { .. } => {
+            Command::EditShotCredit { .. } | Command::UpdateLineMetadata { .. } => {
                 Self::finalize_credit_undo(project, undo_data)
             }
 
@@ -747,15 +747,15 @@ impl AppState {
         match undo_data {
             UndoData::AddedProjectContent(stub) => {
                 let stub = *stub;
-                let first_new = stub.baseline.as_ref().map(|b| b.next_section_id);
+                let first_new = stub.baseline.as_ref().map(|b| b.next_line_id);
                 let ignores = first_new.map_or_else(Vec::new, |first| {
-                    let new: std::collections::HashSet<SectionId> = project
-                        .sections
+                    let new: std::collections::HashSet<LineId> = project
+                        .lines
                         .iter()
                         .map(|s| s.id)
                         .filter(|id| *id >= first)
                         .collect();
-                    self.ignores_on_sections(&new)
+                    self.ignores_on_lines(&new)
                 });
                 stub.finalize(project, ignores)
                     .map_or(UndoData::None, |content| {

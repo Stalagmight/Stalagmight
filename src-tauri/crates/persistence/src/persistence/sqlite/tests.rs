@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 /// A pre-v2 `.stalx` must keep `reverse_parity` through the FK rebuild.
 ///
-/// `migrate_schema` conditionally ADDs columns to `sections`, and for `user_version < 2` the FK
+/// `migrate_schema` conditionally ADDs columns to `lines`, and for `user_version < 2` the FK
 /// rebuild then recreates that table from a fixed DDL and copies the rows across. A column
 /// missing from either half is silently dropped, and the file is stamped current afterwards, so
 /// no later open re-adds it. The damage does not show up on load - the read path falls back to a
@@ -17,8 +17,8 @@ use tempfile::TempDir;
 /// The insert below is the shape `save_project` uses. It is exercised directly rather than
 /// through `save_project` because a real `save_project` on a pre-v2 file currently fails for an
 /// UNRELATED, pre-existing reason: `init_schema` runs before the migration and creates tables
-/// whose foreign keys reference `sections` (`station_comments` among them), the rebuild's rename
-/// rewrites those references to `sections_old`, and the rebuild does not recreate every one of
+/// whose foreign keys reference `lines` (`station_comments` among them), the rebuild's rename
+/// rewrites those references to `lines_old`, and the rebuild does not recreate every one of
 /// them - so the dangling reference outlives the drop. That is master's bug, not this branch's,
 /// and it would mask this assertion rather than sharpen it.
 #[test]
@@ -26,7 +26,7 @@ fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("legacy.stalx");
 
-    // A v1 file: `sections` without any of the columns later migrations add, plus the row we
+    // A v1 file: `lines` without any of the columns later migrations add, plus the row we
     // expect to survive the rebuild.
     {
         let conn = Connection::open(&path).unwrap();
@@ -491,16 +491,16 @@ fn a_pre_v2_file_is_stamped_so_the_fk_rebuild_runs_once() {
     );
 }
 
-/// The v14 azimuth migration must leave `section_offsets` exactly as it found them.
+/// The v14 azimuth migration must leave `line_offsets` exactly as it found them.
 ///
 /// An offset is an accumulated translation from past head insert/remove edits, not a function
 /// of the current shots, so one banked under the old antipodal bearing cannot be recomputed -
-/// only replaying the edit history would do it. Zeroing them instead would move every section
+/// only replaying the edit history would do it. Zeroing them instead would move every line
 /// that has one, including the overwhelming majority whose azimuths were always in range. The
 /// decision is to correct the readings and leave the translation; this pins it so a later
 /// "tidy-up" cannot quietly start rewriting placements.
 #[test]
-fn migration_v14_leaves_section_offsets_untouched() {
+fn migration_v14_leaves_line_offsets_untouched() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("v13.stalx");
 
@@ -704,7 +704,7 @@ fn validation_and_surface_elevation_survive_the_same_save() {
 #[test]
 fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
     // The legacy positional UNIQUE must not let one shot's ignore delete another
-    // shot's UUID-keyed ignore sharing the (section, shot_id) slot - which can
+    // shot's UUID-keyed ignore sharing the (line, shot_id) slot - which can
     // happen transiently when in-memory ids diverge from saved positions after a
     // save (issue #57 / Codex). The conditional upsert preserves the existing row
     // and reports the collision rather than silently dropping either ignore.
@@ -716,7 +716,7 @@ fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
         )
         .unwrap();
     let mk = |uuid: &str| ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 5,
         warning_code: "SHORT_SHOT".to_string(),
         resolved_at: Utc::now(),
@@ -740,7 +740,7 @@ fn bulk_upsert_keeps_uuid_row_over_colliding_legacy_null_row() {
     // UUID row at the same position; the UUID row must win regardless of insert
     // order, never downgrading the survivor to position-keying (issue #57 / Codex).
     let uuid_row = ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 7,
         warning_code: "SHORT_SHOT".to_string(),
         resolved_at: Utc::now(),
@@ -811,25 +811,25 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
     assert!(!db.holds_shots_without_uuid().unwrap(), "no shots at all");
 }
 
-/// The check is SECTION-SCOPED, because a file saved before shot UUIDs were project-wide
-/// unique can hold the same shot UUID in two sections (the load renames one copy).
+/// The check is LINE-SCOPED, because a file saved before shot UUIDs were project-wide
+/// unique can hold the same shot UUID in two lines (the load renames one copy).
 ///
-/// Unscoped, the query answers "persisted" for section 1 because section 0's copy is on disk,
-/// and the caller then keys an ignore by a UUID that is still in-memory-only for the section it
+/// Unscoped, the query answers "persisted" for line 1 because line 0's copy is on disk,
+/// and the caller then keys an ignore by a UUID that is still in-memory-only for the line it
 /// belongs to. The next open mints a different one and the suppression is orphaned - exactly
 /// what this guard exists to prevent (issue #57).
 #[test]
-fn shot_uuid_is_persisted_does_not_answer_for_another_section() {
+fn shot_uuid_is_persisted_does_not_answer_for_another_line() {
     let db = Database::in_memory().unwrap();
-    for section_id in [0, 1] {
+    for line_id in [0, 1] {
         db.conn
             .execute(
                 "INSERT INTO sections (id, color, created_at) VALUES (?1, '#abcdef', '2026-01-01T00:00:00Z')",
-                [section_id],
+                [line_id],
             )
             .unwrap();
     }
-    // The SHARED uuid is on disk for section 0 only; section 1's copy is still in memory.
+    // The SHARED uuid is on disk for line 0 only; line 1's copy is still in memory.
     db.conn
         .execute(
             "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
@@ -841,7 +841,7 @@ fn shot_uuid_is_persisted_does_not_answer_for_another_section() {
     assert!(db.shot_uuid_is_persisted(0, "shared-uuid").unwrap());
     assert!(
         !db.shot_uuid_is_persisted(1, "shared-uuid").unwrap(),
-        "another section's copy must not count as persisted for this one"
+        "another line's copy must not count as persisted for this one"
     );
 }
 
@@ -858,7 +858,7 @@ fn save_resolved_warning_collision_preserves_the_prior_ignore() {
         )
         .unwrap();
     let row = |shot_id: u32, uuid: &str| ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id,
         warning_code: "SHORT_SHOT".to_string(),
         resolved_at: Utc::now(),
@@ -954,7 +954,7 @@ fn test_create_and_save_project() {
     let db = Database::in_memory().unwrap();
     let mut project = Project::new("Test Cave".to_string(), Some("Test Location".to_string()));
 
-    let section_data = SectionData {
+    let line_data = LineData {
         name: Some("Main Line".to_string()),
         surveyor: Some("Test Surveyor".to_string()),
         date: None,
@@ -971,15 +971,15 @@ fn test_create_and_save_project() {
         }],
     };
 
-    project.add_section(section_data);
+    project.add_line(line_data);
 
     let mut db = db;
     db.save_project(&project).unwrap();
 
     let loaded = db.load_project().unwrap();
     assert_eq!(loaded.name, "Test Cave");
-    assert_eq!(loaded.sections.len(), 1);
-    assert_eq!(loaded.sections[0].shots.len(), 1);
+    assert_eq!(loaded.lines.len(), 1);
+    assert_eq!(loaded.lines[0].shots.len(), 1);
 }
 
 #[test]
@@ -1002,20 +1002,20 @@ fn test_save_project_name_targeted_update() {
     assert_eq!(meta.name, "New Name");
 }
 
-// === Test 3.1: Save/Load Multiple Sections ===
+// === Test 3.1: Save/Load Multiple Lines ===
 #[test]
-fn test_save_load_multiple_sections() {
+fn test_save_load_multiple_lines() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test_sections.stalx");
 
-    // Create a project with multiple sections
+    // Create a project with multiple lines
     let mut project = Project::new(
-        "Multi-Section Cave".to_string(),
+        "Multi-Line Cave".to_string(),
         Some("Test Location".to_string()),
     );
 
-    // Section 1: Main passage
-    let section1 = SectionData {
+    // Line 1: Main passage
+    let line1 = LineData {
         name: Some("Main Passage".to_string()),
         surveyor: Some("John Doe".to_string()),
         date: NaiveDate::from_ymd_opt(2024, 6, 15),
@@ -1049,8 +1049,8 @@ fn test_save_load_multiple_sections() {
         ],
     };
 
-    // Section 2: Side passage
-    let section2 = SectionData {
+    // Line 2: Side passage
+    let line2 = LineData {
         name: Some("Side Passage".to_string()),
         surveyor: Some("Jane Smith".to_string()),
         date: NaiveDate::from_ymd_opt(2024, 6, 16),
@@ -1070,8 +1070,8 @@ fn test_save_load_multiple_sections() {
         }],
     };
 
-    // Section 3: No metadata (testing None values)
-    let section3 = SectionData {
+    // Line 3: No metadata (testing None values)
+    let line3 = LineData {
         name: None,
         surveyor: None,
         date: None,
@@ -1081,9 +1081,9 @@ fn test_save_load_multiple_sections() {
         shots: vec![],
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
-    project.add_section(section3);
+    project.add_line(line1);
+    project.add_line(line2);
+    project.add_line(line3);
 
     // Save to file
     {
@@ -1096,12 +1096,12 @@ fn test_save_load_multiple_sections() {
     let loaded = db.load_project().unwrap();
 
     // Verify project metadata
-    assert_eq!(loaded.name, "Multi-Section Cave");
+    assert_eq!(loaded.name, "Multi-Line Cave");
     assert_eq!(loaded.location, Some("Test Location".to_string()));
-    assert_eq!(loaded.sections.len(), 3);
+    assert_eq!(loaded.lines.len(), 3);
 
-    // Verify section 1
-    let s1 = &loaded.sections[0];
+    // Verify line 1
+    let s1 = &loaded.lines[0];
     assert_eq!(s1.name, Some("Main Passage".to_string()));
     let c1 = s1.credit_summary();
     assert_eq!(
@@ -1130,15 +1130,15 @@ fn test_save_load_multiple_sections() {
     assert_eq!(shot2.pitch_in, Some(15.0));
     assert_eq!(shot2.pitch_out, Some(-10.0));
 
-    // Verify section 2 (Out direction, reference shot)
-    let s2 = &loaded.sections[1];
+    // Verify line 2 (Out direction, reference shot)
+    let s2 = &loaded.lines[1];
     assert_eq!(s2.direction, SurveyDirection::Out);
     assert_eq!(s2.shots[0].kind, ShotKind::Reference);
     assert_eq!(s2.shots[0].marker_index, Some(42));
     assert_eq!(s2.shots[0].temperature, Some(18.5));
 
-    // Verify section 3 (None values)
-    let s3 = &loaded.sections[2];
+    // Verify line 3 (None values)
+    let s3 = &loaded.lines[2];
     assert!(s3.name.is_none());
     assert!(s3.credit_summary().surveyors.is_empty());
     assert!(s3.credit_summary().date_min.is_none());
@@ -1153,9 +1153,9 @@ fn test_save_load_station_merges() {
 
     let mut project = Project::new("Merge Test".to_string(), None);
 
-    // Create two sections with shots
-    let section1 = SectionData {
-        name: Some("Section A".to_string()),
+    // Create two lines with shots
+    let line1 = LineData {
+        name: Some("Line A".to_string()),
         color: "#ff0000".to_string(),
         shots: vec![
             ShotData {
@@ -1178,8 +1178,8 @@ fn test_save_load_station_merges() {
         ..Default::default()
     };
 
-    let section2 = SectionData {
-        name: Some("Section B".to_string()),
+    let line2 = LineData {
+        name: Some("Line B".to_string()),
         color: "#00ff00".to_string(),
         shots: vec![ShotData {
             azimuth_in: 90.0,
@@ -1192,19 +1192,19 @@ fn test_save_load_station_merges() {
         ..Default::default()
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
+    project.add_line(line1);
+    project.add_line(line2);
 
     // Add station merges manually (bypassing validation for test)
     let merge1 = StationMerge {
-        station_a: StationRef::new(0, 1).into(), // Section 0, Station 1
-        station_b: StationRef::new(1, 0).into(), // Section 1, Station 0
+        station_a: StationRef::new(0, 1).into(), // Line 0, Station 1
+        station_b: StationRef::new(1, 0).into(), // Line 1, Station 0
         merged_at: Utc::now(),
     };
 
     let merge2 = StationMerge {
-        station_a: StationRef::new(0, 2).into(), // Section 0, Station 2
-        station_b: StationRef::new(1, 1).into(), // Section 1, Station 1
+        station_a: StationRef::new(0, 2).into(), // Line 0, Station 2
+        station_b: StationRef::new(1, 1).into(), // Line 1, Station 1
         merged_at: Utc::now(),
     };
 
@@ -1229,9 +1229,9 @@ fn test_save_load_station_merges() {
     let m1b = loaded
         .resolve_key(&loaded.station_merges[0].station_b)
         .unwrap();
-    assert_eq!(m1a.section_id, 0);
+    assert_eq!(m1a.line_id, 0);
     assert_eq!(m1a.station_index, 1);
-    assert_eq!(m1b.section_id, 1);
+    assert_eq!(m1b.line_id, 1);
     assert_eq!(m1b.station_index, 0);
 
     let m2a = loaded
@@ -1240,9 +1240,9 @@ fn test_save_load_station_merges() {
     let m2b = loaded
         .resolve_key(&loaded.station_merges[1].station_b)
         .unwrap();
-    assert_eq!(m2a.section_id, 0);
+    assert_eq!(m2a.line_id, 0);
     assert_eq!(m2a.station_index, 2);
-    assert_eq!(m2b.section_id, 1);
+    assert_eq!(m2b.line_id, 1);
     assert_eq!(m2b.station_index, 1);
 }
 
@@ -1254,8 +1254,8 @@ fn test_save_load_zero_datums() {
 
     let mut project = Project::new("GPS Test".to_string(), None);
 
-    // Add a section with shots
-    let section = SectionData {
+    // Add a line with shots
+    let line = LineData {
         name: Some("Main".to_string()),
         color: "#ffffff".to_string(),
         shots: vec![ShotData {
@@ -1268,7 +1268,7 @@ fn test_save_load_zero_datums() {
         }],
         ..Default::default()
     };
-    project.add_section(section);
+    project.add_line(line);
 
     // Add zero datums with high-precision GPS coordinates (8+ decimal places)
     let zd1 = ZeroDatum {
@@ -1311,7 +1311,7 @@ fn test_save_load_zero_datums() {
     // Verify 8+ decimal places of precision preserved
     let loaded_zd1 = &loaded.zero_datums[0];
     let loaded_zd1_ref = loaded.resolve_key(&loaded_zd1.station_ref).unwrap();
-    assert_eq!(loaded_zd1_ref.section_id, 0);
+    assert_eq!(loaded_zd1_ref.line_id, 0);
     assert_eq!(loaded_zd1_ref.station_index, 0);
     // Check precision to 8 decimal places
     assert!((loaded_zd1.gps.latitude - 45.123_456_789_012_34).abs() < 1e-8);
@@ -1324,18 +1324,18 @@ fn test_save_load_zero_datums() {
     assert!((loaded_zd2.gps.depth_reference - (-15.5)).abs() < 1e-6);
 }
 
-// === Test 3.4: Save/Load Section Offsets ===
+// === Test 3.4: Save/Load Line Offsets ===
 #[test]
-fn test_save_load_section_offsets() {
+fn test_save_load_line_offsets() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test_offsets.stalx");
 
     let mut project = Project::new("Offset Test".to_string(), None);
 
-    // Create sections
+    // Create lines
     for i in 0..3 {
-        let section = SectionData {
-            name: Some(format!("Section {i}")),
+        let line = LineData {
+            name: Some(format!("Line {i}")),
             color: "#000000".to_string(),
             shots: vec![ShotData {
                 azimuth_in: 0.0,
@@ -1347,15 +1347,15 @@ fn test_save_load_section_offsets() {
             }],
             ..Default::default()
         };
-        project.add_section(section);
+        project.add_line(line);
     }
 
-    // Add section offsets with varying precision
+    // Add line offsets with varying precision
     project
-        .section_offsets
+        .line_offsets
         .insert(0, (10.123_456_789, -20.987_654_321));
-    project.section_offsets.insert(1, (0.0, 0.0));
-    project.section_offsets.insert(2, (-100.5, 200.75));
+    project.line_offsets.insert(1, (0.0, 0.0));
+    project.line_offsets.insert(2, (-100.5, 200.75));
 
     // Save
     {
@@ -1367,17 +1367,17 @@ fn test_save_load_section_offsets() {
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
 
-    assert_eq!(loaded.section_offsets.len(), 3);
+    assert_eq!(loaded.line_offsets.len(), 3);
 
-    let offset0 = loaded.section_offsets.get(&0).unwrap();
+    let offset0 = loaded.line_offsets.get(&0).unwrap();
     assert!((offset0.0 - 10.123_456_789).abs() < 1e-8);
     assert!((offset0.1 - (-20.987_654_321)).abs() < 1e-8);
 
-    let offset1 = loaded.section_offsets.get(&1).unwrap();
+    let offset1 = loaded.line_offsets.get(&1).unwrap();
     assert_eq!(offset1.0, 0.0);
     assert_eq!(offset1.1, 0.0);
 
-    let offset2 = loaded.section_offsets.get(&2).unwrap();
+    let offset2 = loaded.line_offsets.get(&2).unwrap();
     assert_eq!(offset2.0, -100.5);
     assert_eq!(offset2.1, 200.75);
 }
@@ -1390,8 +1390,8 @@ fn test_update_shot_in_database() {
 
     // Create initial project
     let mut project = Project::new("Update Test".to_string(), None);
-    let section = SectionData {
-        name: Some("Test Section".to_string()),
+    let line = LineData {
+        name: Some("Test Line".to_string()),
         color: "#123456".to_string(),
         shots: vec![
             ShotData {
@@ -1414,7 +1414,7 @@ fn test_update_shot_in_database() {
         ],
         ..Default::default()
     };
-    project.add_section(section);
+    project.add_line(line);
 
     // Save initial state
     {
@@ -1423,11 +1423,11 @@ fn test_update_shot_in_database() {
     }
 
     // Modify the shot in the project
-    project.sections[0].shots[0].length = 12.5;
-    project.sections[0].shots[0].azimuth_in = 50.0;
-    project.sections[0].shots[0].comment = Some("Updated comment".to_string());
-    project.sections[0].shots[0].left = Some(2.0);
-    project.sections[0].shots[0].right = Some(3.0);
+    project.lines[0].shots[0].length = 12.5;
+    project.lines[0].shots[0].azimuth_in = 50.0;
+    project.lines[0].shots[0].comment = Some("Updated comment".to_string());
+    project.lines[0].shots[0].left = Some(2.0);
+    project.lines[0].shots[0].right = Some(3.0);
 
     // Save updated state
     {
@@ -1439,7 +1439,7 @@ fn test_update_shot_in_database() {
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
 
-    let updated_shot = &loaded.sections[0].shots[0];
+    let updated_shot = &loaded.lines[0].shots[0];
     assert_eq!(updated_shot.length, 12.5);
     assert_eq!(updated_shot.azimuth_in, 50.0);
     assert_eq!(updated_shot.comment, Some("Updated comment".to_string()));
@@ -1447,22 +1447,22 @@ fn test_update_shot_in_database() {
     assert_eq!(updated_shot.right, Some(3.0));
 
     // Verify other shot unchanged
-    let other_shot = &loaded.sections[0].shots[1];
+    let other_shot = &loaded.lines[0].shots[1];
     assert_eq!(other_shot.length, 15.0);
     assert_eq!(other_shot.azimuth_in, 90.0);
 }
 
-// === Test 3.6: Delete Section Cascades Shots ===
+// === Test 3.6: Delete Line Cascades Shots ===
 #[test]
-fn test_delete_section_cascades_shots() {
+fn test_delete_line_cascades_shots() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test_cascade.stalx");
 
-    // Create project with multiple sections
+    // Create project with multiple lines
     let mut project = Project::new("Cascade Test".to_string(), None);
 
-    let section1 = SectionData {
-        name: Some("Section to keep".to_string()),
+    let line1 = LineData {
+        name: Some("Line to keep".to_string()),
         color: "#111111".to_string(),
         shots: vec![ShotData {
             azimuth_in: 0.0,
@@ -1475,8 +1475,8 @@ fn test_delete_section_cascades_shots() {
         ..Default::default()
     };
 
-    let section2 = SectionData {
-        name: Some("Section to delete".to_string()),
+    let line2 = LineData {
+        name: Some("Line to delete".to_string()),
         color: "#222222".to_string(),
         shots: vec![
             ShotData {
@@ -1507,8 +1507,8 @@ fn test_delete_section_cascades_shots() {
         ..Default::default()
     };
 
-    let section3 = SectionData {
-        name: Some("Another section to keep".to_string()),
+    let line3 = LineData {
+        name: Some("Another line to keep".to_string()),
         color: "#333333".to_string(),
         shots: vec![ShotData {
             azimuth_in: 180.0,
@@ -1521,11 +1521,11 @@ fn test_delete_section_cascades_shots() {
         ..Default::default()
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
-    project.add_section(section3);
+    project.add_line(line1);
+    project.add_line(line2);
+    project.add_line(line3);
 
-    assert_eq!(project.sections.len(), 3);
+    assert_eq!(project.lines.len(), 3);
 
     // Save initial state
     {
@@ -1533,9 +1533,9 @@ fn test_delete_section_cascades_shots() {
         db.save_project(&project).unwrap();
     }
 
-    // Remove section 1 (index 1, the one with 3 shots)
-    project.remove_section(1);
-    assert_eq!(project.sections.len(), 2);
+    // Remove line 1 (index 1, the one with 3 shots)
+    project.remove_line(1);
+    assert_eq!(project.lines.len(), 2);
 
     // Save after deletion
     {
@@ -1547,16 +1547,16 @@ fn test_delete_section_cascades_shots() {
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
 
-    assert_eq!(loaded.sections.len(), 2);
-    assert_eq!(loaded.sections[0].name, Some("Section to keep".to_string()));
+    assert_eq!(loaded.lines.len(), 2);
+    assert_eq!(loaded.lines[0].name, Some("Line to keep".to_string()));
     assert_eq!(
-        loaded.sections[1].name,
-        Some("Another section to keep".to_string())
+        loaded.lines[1].name,
+        Some("Another line to keep".to_string())
     );
 
-    // Verify shots from deleted section are gone
-    let total_shots: usize = loaded.sections.iter().map(|s| s.shots.len()).sum();
-    assert_eq!(total_shots, 2); // 1 shot from section 0 + 1 shot from section 2
+    // Verify shots from deleted line are gone
+    let total_shots: usize = loaded.lines.iter().map(|s| s.shots.len()).sum();
+    assert_eq!(total_shots, 2); // 1 shot from line 0 + 1 shot from line 2
 }
 
 // === Test 3.7: Database Transaction Rollback ===
@@ -1567,8 +1567,8 @@ fn test_database_transaction_rollback() {
 
     // Create and save a valid project
     let mut project = Project::new("Rollback Test".to_string(), None);
-    let section = SectionData {
-        name: Some("Original Section".to_string()),
+    let line = LineData {
+        name: Some("Original Line".to_string()),
         color: "#abcdef".to_string(),
         shots: vec![ShotData {
             azimuth_in: 0.0,
@@ -1580,7 +1580,7 @@ fn test_database_transaction_rollback() {
         }],
         ..Default::default()
     };
-    project.add_section(section);
+    project.add_line(line);
 
     // Save the initial project
     {
@@ -1593,16 +1593,16 @@ fn test_database_transaction_rollback() {
         let db = Database::open_existing(&db_path).unwrap();
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Rollback Test");
-        assert_eq!(loaded.sections.len(), 1);
+        assert_eq!(loaded.lines.len(), 1);
         assert_eq!(
-            loaded.sections[0].name,
-            Some("Original Section".to_string())
+            loaded.lines[0].name,
+            Some("Original Line".to_string())
         );
     }
 
     // Modify and save again - this simulates a successful transaction
     project.name = "Modified Project".to_string();
-    project.sections[0].name = Some("Modified Section".to_string());
+    project.lines[0].name = Some("Modified Line".to_string());
     {
         let mut db = Database::open(&db_path).unwrap();
         db.save_project(&project).unwrap();
@@ -1614,22 +1614,22 @@ fn test_database_transaction_rollback() {
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Modified Project");
         assert_eq!(
-            loaded.sections[0].name,
-            Some("Modified Section".to_string())
+            loaded.lines[0].name,
+            Some("Modified Line".to_string())
         );
     }
 
     // Test that the transaction is atomic - all data is cleared and rewritten
     // If we open for save, it should be a complete replacement
     let mut new_project = Project::new("Completely New".to_string(), None);
-    new_project.add_section(SectionData {
-        name: Some("New Section A".to_string()),
+    new_project.add_line(LineData {
+        name: Some("New Line A".to_string()),
         color: "#000000".to_string(),
         shots: vec![],
         ..Default::default()
     });
-    new_project.add_section(SectionData {
-        name: Some("New Section B".to_string()),
+    new_project.add_line(LineData {
+        name: Some("New Line B".to_string()),
         color: "#ffffff".to_string(),
         shots: vec![],
         ..Default::default()
@@ -1644,12 +1644,12 @@ fn test_database_transaction_rollback() {
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
     assert_eq!(loaded.name, "Completely New");
-    assert_eq!(loaded.sections.len(), 2);
-    // The old "Modified Section" should be completely gone
+    assert_eq!(loaded.lines.len(), 2);
+    // The old "Modified Line" should be completely gone
     assert!(loaded
-        .sections
+        .lines
         .iter()
-        .all(|s| s.name != Some("Modified Section".to_string())));
+        .all(|s| s.name != Some("Modified Line".to_string())));
 }
 
 // === Test 3.8: Open Existing vs Open New ===
@@ -1688,7 +1688,7 @@ fn test_open_existing_vs_open_new() {
 
     // Test 4: Save a project, then open_existing should succeed
     let mut project = Project::new("Test Project".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Test".to_string()),
         color: "#123456".to_string(),
         shots: vec![],
@@ -1707,7 +1707,7 @@ fn test_open_existing_vs_open_new() {
     // Test 5: Verify loaded data is correct
     let loaded = result.unwrap().load_project().unwrap();
     assert_eq!(loaded.name, "Test Project");
-    assert_eq!(loaded.sections.len(), 1);
+    assert_eq!(loaded.lines.len(), 1);
 }
 
 // === Additional Edge Case Tests ===
@@ -1719,9 +1719,9 @@ fn test_save_load_loop_closures() {
 
     let mut project = Project::new("Loop Test".to_string(), None);
 
-    // Add sections
-    project.add_section(SectionData {
-        name: Some("Section 1".to_string()),
+    // Add lines
+    project.add_line(LineData {
+        name: Some("Line 1".to_string()),
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
             azimuth_in: 0.0,
@@ -1882,8 +1882,8 @@ fn test_undo_stack_persistence() {
     // Save undo entries
     let entries = vec![
         (
-            r#"{"type":"AddSection"}"#.to_string(),
-            r#"{"section_id":0}"#.to_string(),
+            r#"{"type":"AddLine"}"#.to_string(),
+            r#"{"line_id":0}"#.to_string(),
         ),
         (
             r#"{"type":"AddShot"}"#.to_string(),
@@ -1900,8 +1900,8 @@ fn test_undo_stack_persistence() {
     let loaded = db.load_undo_stack().unwrap();
     assert_eq!(loaded.len(), 3);
     assert_eq!(loaded[0].0, 0); // sequence
-    assert_eq!(loaded[0].1, r#"{"type":"AddSection"}"#);
-    assert_eq!(loaded[0].2, r#"{"section_id":0}"#);
+    assert_eq!(loaded[0].1, r#"{"type":"AddLine"}"#);
+    assert_eq!(loaded[0].2, r#"{"line_id":0}"#);
     assert_eq!(loaded[1].0, 1);
     assert_eq!(loaded[2].0, 2);
 
@@ -1917,7 +1917,7 @@ fn test_resolved_warnings_persistence() {
 
     // Save project first (to have tables)
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
@@ -1926,7 +1926,7 @@ fn test_resolved_warnings_persistence() {
 
     // Save resolved warning
     let warning = ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "AZIMUTH_DIFF".to_string(),
         resolved_at: Utc::now(),
@@ -1938,7 +1938,7 @@ fn test_resolved_warnings_persistence() {
     // Load resolved warnings
     let loaded = db.load_resolved_warnings().unwrap();
     assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].section_id, 0);
+    assert_eq!(loaded[0].line_id, 0);
     assert_eq!(loaded[0].shot_id, 1);
     assert_eq!(loaded[0].warning_code, "AZIMUTH_DIFF");
     assert_eq!(
@@ -1961,14 +1961,14 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     // it regardless of the shot_id supplied.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
     db.save_project(&project).unwrap();
 
     let base = ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -1997,20 +1997,20 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
 #[test]
 fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     // Issue #57 regression guard: resolve_all can hand the bulk save two
-    // warnings with the SAME (section_id, shot_id, warning_code) - e.g. a shot
+    // warnings with the SAME (line_id, shot_id, warning_code) - e.g. a shot
     // with both azimuths out of range yields two INVALID_AZIMUTH rows, and an
     // over-anchored merge component can map two datums onto one shot. The bulk
     // save must not abort on the legacy UNIQUE constraint.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
     db.save_project(&project).unwrap();
 
     let w = ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "INVALID_AZIMUTH".to_string(),
         resolved_at: Utc::now(),
@@ -2023,7 +2023,7 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     assert_eq!(
         db.load_resolved_warnings().unwrap().len(),
         1,
-        "duplicate (section, shot, code) collapses to one row instead of crashing the batch"
+        "duplicate (line, shot, code) collapses to one row instead of crashing the batch"
     );
 }
 
@@ -2031,11 +2031,11 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
 fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
     // Issue #57 (Item 2): a UUID-keyed save must NOT delete a DIFFERENT shot's
     // valid by-UUID row that occupies a different position. Before the fix the
-    // DELETE also matched `(section_id, shot_id)`, so saving uuid-Y could wipe
+    // DELETE also matched `(line_id, shot_id)`, so saving uuid-Y could wipe
     // uuid-X if Y's params happened to target X's position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
@@ -2043,7 +2043,7 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
 
     // Shot X ignored at position shot_id=1.
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -2053,7 +2053,7 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
     .unwrap();
     // Shot Y ignored at a DISTINCT position shot_id=2 (its own current spot).
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 2,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -2084,7 +2084,7 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
     // touching a DIFFERENT shot's by-UUID row that occupies the same position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
@@ -2092,7 +2092,7 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
 
     // Legacy NULL-uuid suppression of the shot at position (0, 1).
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -2101,11 +2101,11 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
     })
     .unwrap();
     // A DIFFERENT shot's by-UUID suppression at a distinct position (0, 2) - must
-    // NOT be deleted when we un-ignore the shot at (0, 1). (UNIQUE(section_id,
+    // NOT be deleted when we un-ignore the shot at (0, 1). (UNIQUE(line_id,
     // shot_id, warning_code) forbids two rows sharing one position+code, so this
     // models a different shot, not a same-position collision.)
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 2,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -2134,12 +2134,12 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
 
 #[test]
 fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
-    // Issue #57 (Item 4): legacy NULL-uuid resolved rows whose (section_id,
+    // Issue #57 (Item 4): legacy NULL-uuid resolved rows whose (line_id,
     // shot_id) still maps to a live shot are upgraded to UUID keying on load.
     // Idempotent, and a row with no live shot is left NULL (never mis-keyed).
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#000".to_string(),
         ..Default::default()
     });
@@ -2147,7 +2147,7 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
 
     // Legacy row keyed by position (no UUID) that maps to a live shot.
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         warning_code: "ZERO_LENGTH".to_string(),
         resolved_at: Utc::now(),
@@ -2155,9 +2155,9 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
         shot_uuid: None,
     })
     .unwrap();
-    // Legacy row whose (section, shot) is NOT in the live map - must stay NULL.
+    // Legacy row whose (line, shot) is NOT in the live map - must stay NULL.
     db.save_resolved_warning(&ResolvedWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 7,
         warning_code: "SHORT_SHOT".to_string(),
         resolved_at: Utc::now(),
@@ -2489,7 +2489,7 @@ fn test_save_load_station_offsets_individual() {
     let db_path = temp_dir.path().join("station_offsets.stalx");
 
     let mut project = Project::new("Station Offsets".to_string(), None);
-    let section_data = SectionData {
+    let line_data = LineData {
         shots: vec![
             ShotData {
                 azimuth_in: 0.0,
@@ -2510,11 +2510,11 @@ fn test_save_load_station_offsets_individual() {
         ],
         ..Default::default()
     };
-    let section_id = project.add_section(section_data).id;
+    let line_id = project.add_line(line_data).id;
 
     // Add individual station offsets
-    let ref_a = StationRef::new(section_id, 0);
-    let ref_b = StationRef::new(section_id, 1);
+    let ref_a = StationRef::new(line_id, 0);
+    let ref_b = StationRef::new(line_id, 1);
     project
         .station_offsets
         .insert(ref_a.into(), (1.5, -2.3, 0.1));
@@ -2638,17 +2638,17 @@ fn test_clear_undo_after_sequence() {
 /// A pre-v7 UpdateShot command payload: untouched nullable fields serialized
 /// as explicit nulls (this is what `serde_json::to_string(&ShotUpdates)`
 /// produced before `skip_serializing_if` was added).
-fn legacy_null_style_update_shot_command(section_id: u32, shot_id: u32) -> String {
+fn legacy_null_style_update_shot_command(line_id: u32, shot_id: u32) -> String {
     format!(
-        r#"{{"type":"update_shot","section_id":{section_id},"shot_id":{shot_id},"updates":{{"azimuth_in":null,"azimuth_out":null,"length":4.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}}}}"#
+        r#"{{"type":"update_shot","line_id":{line_id},"shot_id":{shot_id},"updates":{{"azimuth_in":null,"azimuth_out":null,"length":4.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}}}}"#
     )
 }
 
 /// A pre-v7 PreviousValues undo payload with the same explicit-null shape.
-fn legacy_null_style_previous_values(section_id: u32, shot_id: u32) -> String {
+fn legacy_null_style_previous_values(line_id: u32, shot_id: u32) -> String {
     let values_json = r#"{"azimuth_in":null,"azimuth_out":null,"length":2.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}"#;
     format!(
-        r#"{{"PreviousValues":{{"section_id":{section_id},"shot_id":{shot_id},"values_json":{}}}}}"#,
+        r#"{{"PreviousValues":{{"line_id":{line_id},"shot_id":{shot_id},"values_json":{}}}}}"#,
         serde_json::to_string(values_json).unwrap()
     )
 }
@@ -2659,7 +2659,7 @@ fn write_legacy_v6_project_with_undo_history(dir: &TempDir, name: &str) -> std::
     let path = dir.path().join(name);
 
     let mut project = Project::new("Legacy Undo".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![ShotData {
             azimuth_in: 45.0,
             azimuth_out: 225.0,
@@ -2674,11 +2674,11 @@ fn write_legacy_v6_project_with_undo_history(dir: &TempDir, name: &str) -> std::
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
     let saved = db.load_project().unwrap();
-    let section_id = saved.sections[0].id;
-    let shot_id = saved.sections[0].shots[0].id;
+    let line_id = saved.lines[0].id;
+    let shot_id = saved.lines[0].shots[0].id;
 
-    let cmd = legacy_null_style_update_shot_command(section_id, shot_id);
-    let undo_data = legacy_null_style_previous_values(section_id, shot_id);
+    let cmd = legacy_null_style_update_shot_command(line_id, shot_id);
+    let undo_data = legacy_null_style_previous_values(line_id, shot_id);
     db.save_undo_stack_with_timestamps(vec![(cmd.clone(), undo_data.clone(), None)])
         .unwrap();
     db.save_redo_stack_with_timestamps(vec![(cmd, undo_data, None)])
@@ -2712,7 +2712,7 @@ fn a_pre_v16_file_loses_its_path_bearing_undo_history_on_open() {
             .unwrap();
         // A snapshot entry of the shape the old producer wrote.
         db.save_undo_stack_with_timestamps(vec![(
-            r#"{"type":"delete_section","section_id":1}"#.to_string(),
+            r#"{"type":"delete_line","line_id":1}"#.to_string(),
             r#"{"ProjectSnapshot":"{\"file_path\":\"/home/victim/caves/secret.stalx\"}"}"#
                 .to_string(),
             None,
@@ -2734,22 +2734,22 @@ fn a_pre_v16_file_loses_its_path_bearing_undo_history_on_open() {
 }
 
 /// [#413 finding 5] A pre-v17 file's undo rows carry explicit-null
-/// `SectionUpdates` fields, so the migration must drop them.
+/// `LineUpdates` fields, so the migration must drop them.
 ///
 /// v17 gave `name` / `surveyor` / `date` the `double_option` +
 /// `skip_serializing_if` pair `ShotUpdates` has carried since v7. A pre-v17
 /// writer serialized every UNTOUCHED one as an explicit `null`, and a present
 /// `null` now means "clear this field" - so replaying a stored
-/// `update_section_metadata` command, or the `PreviousValues` blob recorded
-/// against it, would wipe the name, surveyor and date off the section it names.
+/// `update_line_metadata` command, or the `PreviousValues` blob recorded
+/// against it, would wipe the name, surveyor and date off the line it names.
 /// The payload still PARSES, which is why nothing downstream can catch it and a
 /// version-gated drop is the only safe upgrade - the same reasoning, and the
 /// same remedy, as the v6 to v7 case below.
 #[test]
-fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
+fn a_pre_v17_file_loses_its_explicit_null_line_undo_history_on_open() {
     // Sanity: the legacy payload IS the dangerous shape - under the v17
     // deserializer its explicit nulls decode to Some(None) ("clear the field").
-    let dangerous: crate::models::SectionUpdates =
+    let dangerous: crate::models::LineUpdates =
         serde_json::from_str(r##"{"name":null,"surveyor":null,"date":null,"color":"#123456"}"##)
             .unwrap();
     assert_eq!(dangerous.name, Some(None));
@@ -2766,9 +2766,9 @@ fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
         // nullable field present and null, on BOTH halves of the entry (the
         // command replays on redo, the `values_json` on undo).
         db.save_undo_stack_with_timestamps(vec![(
-            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+            r##"{"type":"update_line_metadata","line_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
                 .to_string(),
-            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+            r##"{"PreviousValues":{"line_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
                 .to_string(),
             None,
         )])
@@ -2800,7 +2800,7 @@ fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
 /// nothing sensible it could run - so a stamp of 99 used to walk straight past
 /// the v7, v13, v15, v16 and v17 drops with the stacks intact. That is a
 /// one-pragma bypass of the v17 arm in particular, whose payloads still PARSE
-/// and whose replay wipes a section's name, surveyor and date. The open used to
+/// and whose replay wipes a line's name, surveyor and date. The open used to
 /// drop the history instead, which wrote into a newer build's file; since #649
 /// it refuses the file, so the stacks are neither replayed nor deleted.
 #[test]
@@ -2810,7 +2810,7 @@ fn a_file_claiming_a_future_schema_is_refused_with_its_history_left_in_place() {
     {
         let mut db = Database::open(&path).unwrap();
         let mut project = Project::new("Future".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#123456".to_string(),
             shots: vec![],
@@ -2820,17 +2820,17 @@ fn a_file_claiming_a_future_schema_is_refused_with_its_history_left_in_place() {
         // The same pre-v17 shape the test above stages, on both stacks: the one
         // the v17 arm drops, and the one this file's forged stamp would keep.
         db.save_undo_stack_with_timestamps(vec![(
-            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+            r##"{"type":"update_line_metadata","line_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
                 .to_string(),
-            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+            r##"{"PreviousValues":{"line_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
                 .to_string(),
             None,
         )])
         .unwrap();
         db.save_redo_stack_with_timestamps(vec![(
-            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+            r##"{"type":"update_line_metadata","line_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
                 .to_string(),
-            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+            r##"{"PreviousValues":{"line_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
                 .to_string(),
             None,
         )])
@@ -2892,8 +2892,8 @@ fn test_legacy_v6_undo_history_dropped_on_open_existing() {
 
     // The project data itself is untouched.
     let project = db.load_project().unwrap();
-    assert_eq!(project.sections.len(), 1);
-    assert_eq!(project.sections[0].shots.len(), 1);
+    assert_eq!(project.lines.len(), 1);
+    assert_eq!(project.lines[0].shots.len(), 1);
 }
 
 #[test]
@@ -3088,9 +3088,9 @@ fn test_display_settings_round_trip() {
 fn test_resolved_warnings_round_trip() {
     let mut db = Database::in_memory().unwrap();
 
-    // Create a project with a section and shot so FK constraints are satisfied
+    // Create a project with a line and shot so FK constraints are satisfied
     let mut project = Project::new("Warnings Test".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![ShotData {
             azimuth_in: 0.0,
             azimuth_out: 0.0,
@@ -3103,13 +3103,13 @@ fn test_resolved_warnings_round_trip() {
     });
     db.save_project(&project).unwrap();
 
-    // Get the actual section and shot IDs from saved project
+    // Get the actual line and shot IDs from saved project
     let loaded_project = db.load_project().unwrap();
-    let section_id = loaded_project.sections[0].id;
-    let shot_id = loaded_project.sections[0].shots[0].id;
+    let line_id = loaded_project.lines[0].id;
+    let shot_id = loaded_project.lines[0].shots[0].id;
 
     let warning = ResolvedWarning {
-        section_id,
+        line_id,
         shot_id,
         warning_code: "azimuth_deviation".to_string(),
         resolved_at: Utc::now(),
@@ -3121,7 +3121,7 @@ fn test_resolved_warnings_round_trip() {
 
     let loaded = db.load_resolved_warnings().unwrap();
     assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].section_id, section_id);
+    assert_eq!(loaded[0].line_id, line_id);
     assert_eq!(loaded[0].shot_id, shot_id);
     assert_eq!(loaded[0].warning_code, "azimuth_deviation");
     assert_eq!(
@@ -3130,7 +3130,7 @@ fn test_resolved_warnings_round_trip() {
     );
 
     // Delete it
-    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation", None)
+    db.delete_resolved_warning(line_id, shot_id, "azimuth_deviation", None)
         .unwrap();
     let remaining = db.load_resolved_warnings().unwrap();
     assert!(remaining.is_empty());
@@ -3148,9 +3148,9 @@ fn test_save_load_complex_project_round_trip() {
         Some("Deep Location".to_string()),
     );
 
-    // Add section with detailed shots
-    let section_a = project
-        .add_section(SectionData {
+    // Add line with detailed shots
+    let line_a = project
+        .add_line(LineData {
             name: Some("North Passage".to_string()),
             surveyor: Some("Alice".to_string()),
             date: NaiveDate::from_ymd_opt(2025, 6, 15),
@@ -3185,8 +3185,8 @@ fn test_save_load_complex_project_round_trip() {
         })
         .id;
 
-    let section_b = project
-        .add_section(SectionData {
+    let line_b = project
+        .add_line(LineData {
             name: Some("East Branch".to_string()),
             color: "#00ff00".to_string(),
             direction: Some(SurveyDirection::Out),
@@ -3203,19 +3203,19 @@ fn test_save_load_complex_project_round_trip() {
         })
         .id;
 
-    // Add section offsets
-    project.section_offsets.insert(section_a, (10.0, -5.0));
+    // Add line offsets
+    project.line_offsets.insert(line_a, (10.0, -5.0));
 
     // Add station merge
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 2).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Add zero datum
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_a, 0).into(),
+        station_ref: StationRef::new(line_a, 0).into(),
         gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -3224,8 +3224,8 @@ fn test_save_load_complex_project_round_trip() {
     // Add loop closure
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 1).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 1).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         strategy: ClosureStrategy::Move,
         is_aligned: false,
         path_length: 15.0,
@@ -3238,7 +3238,7 @@ fn test_save_load_complex_project_round_trip() {
     // Add station offset
     project
         .station_offsets
-        .insert(StationRef::new(section_a, 1).into(), (0.1, -0.2, 0.05));
+        .insert(StationRef::new(line_a, 1).into(), (0.1, -0.2, 0.05));
 
     // Save
     {
@@ -3252,11 +3252,11 @@ fn test_save_load_complex_project_round_trip() {
 
     assert_eq!(loaded.name, "Complex Cave");
     assert_eq!(loaded.location, Some("Deep Location".to_string()));
-    assert_eq!(loaded.sections.len(), 2);
+    assert_eq!(loaded.lines.len(), 2);
 
-    // Verify section A
+    // Verify line A
     let s_a = loaded
-        .sections
+        .lines
         .iter()
         .find(|s| s.name == Some("North Passage".to_string()))
         .unwrap();
@@ -3267,9 +3267,9 @@ fn test_save_load_complex_project_round_trip() {
     assert_eq!(s_a.shots[0].left, Some(1.0));
     assert_eq!(s_a.shots[0].pitch_in, Some(5.0));
 
-    // Verify section offsets
+    // Verify line offsets
     let s_a_id = s_a.id;
-    let offset = loaded.section_offsets.get(&s_a_id).unwrap();
+    let offset = loaded.line_offsets.get(&s_a_id).unwrap();
     assert!((offset.0 - 10.0).abs() < 1e-10);
     assert!((offset.1 - (-5.0)).abs() < 1e-10);
 
@@ -3526,22 +3526,22 @@ fn test_export_salvageable_from_healthy_db() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Salvage Test".to_string(), Some("Cave X".to_string()));
-    let section = SectionData {
+    let line = LineData {
         name: Some("Passage A".to_string()),
         color: "#ff0000".to_string(),
         shots: vec![ShotData::default(), ShotData::default()],
         ..Default::default()
     };
-    project.add_section(section);
+    project.add_line(line);
     db.save_project(&project).unwrap();
     drop(db);
 
     let salvaged = Database::export_salvageable(&db_path).unwrap();
     assert_eq!(salvaged.project_name.as_deref(), Some("Salvage Test"));
     assert_eq!(salvaged.project_location.as_deref(), Some("Cave X"));
-    assert_eq!(salvaged.section_count, 1);
+    assert_eq!(salvaged.line_count, 1);
     assert_eq!(salvaged.shot_count, 2);
-    assert!(salvaged.sections_json.is_some());
+    assert!(salvaged.lines_json.is_some());
     assert!(salvaged.full_project_json.is_some());
     assert!(salvaged.errors.is_empty());
 }
@@ -3581,33 +3581,33 @@ fn test_try_read_metadata_from_populated_db() {
 }
 
 #[test]
-fn test_try_read_sections_from_empty_db() {
+fn test_try_read_lines_from_empty_db() {
     let db = Database::in_memory().unwrap();
-    let sections = db.try_read_sections().unwrap();
-    assert!(sections.is_empty());
+    let lines = db.try_read_lines().unwrap();
+    assert!(lines.is_empty());
 }
 
 #[test]
-fn test_try_read_sections_from_populated_db() {
+fn test_try_read_lines_from_populated_db() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("sections.stalx");
 
     let mut db = Database::open(&db_path).unwrap();
-    let mut project = Project::new("Sections Test".to_string(), None);
-    project.add_section(SectionData {
+    let mut project = Project::new("Lines Test".to_string(), None);
+    project.add_line(LineData {
         name: Some("Passage A".to_string()),
         color: "#ff0000".to_string(),
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Passage B".to_string()),
         color: "#00ff00".to_string(),
         ..Default::default()
     });
     db.save_project(&project).unwrap();
 
-    let sections = db.try_read_sections().unwrap();
-    assert_eq!(sections.len(), 2);
+    let lines = db.try_read_lines().unwrap();
+    assert_eq!(lines.len(), 2);
 }
 
 #[test]
@@ -3672,9 +3672,9 @@ fn test_migrate_schema_adds_direction_column() {
     // Open with Database::open_existing which runs migrations
     let db = Database::open_existing(&db_path).unwrap();
     let project = db.load_project().unwrap();
-    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.lines.len(), 1);
     // Direction should default to 'in' after migration
-    assert_eq!(project.sections[0].direction.to_string(), "in");
+    assert_eq!(project.lines[0].direction.to_string(), "in");
 }
 
 #[test]
@@ -3701,7 +3701,7 @@ fn test_migrate_schema_adds_quality_column() {
     let db = Database::open_existing(&db_path).unwrap();
     let project = db.load_project().unwrap();
     // Quality should default to 1.0 after migration
-    assert!((project.sections[0].quality - 1.0).abs() < f64::EPSILON);
+    assert!((project.lines[0].quality - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -3782,7 +3782,7 @@ fn test_migrate_schema_idempotent() {
     drop(db2);
 
     assert_eq!(p1.name, p2.name);
-    assert_eq!(p1.sections.len(), p2.sections.len());
+    assert_eq!(p1.lines.len(), p2.lines.len());
 }
 
 // ============================================================================
@@ -3796,7 +3796,7 @@ fn test_save_load_round_trip_extreme_coordinates() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Extreme".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Deep".to_string()),
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
@@ -3820,7 +3820,7 @@ fn test_save_load_round_trip_extreme_coordinates() {
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
 
-    let shot = &loaded.sections[0].shots[0];
+    let shot = &loaded.lines[0].shots[0];
     assert!((shot.azimuth_in - 359.9).abs() < 1e-6);
     assert!((shot.azimuth_out - 0.1).abs() < 1e-6);
     assert!((shot.length - 999.99).abs() < 1e-6);
@@ -3836,7 +3836,7 @@ fn test_save_load_round_trip_zero_values() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Zeros".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: None, // no name
         color: "#000000".to_string(),
         shots: vec![ShotData {
@@ -3864,8 +3864,8 @@ fn test_save_load_round_trip_zero_values() {
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
 
-    assert!(loaded.sections[0].name.is_none());
-    let shot = &loaded.sections[0].shots[0];
+    assert!(loaded.lines[0].name.is_none());
+    let shot = &loaded.lines[0].shots[0];
     assert!(shot.pitch_in.is_none());
     assert!(shot.left.is_none());
     assert!(shot.comment.is_none());
@@ -3879,8 +3879,8 @@ fn test_save_load_round_trip_all_metadata() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("FullMeta".to_string(), Some("Underwater Cave".to_string()));
-    project.add_section(SectionData {
-        name: Some("Section A".to_string()),
+    project.add_line(LineData {
+        name: Some("Line A".to_string()),
         surveyor: Some("Diver One".to_string()),
         date: Some(NaiveDate::from_ymd_opt(2025, 12, 25).unwrap()),
         color: "#abcdef".to_string(),
@@ -3899,10 +3899,10 @@ fn test_save_load_round_trip_all_metadata() {
         }],
     });
 
-    // Add station merge, zero datum, section offset, station offset
-    let section_id = project.sections[0].id;
-    project.add_section(SectionData {
-        name: Some("Section B".to_string()),
+    // Add station merge, zero datum, line offset, station offset
+    let line_id = project.lines[0].id;
+    project.add_line(LineData {
+        name: Some("Line B".to_string()),
         color: "#fedcba".to_string(),
         shots: vec![ShotData {
             azimuth_in: 45.0,
@@ -3914,24 +3914,24 @@ fn test_save_load_round_trip_all_metadata() {
         }],
         ..Default::default()
     });
-    let section_b_id = project.sections[1].id;
+    let line_b_id = project.lines[1].id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_id, 1).into(),
-        station_b: StationRef::new(section_b_id, 0).into(),
+        station_a: StationRef::new(line_id, 1).into(),
+        station_b: StationRef::new(line_b_id, 0).into(),
         merged_at: Utc::now(),
     });
 
     let gps = GpsCoordinates::new(48.8566, 2.3522, 5.0).unwrap();
     project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .set_zero_datum(StationRef::new(line_id, 0), gps)
         .unwrap();
 
-    // set_zero_datum creates section offsets for all connected sections (A and B are merged),
-    // so we don't add a manual section_offset - we just verify the ones set_zero_datum created.
+    // set_zero_datum creates line offsets for all connected lines (A and B are merged),
+    // so we don't add a manual line_offset - we just verify the ones set_zero_datum created.
     project
         .station_offsets
-        .insert(StationRef::new(section_id, 1).into(), (1.0, 2.0, 3.0));
+        .insert(StationRef::new(line_id, 1).into(), (1.0, 2.0, 3.0));
     project
         .imported_file_hashes
         .push("abc123def456".to_string());
@@ -3942,29 +3942,29 @@ fn test_save_load_round_trip_all_metadata() {
 
     assert_eq!(loaded.name, "FullMeta");
     assert_eq!(loaded.location.as_deref(), Some("Underwater Cave"));
-    assert_eq!(loaded.sections.len(), 2);
+    assert_eq!(loaded.lines.len(), 2);
     assert_eq!(
-        loaded.sections[0].shots[0]
+        loaded.lines[0].shots[0]
             .credit()
             .surveyor_names()
             .as_deref(),
         Some("Diver One")
     );
-    assert_eq!(loaded.sections[0].direction.to_string(), "out");
-    assert!((loaded.sections[0].quality - 0.75).abs() < 1e-6);
-    assert_eq!(loaded.sections[0].shots[0].kind, ShotKind::Reference);
-    assert_eq!(loaded.sections[0].shots[0].marker_index, Some(42));
+    assert_eq!(loaded.lines[0].direction.to_string(), "out");
+    assert!((loaded.lines[0].quality - 0.75).abs() < 1e-6);
+    assert_eq!(loaded.lines[0].shots[0].kind, ShotKind::Reference);
+    assert_eq!(loaded.lines[0].shots[0].marker_index, Some(42));
     assert_eq!(loaded.station_merges.len(), 1);
     assert_eq!(loaded.zero_datums.len(), 1);
     assert!((loaded.zero_datums[0].gps.latitude - 48.8566).abs() < 1e-6);
-    // The section offsets `set_zero_datum` produced survive the round trip
+    // The line offsets `set_zero_datum` produced survive the round trip
     // EXACTLY - value for value, not merely in number. Only the displaced
-    // section carries one: `section_offsets` means "sections that are actually
-    // displaced", so a section the datum leaves on exactly (0, 0) has no entry
+    // line carries one: `line_offsets` means "lines that are actually
+    // displaced", so a line the datum leaves on exactly (0, 0) has no entry
     // to persist (#413 finding 2). This used to assert `len() == 2`, counting
     // that inert entry and checking no value at all.
-    assert_eq!(loaded.section_offsets, project.section_offsets);
-    assert_eq!(loaded.section_offsets.len(), 1);
+    assert_eq!(loaded.line_offsets, project.line_offsets);
+    assert_eq!(loaded.line_offsets.len(), 1);
     assert_eq!(loaded.station_offsets.len(), 1);
     assert_eq!(loaded.imported_file_hashes.len(), 1);
     assert_eq!(loaded.imported_file_hashes[0], "abc123def456");
@@ -3978,7 +3978,7 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Closures".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
             length: 5.0,
@@ -3986,7 +3986,7 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
         }],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -4035,7 +4035,7 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
 
 #[test]
 fn test_compress_decompress_round_trip() {
-    let original = r#"{"type":"AddSection","data":{"name":"Main"}}"#;
+    let original = r#"{"type":"AddLine","data":{"name":"Main"}}"#;
     let compressed = compress_json(original);
     let decompressed = decompress_json(&compressed).unwrap();
     assert_eq!(decompressed, original);
@@ -4398,7 +4398,7 @@ fn a_multibyte_payload_past_the_ceiling_reports_the_ceiling_not_utf8() {
 /// The ceiling does not get in the way of a realistically large history blob.
 #[test]
 fn ordinary_history_blobs_still_round_trip_under_the_default_ceiling() {
-    let entry = r#"{"type":"MoveStation","section":3,"station":17,"from":[12.5,-3.25,44.0],"to":[12.75,-3.5,44.25]},"#;
+    let entry = r#"{"type":"MoveStation","line":3,"station":17,"from":[12.5,-3.25,44.0],"to":[12.75,-3.5,44.25]},"#;
     let mut json = String::from(r#"{"entries":["#);
     while json.len() < 2 * 1024 * 1024 {
         json.push_str(entry);
@@ -4776,17 +4776,17 @@ fn a_stack_that_fails_part_way_refunds_the_rows_that_already_decoded() {
 }
 
 #[test]
-fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
+fn two_dangling_station_offsets_in_one_line_save_without_pk_collision() {
     // Regression for the save crash (review finding #7): two dangling station
-    // offsets in one section both used to resolve to (section, 0) via
-    // key_to_ref_lossy and collide on the (section_id, station_index) PRIMARY
+    // offsets in one line both used to resolve to (line, 0) via
+    // key_to_ref_lossy and collide on the (line_id, station_index) PRIMARY
     // KEY, aborting the entire save. The persistence layer now skips a key that
     // doesn't resolve, so the save succeeds and the dangling offsets are dropped
     // (not persisted as phantom station-0 rows).
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Dangling".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![ShotData {
                 length: 5.0,
                 ..Default::default()
@@ -5227,7 +5227,7 @@ fn project_with_reference_shots() -> Project {
         ..Default::default()
     };
     let mut project = Project::new("Refs".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(10.0, ShotKind::Normal),
             shot(4.0, ShotKind::Reference),
@@ -5235,7 +5235,7 @@ fn project_with_reference_shots() -> Project {
         ],
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(6.0, ShotKind::Reference)],
         ..Default::default()
     });
@@ -6540,12 +6540,12 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
 
 // --- #195 VACUUM INTO snapshot ---
 
-/// Seed a `.stalx` at `path` with one section + one shot, then close it (so a
+/// Seed a `.stalx` at `path` with one line + one shot, then close it (so a
 /// DELETE-mode file is fully flushed to disk).
 fn seed_snapshot_source(path: &Path) {
     let mut db = Database::open(path).unwrap();
     let mut project = Project::new("Snap Cave".to_string(), Some("Loc".to_string()));
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Line".to_string()),
         surveyor: None,
         date: None,
@@ -6592,8 +6592,8 @@ fn vacuum_snapshot_self_contained_delete_mode() {
     let db = Database::open_existing(&dest).unwrap();
     let loaded = db.load_project().unwrap();
     assert_eq!(loaded.name, "Snap Cave");
-    assert_eq!(loaded.sections.len(), 1);
-    assert_eq!(loaded.sections[0].shots.len(), 1);
+    assert_eq!(loaded.lines.len(), 1);
+    assert_eq!(loaded.lines[0].shots.len(), 1);
 }
 
 #[test]
@@ -6608,7 +6608,7 @@ fn vacuum_snapshot_under_wal_mode() {
     let mut db = Database::open(&src).unwrap();
     db.conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
     let mut project = Project::new("WAL Cave".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("WL".to_string()),
         surveyor: None,
         date: None,
@@ -6633,8 +6633,8 @@ fn vacuum_snapshot_under_wal_mode() {
     let snap = Database::open_existing(&dest).unwrap();
     let loaded = snap.load_project().unwrap();
     assert_eq!(loaded.name, "WAL Cave");
-    assert_eq!(loaded.sections.len(), 1, "committed WAL data captured");
-    assert_eq!(loaded.sections[0].shots.len(), 1);
+    assert_eq!(loaded.lines.len(), 1, "committed WAL data captured");
+    assert_eq!(loaded.lines[0].shots.len(), 1);
 }
 
 #[test]
@@ -6704,7 +6704,7 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
             .unwrap();
         // A non-null edit timestamp so the dirty clear is observable; a view toggle
         // that MUST be stripped; and project-data rows that MUST survive. A real
-        // section backs the resolved_warnings FK so Database::open_existing's
+        // line backs the resolved_warnings FK so Database::open_existing's
         // integrity check passes after sanitize.
         db.conn
             .execute(
@@ -6801,7 +6801,7 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
     assert_eq!(
         count("imported_section_hashes"),
         1,
-        "imported_section_hashes must proliferate with the project"
+        "imported_line_hashes must proliferate with the project"
     );
     // Dirty bit + edit timestamp cleared; the hand-off identity is preserved.
     let link = snap.load_speleo_link().unwrap().expect("link kept");
@@ -7120,10 +7120,10 @@ fn sanitize_push_snapshot_tolerates_an_unstrippable_display_settings() {
     assert_eq!(count("display_settings"), 1, "the best-effort strip failed");
 }
 
-/// Build a section of shots that all descend at ~30°, with `sign` applied to the
+/// Build a line of shots that all descend at ~30°, with `sign` applied to the
 /// recorded pitch: `-1.0` reproduces the pre-#296 DMP storage (+up), `1.0` the
 /// already-correct Walls/Compass storage (+down).
-fn descending_section(name: &str, sign: f64, count: usize) -> SectionData {
+fn descending_line(name: &str, sign: f64, count: usize) -> LineData {
     // length 10 with dz 5 is a 30° descent, well clear of the migration's
     // near-horizontal and short-shot floors.
     let shots = (0..count)
@@ -7138,7 +7138,7 @@ fn descending_section(name: &str, sign: f64, count: usize) -> SectionData {
             ..Default::default()
         })
         .collect();
-    SectionData {
+    LineData {
         name: Some(name.to_string()),
         surveyor: None,
         date: None,
@@ -7149,7 +7149,7 @@ fn descending_section(name: &str, sign: f64, count: usize) -> SectionData {
     }
 }
 
-fn section_pitches(db: &Database, section_name: &str) -> Vec<Option<f64>> {
+fn line_pitches(db: &Database, line_name: &str) -> Vec<Option<f64>> {
     let mut stmt = db
         .conn
         .prepare(
@@ -7158,7 +7158,7 @@ fn section_pitches(db: &Database, section_name: &str) -> Vec<Option<f64>> {
              WHERE sec.name = ?1 ORDER BY s.sequence_order",
         )
         .unwrap();
-    stmt.query_map([section_name], |r| r.get::<_, Option<f64>>(0))
+    stmt.query_map([line_name], |r| r.get::<_, Option<f64>>(0))
         .unwrap()
         .map(|r| r.unwrap())
         .collect()
@@ -7175,7 +7175,7 @@ fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
     let mut project = Project::new("Legacy".to_string(), None);
     // R V R  -> bounded, so the backfill should settle on Jump.
     // R V V  -> one-sided, so the backfill should settle on Reference.
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Bounded".to_string()),
         shots: vec![
             legacy_shot(ShotKind::Normal),
@@ -7184,7 +7184,7 @@ fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
         ],
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Dangling".to_string()),
         shots: vec![
             legacy_shot(ShotKind::Normal),
@@ -7250,7 +7250,7 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
     let path = temp.path().join("bad_kind.stalx");
 
     let mut project = Project::new("Corrupt".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Main".to_string()),
         shots: vec![
             legacy_shot(ShotKind::Normal),
@@ -7282,19 +7282,19 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
         "the raw value must survive for the dialog"
     );
     assert_eq!(hit.shot_number, 2, "1-based position for display");
-    assert_eq!(hit.section_name.as_deref(), Some("Main"));
-    let section_id = project.sections[0].id;
-    assert_eq!(hit.section_id, section_id);
+    assert_eq!(hit.line_name.as_deref(), Some("Main"));
+    let line_id = project.lines[0].id;
+    assert_eq!(hit.line_id, line_id);
     assert_eq!(
         hit.shot_id,
-        section_id * crate::models::FEATURE_ID_STRIDE + 1,
+        line_id * crate::models::FEATURE_ID_STRIDE + 1,
         "shot_id must be the in-memory id set_shot_kind expects, not the rowid"
     );
 
     // And the loader itself fails the shot closed rather than making it swimmable.
     let loaded = db.load_project().unwrap();
     assert_eq!(
-        loaded.sections[0].shots[1].kind,
+        loaded.lines[0].shots[1].kind,
         ShotKind::Reference,
         "an unreadable kind must not load as a swimmable leg"
     );
@@ -7319,7 +7319,7 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
         assert_eq!(reported.len(), 1, "kind {bad} must still be reported");
         assert_eq!(reported[0].raw_value, bad.to_string());
         assert_eq!(
-            db.load_project().unwrap().sections[0].shots[1].kind,
+            db.load_project().unwrap().lines[0].shots[1].kind,
             ShotKind::Reference,
             "kind {bad} must load as Reference, not Normal"
         );
@@ -7335,7 +7335,7 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
             ))
             .unwrap();
         assert_eq!(
-            db.load_project().unwrap().sections[0].shots[1].kind,
+            db.load_project().unwrap().lines[0].shots[1].kind,
             ShotKind::Reference,
             "kind {bad} must load as Reference rather than failing the load"
         );
@@ -7359,7 +7359,7 @@ fn unrecognised_shot_kinds_are_repaired_on_disk() {
     let path = temp.path().join("repair.stalx");
 
     let mut project = Project::new("Corrupt".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![legacy_shot(ShotKind::Normal), legacy_shot(ShotKind::Jump)],
         ..Default::default()
     });
@@ -7407,7 +7407,7 @@ fn migrate_v13_carries_every_truthy_legacy_reference_value() {
     let path = temp.path().join("noncanonical.stalx");
 
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             legacy_shot(ShotKind::Normal),
             legacy_shot(ShotKind::Normal),
@@ -7462,7 +7462,7 @@ fn migrate_v13_materialises_show_jumps_from_the_old_single_toggle() {
     let path = temp.path().join("legacy_toggle.stalx");
 
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![legacy_shot(ShotKind::Reference)],
         ..Default::default()
     });
@@ -7510,7 +7510,7 @@ fn migrate_v13_drops_persisted_undo_history() {
     let path = temp.path().join("legacy_v12_undo.stalx");
 
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             legacy_shot(ShotKind::Normal),
             legacy_shot(ShotKind::Reference),
@@ -7565,10 +7565,10 @@ fn migrate_v13_drops_persisted_undo_history() {
 /// Regression: the first cut wrote `UPDATE shots SET kind = ? WHERE id = ?`
 /// using the in-memory `Shot::id`. That is a different ID space from the
 /// `shots.id` rowid - `write.rs` never stores an id, and `read.rs` synthesises
-/// one as `section_id * FEATURE_ID_STRIDE + sequence_order`. So section 0's
-/// verdicts landed one row early and every later section matched nothing at
+/// one as `line_id * FEATURE_ID_STRIDE + sequence_order`. So line 0's
+/// verdicts landed one row early and every later line matched nothing at
 /// all, while the pending flag was cleared in the same transaction - making the
-/// wrong kinds permanent. Two sections here is the point: a single-section
+/// wrong kinds permanent. Two lines here is the point: a single-line
 /// fixture passes even with the rowid bug.
 #[test]
 fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
@@ -7576,7 +7576,7 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
     let path = temp.path().join("backfill.stalx");
 
     let mut project = Project::new("Backfill".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("First".to_string()),
         shots: vec![
             legacy_shot(ShotKind::Normal),
@@ -7585,7 +7585,7 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
         ],
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Second".to_string()),
         shots: vec![
             legacy_shot(ShotKind::Normal),
@@ -7603,12 +7603,12 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
     // the verdicts through exactly as project_load does.
     let db = Database::open_existing(&path).unwrap();
     let loaded = db.load_project().unwrap();
-    // Section 0's virtual shot -> Reference, section 1's -> Jump. Deliberately
-    // different per section, and neither equal to what is on disk, so a write
+    // Line 0's virtual shot -> Reference, line 1's -> Jump. Deliberately
+    // different per line, and neither equal to what is on disk, so a write
     // that lands on the wrong row or no row cannot pass.
     let verdicts = vec![
-        (loaded.sections[0].id, 1_u32, ShotKind::Reference),
-        (loaded.sections[1].id, 1_u32, ShotKind::Jump),
+        (loaded.lines[0].id, 1_u32, ShotKind::Reference),
+        (loaded.lines[1].id, 1_u32, ShotKind::Jump),
     ];
     db.persist_backfilled_shot_kinds(&verdicts).unwrap();
     drop(db);
@@ -7623,8 +7623,8 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
         .map(|r| r.unwrap())
         .collect();
 
-    let s0 = loaded.sections[0].id;
-    let s1 = loaded.sections[1].id;
+    let s0 = loaded.lines[0].id;
+    let s1 = loaded.lines[1].id;
     assert_eq!(
         on_disk,
         vec![
@@ -7632,9 +7632,9 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
             (s0, 1, 2), // Reference - the verdict, on the row it was aimed at
             (s0, 2, 0), // Normal, untouched (the rowid bug shifted this one)
             (s1, 0, 0), // Normal, untouched
-            (s1, 1, 1), // Jump - the rowid bug never reached this section at all
+            (s1, 1, 1), // Jump - the rowid bug never reached this line at all
         ],
-        "each verdict must land on its own (section_id, sequence_order) row"
+        "each verdict must land on its own (line_id, sequence_order) row"
     );
     assert!(
         !db.is_kind_classification_pending(),
@@ -7679,27 +7679,27 @@ fn legacy_shot(kind: ShotKind) -> ShotData {
     }
 }
 
-/// Opening a pre-v12 project normalises only the sections whose pitch is stored
+/// Opening a pre-v12 project normalises only the lines whose pitch is stored
 /// in the old +up convention, and leaves everything else exactly as it was (#296).
 ///
-/// The verdict has to be per section because nothing records which importer
-/// produced a section, and a project can hold a DMP section and a Compass section
+/// The verdict has to be per line because nothing records which importer
+/// produced a line, and a project can hold a DMP line and a Compass line
 /// side by side, and only the DMP one may be touched.
 #[test]
-fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
+fn migrate_v12_flips_only_the_lines_stored_in_the_old_convention() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("legacy_v11.stalx");
 
     let mut project = Project::new("Mixed".to_string(), None);
     // Pre-#296 DMP: descending shots recorded negative. Must be flipped.
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project.add_line(descending_line("FromDmp", -1.0, 4));
     // Walls/Compass: already +down. Must be left alone.
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project.add_line(descending_line("FromCompass", 1.0, 4));
     // Ariane never populates inclination, so there is no signal to act on.
-    project.add_section(descending_section("FromAriane", 0.0, 4));
-    // Too few usable shots to call a section-wide verdict, even though each
+    project.add_line(descending_line("FromAriane", 0.0, 4));
+    // Too few usable shots to call a line-wide verdict, even though each
     // individual shot looks reversed.
-    project.add_section(descending_section("TooShort", -1.0, 2));
+    project.add_line(descending_line("TooShort", -1.0, 2));
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -7712,22 +7712,22 @@ fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         vec![Some(30.0); 4],
-        "a section stored +up is negated into +down"
+        "a line stored +up is negated into +down"
     );
     assert_eq!(
-        section_pitches(&db, "FromCompass"),
+        line_pitches(&db, "FromCompass"),
         vec![Some(30.0); 4],
-        "a section already +down must not be double-flipped"
+        "a line already +down must not be double-flipped"
     );
     assert_eq!(
-        section_pitches(&db, "FromAriane"),
+        line_pitches(&db, "FromAriane"),
         vec![Some(0.0); 4],
         "all-zero pitch carries no signal and is left untouched"
     );
     assert_eq!(
-        section_pitches(&db, "TooShort"),
+        line_pitches(&db, "TooShort"),
         vec![Some(-30.0); 2],
         "too few usable shots is not a verdict; left alone rather than guessed"
     );
@@ -7743,17 +7743,17 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
     let path = temp.path().join("legacy_nulls.stalx");
 
     let mut project = Project::new("Nulls".to_string(), None);
-    let mut section = descending_section("FromDmp", -1.0, 6);
+    let mut line = descending_line("FromDmp", -1.0, 6);
     // One shot never had an inclination recorded.
-    section.shots[1].pitch_in = None;
-    section.shots[1].pitch_out = None;
+    line.shots[1].pitch_in = None;
+    line.shots[1].pitch_out = None;
     // One shot is a genuine blunder: it disagrees with the rest of its own
-    // section about which way it points. The section verdict flips it along
+    // line about which way it points. The line verdict flips it along
     // with everything else, so it comes out still disagreeing with its depth
     // change, which is exactly right.
-    section.shots[5].pitch_in = Some(30.0);
-    section.shots[5].pitch_out = Some(30.0);
-    project.add_section(section);
+    line.shots[5].pitch_in = Some(30.0);
+    line.shots[5].pitch_out = Some(30.0);
+    project.add_line(line);
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -7762,14 +7762,14 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
     }
 
     let db = Database::open_existing(&path).unwrap();
-    let pitches = section_pitches(&db, "FromDmp");
+    let pitches = line_pitches(&db, "FromDmp");
     assert_eq!(pitches[0], Some(30.0), "ordinary shot normalised");
     assert_eq!(pitches[1], None, "an unrecorded pitch stays unrecorded");
     assert_eq!(pitches[2], Some(30.0), "ordinary shot normalised");
     assert_eq!(
         pitches[5],
         Some(-30.0),
-        "the outlier inherits the section verdict and stays wrong, so validation \
+        "the outlier inherits the line verdict and stays wrong, so validation \
          still flags it instead of the migration silently agreeing with it"
     );
 }
@@ -7778,18 +7778,18 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
 ///
 /// `test_v5.dmp` records no depth change on any shot, so the geometry cannot say
 /// which convention its inclinations are in. The migration has to decline rather
-/// than guess: silently negating a section it cannot reason about would corrupt
+/// than guess: silently negating a line it cannot reason about would corrupt
 /// it, and unlike a wrong warning that is not something the user can see.
 #[test]
-fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
+fn migrate_v12_leaves_a_line_with_no_vertical_signal_untouched() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
     assert!(fixture.exists(), "Fixture missing: {}", fixture.display());
     let dmp = stalagmight_parsers::parsers::dmp::parse_dmp(&fixture).unwrap();
 
     let mut project = Project::new("Flat".to_string(), None);
     let mut stored: Vec<Option<f64>> = Vec::new();
-    for section in &dmp.sections {
-        let mut data = section.to_section_data(String::new());
+    for line in &dmp.lines {
+        let mut data = line.to_line_data(String::new());
         if data.shots.len() < 4 {
             continue;
         }
@@ -7805,9 +7805,9 @@ fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
         }
         data.name = Some(format!("S{}", stored.len()));
         stored.extend(data.shots.iter().map(|s| s.pitch_in));
-        project.add_section(data);
+        project.add_line(data);
     }
-    assert!(!stored.is_empty(), "fixture yielded no usable section");
+    assert!(!stored.is_empty(), "fixture yielded no usable line");
     assert!(
         stored.iter().any(|p| p.is_some_and(|v| v.abs() > 1.0)),
         "fixture has no recorded inclination, so there would be nothing to leave alone"
@@ -7826,7 +7826,7 @@ fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
     let after: Vec<Option<f64>> = db
         .load_project()
         .unwrap()
-        .sections
+        .lines
         .iter()
         .flat_map(|s| s.shots.iter().map(|sh| sh.pitch_in))
         .collect();
@@ -7844,11 +7844,11 @@ fn seed_v11_project(path: &Path, project: &Project) {
     db.set_user_version(11).unwrap();
 }
 
-/// `MIN_VOTING_SHOTS` is 3 and the comparison is `>=`, so a section with exactly
+/// `MIN_VOTING_SHOTS` is 3 and the comparison is `>=`, so a line with exactly
 /// three usable shots is decided rather than skipped. The existing coverage uses
 /// 2 (declined) and 4 (flipped), so a `>=` slipping to `>` would go unnoticed.
 #[test]
-fn migrate_v12_decides_a_section_at_exactly_the_minimum_vote_count() {
+fn migrate_v12_decides_a_line_at_exactly_the_minimum_vote_count() {
     let temp = TempDir::new().unwrap();
 
     for (count, expected, why) in [
@@ -7865,12 +7865,12 @@ fn migrate_v12_decides_a_section_at_exactly_the_minimum_vote_count() {
     ] {
         let path = temp.path().join(format!("votes_{count}.stalx"));
         let mut project = Project::new("Votes".to_string(), None);
-        project.add_section(descending_section("FromDmp", -1.0, count));
+        project.add_line(descending_line("FromDmp", -1.0, count));
         seed_v11_project(&path, &project);
 
         let db = Database::open_existing(&path).unwrap();
         assert_eq!(
-            section_pitches(&db, "FromDmp"),
+            line_pitches(&db, "FromDmp"),
             vec![Some(expected); count],
             "{why}"
         );
@@ -7888,18 +7888,18 @@ fn migrate_v12_is_idempotent_when_run_twice() {
     let path = temp.path().join("twice.stalx");
 
     let mut project = Project::new("Twice".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project.add_line(descending_line("FromDmp", -1.0, 4));
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
-    let after_first = section_pitches(&db, "FromDmp");
+    let after_first = line_pitches(&db, "FromDmp");
     assert_eq!(after_first, vec![Some(30.0); 4], "first pass flips");
 
     // Simulate the interrupted case: rows are already flipped, but the stamp
     // never landed, so the migration runs over them again.
     Database::migrate_pitch_to_down_convention(&db.conn).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         after_first,
         "a second pass over already-flipped rows must not flip them back"
     );
@@ -7923,28 +7923,28 @@ fn migrate_v12_flip_is_governed_by_the_callers_transaction() {
     let path = temp.path().join("rollback.stalx");
 
     let mut project = Project::new("Rollback".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project.add_line(descending_line("FromDmp", -1.0, 4));
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
-    assert_eq!(section_pitches(&db, "FromDmp"), vec![Some(-30.0); 4]);
+    assert_eq!(line_pitches(&db, "FromDmp"), vec![Some(-30.0); 4]);
 
     let tx = db.conn.unchecked_transaction().unwrap();
     assert!(
         !Database::migrate_pitch_to_down_convention(&tx)
             .unwrap()
             .is_empty(),
-        "precondition: this section is the kind the migration flips"
+        "precondition: this line is the kind the migration flips"
     );
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         vec![Some(30.0); 4],
         "precondition: the flip is visible inside the open transaction"
     );
     tx.rollback().unwrap();
 
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         vec![Some(-30.0); 4],
         "rolling back the caller's transaction must undo the flip, so the flip \
          and the invalidation cannot be separated by a crash"
@@ -7953,7 +7953,7 @@ fn migrate_v12_flip_is_governed_by_the_callers_transaction() {
 
 /// A leg steeper than vertical is a survey blunder, and validation skips the
 /// inclination cross-check for it. It must not vote in the migration either, or
-/// a single typo can drag a section's verdict in whichever direction its sign
+/// a single typo can drag a line's verdict in whichever direction its sign
 /// happens to point.
 #[test]
 fn migrate_v12_ignores_out_of_range_legs_when_voting() {
@@ -7992,15 +7992,15 @@ fn migrate_v12_ignores_out_of_range_legs_when_voting() {
         ..Default::default()
     });
 
-    let mut section = descending_section("FromCompass", 1.0, 1);
-    section.shots = shots;
+    let mut line = descending_line("FromCompass", 1.0, 1);
+    line.shots = shots;
     let mut project = Project::new("Blunder".to_string(), None);
-    project.add_section(section);
+    project.add_line(line);
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromCompass"),
+        line_pitches(&db, "FromCompass"),
         vec![Some(2.0), Some(2.0), Some(2.0), Some(-91.0)],
         "an out-of-range leg must neither vote nor be rewritten, and must not \
          drag the correct shots around it"
@@ -8008,7 +8008,7 @@ fn migrate_v12_ignores_out_of_range_legs_when_voting() {
 }
 
 /// Everything outside the `shots` table that still holds a pre-flip pitch is
-/// dropped when the migration flips a section, because the v12 stamp means
+/// dropped when the migration flips a line, because the v12 stamp means
 /// there is no second pass to catch it later.
 ///
 /// Undo is the sharpest case: the payload carries absolute pitch values, so
@@ -8019,7 +8019,7 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
     let path = temp.path().join("stale.stalx");
 
     let mut project = Project::new("Stale".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project.add_line(descending_line("FromDmp", -1.0, 4));
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -8030,7 +8030,7 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
         )])
         .unwrap();
         db.save_resolved_warnings_bulk(&[ResolvedWarning {
-            section_id: 0,
+            line_id: 0,
             shot_id: 0,
             warning_code: "INCLINATION_DEPTH_MISMATCH".to_string(),
             resolved_at: Utc::now(),
@@ -8043,9 +8043,9 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         vec![Some(30.0); 4],
-        "precondition: the migration flipped this section"
+        "precondition: the migration flipped this line"
     );
 
     assert!(
@@ -8058,7 +8058,7 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
     );
 }
 
-/// One in-range blunder must not outvote the section majority.
+/// One in-range blunder must not outvote the line majority.
 ///
 /// The verdict counts votes rather than summing angular errors, because summing
 /// let a single shot decide by sheer magnitude. Here three correct shallow
@@ -8068,7 +8068,7 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
 /// corrupts the three correct shots and launders the blunder into agreement
 /// with its own depth change. Counted, it is one vote against three.
 #[test]
-fn migrate_v12_does_not_let_one_blunder_outvote_the_section() {
+fn migrate_v12_does_not_let_one_blunder_outvote_the_line() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("outvoted.stalx");
 
@@ -8096,33 +8096,33 @@ fn migrate_v12_does_not_let_one_blunder_outvote_the_section() {
         ..Default::default()
     });
 
-    let mut section = descending_section("FromCompass", 1.0, 1);
-    section.shots = shots;
+    let mut line = descending_line("FromCompass", 1.0, 1);
+    line.shots = shots;
     let mut project = Project::new("Outvoted".to_string(), None);
-    project.add_section(section);
+    project.add_line(line);
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromCompass"),
+        line_pitches(&db, "FromCompass"),
         vec![Some(2.0), Some(2.0), Some(2.0), Some(-89.0)],
         "three correct shots must outvote one blunder, and the blunder must stay \
          wrong so validation keeps flagging it"
     );
 }
 
-/// The other side of the margin: a real DMP section carrying one genuine
-/// blunder must still be converted. The blunder inherits the section verdict
+/// The other side of the margin: a real DMP line carrying one genuine
+/// blunder must still be converted. The blunder inherits the line verdict
 /// and stays flagged, which is what the cross-check is for.
 #[test]
-fn migrate_v12_still_flips_a_section_that_contains_one_blunder() {
+fn migrate_v12_still_flips_a_line_that_contains_one_blunder() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("blunder_in_dmp.stalx");
 
     // Six shots stored +up (pre-#296 DMP), plus one whose recorded pitch agrees
     // with its depth change and so votes the other way.
-    let mut section = descending_section("FromDmp", -1.0, 6);
-    section.shots.push(ShotData {
+    let mut line = descending_line("FromDmp", -1.0, 6);
+    line.shots.push(ShotData {
         azimuth_in: 90.0,
         azimuth_out: 90.0,
         length: 10.0,
@@ -8133,20 +8133,20 @@ fn migrate_v12_still_flips_a_section_that_contains_one_blunder() {
         ..Default::default()
     });
     let mut project = Project::new("BlunderInDmp".to_string(), None);
-    project.add_section(section);
+    project.add_line(line);
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
-    let pitches = section_pitches(&db, "FromDmp");
+    let pitches = line_pitches(&db, "FromDmp");
     assert_eq!(
         pitches[..6].to_vec(),
         vec![Some(30.0); 6],
-        "six votes to flip must carry the section past one dissenter"
+        "six votes to flip must carry the line past one dissenter"
     );
     assert_eq!(
         pitches[6],
         Some(-30.0),
-        "the dissenting shot inherits the section verdict and is left contradicting \
+        "the dissenting shot inherits the line verdict and is left contradicting \
          its own depth change, so validation still flags it"
     );
 }
@@ -8188,15 +8188,15 @@ fn migrate_v12_rejects_a_shot_with_one_out_of_range_leg() {
         ..Default::default()
     });
 
-    let mut section = descending_section("FromCompass", 1.0, 1);
-    section.shots = shots;
+    let mut line = descending_line("FromCompass", 1.0, 1);
+    line.shots = shots;
     let mut project = Project::new("HalfBlunder".to_string(), None);
-    project.add_section(section);
+    project.add_line(line);
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromCompass"),
+        line_pitches(&db, "FromCompass"),
         vec![Some(2.0), Some(2.0), Some(2.0), Some(-91.0)],
         "a shot with one out-of-range leg must not vote, so the correct shots \
          around it stay put"
@@ -8328,7 +8328,7 @@ fn migrate_v14_normalises_stored_azimuths() {
     ] {
         let path = temp.path().join(file);
         let mut project = Project::new("Legacy".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Wide".to_string()),
             shots,
             ..Default::default()
@@ -8428,7 +8428,7 @@ fn migrate_v14_normalisation_leaves_the_walked_bearing_alone() {
     let path = temp.path().join("legacy_v13_geometry.stalx");
 
     let mut project = Project::new("Geometry".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Wide".to_string()),
         shots: vec![ShotData {
             azimuth_in: 600.0,
@@ -8467,7 +8467,7 @@ fn migrate_v14_normalisation_leaves_the_walked_bearing_alone() {
 ///
 /// `LENGTH_BELOW_DEPTH_CHANGE` compares length against the depth change and
 /// never reads pitch, so clearing it would make previously dismissed warnings
-/// reappear for no reason. Dismissals on sections the migration did not flip
+/// reappear for no reason. Dismissals on lines the migration did not flip
 /// must survive too.
 #[test]
 fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
@@ -8475,17 +8475,17 @@ fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
     let path = temp.path().join("dismissals.stalx");
 
     let mut project = Project::new("Dismissals".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project.add_line(descending_line("FromDmp", -1.0, 4));
+    project.add_line(descending_line("FromCompass", 1.0, 4));
 
-    let flipped_id = project.sections[0].id;
-    let untouched_id = project.sections[1].id;
+    let flipped_id = project.lines[0].id;
+    let untouched_id = project.lines[1].id;
 
     {
         let mut db = Database::open(&path).unwrap();
         db.save_project(&project).unwrap();
-        let warn = |section_id: u32, code: &str| ResolvedWarning {
-            section_id,
+        let warn = |line_id: u32, code: &str| ResolvedWarning {
+            line_id,
             shot_id: 0,
             warning_code: code.to_string(),
             resolved_at: Utc::now(),
@@ -8503,16 +8503,16 @@ fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromDmp"),
+        line_pitches(&db, "FromDmp"),
         vec![Some(30.0); 4],
-        "precondition: the DMP section was flipped"
+        "precondition: the DMP line was flipped"
     );
 
     let mut remaining: Vec<(u32, String)> = db
         .load_resolved_warnings()
         .unwrap()
         .into_iter()
-        .map(|w| (w.section_id, w.warning_code))
+        .map(|w| (w.line_id, w.warning_code))
         .collect();
     remaining.sort();
 
@@ -8524,8 +8524,8 @@ fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
 
     assert_eq!(
         remaining, expected,
-        "only the inclination dismissal on the flipped section should go: a \
-         length warning never reads pitch, and an untouched section did not move"
+        "only the inclination dismissal on the flipped line should go: a \
+         length warning never reads pitch, and an untouched line did not move"
     );
 }
 
@@ -8538,7 +8538,7 @@ fn migrate_v12_does_not_flip_an_untouched_project_but_v13_still_drops_its_undo()
     let path = temp.path().join("untouched.stalx");
 
     let mut project = Project::new("Untouched".to_string(), None);
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project.add_line(descending_line("FromCompass", 1.0, 4));
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -8553,7 +8553,7 @@ fn migrate_v12_does_not_flip_an_untouched_project_but_v13_still_drops_its_undo()
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
-        section_pitches(&db, "FromCompass"),
+        line_pitches(&db, "FromCompass"),
         vec![Some(30.0); 4],
         "precondition: nothing was flipped"
     );
@@ -8575,18 +8575,18 @@ fn migrate_v12_does_not_flip_an_untouched_project_but_v13_still_drops_its_undo()
 
 /// #557: the mint-time bound (#556) vets what the APP creates, not what a FILE
 /// carries - a pre-#556 build, another tool, or a hostile author can persist a
-/// section id past the shot-id encode. `Section::new` computes
+/// line id past the shot-id encode. `Line::new` computes
 /// `id * FEATURE_ID_STRIDE` unchecked (debug panic, release wrap), so the open
 /// must refuse first, with a message naming the id and the bound.
 #[test]
-fn an_over_bound_section_id_refuses_the_open() {
+fn an_over_bound_line_id_refuses_the_open() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("overbound.stalx");
     let mut db = Database::open(&path).unwrap();
     let project = Project::new("Overbound".to_string(), None);
     db.save_project(&project).unwrap();
 
-    let hostile = crate::models::MAX_SECTION_ID + 1;
+    let hostile = crate::models::MAX_LINE_ID + 1;
     db.conn
         .execute(
             "INSERT INTO sections (id, color, created_at) VALUES (?1, '#abcdef', '2026-01-01T00:00:00Z')",
@@ -8600,18 +8600,18 @@ fn an_over_bound_section_id_refuses_the_open() {
         "the refusal must name the offending id: {err}"
     );
     assert!(
-        err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        err.contains(&crate::models::MAX_LINE_ID.to_string()),
         "the refusal must name the bound: {err}"
     );
 }
 
 /// #557: `u32::MAX` is the id that used to overflow the counter rebuild's
 /// `id + 1` (debug panic; release wrap to 0, after which the kept counter is
-/// whatever smaller ids produced and future mints could REUSE live section
+/// whatever smaller ids produced and future mints could REUSE live line
 /// ids). It is refused like any other over-bound id, before the counter runs,
 /// so debug and release agree.
 #[test]
-fn a_u32_max_section_id_is_refused_before_the_counter_rebuild() {
+fn a_u32_max_line_id_is_refused_before_the_counter_rebuild() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("umax.stalx");
     let mut db = Database::open(&path).unwrap();
@@ -8631,7 +8631,7 @@ fn a_u32_max_section_id_is_refused_before_the_counter_rebuild() {
         "the refusal must name the offending id: {err}"
     );
     assert!(
-        err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        err.contains(&crate::models::MAX_LINE_ID.to_string()),
         "the refusal must name the bound: {err}"
     );
 }
@@ -8639,7 +8639,7 @@ fn a_u32_max_section_id_is_refused_before_the_counter_rebuild() {
 /// The boundary id itself is legal - the refusal must not be off by one, and
 /// the counter rebuild must come back one past it.
 #[test]
-fn the_last_encodable_section_id_still_opens() {
+fn the_last_encodable_line_id_still_opens() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("boundary.stalx");
     let mut db = Database::open(&path).unwrap();
@@ -8649,30 +8649,30 @@ fn the_last_encodable_section_id_still_opens() {
     db.conn
         .execute(
             "INSERT INTO sections (id, color, created_at) VALUES (?1, '#abcdef', '2026-01-01T00:00:00Z')",
-            rusqlite::params![crate::models::MAX_SECTION_ID],
+            rusqlite::params![crate::models::MAX_LINE_ID],
         )
         .unwrap();
 
     let loaded = db.load_project().unwrap();
     assert!(
         loaded
-            .sections
+            .lines
             .iter()
-            .any(|s| s.id == crate::models::MAX_SECTION_ID),
-        "the boundary section must load"
+            .any(|s| s.id == crate::models::MAX_LINE_ID),
+        "the boundary line must load"
     );
     assert_eq!(
-        loaded.next_section_id,
-        crate::models::MAX_SECTION_ID + 1,
+        loaded.next_line_id,
+        crate::models::MAX_LINE_ID + 1,
         "the counter rebuild must sit one past the largest loaded id"
     );
 }
 
 /// #557: `unrecognised_shot_kinds` runs its own query over the shots table, so
-/// it can meet a section id the open-refusal never vetted (the diagnostic can
+/// it can meet a line id the open-refusal never vetted (the diagnostic can
 /// be called without a full load). The encode must saturate, not panic.
 #[test]
-fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
+fn unrecognised_shot_kinds_saturates_an_over_bound_line_id() {
     let db = Database::in_memory().unwrap();
     db.conn
         .execute(
@@ -8688,7 +8688,7 @@ fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
         )
         .unwrap();
 
-    // A second, legal row pins the FORMULA (a bare `shot_id: section_id`
+    // A second, legal row pins the FORMULA (a bare `shot_id: line_id`
     // would also yield u32::MAX for the hostile row above).
     db.conn
         .execute(
@@ -8706,17 +8706,17 @@ fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
 
     let kinds = db.unrecognised_shot_kinds().unwrap();
     assert_eq!(kinds.len(), 2, "both unrecognised kinds must be reported");
-    let legal = kinds.iter().find(|k| k.section_id == 7).unwrap();
+    let legal = kinds.iter().find(|k| k.line_id == 7).unwrap();
     assert_eq!(
         legal.shot_id,
         7 * crate::models::FEATURE_ID_STRIDE + 3,
-        "a legal section id must still encode by the stride formula"
+        "a legal line id must still encode by the stride formula"
     );
-    let hostile = kinds.iter().find(|k| k.section_id == u32::MAX).unwrap();
+    let hostile = kinds.iter().find(|k| k.line_id == u32::MAX).unwrap();
     assert_eq!(
         hostile.shot_id,
         u32::MAX,
-        "an over-bound section id saturates the encode instead of panicking"
+        "an over-bound line id saturates the encode instead of panicking"
     );
 }
 
@@ -8890,7 +8890,7 @@ fn counter_parity_file(raw: Option<&str>) -> (TempDir, Database, String) {
     let mut db = Database::open(&temp.path().join("parity.stalx")).unwrap();
     let mut project = Project::new("Parity".to_string(), None);
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![ShotData {
                 length: 5.0,
                 ..Default::default()
@@ -8898,7 +8898,7 @@ fn counter_parity_file(raw: Option<&str>) -> (TempDir, Database, String) {
             ..Default::default()
         })
         .id;
-    let uuid = project.get_section(id).unwrap().shots[0]
+    let uuid = project.get_line(id).unwrap().shots[0]
         .uuid
         .clone()
         .unwrap();
@@ -8978,7 +8978,7 @@ fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
     let mut db = Database::open(&temp.path().join("held.stalx")).unwrap();
     let mut project = Project::new("Held".to_string(), None);
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 ShotData {
                     length: 5.0,
@@ -8992,9 +8992,9 @@ fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
             ..Default::default()
         })
         .id;
-    let shots = &project.get_section(id).unwrap().shots;
+    let shots = &project.get_line(id).unwrap().shots;
     let held = crate::models::HeldGauge {
-        section_id: id,
+        line_id: id,
         shot: shots[1].uuid.clone().unwrap(),
         neighbour: shots[0].uuid.clone(),
         end: true,

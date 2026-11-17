@@ -107,8 +107,8 @@ describe('classifyDiffs', () => {
     // wants when a comparison does not cross a save/reload epoch.
     const classified = classifyDiffs(
       [
-        { path: 'project.sections[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
-        { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
+        { path: 'project.lines[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
+        { path: 'project.line_offsets.32', expected: '<absent>', actual: '[0,0]' },
       ],
       [],
     );
@@ -120,7 +120,7 @@ describe('classifyDiffs', () => {
 
   it('does not swallow a neighbouring field on an attributable path', () => {
     const classified = classifyDiffs(
-      [{ path: 'project.sections[2].shots[0].length', expected: '5', actual: '6' }],
+      [{ path: 'project.lines[2].shots[0].length', expected: '5', actual: '6' }],
       SAVE_HEALING_MUTATIONS,
     );
 
@@ -131,8 +131,8 @@ describe('classifyDiffs', () => {
   it('reports each matching rule once, whatever the diff count', () => {
     const classified = classifyDiffs(
       [
-        { path: 'project.sections[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
-        { path: 'project.sections[5].gauge_shot_uuid', expected: 'null', actual: '"u-2"' },
+        { path: 'project.lines[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
+        { path: 'project.lines[5].gauge_shot_uuid', expected: 'null', actual: '"u-2"' },
       ],
       SAVE_HEALING_MUTATIONS,
     );
@@ -212,10 +212,10 @@ describe('SAVE_HEALING_MUTATIONS', () => {
   it('accepts the three documented save-time heals, in the documented direction', () => {
     const classified = classifyDiffs(
       [
-        { path: 'project.sections[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
-        { path: 'project.sections[2].gauge_neighbour_uuid', expected: 'null', actual: '"u-2"' },
-        { path: 'project.sections[0].shots[1].uuid', expected: '<absent>', actual: '"u-3"' },
-        { path: 'project.section_offsets.9', expected: '[0,0]', actual: '<absent>' },
+        { path: 'project.lines[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
+        { path: 'project.lines[2].gauge_neighbour_uuid', expected: 'null', actual: '"u-2"' },
+        { path: 'project.lines[0].shots[1].uuid', expected: '<absent>', actual: '"u-3"' },
+        { path: 'project.line_offsets.9', expected: '[0,0]', actual: '<absent>' },
       ],
       SAVE_HEALING_MUTATIONS,
     );
@@ -228,11 +228,11 @@ describe('SAVE_HEALING_MUTATIONS', () => {
     const classified = classifyDiffs(
       [
         // A gauge anchor changing value (not null -> value) is not a heal.
-        { path: 'project.sections[2].gauge_shot_uuid', expected: '"old"', actual: '"new"' },
+        { path: 'project.lines[2].gauge_shot_uuid', expected: '"old"', actual: '"new"' },
         // An offset entry APPEARING is not the orphan retain.
-        { path: 'project.section_offsets.9', expected: '<absent>', actual: '[1,2]' },
+        { path: 'project.line_offsets.9', expected: '<absent>', actual: '[1,2]' },
         // A uuid being cleared is not the backfill.
-        { path: 'project.sections[0].shots[1].uuid', expected: '"u"', actual: '<absent>' },
+        { path: 'project.lines[0].shots[1].uuid', expected: '"u"', actual: '<absent>' },
       ],
       SAVE_HEALING_MUTATIONS,
     );
@@ -243,7 +243,7 @@ describe('SAVE_HEALING_MUTATIONS', () => {
 
   it('rejects anything else a save might have touched', () => {
     const classified = classifyDiffs(
-      [{ path: 'project.sections[0].shots[1].length', expected: '5', actual: '6' }],
+      [{ path: 'project.lines[0].shots[1].length', expected: '5', actual: '6' }],
       SAVE_HEALING_MUTATIONS,
     );
 
@@ -252,12 +252,12 @@ describe('SAVE_HEALING_MUTATIONS', () => {
 });
 
 describe('shotSetDelta', () => {
-  const snapshot = (sections: { id: number; uuids: string[] }[]): string =>
+  const snapshot = (lines: { id: number; uuids: string[] }[]): string =>
     canonicalJson({
       project: {
-        sections: sections.map((section) => ({
-          id: section.id,
-          shots: section.uuids.map((uuid) => ({ uuid })),
+        lines: lines.map((line) => ({
+          id: line.id,
+          shots: line.uuids.map((uuid) => ({ uuid })),
         })),
       },
       stations: [],
@@ -267,7 +267,7 @@ describe('shotSetDelta', () => {
     const same = snapshot([{ id: 1, uuids: ['a', 'b'] }]);
 
     expect(shotSetDelta(same, same)).toEqual([]);
-    // Reordered within the section: the same shots moved, none was lost.
+    // Reordered within the line: the same shots moved, none was lost.
     expect(shotSetDelta(same, snapshot([{ id: 1, uuids: ['b', 'a'] }]))).toEqual([]);
   });
 
@@ -278,13 +278,13 @@ describe('shotSetDelta', () => {
     );
 
     expect(deltas).toEqual([
-      { sectionId: 1, missing: ['b'], extra: ['c'], expectedCount: 2, actualCount: 2 },
+      { lineId: 1, missing: ['b'], extra: ['c'], expectedCount: 2, actualCount: 2 },
     ]);
   });
 
-  it('counts a section that VANISHED as its whole shot list lost', () => {
+  it('counts a line that VANISHED as its whole shot list lost', () => {
     // The regression this guards: iterating only `expected` and skipping ids
-    // absent from `actual` reported NO delta for a run that lost a section, and
+    // absent from `actual` reported NO delta for a run that lost a line, and
     // the caller then printed "shot identity is IDENTICAL on both sides".
     const deltas = shotSetDelta(
       snapshot([{ id: 1, uuids: ['a'] }, { id: 7, uuids: ['x', 'y'] }]),
@@ -292,18 +292,18 @@ describe('shotSetDelta', () => {
     );
 
     expect(deltas).toEqual([
-      { sectionId: 7, missing: ['x', 'y'], extra: [], expectedCount: 2, actualCount: 0 },
+      { lineId: 7, missing: ['x', 'y'], extra: [], expectedCount: 2, actualCount: 0 },
     ]);
   });
 
-  it('counts a section that APPEARED as its whole shot list gained', () => {
+  it('counts a line that APPEARED as its whole shot list gained', () => {
     const deltas = shotSetDelta(
       snapshot([{ id: 1, uuids: ['a'] }]),
       snapshot([{ id: 1, uuids: ['a'] }, { id: 7, uuids: ['x'] }]),
     );
 
     expect(deltas).toEqual([
-      { sectionId: 7, missing: [], extra: ['x'], expectedCount: 0, actualCount: 1 },
+      { lineId: 7, missing: [], extra: ['x'], expectedCount: 0, actualCount: 1 },
     ]);
   });
 });

@@ -58,7 +58,7 @@ describe('usePanelReveal - close-grace + pin clearing', () => {
     act(() => result.current.scheduleClose(700));
     expect(result.current.isFloatingOpen).toBe(true);
 
-    // Pin (section-focus / keyboard / menu all force mode='pin').
+    // Pin (line-focus / keyboard / menu all force mode='pin').
     act(() => {
       useUIStore.setState({ detailPanelMode: 'pin' });
     });
@@ -149,7 +149,7 @@ describe('usePanelReveal - viewport-forced close (#260)', () => {
 it('programmatic reveal preserves preferences and focus keeps a floating dock accessible', () => {
   vi.useFakeTimers();
   useUIStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: false });
-  const { result } = renderHook(() => usePanelReveal('sections'));
+  const { result } = renderHook(() => usePanelReveal('lines'));
   act(() => result.current.revealTemporarily());
   expect(result.current.isFloatingOpen).toBe(true);
   expect(useUIStore.getState().sectionsPanelOpen).toBe(false);

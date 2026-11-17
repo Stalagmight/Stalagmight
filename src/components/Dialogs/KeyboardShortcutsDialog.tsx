@@ -133,7 +133,7 @@ export default function KeyboardShortcutsDialog() {
                 ))}
               </div>
 
-              {/* Reserved section - full width */}
+              {/* Reserved line - full width */}
               {filteredReserved.length > 0 && (
                 <div className="mt-4">
                   <h3 className="text-sm font-medium text-text-secondary mb-2">

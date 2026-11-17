@@ -2,7 +2,7 @@
  * The predicate and translations that keep the UI's station numbering and the
  * payload's in step.
  *
- * Dropping blank new rows from the payloads created two pictures of a section -
+ * Dropping blank new rows from the payloads created two pictures of a line -
  * the one on screen, which counts a blank row, and the one sent, which does not.
  * Three separate sites converted between them wrongly (zero-datum reanchoring,
  * the DMP station adjustment, the manual segment anchor), each able to land a
@@ -98,8 +98,8 @@ describe('toEmittedStationIndex', () => {
     expect(toEmittedStationIndex(rows, 2)).toBe(2);
   });
 
-  it('clamps a pick past the end of the shortened section', () => {
-    // Every row blank: the emitted section has no shots, so the only station
+  it('clamps a pick past the end of the shortened line', () => {
+    // Every row blank: the emitted line has no shots, so the only station
     // left is 0 - never an out-of-range index the backend would reject.
     const rows = [blank(0), blank(1)];
     expect(toEmittedStationIndex(rows, 2)).toBe(0);
@@ -166,7 +166,7 @@ describe('fromEmittedStationIndex', () => {
 });
 
 /**
- * The reverse mirror reflects a station about the midpoint of its section, so it
+ * The reverse mirror reflects a station about the midpoint of its line, so it
  * has to count the same shots the payload sends. Counting non-deleted rows while
  * emitting non-blank ones reflected about the wrong midpoint and attached the
  * import to the wrong physical station.

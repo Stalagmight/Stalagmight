@@ -66,7 +66,7 @@ test.describe('Recovery Integrity Workflow', () => {
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              project: { file_path: string | null; sections: unknown[] } | null;
+              project: { file_path: string | null; lines: unknown[] } | null;
             };
           };
         };
@@ -74,11 +74,11 @@ test.describe('Recovery Integrity Workflow', () => {
 
       return {
         filePath: e2e?.projectStore.getState().project?.file_path ?? null,
-        sectionCount: e2e?.projectStore.getState().project?.sections.length ?? 0,
+        lineCount: e2e?.projectStore.getState().project?.lines.length ?? 0,
       };
     });
 
     expect(projectState.filePath).toBe('/mock/corrupt-project.stalx');
-    expect(projectState.sectionCount).toBeGreaterThan(0);
+    expect(projectState.lineCount).toBeGreaterThan(0);
   });
 });

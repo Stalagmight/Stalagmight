@@ -22,7 +22,7 @@ const KEY = {
 };
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project with mock lines/stations
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
@@ -95,7 +95,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // Verify search input exists
       await expect(page.locator('[data-testid="shortcuts-search"]')).toBeVisible();
 
-      // Verify reserved shortcuts section exists
+      // Verify reserved shortcuts line exists
       await expect(page.locator('[data-testid="reserved-shortcuts"]')).toBeVisible();
 
       // Verify categories are visible (File is now the first category)
@@ -546,12 +546,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect(reserved).toContainText('Delete selection');
       await expect(reserved).toContainText('UI Navigation');
 
-      // Ctrl+I and Ctrl+E should NOT be in reserved section (they are now configurable)
+      // Ctrl+I and Ctrl+E should NOT be in reserved line (they are now configurable)
       await expect(reserved).not.toContainText(IS_MAC ? `${KEY.Ctrl}I` : 'Ctrl+I');
       await expect(reserved).not.toContainText(IS_MAC ? `${KEY.Ctrl}E` : 'Ctrl+E');
     });
 
-    test('reserved shortcuts section is positioned above search bar', async ({ page }) => {
+    test('reserved shortcuts line is positioned above search bar', async ({ page }) => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
@@ -561,7 +561,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect(reserved).toBeVisible();
       await expect(search).toBeVisible();
 
-      // Verify reserved section precedes search bar in DOM order
+      // Verify reserved line precedes search bar in DOM order
       // compareDocumentPosition returns bitmask; bit 4 (DOCUMENT_POSITION_FOLLOWING) means search follows reserved
       const reservedPrecedesSearch = await page.evaluate(() => {
         const reservedEl = document.querySelector('[data-testid="reserved-shortcuts"]');

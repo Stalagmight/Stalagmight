@@ -4,12 +4,12 @@
 
 use std::collections::HashSet;
 
-use crate::{SectionId, ShotId, StationKey, StationRef};
+use crate::{LineId, ShotId, StationKey, StationRef};
 
 use super::{ClosurePair, Project};
 
 impl Project {
-    /// Remove the shots at positions `start_pos..=end_pos` of `section_id` by
+    /// Remove the shots at positions `start_pos..=end_pos` of `line_id` by
     /// gap-closing: in forward order, each a single-shot
     /// [`Self::remove_shot_with_rewire_excluding_anchors`] with the per-shot
     /// cascade deferred. The caller runs the one cascade afterwards
@@ -22,26 +22,26 @@ impl Project {
     /// when deciding which side keeps its position - otherwise an anchor on a
     /// later, also-doomed range shot would displace the survivors (a suffix
     /// shift would keep the doomed tail fixed and shift the head). The caller
-    /// has refused the whole section, so `start_pos == 0` means a prefix.
+    /// has refused the whole line, so `start_pos == 0` means a prefix.
     ///
     /// On `Err` the project is part-way through the range: the command restores
     /// its snapshot, the preview drops its clone.
     pub fn gap_close_shot_range(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
     ) -> Result<(), String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let n = section.shots.len();
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        let n = line.shots.len();
         if start_pos > end_pos || end_pos >= n {
             return Err(format!(
-                "Shot range {start_pos}..={end_pos} is not in section {section_id}"
+                "Shot range {start_pos}..={end_pos} is not in line {line_id}"
             ));
         }
-        let range_shot_ids: Vec<ShotId> = section.shots[start_pos..=end_pos]
+        let range_shot_ids: Vec<ShotId> = line.shots[start_pos..=end_pos]
             .iter()
             .map(|s| s.id)
             .collect();
@@ -55,11 +55,11 @@ impl Project {
         };
         let doomed_anchors: HashSet<StationKey> = doomed_indices
             .iter()
-            .filter_map(|&i| self.key_for_ref(StationRef::new(section_id, i)))
+            .filter_map(|&i| self.key_for_ref(StationRef::new(line_id, i)))
             .collect();
         for &sid in &range_shot_ids {
             self.remove_shot_with_rewire_excluding_anchors(
-                section_id,
+                line_id,
                 sid,
                 &doomed_anchors,
                 /* defer_cascade */ true,
@@ -68,7 +68,7 @@ impl Project {
         Ok(())
     }
 
-    /// The loop closures gap-closing `start_pos..=end_pos` of `section_id`
+    /// The loop closures gap-closing `start_pos..=end_pos` of `line_id`
     /// would leave tying the two ends of one shot together (#737), named by
     /// their stations before the delete - exactly the closures
     /// `execute_delete_shot_range_shift` removes, because it is the same
@@ -79,7 +79,7 @@ impl Project {
     /// across one shot then).
     pub fn preview_gap_close_closure_removals(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
     ) -> Result<Vec<ClosurePair>, String> {
@@ -87,14 +87,14 @@ impl Project {
             return Ok(Vec::new());
         }
         self.clone()
-            .into_gap_close_closure_removals(section_id, start_pos, end_pos)
+            .into_gap_close_closure_removals(line_id, start_pos, end_pos)
     }
 
     /// [`Self::preview_gap_close_closure_removals`] on a copy the caller gives
     /// up, so it is not cloned again.
     pub fn into_gap_close_closure_removals(
         mut self,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
     ) -> Result<Vec<ClosurePair>, String> {
@@ -102,7 +102,7 @@ impl Project {
             return Ok(Vec::new());
         }
         let before = self.closures_before_edit();
-        self.gap_close_shot_range(section_id, start_pos, end_pos)?;
+        self.gap_close_shot_range(line_id, start_pos, end_pos)?;
         Ok(self.closures_newly_across_one_shot(&before))
     }
 

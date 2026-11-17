@@ -20,7 +20,7 @@ pub struct Config {
     pub general: GeneralConfig,
     pub units: UnitsConfig,
     pub display: DisplayConfig,
-    pub section_colors: SectionColorsConfig,
+    pub line_colors: LineColorsConfig,
     pub map: MapConfig,
     pub validation: ValidationConfig,
     #[serde(default)]
@@ -40,7 +40,7 @@ pub struct Config {
     /// `defaultConfig.ts` (which is typed as the frontend `Config`, so an emitted
     /// `webkit_memory` block would fail `tsc`). Because `skip_serializing` also
     /// drops it from `toml::to_string_pretty`, saving would otherwise wipe the
-    /// `[webkit_memory]` section from disk; `Config::save_to_path` therefore
+    /// `[webkit_memory]` line from disk; `Config::save_to_path` therefore
     /// re-appends the table (when non-default) after serializing, so a hand-tuned
     /// knob in `config.toml` survives a save. The re-appended value is the one
     /// `AppState::update_config` preserves in memory across the session, so saving
@@ -77,7 +77,7 @@ pub struct Config {
     pub(super) legacy_snap: Option<LegacySnapConfig>,
 }
 
-/// Legacy snap config for migration from old [snap] section
+/// Legacy snap config for migration from old [snap] line
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub(super) struct LegacySnapConfig {
     #[serde(default)]
@@ -894,7 +894,7 @@ fn default_measure_path_color() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SectionColorsConfig {
+pub struct LineColorsConfig {
     pub palette: Vec<String>,
 }
 
@@ -1088,7 +1088,7 @@ pub struct ShortcutsConfig {
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub toggle_shot_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub toggle_section_labels: Vec<String>,
+    pub toggle_line_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub fit_to_bounds: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
@@ -1192,9 +1192,9 @@ impl ShortcutsConfig {
             "toggle_shot_labels",
         );
         normalize_shortcut_field(
-            &mut self.toggle_section_labels,
-            &defaults.toggle_section_labels,
-            "toggle_section_labels",
+            &mut self.toggle_line_labels,
+            &defaults.toggle_line_labels,
+            "toggle_line_labels",
         );
         normalize_shortcut_field(
             &mut self.fit_to_bounds,
@@ -1512,7 +1512,7 @@ impl Config {
             struct WebkitMemoryDoc<'a> {
                 webkit_memory: &'a WebkitMemoryConfig,
             }
-            let section = toml::to_string_pretty(&WebkitMemoryDoc {
+            let line = toml::to_string_pretty(&WebkitMemoryDoc {
                 webkit_memory: &self.webkit_memory,
             })
             .context("Failed to serialize webkit_memory config")?;
@@ -1520,7 +1520,7 @@ impl Config {
                 contents.push('\n');
             }
             contents.push('\n');
-            contents.push_str(&section);
+            contents.push_str(&line);
         }
         super::speleodb_file::save_with_general(&self.speleodb, path, &contents)?;
         tracing::info!(config_path = ?path, "Saved config to file");
@@ -1556,15 +1556,15 @@ impl Config {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
-    /// Get the next section color from the palette
-    pub fn next_section_color(&self, used_colors: &[String]) -> String {
-        for color in &self.section_colors.palette {
+    /// Get the next line color from the palette
+    pub fn next_line_color(&self, used_colors: &[String]) -> String {
+        for color in &self.line_colors.palette {
             if !used_colors.contains(color) {
                 return color.clone();
             }
         }
         // If all colors used, start from beginning
-        self.section_colors
+        self.line_colors
             .palette
             .first()
             .cloned()
@@ -1620,14 +1620,14 @@ impl Config {
     /// Called during load() before normalize()
     ///
     /// Note: Migration only occurs when map.snap has default values.
-    /// If a user explicitly sets map.snap to defaults AND has a legacy [snap] section,
+    /// If a user explicitly sets map.snap to defaults AND has a legacy [snap] line,
     /// the legacy values will override. This edge case is accepted as the user likely
     /// wants to migrate their old settings.
     pub(super) fn migrate_legacy(&mut self) {
-        // Migrate old [snap] section to new map.snap
+        // Migrate old [snap] line to new map.snap
         if let Some(legacy) = self.legacy_snap.take() {
             // Only migrate if map.snap appears to be at defaults (not explicitly set)
-            // Limitation: Cannot distinguish explicit defaults from missing section
+            // Limitation: Cannot distinguish explicit defaults from missing line
             let snap_is_default = (self.map.snap.threshold - default_snap_threshold()).abs()
                 < f64::EPSILON
                 && self.map.snap.enabled_merge

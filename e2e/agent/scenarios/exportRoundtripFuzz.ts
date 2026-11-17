@@ -169,7 +169,7 @@
  * in `ExportImageOptions` at all (`_include_satellite`, `_include_grid`), and
  * one DISAGREES with the shipped default: the config says
  * `default_include_labels: true` while `show_station_labels` and
- * `show_section_names` both default `false`. Metered as
+ * `show_line_names` both default `false`. Metered as
  * `x8:configDefaultsHonored` (0 or 1) rather than asserted, because "should a
  * settings default seed the export form" is a product question, not a
  * correctness one. Recorded here so the answer is a decision rather than an
@@ -300,7 +300,7 @@
  *         that transform with nothing left over. They are the reversed legs of
  *         finding 4a arriving reversed, which is the exporter working as
  *         designed - a `.tml` cannot say "surveyed outward from here", so a
- *         section surveyed away from its datum is written walking back toward
+ *         line surveyed away from its datum is written walking back toward
  *         it. X6's key was DIRECTION-BEARING and called one leg a lost shot and
  *         a gained shot. It is now direction-agnostic (`shotKey` orients each
  *         shot to the lexicographically smaller of itself and its reciprocal),
@@ -364,14 +364,14 @@
  *    MEASURED, by parsing T1..T4 rather than diffing bytes, matching shots by
  *    uuid:
  *      - T3 and T4 are BYTE-IDENTICAL. The chain converges; it does not churn.
- *      - T2 and T3 hold the same 40 sections, the same NAME SET, and the same
- *        MEMBERSHIP - ZERO shots changed section between them.
+ *      - T2 and T3 hold the same 40 lines, the same NAME SET, and the same
+ *        MEMBERSHIP - ZERO shots changed line between them.
  *      - Setting aside the Ariane `<ID>`/`<FR>` node numbers, which renumber
  *        with position, T2 and T3 have an IDENTICAL BLOCK MULTISET.
  *    So no boundary moved, nothing was lost or gained, and the only thing that
- *    differs is the ORDER the sections are written in.
+ *    differs is the ORDER the lines are written in.
  *
- *    THE MECHANISM. The first import does not DERIVE its section order - it
+ *    THE MECHANISM. The first import does not DERIVE its line order - it
  *    inherits it from the source project, which for T1 is the fixture's own.
  *    The second import derives it from a file the exporter wrote, and from then
  *    on the composition maps that order to itself. So the trip needs one extra
@@ -398,9 +398,9 @@
  * product decision about how chatty the panel should be, not a defect. It is
  * written down here so the asymmetry is a decision rather than an oversight.
  *
- * A SYNTHETIC FLOATING SECTION DOES NOT SURVIVE THE TML ROUND TRIP INTACT, and
+ * A SYNTHETIC FLOATING LINE DOES NOT SURVIVE THE TML ROUND TRIP INTACT, and
  * this scenario measures it without claiming to have characterised it. X7 builds
- * a 14-shot chain with `createSection` - unconnected, unanchored - and when the
+ * a 14-shot chain with `createLine` - unconnected, unanchored - and when the
  * rotation put it in the same episode as X5/X6, the re-imported copy came back
  * with every depth shifted by a constant 7 and every comment gone (seed 1,
  * episode 3, both counts exact). The depth shift is the exporter re-rooting an
@@ -410,7 +410,7 @@
  * around the START shot, and this may be one of them or may not.
  *
  * IT IS NOT REPORTED AS A FINDING, because the input is one this scenario
- * fabricated rather than one a user can make: `createSection` builds a chain
+ * fabricated rather than one a user can make: `createLine` builds a chain
  * that no import or draw flow produces in that state, and the same argument
  * `importDialogFuzz.ts` makes for `uiStore.confirmPlacement()` applies - a bug
  * found by driving a store into a state no UI can reach is a fabricated bug.
@@ -602,15 +602,15 @@ function rmrf(target: string): void {
 }
 
 /**
- * A canonical-snapshot-shaped document holding every uuid in ONE section.
+ * A canonical-snapshot-shaped document holding every uuid in ONE line.
  *
- * `shotSetDelta` reads `project.sections[].shots[].uuid` and answers per
- * section. A round trip is allowed to re-partition sections, so the flattening
+ * `shotSetDelta` reads `project.lines[].shots[].uuid` and answers per
+ * line. A round trip is allowed to re-partition lines, so the flattening
  * is what makes its answer the project-wide identity question instead of a
  * restatement of the fragmentation.
  */
 function flatUuidSnapshot(uuids: readonly string[]): string {
-  return JSON.stringify({ project: { sections: [{ id: 0, shots: uuids.map((uuid) => ({ uuid })) }] } });
+  return JSON.stringify({ project: { lines: [{ id: 0, shots: uuids.map((uuid) => ({ uuid })) }] } });
 }
 
 /** Everything in `dir` that is not one of `expected`. */
@@ -627,18 +627,18 @@ function straysIn(dir: string, expected: readonly string[]): string[] {
 /** The project state, reduced in page to what the oracles need. */
 interface ProjectDigest {
   open: boolean;
-  sections: number;
+  lines: number;
   shots: ShotIdentity[];
   uuids: string[];
   /**
-   * The same uuids, grouped BY SECTION.
+   * The same uuids, grouped BY LINE.
    *
-   * Shot-uuid uniqueness is a per-section invariant in this app
-   * (`models/project.rs::ensure_unique_shot_uuids`, and the `(section_id, uuid)`
+   * Shot-uuid uniqueness is a per-line invariant in this app
+   * (`models/project.rs::ensure_unique_shot_uuids`, and the `(line_id, uuid)`
    * lookup cache), so X6b needs the grouping and X4's precondition needs the
    * flat list - they are different questions and both are carried.
    */
-  uuidsBySection: string[][];
+  uuidsByLine: string[][];
   /**
    * Every comment TEXT in the project, U+200B-split, pooled over shot comments
    * AND station comments.
@@ -667,12 +667,12 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
     const core = window.__TAURI__ && window.__TAURI__.core;
     const state = await core.invoke('get_project_state');
     const project = state && state.project ? state.project : state;
-    if (!project || !Array.isArray(project.sections)) {
-      return { open: false, sections: 0, shots: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
+    if (!project || !Array.isArray(project.lines)) {
+      return { open: false, lines: 0, shots: [], uuids: [], uuidsByLine: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
     }
     const shots = [];
     const uuids = [];
-    const uuidsBySection = [];
+    const uuidsByLine = [];
     const commentParts = [];
     const addComment = (text) => {
       if (typeof text !== 'string' || text === '') return;
@@ -682,18 +682,18 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
     let missing = 0;
     const seen = Object.create(null);
     let duplicates = 0;
-    for (const section of project.sections) {
-      if (!section || !Array.isArray(section.shots)) continue;
-      const sectionUuids = [];
-      uuidsBySection.push(sectionUuids);
-      for (const shot of section.shots) {
+    for (const line of project.lines) {
+      if (!line || !Array.isArray(line.shots)) continue;
+      const lineUuids = [];
+      uuidsByLine.push(lineUuids);
+      for (const shot of line.shots) {
         const uuid = typeof shot.uuid === 'string' ? shot.uuid : '';
         if (uuid === '') missing += 1;
         else {
           if (seen[uuid]) duplicates += 1;
           seen[uuid] = true;
           uuids.push(uuid);
-          sectionUuids.push(uuid);
+          lineUuids.push(uuid);
         }
         addComment(shot.comment);
         shots.push({
@@ -735,10 +735,10 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
 
     return {
       open: true,
-      sections: project.sections.length,
+      lines: project.lines.length,
       shots: shots,
       uuids: uuids,
-      uuidsBySection: uuidsBySection,
+      uuidsByLine: uuidsByLine,
       commentParts: commentParts,
       missingUuids: missing,
       duplicateUuids: duplicates,
@@ -927,7 +927,7 @@ export const exportRoundtripFuzz: Scenario = {
       const toggle = await clickControl(ctx, 'export-labels-options-toggle');
       if (!toggle.performed) ctx.metric(`skip:labels-toggle:${toggle.reason}`);
       const checkboxes: [string, boolean][] = [
-        ['export-show-section-names', options.show_section_names],
+        ['export-show-line-names', options.show_line_names],
         ['export-show-station-labels', options.show_station_labels],
         // After the IDs: ticking names unticks the IDs, never the reverse order.
         // `=== true`: a step recorded before the option existed replays as off.
@@ -1044,7 +1044,7 @@ export const exportRoundtripFuzz: Scenario = {
       // The project's own bytes, read IMMEDIATELY before the move rather than
       // once per episode. The `.stalx` is a live SQLite database and every
       // mutating command writes to it, so an episode-scoped baseline reports
-      // the hostile-comment oracle's `createSection` as "the export modified
+      // the hostile-comment oracle's `createLine` as "the export modified
       // the database". Measured on seed 2. Taken as late as possible so the
       // only thing between the two reads is the export.
       const projectBytesBefore =
@@ -1190,7 +1190,7 @@ export const exportRoundtripFuzz: Scenario = {
      * `base` is DRAWN by the caller and passed in, not drawn here, because it
      * is what the trace records: a replay runs this oracle on the option set
      * the recording used rather than on whatever a differently-consumed rng
-     * hands it. See the "Record and replay" section of the header.
+     * hands it. See the "Record and replay" line of the header.
      */
     const runDifferential = async (episodeDir: string, base: ImageOptionDraw): Promise<void> => {
       const dir = path.join(episodeDir, 'differential');
@@ -1333,8 +1333,8 @@ export const exportRoundtripFuzz: Scenario = {
       // done to the project so far.
       //
       // The rotation can put the hostile-comment oracle (X7) in the same
-      // episode, and its section is a SYNTHETIC FLOATING chain built by
-      // `createSection` - not connected to anything, not anchored to a datum.
+      // episode, and its line is a SYNTHETIC FLOATING chain built by
+      // `createLine` - not connected to anything, not anchored to a datum.
       // Measured on seed 1 episode 3: those 14 shots come back with their
       // depths shifted by a constant 7 and their comments gone, which is the
       // exporter re-rooting an orphan chain (`ensure_rooted_chain`) and the
@@ -1375,11 +1375,11 @@ export const exportRoundtripFuzz: Scenario = {
       //
       // Identity goes through `projectSnapshot.ts`'s `shotSetDelta`, the
       // harness's one answer to "which shots did this gain or lose", over a
-      // FLATTENED snapshot: that function is per-SECTION, and section identity
+      // FLATTENED snapshot: that function is per-LINE, and line identity
       // is exactly what a round trip is allowed to change (`parse_tml` rebuilds
-      // sections as connected runs of the shot graph, so one exported section
+      // lines as connected runs of the shot graph, so one exported line
       // can come back as several - #412, by design). Collapsing both sides onto
-      // one synthetic section asks the question that survives the trip.
+      // one synthetic line asks the question that survives the trip.
       const identity = shotSetDelta(flatUuidSnapshot(original.uuids), flatUuidSnapshot(afterFirst.uuids));
       guarded(() =>
         checkShotMultiset(
@@ -1432,7 +1432,7 @@ export const exportRoundtripFuzz: Scenario = {
         await settleOnce(ctx);
         await assertIntegrity('a second import of the same file');
         const doubled = await readProjectDigest(ctx);
-        guarded(() => checkNoDuplicateUuids(doubled.uuidsBySection, reproduce));
+        guarded(() => checkNoDuplicateUuids(doubled.uuidsByLine, reproduce));
         ctx.metric('x6:doubleImportUnique');
       } else {
         ctx.metric('skip:second-import-refused');
@@ -1444,7 +1444,7 @@ export const exportRoundtripFuzz: Scenario = {
       // The chain runs until two consecutive exports match, up to
       // MAX_ROUNDTRIP_EXPORTS. Asserting a fixed POINT rather than a fixed INDEX
       // is what finding 6 corrected: on a real survey the first import inherits
-      // its section ORDER from the source project rather than deriving it, so
+      // its line ORDER from the source project rather than deriving it, so
       // the composition takes one more pass to reach its own fixed point - and
       // nothing but that order moves on the way.
       const chain: string[] = [];
@@ -1493,7 +1493,7 @@ export const exportRoundtripFuzz: Scenario = {
     const runNeutralisation = async (episodeDir: string): Promise<void> => {
       const dir = path.join(episodeDir, 'hostile');
       fs.mkdirSync(dir, { recursive: true });
-      // Direct section creation rather than a synthetic import: the comments
+      // Direct line creation rather than a synthetic import: the comments
       // are the input under test, and routing them through an importer first
       // would mean testing the importer's escaping instead of the exporter's.
       const shots = HOSTILE_COMMENTS.map((comment, index) => ({
@@ -1513,7 +1513,7 @@ export const exportRoundtripFuzz: Scenario = {
         marker_index: null,
         temperature: null,
       }));
-      const created = await callProjectAction(ctx, 'createSection', [
+      const created = await callProjectAction(ctx, 'createLine', [
         {
           name: 'hostile "comments", =1+1',
           surveyor: 'export-fuzz',
@@ -1525,17 +1525,17 @@ export const exportRoundtripFuzz: Scenario = {
         },
       ]);
       if (!created.ok) {
-        ctx.metric('skip:hostile-section-refused');
-        ctx.log(`x7: createSection refused (${created.err ?? 'no message'})`);
+        ctx.metric('skip:hostile-line-refused');
+        ctx.log(`x7: createLine refused (${created.err ?? 'no message'})`);
         rmrf(dir);
         return;
       }
       // No `mutate` step: since v4 this whole oracle travels as ONE `oracle`
       // step, recorded by its caller before it runs. A `mutate` step here as
       // well would replay the oracle twice - once for the step and once for the
-      // dispatch - and a `createSection` recorded from INSIDE an oracle could
+      // dispatch - and a `createLine` recorded from INSIDE an oracle could
       // only ever be replayed by re-running the oracle from the top anyway.
-      note('createSection(hostile comments)');
+      note('createLine(hostile comments)');
       await assertIntegrity('seeding hostile comments');
 
       const csvPath = path.join(dir, 'hostile.csv');
@@ -1683,7 +1683,7 @@ export const exportRoundtripFuzz: Scenario = {
         color_mode: 'depth' as const,
         show_station_labels: true,
         show_station_names: false,
-        show_section_names: true,
+        show_line_names: true,
         show_station_comments: true,
         show_shot_comments: true,
         show_shot_data: true,
@@ -1808,7 +1808,7 @@ export const exportRoundtripFuzz: Scenario = {
       const digest = await readProjectDigest(ctx);
       if (digest.open) {
         fail(
-          `E1 teardown left a project open\n    ${digest.sections} section(s)\n  ${reproduce}`,
+          `E1 teardown left a project open\n    ${digest.lines} line(s)\n  ${reproduce}`,
         );
       }
       const dialog = (await ctx.readStore('ui', 'activeDialog')) as { value?: unknown };
@@ -2081,7 +2081,7 @@ export const exportRoundtripFuzz: Scenario = {
           // came back green on the very trace that dropped it.
           await runOracle(oracleFromStep(step), (step.inputs ?? {}) as OracleInputs, episodeDir, current);
           ctx.metric(`replay:oracle:${step.oracle}`);
-          // An oracle can import, create sections and switch projects, so the
+          // An oracle can import, create lines and switch projects, so the
           // episode's project handle is re-read rather than assumed.
           opened = await readProjectDigest(ctx);
           continue;
@@ -2104,7 +2104,7 @@ export const exportRoundtripFuzz: Scenario = {
       if (!(await disableAutoSave(ctx))) ctx.metric('autoSaveStillOn');
       const digest = await readProjectDigest(ctx);
       if (episode === 0) {
-        ctx.setMetric('fixtureSections', digest.sections);
+        ctx.setMetric('fixtureLines', digest.lines);
         ctx.setMetric('fixtureShots', digest.shots.length);
         ctx.setMetric('fixtureMissingUuids', digest.missingUuids);
         ctx.setMetric('fixtureDuplicateUuids', digest.duplicateUuids);

@@ -25,7 +25,7 @@ const saved = () =>
   vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'save_display_setting');
 
 /** Survey workspace, single-survey view, detail panel open on Details, the saved
- *  colour mode Section and the Errors labels off. */
+ *  colour mode Line and the Errors labels off. */
 function reset(): void {
   useUIStore.setState({
     view: 'single',
@@ -106,7 +106,7 @@ describe('the Warnings-tab visit', () => {
     useUIStore.setState({ selection: null });
     expect(effective().color).toBe('depth');
     leaveWarnings();
-    expect(effective().color).toBe('section');
+    expect(effective().color).toBe('line');
     expect(useUIStore.getState().warningsVisitOverride).toBeNull();
   });
 
@@ -125,7 +125,7 @@ describe('the Warnings-tab visit', () => {
 
   it('a new visit starts from the defaults again', () => {
     openWarnings();
-    useUIStore.getState().setColorMode('section');
+    useUIStore.getState().setColorMode('line');
     useUIStore.getState().toggleDisplay('showShotErrors');
     leaveWarnings();
     openWarnings();
@@ -137,7 +137,7 @@ describe('the Warnings-tab visit', () => {
     useUIStore.getState().toggleDisplay('showDepthGradient');
     expect(effective().color).toBe('depth');
     useUIStore.getState().toggleDisplay('showDepthGradient');
-    expect(effective().color).toBe('section');
+    expect(effective().color).toBe('line');
     expect(useUIStore.getState().showDepthGradient).toBe(false);
     expect(saved()).toHaveLength(0);
   });
@@ -149,20 +149,20 @@ describe('the Warnings-tab visit', () => {
     useUIStore.getState().toggleIssueSeverity();
     expect(effective().color).toBe('issues');
     useUIStore.getState().setIssueSeverity(false);
-    expect(effective().color).toBe('section');
+    expect(effective().color).toBe('line');
     useUIStore.getState().setIssueSeverity(true);
     expect(effective().color).toBe('issues');
     const s = useUIStore.getState();
     expect([s.showDistanceGradient, s.showIssueSeverity, s.showDepthGradient]).toEqual([false, false, false]);
     leaveWarnings();
-    expect(effective().color).toBe('section');
+    expect(effective().color).toBe('line');
   });
 
   it('Distance picked during the visit drives the distance overlay, and its cache goes with the visit', () => {
     openWarnings();
     useUIStore.getState().setColorMode('distance');
     expect(selectDistanceOverlayActive(useUIStore.getState())).toBe(true);
-    useUIStore.setState({ distanceGradientOrigin: { section_id: 1, station_index: 2 } });
+    useUIStore.setState({ distanceGradientOrigin: { line_id: 1, station_index: 2 } });
     leaveWarnings();
     const s = useUIStore.getState();
     expect(selectDistanceOverlayActive(s)).toBe(false);
@@ -171,7 +171,7 @@ describe('the Warnings-tab visit', () => {
   });
 
   it('a saved Distance keeps its origin across a visit', () => {
-    const origin = { section_id: 1, station_index: 2 };
+    const origin = { line_id: 1, station_index: 2 };
     useUIStore.setState({ showDistanceGradient: true, distanceGradientOrigin: origin });
     openWarnings();
     expect(selectDistanceOverlayActive(useUIStore.getState())).toBe(false);
@@ -199,7 +199,7 @@ describe('the Warnings-tab visit', () => {
   it('with the setting off the Warnings tab changes nothing and toggles save as usual', async () => {
     useUIStore.setState({ warningsAutoDisplay: false });
     openWarnings();
-    expect(effective()).toEqual({ color: 'section', errors: false });
+    expect(effective()).toEqual({ color: 'line', errors: false });
     useUIStore.getState().toggleDisplay('showShotErrors');
     expect(useUIStore.getState().showShotErrors).toBe(true);
     await vi.waitFor(() =>

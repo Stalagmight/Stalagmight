@@ -1,6 +1,6 @@
 import type { CommandResult } from '../types/commands';
 import type { CreditEdit, CreditTargets } from '../types/ipc.generated';
-import type { SectionId, ShotId } from '../types/project';
+import type { LineId, ShotId } from '../types/project';
 
 /** `projectStore`'s `executeCommand`: invoke, refresh on success, mark dirty. */
 export type ExecuteCommand = (
@@ -16,9 +16,9 @@ export type ExecuteCommand = (
  * state and marks it dirty exactly like every other mutation.
  */
 export interface ProjectShotActions {
-  splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandResult>;
+  splitShotAtDistance: (lineId: LineId, shotId: ShotId, distance: number) => Promise<CommandResult>;
   /**
-   * Edit the survey credit (surveyors, explorers, date) of a whole section or of
+   * Edit the survey credit (surveyors, explorers, date) of a whole line or of
    * explicit shots, as ONE undo step however many shots it touches. Per role the
    * edit sets, then removes, then adds people (matched on casefolded name and
    * email); `set_date` sets a date or, with `null`, clears it.
@@ -28,11 +28,11 @@ export interface ProjectShotActions {
 
 export function createProjectShotActions(executeCommand: ExecuteCommand): ProjectShotActions {
   return {
-    splitShotAtDistance: async (sectionId, shotId, distance) =>
+    splitShotAtDistance: async (lineId, shotId, distance) =>
       executeCommand(
         'split_shot_at_distance',
-        { sectionId, shotId, distance },
-        { purpose: 'insert station mid-shot', fields: { sectionId, shotId } },
+        { lineId, shotId, distance },
+        { purpose: 'insert station mid-shot', fields: { lineId, shotId } },
       ),
     editShotCredit: async (targets, edit) =>
       executeCommand(

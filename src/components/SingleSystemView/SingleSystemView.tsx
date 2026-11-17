@@ -9,7 +9,7 @@ import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
-import type { SectionId } from '../../types/project';
+import type { LineId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
@@ -46,17 +46,17 @@ import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
-// #50: after double-click collapses the side panels, the map grows. fitToSection
+// #50: after double-click collapses the side panels, the map grows. fitToLine
 // reads the container size at call time, so re-fit once the layout has reflowed
 // and MapLibre's ResizeObserver has resized the map (a couple of frames). This
 // lives here rather than in SectionsPanel, which unmounts when it collapses.
-const SECTION_FOCUS_REFIT_DELAY_MS = 180;
+const LINE_FOCUS_REFIT_DELAY_MS = 180;
 
 // Top offsets (px) for the side opener tabs, aligning each tab with its panel's
 // header/content divider. These track the panel header layout - revisit if the
 // header height or the top-left map controls change. (The webview UI zoom scales
 // these uniformly with the header, so they stay aligned under zoom.)
-const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
+const LINES_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
 const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
 // Opener-tab arrow glyphs. Module-level constant elements (immutable, depend on
@@ -99,7 +99,7 @@ export default function SingleSystemView() {
   // table + detail panel; Plan swaps the right Dock for the gas setup sidebar and the
   // bottom Dock for the tabbed plan tables; Export swaps the right Dock for the export
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
-  // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
+  // reset it. The left Lines Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
   const workspace = useUIStore((s) => s.leftWorkspace);
   const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
@@ -193,11 +193,11 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableHeight,
     dataTableFullScreen,
-    focusedSectionId,
-    exitSectionFocus,
-    setFocusedSection,
+    focusedLineId,
+    exitLineFocus,
+    setFocusedLine,
     selection,
-    triggerZoomToSection,
+    triggerZoomToLine,
     triggerFitToBounds,
     setSectionsPanelWidth,
     setDetailPanelWidth,
@@ -208,11 +208,11 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
-    focusedSectionId: s.focusedSectionId,
-    exitSectionFocus: s.exitSectionFocus,
-    setFocusedSection: s.setFocusedSection,
+    focusedLineId: s.focusedLineId,
+    exitLineFocus: s.exitLineFocus,
+    setFocusedLine: s.setFocusedLine,
     selection: s.selection,
-    triggerZoomToSection: s.triggerZoomToSection,
+    triggerZoomToLine: s.triggerZoomToLine,
     triggerFitToBounds: s.triggerFitToBounds,
     setSectionsPanelWidth: s.setSectionsPanelWidth,
     setDetailPanelWidth: s.setDetailPanelWidth,
@@ -233,19 +233,19 @@ export default function SingleSystemView() {
   // straight from the PERSISTED mode/open (a hover-floating panel overlays the map
   // and costs no layout width), so this is computable before the reveal hooks run
   // and there is no circular dependency between "am I collapsed" and "am I open".
-  const sectionsPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
+  const linesPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
   const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
-  // Sections is survey-only; Plan/Export don't render it at all, so it costs
+  // Lines is survey-only; Plan/Export don't render it at all, so it costs
   // nothing there (not even an opener bar).
-  const sectionsPresent = appMode === 'survey' || outsideSurvey;
-  const squeezeSections = useMemo(
+  const linesPresent = appMode === 'survey' || outsideSurvey;
+  const squeezeLines = useMemo(
     () => ({
       width: Math.max(workspaceMin, sectionsPanelWidth),
       min: workspaceMin,
-      present: sectionsPresent,
-      pinnedOpen: sectionsPinnedOpen,
+      present: linesPresent,
+      pinnedOpen: linesPinnedOpen,
     }),
-    [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen, workspaceMin],
+    [sectionsPanelWidth, linesPresent, linesPinnedOpen, workspaceMin],
   );
   const squeezeDetail = useMemo(
     () => ({
@@ -259,12 +259,12 @@ export default function SingleSystemView() {
   const squeeze = useSidePanelSqueeze(mainEl, {
     mapMinWidth: MAP_MIN_WIDTH,
     barWidth: BAR,
-    sections: squeezeSections,
+    lines: squeezeLines,
     detail: squeezeDetail,
   });
   // Display-only widths: these feed the Docks' rendered size, NEVER the store or
   // savePanelSizes (see sidePanelSqueeze).
-  const sectionsDisplayWidth = squeeze.sections.width;
+  const linesDisplayWidth = squeeze.lines.width;
   const detailDisplayWidth = squeeze.detail.width;
 
   // The same squeeze on the VERTICAL axis (#260). The original fix covered only
@@ -292,11 +292,11 @@ export default function SingleSystemView() {
   // persisted mode/open; these hooks add transient hover visibility + handlers.
   // `forcedClosed` layers the transient viewport collapse on top without touching
   // either persisted field.
-  const sectionsReveal = usePanelReveal('sections', { forcedClosed: squeeze.sections.collapsed });
+  const linesReveal = usePanelReveal('lines', { forcedClosed: squeeze.lines.collapsed });
   useEffect(() => {
-    useUIStore.setState({ leftWorkspaceVisible: sectionsPresent && sectionsReveal.isOpen });
-  }, [sectionsPresent, sectionsReveal.isOpen]);
-  const revealLeft = sectionsReveal.revealTemporarily;
+    useUIStore.setState({ leftWorkspaceVisible: linesPresent && linesReveal.isOpen });
+  }, [linesPresent, linesReveal.isOpen]);
+  const revealLeft = linesReveal.revealTemporarily;
   const lastReveal = useRef(revealNonce);
   useLayoutEffect(() => {
     if (lastReveal.current === revealNonce) return;
@@ -319,17 +319,17 @@ export default function SingleSystemView() {
   // re-binds its listeners whenever their identity changes, and the display size
   // moves ~60x/s during an unsqueezed drag.
   const squeezeRef = useRef({
-    sections: { display: 0, user: 0 },
+    lines: { display: 0, user: 0 },
     detail: { display: 0, user: 0 },
     data: { display: 0, user: 0 },
   });
   squeezeRef.current = {
-    sections: { display: sectionsDisplayWidth, user: Math.max(workspaceMin, sectionsPanelWidth) },
+    lines: { display: linesDisplayWidth, user: Math.max(workspaceMin, sectionsPanelWidth) },
     detail: { display: detailDisplayWidth, user: detailPanelWidth },
     data: { display: dataDisplayHeight, user: dataTableHeight },
   };
   /** The size to write for `size`, clamped to what this drag could reach on screen. */
-  const resolveSize = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
+  const resolveSize = useCallback((axis: 'lines' | 'detail' | 'data', size: number) => {
     const { display, user } = squeezeRef.current[axis];
     return resolveResize(display, user, size);
   }, []);
@@ -338,9 +338,9 @@ export default function SingleSystemView() {
   // through a drag (these props feed useResizeHandle, which re-binds listeners
   // when they change). Inline arrows would be re-created every render - including
   // the ~60×/s store-width updates during the drag itself.
-  const applySectionsWidth = useCallback(
+  const applyLinesWidth = useCallback(
     (size: number) => {
-      setSectionsPanelWidth(resolveSize('sections', size));
+      setSectionsPanelWidth(resolveSize('lines', size));
     },
     [resolveSize, setSectionsPanelWidth],
   );
@@ -356,9 +356,9 @@ export default function SingleSystemView() {
     },
     [resolveSize, setDataTableHeight],
   );
-  const handleSectionsResizeEnd = useCallback(
+  const handleLinesResizeEnd = useCallback(
     (size: number) => {
-      savePanelSizes('sections', resolveSize('sections', size));
+      savePanelSizes('lines', resolveSize('lines', size));
     },
     [resolveSize, savePanelSizes],
   );
@@ -372,9 +372,9 @@ export default function SingleSystemView() {
   // height only in memory, so a focus-time drag must not leak to config.
   const handleDataResizeEnd = useCallback(
     (size: number) => {
-      if (focusedSectionId === null) savePanelSizes('data-table', resolveSize('data', size));
+      if (focusedLineId === null) savePanelSizes('data-table', resolveSize('data', size));
     },
-    [resolveSize, savePanelSizes, focusedSectionId],
+    [resolveSize, savePanelSizes, focusedLineId],
   );
 
   // Programmatic Details reveal (jump-to-warning from the data table). The store
@@ -407,19 +407,19 @@ export default function SingleSystemView() {
       setResizingPanel((prev) => (resizing ? panel : prev === panel ? null : prev)),
     [],
   );
-  const onSectionsResizing = useCallback((r: boolean) => setPanelResizing('sections', r), [setPanelResizing]);
+  const onLinesResizing = useCallback((r: boolean) => setPanelResizing('lines', r), [setPanelResizing]);
   const onDataResizing = useCallback((r: boolean) => setPanelResizing('data-table', r), [setPanelResizing]);
   const onDetailResizing = useCallback((r: boolean) => setPanelResizing('detail', r), [setPanelResizing]);
   const dataResizing = resizingPanel === 'data-table';
-  const sidePanelResizing = resizingPanel === 'sections' || resizingPanel === 'detail';
+  const sidePanelResizing = resizingPanel === 'lines' || resizingPanel === 'detail';
   // Stop the Data overlay at ANY open side panel's edge - pinned OR hover-floating
   // (both render the full panel at its persisted width); only fill to the window
   // edge when the side is minimized and the Data panel is open, else sit between
   // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
   // the Data panel and hides its tab.)
-  // Outside Survey the Sections Dock is not rendered at all (see the appMode gate below), so there
+  // Outside Survey the Lines Dock is not rendered at all (see the appMode gate below), so there
   // is neither a panel nor a closed bar on the left to stop at - the bottom panel must reach the
-  // window edge. `sectionsReveal.isOpen` still reports the PERSISTED survey-mode state, which is
+  // window edge. `linesReveal.isOpen` still reports the PERSISTED survey-mode state, which is
   // exactly why Plan's cylinders bar used to sit indented by a panel that was not there (#298).
   // Inside Survey it is the display width, i.e. the width each Dock is actually RENDERING at in
   // its current state - squeezed while it reflows the map, and the user's own width (capped at
@@ -428,10 +428,10 @@ export default function SingleSystemView() {
   // viewport-collapsed panel still reports that same width: it is what the panel renders at if
   // the user floats it open, and while it is NOT open neither branch below reads it.
   const dataOverlayLeft =
-    !sectionsPresent
+    !linesPresent
       ? 0
-      : sectionsReveal.isOpen
-        ? sectionsDisplayWidth
+      : linesReveal.isOpen
+        ? linesDisplayWidth
         : dataReveal.isOpen
           ? 0
           : BAR;
@@ -441,71 +441,71 @@ export default function SingleSystemView() {
       ? 0
       : BAR;
 
-  // #50: name shown in place of the project name while focused on one section.
+  // #50: name shown in place of the project name while focused on one line.
   // A single lookup drives both existence (the auto-exit effect) and the name.
   // Memoized: SingleSystemView re-renders ~60×/s during a panel-resize drag (it
   // subscribes to the panel width/height being mutated each tick), so the O(n)
-  // .find() must not re-scan project.sections every frame when focus is active.
-  const focusedSection = useMemo(
+  // .find() must not re-scan project.lines every frame when focus is active.
+  const focusedLine = useMemo(
     () =>
-      focusedSectionId !== null
-        ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
+      focusedLineId !== null
+        ? project?.lines.find((s) => s.id === focusedLineId) ?? null
         : null,
-    [focusedSectionId, project?.sections],
+    [focusedLineId, project?.lines],
   );
-  const focusedSectionExists = focusedSection !== null;
-  const focusedSectionName =
-    focusedSectionId !== null
-      ? focusedSection?.name ?? t('sections.defaultName', { id: focusedSectionId })
+  const focusedLineExists = focusedLine !== null;
+  const focusedLineName =
+    focusedLineId !== null
+      ? focusedLine?.name ?? t('sections.defaultName', { id: focusedLineId })
       : null;
 
-  // The section that owns the current selection (section / shot / station) - the
-  // same mapping the data table uses to pick its section.
-  const selectedSectionId: SectionId | undefined =
-    selection?.type === 'section' || selection?.type === 'shot'
-      ? selection.sectionId
+  // The line that owns the current selection (line / shot / station) - the
+  // same mapping the data table uses to pick its line.
+  const selectedLineId: LineId | undefined =
+    selection?.type === 'line' || selection?.type === 'shot'
+      ? selection.lineId
       : selection?.type === 'station'
-        ? selection.stationRef?.section_id
+        ? selection.stationRef?.line_id
         : undefined;
 
   // #50: adjust the map once the layout settles, after the side panels collapse
-  // (entry) or return (exit). ENTRY (null -> id) frames the focused section in the
+  // (entry) or return (exit). ENTRY (null -> id) frames the focused line in the
   // enlarged map; EXIT (id -> null) returns to a neutral whole-map overview
-  // (fit-to-bounds) rather than staying zoomed into the section. NOT on a follow
-  // (id -> id'), so clicking another section never re-zooms - consistent with
+  // (fit-to-bounds) rather than staying zoomed into the line. NOT on a follow
+  // (id -> id'), so clicking another line never re-zooms - consistent with
   // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
-  const prevFocusedRef = useRef<SectionId | null>(null);
-  const focusedSectionIdRef = useRef<SectionId | null>(focusedSectionId);
-  focusedSectionIdRef.current = focusedSectionId;
+  const prevFocusedRef = useRef<LineId | null>(null);
+  const focusedLineIdRef = useRef<LineId | null>(focusedLineId);
+  focusedLineIdRef.current = focusedLineId;
   const refitTimerRef = useRef<number | null>(null);
   useEffect(() => {
     const prev = prevFocusedRef.current;
-    prevFocusedRef.current = focusedSectionId;
+    prevFocusedRef.current = focusedLineId;
     const transition =
-      prev === null && focusedSectionId !== null
+      prev === null && focusedLineId !== null
         ? 'enter'
-        : prev !== null && focusedSectionId === null
+        : prev !== null && focusedLineId === null
           ? 'exit'
           : null; // follow / no transition
     // A follow (id -> id') deliberately doesn't re-frame the map, and crucially
     // must NOT cancel a still-pending ENTER re-fit either: the entry timer reads
     // the latest focused id at fire time, so a quick follow during the settle
-    // window still frames the section the user landed on instead of dropping the
+    // window still frames the line the user landed on instead of dropping the
     // zoom. So leave any pending timer untouched on a follow.
     if (transition === null) return;
     if (refitTimerRef.current !== null) window.clearTimeout(refitTimerRef.current);
     refitTimerRef.current = window.setTimeout(() => {
       refitTimerRef.current = null;
       setSource('sections-panel');
-      const id = focusedSectionIdRef.current;
+      const id = focusedLineIdRef.current;
       if (transition === 'enter' && id !== null) {
-        triggerZoomToSection(id);
+        triggerZoomToLine(id);
       } else {
         triggerFitToBounds();
       }
-    }, SECTION_FOCUS_REFIT_DELAY_MS);
-  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
+    }, LINE_FOCUS_REFIT_DELAY_MS);
+  }, [focusedLineId, triggerZoomToLine, triggerFitToBounds]);
   // The effect above no longer returns a per-change cleanup (so a follow can't
   // cancel an in-flight entry zoom); clear any pending re-fit on unmount instead.
   useEffect(
@@ -515,25 +515,25 @@ export default function SingleSystemView() {
     [],
   );
 
-  // #50: while focused, follow the selected section so the toolbar heading tracks
-  // the data table (clicking another section on the map updates both).
+  // #50: while focused, follow the selected line so the toolbar heading tracks
+  // the data table (clicking another line on the map updates both).
   useEffect(() => {
     if (
-      focusedSectionId !== null &&
-      selectedSectionId !== undefined &&
-      selectedSectionId !== focusedSectionId
+      focusedLineId !== null &&
+      selectedLineId !== undefined &&
+      selectedLineId !== focusedLineId
     ) {
-      setFocusedSection(selectedSectionId);
+      setFocusedLine(selectedLineId);
     }
-  }, [focusedSectionId, selectedSectionId, setFocusedSection]);
+  }, [focusedLineId, selectedLineId, setFocusedLine]);
 
-  // #50: if the focused section disappears (e.g. deleted while focused), exit
+  // #50: if the focused line disappears (e.g. deleted while focused), exit
   // focus mode rather than stay in the collapsed layout showing a stale name.
   useEffect(() => {
-    if (focusedSectionId !== null && project && !focusedSectionExists) {
-      exitSectionFocus();
+    if (focusedLineId !== null && project && !focusedLineExists) {
+      exitLineFocus();
     }
-  }, [focusedSectionId, focusedSectionExists, project, exitSectionFocus]);
+  }, [focusedLineId, focusedLineExists, project, exitLineFocus]);
 
   // Fullscreen data table: the overlay's top edge tracks the live toolbar
   // height (it can change with wrapping/zoom), published as a CSS var on the
@@ -564,7 +564,7 @@ export default function SingleSystemView() {
   // it open, so exiting the step restores the user's exact preference (including
   // hover mode) instead of leaving it pinned. Null when onboarding isn't holding it.
   type PanelSnapshot = { mode: PanelMode; open: boolean };
-  const sectionsOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const linesOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
   const detailOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
   const dataTableOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
 
@@ -624,7 +624,7 @@ export default function SingleSystemView() {
     // One merged "docks" step (#331) spotlights all three panels at once, so all
     // three reveal together instead of one per step.
     const onDocksStep = singleViewOnboardingStepId === 'docks';
-    syncOnboardingPanel('sections', onDocksStep, sectionsOnboardingSnapRef);
+    syncOnboardingPanel('lines', onDocksStep, linesOnboardingSnapRef);
     syncOnboardingPanel('detail', onDocksStep, detailOnboardingSnapRef);
     syncOnboardingPanel('data-table', onDocksStep, dataTableOnboardingSnapRef);
 
@@ -633,7 +633,7 @@ export default function SingleSystemView() {
     // closed from the app menu while the tour is up) would otherwise strand all
     // three panels pinned open with the real layout lost.
     return () => {
-      syncOnboardingPanel('sections', false, sectionsOnboardingSnapRef);
+      syncOnboardingPanel('lines', false, linesOnboardingSnapRef);
       syncOnboardingPanel('detail', false, detailOnboardingSnapRef);
       syncOnboardingPanel('data-table', false, dataTableOnboardingSnapRef);
     };
@@ -642,7 +642,7 @@ export default function SingleSystemView() {
   // Shared panel content - each rendered in exactly ONE place (its Dock), so the
   // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
   // so a panel-resize re-render (which fires ~60×/s as the store width/height
-  // updates during a drag) doesn't reconcile the heavy DataTable / Sections /
+  // updates during a drag) doesn't reconcile the heavy DataTable / Lines /
   // Details subtrees: the Docks receive the SAME element reference and React bails
   // out of the child render. Dimmed during placement (dim wraps content only,
   // never the tab/handle).
@@ -654,17 +654,17 @@ export default function SingleSystemView() {
   // with `pointer-events-none` (or move the dim to an overlay) - don't dim the
   // panel subtree with a filter while leaving it interactive.
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
-  const sections = project?.sections;
-  const sectionsContent = useMemo(
+  const lines = project?.lines;
+  const linesContent = useMemo(
     () =>
-      sections ? (
+      lines ? (
         <div className={`h-full ${dimCls}`}>
-          <ErrorBoundary panelName="Sections">
-            <SectionsPanel sections={sections} />
+          <ErrorBoundary panelName="Lines">
+            <SectionsPanel lines={lines} />
           </ErrorBoundary>
         </div>
       ) : null,
-    [sections, dimCls],
+    [lines, dimCls],
   );
   const detailContent = useMemo(
     () => (
@@ -700,14 +700,14 @@ export default function SingleSystemView() {
             </ErrorBoundary>
           </div>
         ) : null
-      ) : sections ? (
+      ) : lines ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Data Table">
-            <DataTable sections={sections} />
+            <DataTable lines={lines} />
           </ErrorBoundary>
         </div>
       ) : null,
-    [appMode, gasOriginChosen, sections, dimCls],
+    [appMode, gasOriginChosen, lines, dimCls],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and
@@ -716,7 +716,7 @@ export default function SingleSystemView() {
   // would bust the memo every tick.
   const panelLabels = useMemo(() => {
     const name = {
-      sections: t('singleView.panels.sectionsName'),
+      lines: t('singleView.panels.sectionsName'),
       detail: t('singleView.panels.detailName'),
       // In Plan mode the bottom Dock holds the Cylinders/DPV/Segments/Profile tables,
       // so its tab says "Gear" rather than "Data" (#395).
@@ -730,7 +730,7 @@ export default function SingleSystemView() {
     });
     return {
       name,
-      sections: labels(name.sections),
+      lines: labels(name.lines),
       detail: labels(name.detail),
       data: labels(name.data),
     };
@@ -747,11 +747,11 @@ export default function SingleSystemView() {
   return (
     <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
       {/* Page heading for screen readers. The toolbar center now shows the
-          active tool name (#51), so the project/focused-section name - the real
+          active tool name (#51), so the project/focused-line name - the real
           page heading - lives here, visually hidden but still in the heading
-          outline (follows the focused section in focus mode, per #50). */}
+          outline (follows the focused line in focus mode, per #50). */}
       <h1 className="sr-only" data-testid="page-heading">
-        {focusedSectionName ?? project.name}
+        {focusedLineName ?? project.name}
       </h1>
       {/* Toolbar */}
       <Toolbar
@@ -773,35 +773,35 @@ export default function SingleSystemView() {
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
-        {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
-            with no section-editing affordances. */}
-        <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
+        {/* Lines (left) - survey-only; Plan/Export show the read-only closure map
+            with no line-editing affordances. */}
+        <div className="contents" style={!linesPresent ? { display: 'none' } : undefined}>
         <Dock
-          reveal={sectionsReveal}
+          reveal={linesReveal}
           edge="left"
           // Display width: squeezed down when the viewport can't afford the user's
           // own width without starving the map (#260). The store keeps the user's
           // value, so zooming back out restores it.
-          size={sectionsDisplayWidth}
+          size={linesDisplayWidth}
           minSize={workspaceMin}
-          maxSize={PANEL_SIZE_BOUNDS.sections.max}
-          onResize={applySectionsWidth}
-          onResizeEnd={handleSectionsResizeEnd}
-          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.sections}
+          maxSize={PANEL_SIZE_BOUNDS.lines.max}
+          onResize={applyLinesWidth}
+          onResizeEnd={handleLinesResizeEnd}
+          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.lines}
           openArrow={CHEVRON_RIGHT}
           closeArrow={CHEVRON_LEFT}
           keepMounted
-          testId="sections"
-          tabLabels={panelLabels.sections}
-          tabTop={SECTIONS_TAB_TOP}
+          testId="lines"
+          tabLabels={panelLabels.lines}
+          tabTop={LINES_TAB_TOP}
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
           closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
-          onResizingChange={onSectionsResizing}
+          onResizingChange={onLinesResizing}
         >
-          <LeftWorkspace key={openPath} sections={sectionsContent} />
+          <LeftWorkspace key={openPath} lines={linesContent} />
         </Dock>
         </div>
 
@@ -888,7 +888,7 @@ export default function SingleSystemView() {
         <Dock
           reveal={detailReveal}
           edge="right"
-          // See the Sections Dock: display-only squeeze, never persisted.
+          // See the Lines Dock: display-only squeeze, never persisted.
           size={detailDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.detail.min}
           maxSize={PANEL_SIZE_BOUNDS.detail.max}
@@ -922,14 +922,14 @@ export default function SingleSystemView() {
       >
         <span>
           {t('singleView.status.summary', {
-            sections: formatNumber(stats?.section_count ?? 0),
+            lines: formatNumber(stats?.line_count ?? 0),
             shots: formatNumber(stats?.shot_count ?? 0),
             length: formatLength(stats?.total_length ?? 0, precision.length),
           })}
-          {focusedSectionName !== null && (
-            <span data-testid="status-focused-section" className="ml-2 text-accent">
+          {focusedLineName !== null && (
+            <span data-testid="status-focused-line" className="ml-2 text-accent">
               {' | '}
-              {t('singleView.status.focusedSection', { name: focusedSectionName })}
+              {t('singleView.status.focusedSection', { name: focusedLineName })}
             </span>
           )}
         </span>

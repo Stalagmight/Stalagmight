@@ -1,5 +1,5 @@
 //! [#738] A loop closure left between merged stations, at the app-state level:
-//! Split Section Here's preview names the closure the split removes (apart
+//! Split Line Here's preview names the closure the split removes (apart
 //! from one that already was between merged stations), the split removes
 //! exactly that one inside its own undo unit, every other command whose sweep
 //! removes one reports it as a warning named by its stations before the edit,
@@ -12,8 +12,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosurePair, ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, SectionId,
-    ShotData, SplitAt, SplitPreview, SplitSectionOptions, SplitSide, StationRef,
+    ClosurePair, ClosureStrategy, GpsCoordinates, LoopClosure, Project, LineData, LineId,
+    ShotData, SplitAt, SplitPreview, SplitLineOptions, SplitSide, StationRef,
     CLOSURE_REMOVED_MERGED_ENDS,
 };
 
@@ -26,9 +26,9 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some(name.to_string()),
             shots,
             ..Default::default()
@@ -36,12 +36,12 @@ fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
         .id
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
-fn options() -> SplitSectionOptions {
-    SplitSectionOptions {
+fn options() -> SplitLineOptions {
+    SplitLineOptions {
         name_a: "S-A".to_string(),
         name_b: "S-B".to_string(),
         color_a: "#111111".to_string(),
@@ -56,7 +56,7 @@ fn options() -> SplitSectionOptions {
 /// S:1. Then one closure per entry of `ties`, in that order, from S:3 to the
 /// one point {S:1, T:0, U:0}: `"S"` ties it to S:1, `"T"` to T:0 and `"U"` to
 /// U:0. Returns the project, S, T and the closure ids in `ties` order.
-fn survey(ties: &[&str]) -> (Project, SectionId, SectionId, Vec<u64>) {
+fn survey(ties: &[&str]) -> (Project, LineId, LineId, Vec<u64>) {
     let mut p = Project::new("738".to_string(), None);
     let s = add(
         &mut p,
@@ -161,14 +161,14 @@ fn pair(closure_id: u64, a: StationRef, b: StationRef) -> ClosurePair {
 /// project before - both closures included - and one redo the one after.
 fn split_and_check(
     state: &AppState,
-    s: SectionId,
+    s: LineId,
     at: SplitAt,
-    promoted_ends: impl Fn(SectionId) -> [StationRef; 2],
+    promoted_ends: impl Fn(LineId) -> [StationRef; 2],
     removed: &[ClosurePair],
 ) -> SplitPreview {
     let before_project = project(state);
     let before = full_snapshot(state);
-    let preview = state.split_section_preview(s, at, &options()).unwrap();
+    let preview = state.split_line_preview(s, at, &options()).unwrap();
     assert_eq!(
         full_snapshot(state),
         before,
@@ -178,9 +178,9 @@ fn split_and_check(
     assert_eq!(preview.removed_closures, removed, "the preview's list");
     assert_eq!(preview.removed_already_one_point, []);
 
-    let result = state.execute_split_section(s, at, options());
+    let result = state.execute_split_line(s, at, options());
     assert!(result.success, "{:?}", result.error);
-    let second = result.section_id.unwrap();
+    let second = result.line_id.unwrap();
     let after_project = project(state);
     let after = full_snapshot(state);
     assert!(
@@ -246,7 +246,7 @@ fn the_first_closure_in_the_list_is_the_one_promoted() {
     let again = state_with(p);
     assert_eq!(
         again
-            .split_section_preview(s, SplitAt::Station { station_index: 2 }, &options())
+            .split_line_preview(s, SplitAt::Station { station_index: 2 }, &options())
             .unwrap(),
         preview
     );
@@ -258,7 +258,7 @@ fn the_first_closure_in_the_list_is_the_one_promoted() {
 fn three_closures_to_one_point_leave_one_merge_and_no_closure() {
     let (p, s, t, ids) = survey(&["S", "T", "U"]);
     let u = p
-        .sections
+        .lines
         .iter()
         .find(|x| x.name.as_deref() == Some("U"))
         .unwrap()
@@ -282,7 +282,7 @@ fn three_closures_to_one_point_leave_one_merge_and_no_closure() {
 #[test]
 fn a_cut_along_a_shot_names_the_removed_closure_by_its_stations_before_the_cut() {
     let (p, s, t, ids) = survey(&["S", "T"]);
-    let north = p.get_section(s).unwrap().shots[1].id;
+    let north = p.get_line(s).unwrap().shots[1].id;
     let state = state_with(p);
     split_and_check(
         &state,
@@ -318,7 +318,7 @@ fn a_split_with_one_closure_across_the_cut_removes_none() {
 #[test]
 fn delete_shot_and_split_leaves_no_closure_between_merged_stations() {
     let (p, s, _, _) = survey(&["S", "T"]);
-    let north = p.get_section(s).unwrap().shots[1].id;
+    let north = p.get_line(s).unwrap().shots[1].id;
     let state = state_with(p);
     let before_project = project(&state);
     let before = full_snapshot(&state);
@@ -475,14 +475,14 @@ fn the_preview_names_a_closure_already_between_merged_stations_apart() {
     let before = full_snapshot(&state);
     let at = SplitAt::Station { station_index: 2 };
 
-    let preview = state.split_section_preview(s, at, &options()).unwrap();
+    let preview = state.split_line_preview(s, at, &options()).unwrap();
     assert_eq!(preview.removed_closures, [pair(ids[1], st(t, 0), st(s, 3))]);
     assert_eq!(
         preview.removed_already_one_point,
         [pair(stale, st(t, 1), st(w, 0))]
     );
 
-    let result = state.execute_split_section(s, at, options());
+    let result = state.execute_split_line(s, at, options());
     assert!(result.success, "{:?}", result.error);
     assert!(project(&state).loop_closures.is_empty());
     assert!(state.undo().success);
@@ -499,7 +499,7 @@ fn the_preview_names_the_removed_closure_when_ids_repeat() {
     p.loop_closures[1].id = ids[0];
     let state = state_with(p);
     let preview = state
-        .split_section_preview(s, SplitAt::Station { station_index: 2 }, &options())
+        .split_line_preview(s, SplitAt::Station { station_index: 2 }, &options())
         .unwrap();
     assert_eq!(preview.removed_closures, [pair(ids[0], st(t, 0), st(s, 3))]);
 }
@@ -509,7 +509,7 @@ fn the_preview_names_the_removed_closure_when_ids_repeat() {
 #[test]
 fn delete_shot_range_and_split_reports_the_closure_it_removes() {
     let (p, s, _, _) = survey(&["S", "T"]);
-    let north = p.get_section(s).unwrap().shots[1].id;
+    let north = p.get_line(s).unwrap().shots[1].id;
     let state = state_with(p);
     let before = full_snapshot(&state);
 
@@ -539,7 +539,7 @@ fn delete_shot_range_and_split_reports_the_closure_it_removes() {
 /// twice: X:3 to N:2, then M:0 to X:3. Cutting X loose - unmerging it from Y,
 /// deleting Y, or deleting X's first shot - leaves those two closures as X's
 /// only ties. Returns the project and N, M, X, Y.
-fn branch_survey() -> (Project, [SectionId; 4]) {
+fn branch_survey() -> (Project, [LineId; 4]) {
     let mut p = Project::new("branch".to_string(), None);
     let n = add(&mut p, "N", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let m = add(&mut p, "M", vec![shot(0.0, 5.0)]);
@@ -560,8 +560,8 @@ fn branch_survey() -> (Project, [SectionId; 4]) {
 }
 
 /// Every other command whose sweep can remove one - through `execute()`'s
-/// epilogue (Unmerge, Delete Section), the single Delete Shot (whose own shot
-/// removal sweeps), and Delete Last Shot & Section - reports the closure it
+/// epilogue (Unmerge, Delete Line), the single Delete Shot (whose own shot
+/// removal sweeps), and Delete Last Shot & Line - reports the closure it
 /// removed by the stations it had BEFORE the edit (the first-shot delete
 /// renumbers X:3 to X:2; the warning still says 2:3), and one undo brings both
 /// closures back.
@@ -573,13 +573,13 @@ fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
     ];
     for what in [
         "unmerge",
-        "delete section",
+        "delete line",
         "delete shot",
         "delete last shot",
     ] {
         let (p, [_, _, x, y]) = branch_survey();
-        let first_of_x = p.get_section(x).unwrap().shots[0].id;
-        let only_of_y = p.get_section(y).unwrap().shots[0].id;
+        let first_of_x = p.get_line(x).unwrap().shots[0].id;
+        let only_of_y = p.get_line(y).unwrap().shots[0].id;
         let state = state_with(p);
         let before = full_snapshot(&state);
         let result = match what {
@@ -587,12 +587,12 @@ fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
                 station_a: st(y, 1),
                 station_b: st(x, 0),
             }),
-            "delete section" => state.execute(Command::DeleteSection { section_id: y }),
+            "delete line" => state.execute(Command::DeleteLine { line_id: y }),
             "delete shot" => state.execute(Command::DeleteShot {
-                section_id: x,
+                line_id: x,
                 shot_id: first_of_x,
             }),
-            _ => state.execute_delete_last_shot_and_section(y, only_of_y),
+            _ => state.execute_delete_last_shot_and_line(y, only_of_y),
         };
         assert!(result.success, "{what}: {:?}", result.error);
         assert!(
@@ -664,7 +664,7 @@ fn a_closure_that_already_was_between_merged_stations_is_reported_as_such() {
 /// Two anchored surveys, each placed by its own datum, tied by two closures:
 /// A:1-B:1 and A:2-B:2. Since #741 the two may merge (B's datum becomes a GPS
 /// fix). Returns the project, A, B and the two closure ids.
-fn two_placed_pieces() -> (Project, SectionId, SectionId, [u64; 2]) {
+fn two_placed_pieces() -> (Project, LineId, LineId, [u64; 2]) {
     let mut p = Project::new("placed".to_string(), None);
     let a = add(&mut p, "A", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let b = add(&mut p, "B", vec![shot(0.0, 10.0), shot(0.0, 10.0)]);

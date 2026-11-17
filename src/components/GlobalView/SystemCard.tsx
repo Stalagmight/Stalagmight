@@ -20,7 +20,7 @@ interface SystemCardProps {
   location: string | null;
   filePath: string;
   modifiedAt: string;
-  sectionCount: number;
+  lineCount: number;
   totalLength: number;
   isSelected?: boolean;
   /** SpeleoDB lock state for this entry (#201); a local project renders no badge. */
@@ -44,7 +44,7 @@ export default function SystemCard({
   location,
   filePath,
   modifiedAt,
-  sectionCount,
+  lineCount,
   totalLength,
   isSelected,
   speleoLock,
@@ -161,7 +161,7 @@ export default function SystemCard({
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div>
           <span className="text-text-secondary">{t('globalView.systemCard.sections')}:</span>{' '}
-          <span>{formatNumber(sectionCount)}</span>
+          <span>{formatNumber(lineCount)}</span>
         </div>
         <div>
           <span className="text-text-secondary">{t('globalView.systemCard.length')}:</span>{' '}

@@ -1,5 +1,5 @@
 /**
- * Undo/redo of a section reverse must move the frontend's positional refs back
+ * Undo/redo of a line reverse must move the frontend's positional refs back
  * with it (#24).
  *
  * The hazard: a reverse renumbers station `i` to `N - i`, and the
@@ -14,14 +14,14 @@
  * a second time; the anchor round trip itself is covered in
  * `gasPlanAnchors.test.ts`.
  *
- * `executeUndoRedo` therefore re-mirrors the sections the backend reports on the
- * result as renumbered (`CommandResult.reversed_sections`, populated for a
+ * `executeUndoRedo` therefore re-mirrors the lines the backend reports on the
+ * result as renumbered (`CommandResult.reversed_lines`, populated for a
  * forward reverse and for the undo/redo that re-reverses it). These tests drive
  * the real store action with the IPC mocked, so deleting that wiring fails here.
  *
  * From `undo_to`/`redo_to` the field is an ORDERED PER-STEP LOG - one entry per
  * reversing step, repeats intact, each carrying the shot count in force at ITS
- * step - so the store composes the entries into one transform per section and
+ * step - so the store composes the entries into one transform per line and
  * applies it once. The Playwright IPC mock stubs undo/redo as no-ops that never
  * emit the field, so this path is only reachable at the store level, here.
  */
@@ -30,7 +30,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
-import type { ReversedSection } from '../../types/ipc/ReversedSection';
+import type { ReversedLine } from '../../types/ipc/ReversedLine';
 import type { Station } from '../../types/project';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -39,12 +39,12 @@ vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
 }));
 
-const SECTION = 4;
+const LINE = 4;
 
-/** A 3-shot (4-station) section laid out along +x, in station order. */
+/** A 3-shot (4-station) line laid out along +x, in station order. */
 function line(xs: number[]): Station[] {
   return xs.map((x, i) => ({
-    station_ref: { section_id: SECTION, station_index: i },
+    station_ref: { line_id: LINE, station_index: i },
     coordinates: { x, y: 0, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
@@ -59,9 +59,9 @@ const REVERSED = [40, 25, 10, 0];
 /** Reversed AND translated, as one batch that reverses and moves produces. */
 const REVERSED_AND_MOVED = REVERSED.map((x) => x + 1000);
 
-/** One `reversed_sections` entry: the section, and the count in force at that step. */
-const reversed = (shot_count: number): ReversedSection => ({
-  section_id: SECTION,
+/** One `reversed_lines` entry: the line, and the count in force at that step. */
+const reversed = (shot_count: number): ReversedLine => ({
+  line_id: LINE,
   shot_count,
 });
 
@@ -71,9 +71,9 @@ function projectWith(stations: Station[]) {
     location: null,
     created_at: '2026-01-01T00:00:00Z',
     modified_at: '2026-01-01T00:00:01Z',
-    sections: [
+    lines: [
       {
-        id: SECTION,
+        id: LINE,
         name: 'Main',
         surveyor: null,
         date: null,
@@ -88,23 +88,23 @@ function projectWith(stations: Station[]) {
     zero_datums: [],
     loop_closures: [],
     file_path: '/tmp/reverse.stalx',
-    next_section_id: 5,
-    section_offsets: {},
+    next_line_id: 5,
+    line_offsets: {},
     imported_file_hashes: [],
-    imported_section_hashes: [],
+    imported_line_hashes: [],
   };
 }
 
 /**
  * Point every read-only refresh IPC at a project whose stations are `stations`,
- * and have undo/redo report `reversedSections` as renumbered. Omit it for an
+ * and have undo/redo report `reversedLines` as renumbered. Omit it for an
  * operation that reversed nothing: the field is then absent from the wire, which
  * is what the backend does for every other command. `error` turns the undo into
  * a FAILED one that still reports what it managed to apply.
  */
 function serveState(
   stations: Station[],
-  reversedSections?: ReversedSection[],
+  reversedLines?: ReversedLine[],
   error?: string
 ) {
   invokeIpcMock.mockImplementation(async (command: string) => {
@@ -116,10 +116,10 @@ function serveState(
           success: error === undefined,
           warnings: [],
           error: error ?? null,
-          section_ids: [],
-          ...(reversedSections === undefined
+          line_ids: [],
+          ...(reversedLines === undefined
             ? {}
-            : { reversed_sections: reversedSections }),
+            : { reversed_lines: reversedLines }),
         };
       case 'get_project_state':
         return {
@@ -141,14 +141,14 @@ function serveState(
   });
 }
 
-const ref = (station_index: number) => ({ section_id: SECTION, station_index });
+const ref = (station_index: number) => ({ line_id: LINE, station_index });
 
 describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useGasPlanStore.getState().reset();
     useUIStore.setState({ distanceGradientOrigin: null, selection: null, multiSelection: [] });
-    // Pre-undo state: the section is currently REVERSED and every pin was
+    // Pre-undo state: the line is currently REVERSED and every pin was
     // already mirrored onto it by the Reverse dialog.
     useProjectStore.setState({ stations: line(REVERSED), project: null });
   });
@@ -196,7 +196,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('leaves the origin alone on an undo that did not renumber anything', async () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
-    // No `reversed_sections` on the wire: an ordinary undo must not churn the
+    // No `reversed_lines` on the wire: an ordinary undo must not churn the
     // distance ramp.
     serveState(line(REVERSED));
     await useProjectStore.getState().undo();
@@ -205,9 +205,9 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('mirrors a section that was reversed AND moved in the same operation', async () => {
+  it('mirrors a line that was reversed AND moved in the same operation', async () => {
     // The case that defeats any position-diffing inference: undoing a batch that
-    // both reversed and moved the section leaves its stations matching NEITHER
+    // both reversed and moved the line leaves its stations matching NEITHER
     // the old numbering nor its mirror, so the geometry reports nothing while
     // the numbering really did flip. The backend says so outright instead.
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
@@ -219,7 +219,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   });
 
   it('treats an equal-count double reverse as a TOTAL no-op', async () => {
-    // Two reverses of one section at the same count, undone as one range: the
+    // Two reverses of one line at the same count, undone as one range: the
     // composed transform is exactly `i -> i`, so nothing may move and nothing may
     // be cleared. The out-of-range origin is the discriminator - it is what a
     // per-entry replay would drag onto an end station (`9 -> 0 -> 7`), because
@@ -252,7 +252,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   });
 
   it('mirrors what a PARTIALLY failed undo_to already applied', async () => {
-    // The earlier steps flipped their sections and cannot be rolled back, so the
+    // The earlier steps flipped their lines and cannot be rolled back, so the
     // backend attaches them to the failure return. Ignoring the field on
     // `success === false` leaves the pins on the opposite physical stations with
     // only a step-N-of-M toast to explain it.
@@ -318,14 +318,14 @@ describe('frontend mutation ordering (#24)', () => {
         success: true,
         warnings: [],
         error: null,
-        section_ids: [],
-        reversed_sections: [{ section_id: SECTION, shot_count }],
+        line_ids: [],
+        reversed_lines: [{ line_id: LINE, shot_count }],
       };
     });
 
     const store = useProjectStore.getState();
-    const first = store.reverseSection(SECTION, false);
-    const second = store.reverseSection(SECTION, false);
+    const first = store.reverseLine(LINE, false);
+    const second = store.reverseLine(LINE, false);
     releaseFirst?.();
     await Promise.all([first, second]);
 
@@ -337,7 +337,7 @@ describe('frontend mutation ordering (#24)', () => {
   it('never sends a queued command against a project that opened while it waited', async () => {
     // Project load/create/close do NOT go through the mutation queue, so a command can be
     // issued against A, wait behind another entry, and reach the front after B has opened.
-    // Section ids are small per-project integers, so running A's ids against B would mostly
+    // Line ids are small per-project integers, so running A's ids against B would mostly
     // RESOLVE - mutating the wrong survey rather than failing.
     const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
     let releaseFirst: (() => void) | undefined;
@@ -362,7 +362,7 @@ describe('frontend mutation ordering (#24)', () => {
       if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       reverseCalls.push(args);
       if (reverseCalls.length === 1) await firstHeld;
-      return { success: true, warnings: [], error: null, section_ids: [] };
+      return { success: true, warnings: [], error: null, line_ids: [] };
     });
 
     useProjectStore.setState({ project: projectWith(stations) as never });
@@ -370,9 +370,9 @@ describe('frontend mutation ordering (#24)', () => {
 
     // Let the first entry actually reach its IPC and park there, so the second is genuinely
     // WAITING behind it rather than both being rejected before either starts.
-    const first = store.reverseSection(SECTION, false);
+    const first = store.reverseLine(LINE, false);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const second = store.reverseSection(SECTION, false);
+    const second = store.reverseLine(LINE, false);
 
     // Project B opens while the second entry is still queued behind the first.
     openProjectCreatedAt = '2099-12-31T00:00:00Z';
@@ -395,7 +395,7 @@ describe('frontend mutation ordering (#24)', () => {
  * `flushPlanAnchors` is a real IPC round trip, and it sits BETWEEN the project-switch guard and
  * the `invokeIpc` that dispatches the edit. Project load/create/close do not go through the
  * mutation queue, so one can land while the flush is in flight - and `args` were captured against
- * the OUTGOING project. Section ids are small per-project integers, so they would mostly RESOLVE
+ * the OUTGOING project. Line ids are small per-project integers, so they would mostly RESOLVE
  * in whatever is now open: the wrong survey is edited, silently, and the guard that exists to stop
  * exactly that already ran before the window existed.
  *
@@ -445,7 +445,7 @@ describe('a project that opens during the anchor flush cancels the mutation (#31
           return { messages: [], save_blocked: false };
         default:
           mutations.push(command);
-          return { success: true, warnings: [], error: null, section_ids: [] };
+          return { success: true, warnings: [], error: null, line_ids: [] };
       }
     });
     return { release: () => release?.(), mutations, openProject };
@@ -460,7 +460,7 @@ describe('a project that opens during the anchor flush cancels the mutation (#31
   }
 
   it.each([
-    ['executeCommand', () => useProjectStore.getState().reverseSection(SECTION, false), 'reverse_section'],
+    ['executeCommand', () => useProjectStore.getState().reverseLine(LINE, false), 'reverse_line'],
     ['executeUndoRedo', () => useProjectStore.getState().undo(), 'undo'],
   ])('%s never dispatches once the flush loses its project', async (_seam, run, command) => {
     const { release, mutations, openProject } = serveHeldFlush();

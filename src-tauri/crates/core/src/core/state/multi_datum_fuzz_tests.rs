@@ -3,15 +3,15 @@
 //! combine entry points, undo, redo, and a save-and-reopen round trip.
 //! Synthetic surveys only.
 //!
-//! A chain starts from a random project built by commands (sections, some
+//! A chain starts from a random project built by commands (lines, some
 //! merges, one to three datums), then runs random steps: set a datum
 //! (placement or fix, its GPS 0-100 m from where the survey puts the
 //! station), set a datum with another datum's GPS bit for bit, change only
 //! an accuracy, remove a datum (the frame on purpose now and then), merge
 //! (two separately placed pieces on purpose now and then), unmerge, add a
-//! loop closure, split, Combine Sections through an offered candidate,
-//! delete a section or a shot, add a shot, undo, redo, reopen. Datums land
-//! on station 0, on sections that already hold one and in the frame's own
+//! loop closure, split, Combine Lines through an offered candidate,
+//! delete a line or a shot, add a shot, undo, redo, reopen. Datums land
+//! on station 0, on lines that already hold one and in the frame's own
 //! merge component more often than chance.
 //!
 //! After every state change, each failure message starting with its class:
@@ -39,7 +39,7 @@
 //!   re-anchored onto the key of a datum the step removed; a new GPS on the
 //!   frame datum (all fixed, see [`KNOWN_OPEN`]).
 //! - `datum-twin-station`: two datums resolve to one station (Combine
-//!   Sections joining two datum stations; now refused).
+//!   Lines joining two datum stations; now refused).
 //! - `hard-fix-off-gps` / `hard-fix-no-unknowns`: in the Closures Computed
 //!   View, a hard fix the solve holds is not on its GPS (rule derived from
 //!   `lsq.rs`; see `held_groups`). `-no-unknowns`: its component has no
@@ -53,7 +53,7 @@
 //! - `fix-moved-raw`: storing or removing a GPS fix moved raw geometry.
 //! - `undo-inexact` / `redo-inexact`: an undo or redo did not restore the
 //!   state it should (datums with GPS bits, accuracies and roles, merges,
-//!   closures, sections, raw coordinates to 1e-9). Every forward step is
+//!   closures, lines, raw coordinates to 1e-9). Every forward step is
 //!   undone and redone at once; random undo and redo steps go deeper.
 //!   `undo-across-reopen`: the same, for a state from before a reopen.
 //! - `reopen-drift`: save and reopen changed the datums, roles, merges,
@@ -81,14 +81,14 @@ use super::AppState;
 use crate::config::ClosureAdjustmentConfig;
 use crate::core::Command;
 use crate::models::{
-    gps_to_local, ClosureStrategy, DatumRole, GpsCoordinates, Project, SectionId, StationKey,
+    gps_to_local, ClosureStrategy, DatumRole, GpsCoordinates, Project, LineId, StationKey,
     StationRef, SurveyDirection,
 };
 
 /// `lsq.rs`'s `HARD_FIX_ACCURACY_M`.
 const HARD_FIX_ACCURACY_M: f64 = 1e-3;
 
-/// Per axis, for a station the solve holds: stations of one section may
+/// Per axis, for a station the solve holds: stations of one line may
 /// disagree on its translation by 1e-6 m before the solve refuses.
 const HELD_TOL_M: f64 = 1e-6 + 1e-8;
 
@@ -106,7 +106,7 @@ const EXACT_M: f64 = 1e-9;
 /// datum's key, or a combine re-keying one of two twins, a placement and a
 /// fix with one GPS, onto the key of the other), both fixed in
 /// `DatumLayout::was_unplaced`; and
-/// `datum-twin-station` (Combine Sections joining two stations that each
+/// `datum-twin-station` (Combine Lines joining two stations that each
 /// hold a datum), now refused; and `hard-fix-no-unknowns` (a hard fix in a
 /// component with no unknown left), now applied; and `frame-gps-edit` (a new
 /// GPS on the frame datum left every other placed piece off its own GPS,
@@ -157,7 +157,7 @@ impl PartialEq for DatumRow {
 /// Everything a step must keep or restore, in comparable form.
 #[derive(Debug, Clone)]
 struct Snap {
-    sections: Vec<(SectionId, usize)>,
+    lines: Vec<(LineId, usize)>,
     datums: Vec<DatumRow>,
     /// Resolved merge pairs, each ordered, sorted.
     merges: Vec<(StationRef, StationRef)>,
@@ -175,7 +175,7 @@ fn gps_bits(g: &GpsCoordinates) -> [u64; 3] {
 }
 
 fn ordered(a: StationRef, b: StationRef) -> (StationRef, StationRef) {
-    if (a.section_id, a.station_index) <= (b.section_id, b.station_index) {
+    if (a.line_id, a.station_index) <= (b.line_id, b.station_index) {
         (a, b)
     } else {
         (b, a)
@@ -205,7 +205,7 @@ fn snap(p: &Project) -> Snap {
             ))
         })
         .collect();
-    merges.sort_by_key(|(a, b)| (a.section_id, a.station_index, b.section_id, b.station_index));
+    merges.sort_by_key(|(a, b)| (a.line_id, a.station_index, b.line_id, b.station_index));
     let mut closures: Vec<_> = p
         .loop_closures
         .iter()
@@ -216,7 +216,7 @@ fn snap(p: &Project) -> Snap {
         .collect();
     closures.sort_by_key(|c| c.0);
     Snap {
-        sections: p.sections.iter().map(|s| (s.id, s.shots.len())).collect(),
+        lines: p.lines.iter().map(|s| (s.id, s.shots.len())).collect(),
         datums,
         merges,
         closures,
@@ -233,10 +233,10 @@ fn snap(p: &Project) -> Snap {
 
 /// The first difference between `want` and `got`, if any.
 fn diff(want: &Snap, got: &Snap) -> Option<String> {
-    if want.sections != got.sections {
+    if want.lines != got.lines {
         return Some(format!(
-            "sections {:?} -> {:?}",
-            want.sections, got.sections
+            "lines {:?} -> {:?}",
+            want.lines, got.lines
         ));
     }
     if want.datums != got.datums {
@@ -342,24 +342,24 @@ fn held_groups(p: &Project) -> (Groups, HashSet<StationRef>, Vec<(StationRef, (f
     (groups, held, fixes)
 }
 
-/// Whether every constraint group of `section`'s component is held.
+/// Whether every constraint group of `line`'s component is held.
 fn component_all_held(
     p: &Project,
     groups: &mut Groups,
     held: &HashSet<StationRef>,
-    section: SectionId,
+    line: LineId,
 ) -> bool {
-    let component = p.get_connected_section_ids(section);
+    let component = p.get_connected_line_ids(line);
     every_station(p)
         .into_iter()
-        .filter(|s| component.contains(&s.section_id))
+        .filter(|s| component.contains(&s.line_id))
         .all(|s| held.contains(&groups.find(s)))
 }
 
-/// A computed view: positions, and the sections of failed components.
+/// A computed view: positions, and the lines of failed components.
 struct View {
     at: HashMap<StationRef, (f64, f64, f64)>,
-    failed: HashSet<SectionId>,
+    failed: HashSet<LineId>,
 }
 
 fn solve(p: &Project) -> View {
@@ -376,7 +376,7 @@ fn solve(p: &Project) -> View {
         failed: solved
             .failures
             .iter()
-            .flat_map(|f| f.section_ids.iter().copied())
+            .flat_map(|f| f.line_ids.iter().copied())
             .collect(),
     }
 }
@@ -443,7 +443,7 @@ fn project(state: &AppState) -> Project {
 }
 
 impl Chain {
-    /// The project of `seed`: sections, some merged, and one to three datums,
+    /// The project of `seed`: lines, some merged, and one to three datums,
     /// all through commands. Mostly near the equator, where re-framing moves a
     /// placement by well under a micrometre (see the module doc).
     fn new(seed: u64, verbose: bool) -> (Self, Vec<Op>) {
@@ -464,7 +464,7 @@ impl Chain {
         let count = 3 + rng.below(4);
         for i in 0..count {
             let n = 1 + rng.below(5);
-            let r = state.execute(Command::CreateSection {
+            let r = state.execute(Command::CreateLine {
                 name: Some(format!("S{i}")),
                 surveyor: None,
                 date: None,
@@ -490,7 +490,7 @@ impl Chain {
         // The setup's own steps: merges, then datums.
         let mut setup = Vec::new();
         let p = project(&chain.state);
-        let ids: Vec<SectionId> = p.sections.iter().map(|s| s.id).collect();
+        let ids: Vec<LineId> = p.lines.iter().map(|s| s.id).collect();
         for (i, &id) in ids.iter().enumerate().skip(1) {
             if rng.chance(60) {
                 let other = ids[rng.below(i)];
@@ -507,8 +507,8 @@ impl Chain {
         (chain, setup)
     }
 
-    fn station_of(&self, p: &Project, id: SectionId, rng: &mut Rng) -> StationRef {
-        let n = p.get_section(id).map_or(0, |s| s.shots.len());
+    fn station_of(&self, p: &Project, id: LineId, rng: &mut Rng) -> StationRef {
+        let n = p.get_line(id).map_or(0, |s| s.shots.len());
         let i = if rng.chance(35) { 0 } else { rng.below(n + 1) };
         StationRef::new(id, i as u32)
     }
@@ -639,10 +639,10 @@ fn placement_mechanism(op: Option<&Op>, before: &Snap, p: &Project) -> Option<&'
     None
 }
 
-/// The roles re-derived from the merges: union-find over sections.
+/// The roles re-derived from the merges: union-find over lines.
 fn expected_roles(p: &Project) -> Vec<Option<DatumRole>> {
-    let mut up: HashMap<SectionId, SectionId> = HashMap::new();
-    fn find(up: &mut HashMap<SectionId, SectionId>, x: SectionId) -> SectionId {
+    let mut up: HashMap<LineId, LineId> = HashMap::new();
+    fn find(up: &mut HashMap<LineId, LineId>, x: LineId) -> LineId {
         let next = *up.get(&x).unwrap_or(&x);
         if next == x {
             return x;
@@ -653,7 +653,7 @@ fn expected_roles(p: &Project) -> Vec<Option<DatumRole>> {
     }
     for m in &p.station_merges {
         if let (Some(a), Some(b)) = (p.resolve_key(&m.station_a), p.resolve_key(&m.station_b)) {
-            let (ra, rb) = (find(&mut up, a.section_id), find(&mut up, b.section_id));
+            let (ra, rb) = (find(&mut up, a.line_id), find(&mut up, b.line_id));
             if ra != rb {
                 up.insert(ra, rb);
             }
@@ -664,7 +664,7 @@ fn expected_roles(p: &Project) -> Vec<Option<DatumRole>> {
         .iter()
         .map(|zd| {
             let at = p.resolve_key(&zd.station_ref)?;
-            Some(if placed.insert(find(&mut up, at.section_id)) {
+            Some(if placed.insert(find(&mut up, at.line_id)) {
                 DatumRole::Placement
             } else {
                 DatumRole::GpsFix
@@ -787,7 +787,7 @@ impl Chain {
         if !p.gps_fix_datums().is_empty() {
             let bare = solve(&without_fixes(p));
             for (at, &(_, _, z)) in &view.at {
-                if view.failed.contains(&at.section_id) || bare.failed.contains(&at.section_id) {
+                if view.failed.contains(&at.line_id) || bare.failed.contains(&at.line_id) {
                     continue;
                 }
                 let bz = bare.at[at].2;
@@ -800,7 +800,7 @@ impl Chain {
             }
         }
         for at in p.placement_datum_refs() {
-            if view.failed.contains(&at.section_id) {
+            if view.failed.contains(&at.line_id) {
                 continue;
             }
             let (rx, ry, _) = raw[&at];
@@ -815,12 +815,12 @@ impl Chain {
         let (mut groups, held, fixes) = held_groups(p);
         stats.held_fixes += fixes.len();
         for (at, (gx, gy)) in fixes {
-            if view.failed.contains(&at.section_id) {
+            if view.failed.contains(&at.line_id) {
                 continue;
             }
             let (x, y, _) = view.at[&at];
             if (x - gx).abs() > HELD_TOL_M || (y - gy).abs() > HELD_TOL_M {
-                let class = if component_all_held(p, &mut groups, &held, at.section_id) {
+                let class = if component_all_held(p, &mut groups, &held, at.line_id) {
                     "hard-fix-no-unknowns"
                 } else {
                     "hard-fix-off-gps"
@@ -843,7 +843,7 @@ impl Chain {
             s.closures.iter().map(|c| (c.1, c.2)).collect()
         };
         let same_topology =
-            s0.sections == s1.sections && s0.merges == s1.merges && pairs(s0) == pairs(s1);
+            s0.lines == s1.lines && s0.merges == s1.merges && pairs(s0) == pairs(s1);
         let moved_most = || -> f64 {
             s0.raw
                 .iter()
@@ -1005,12 +1005,12 @@ impl Chain {
             }))
             .or_default() += 1;
         if let Op::Merge { a, b } = op {
-            let placed: HashSet<SectionId> = p0
+            let placed: HashSet<LineId> = p0
                 .placement_datum_refs()
                 .into_iter()
-                .flat_map(|sr| p0.get_merged_section_ids(sr.section_id))
+                .flat_map(|sr| p0.get_merged_line_ids(sr.line_id))
                 .collect();
-            if placed.contains(&a.section_id) && placed.contains(&b.section_id) {
+            if placed.contains(&a.line_id) && placed.contains(&b.line_id) {
                 stats.placed_merges += 1;
             }
         }

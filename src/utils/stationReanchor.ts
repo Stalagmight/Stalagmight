@@ -15,7 +15,7 @@
 /**
  * Keep a committed station pick on the same physical station across a shot edit.
  *
- * The pick addresses the POST-EDIT order (a section of `s` surviving shots has
+ * The pick addresses the POST-EDIT order (a line of `s` surviving shots has
  * stations `0..s`), so adding or removing a survivor renumbers every station
  * beyond it. `editPosition` is the survivor position the edit lands at:
  * deleting the shot there merges stations `editPosition` and `editPosition + 1`,
@@ -48,7 +48,7 @@ export function reanchorStation(
  * {@link reanchorStation} alone applies the whole run's delta to any pick past
  * the run's first station, which for a pick inside the run subtracts more
  * stations than precede it: deleting stations 2..7 with 5 picked gave 5 - 6,
- * clamped to 0, sending the GPS anchor to the head of the section.
+ * clamped to 0, sending the GPS anchor to the head of the line.
  */
 export function reanchorAfterRunDelete(
   pick: number,

@@ -5,31 +5,31 @@
 /**
  * Format a shot ID for user display.
  *
- * @param sectionId - Section ID (1-indexed, from database)
- * @param shotPosition - Shot position within section (1-indexed)
- * @returns Formatted ID string in "sectionId:shotPosition" format
+ * @param lineId - Line ID (1-indexed, from database)
+ * @param shotPosition - Shot position within line (1-indexed)
+ * @returns Formatted ID string in "lineId:shotPosition" format
  *
  * @example
  * formatShotId(5, 3) // returns "5:3"
  * formatShotId(1, 1) // returns "1:1"
  */
-export function formatShotId(sectionId: number, shotPosition: number): string {
-  return `${sectionId}:${shotPosition}`;
+export function formatShotId(lineId: number, shotPosition: number): string {
+  return `${lineId}:${shotPosition}`;
 }
 
 /**
  * Format a station ID for user display.
  *
- * @param sectionId - Section ID (1-indexed, from database)
- * @param stationIndex - Station index within section (0-indexed)
- * @returns Formatted ID string in "sectionId:stationIndex" format
+ * @param lineId - Line ID (1-indexed, from database)
+ * @param stationIndex - Station index within line (0-indexed)
+ * @returns Formatted ID string in "lineId:stationIndex" format
  *
  * @example
  * formatStationId(5, 0) // returns "5:0"
  * formatStationId(1, 3) // returns "1:3"
  */
-export function formatStationId(sectionId: number, stationIndex: number): string {
-  return `${sectionId}:${stationIndex}`;
+export function formatStationId(lineId: number, stationIndex: number): string {
+  return `${lineId}:${stationIndex}`;
 }
 
 /**
@@ -68,7 +68,7 @@ export function displayStationName(name: string | null | undefined): string {
 /**
  * A station ID with its name, when it has one (e.g. the MNemo station number
  * a DMP import recorded). The name is not unique - MNemo restarts at 0 in
- * every section - so here it is shown beside the positional ID. Only the
+ * every line - so here it is shown beside the positional ID. Only the
  * opt-in Station names map label (exclusive with the Station IDs label) shows
  * a name instead of the ID.
  *
@@ -77,11 +77,11 @@ export function displayStationName(name: string | null | undefined): string {
  * formatStationIdWithName(5, 3)       // returns "5:3"
  */
 export function formatStationIdWithName(
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
   name?: string | null,
 ): string {
-  const id = formatStationId(sectionId, stationIndex);
+  const id = formatStationId(lineId, stationIndex);
   const shown = displayStationName(name);
   return shown ? `${id} · ${shown}` : id;
 }

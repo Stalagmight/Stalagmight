@@ -122,18 +122,18 @@ fresh_clone() {
     scripts/release-notes.sh scripts/release-channel.sh scripts/lib/release-version.sh
   # Pin the changelog these cases run against instead of inheriting the live one.
   # release.sh refuses an empty `## [Unreleased]` - case 5 asserts that refusal is
-  # correct - so cutting a release, which empties that section by moving it under
+  # correct - so cutting a release, which empties that line by moving it under
   # the new version, turned cases 1, 6 and 9 red on master for a reason none of
   # them is about. A fixture makes every outcome attributable to the case's own
-  # name; case 5 overwrites it with an empty section on purpose.
+  # name; case 5 overwrites it with an empty line on purpose.
   # Non-empty matters for case 7 as much as for the happy paths: with notes
   # already present, release.sh skips the write-them-now editor at the top and
   # reaches the post-rewrite one, which is the editor whose failure case 7 exists
-  # to test. Against an empty section it aborts at the first editor instead, with
+  # to test. Against an empty line it aborts at the first editor instead, with
   # no version file ever written, and case 7 passes without testing anything.
   printf '%s\n' \
     '# Changelog' '' \
-    '## [Unreleased]' '' '### Fixed' '' '- a fixture entry, so the section is not empty' '' \
+    '## [Unreleased]' '' '### Fixed' '' '- a fixture entry, so the line is not empty' '' \
     '## [0.1.0] - 2026-01-01' '' '- something old' \
     > "$dir/CHANGELOG.md"
   git -C "$dir" add CHANGELOG.md
@@ -197,7 +197,7 @@ if "$D/scripts/release.sh" 9.9.9 --no-edit >/dev/null 2>&1; then
     grep -q 'generated against: version = "9.9.9"' "$D/THIRD-PARTY-LICENSES.md"
   assert "license bundle is in the release commit" \
     bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "THIRD-PARTY-LICENSES.md"' _ "$D"
-  assert "changelog section created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
+  assert "changelog line created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
   assert "tag created"               has_tag "$D" v9.9.9
   assert "tree clean after release"  tree_clean "$D"
 else
@@ -253,17 +253,17 @@ else
   assert "tree clean, nothing to hand-revert" tree_clean "$D"
 fi
 
-echo "== case 5: an empty [Unreleased] section aborts before anything is written =="
+echo "== case 5: an empty [Unreleased] line aborts before anything is written =="
 # Guards against shipping a release whose notes are just "Release vX.Y.Z": the
-# workflow falls back to that bare body when it finds no changelog section.
+# workflow falls back to that bare body when it finds no changelog line.
 D=$(fresh_clone case5)
 printf '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-01-01\n\n- something old\n' \
   > "$D/CHANGELOG.md"
-git -C "$D" commit --quiet -am "empty the Unreleased section"
+git -C "$D" commit --quiet -am "empty the Unreleased line"
 if "$D/scripts/release.sh" 6.6.6 --no-edit >/dev/null 2>&1; then
-  fail "accepted an empty [Unreleased] section"
+  fail "accepted an empty [Unreleased] line"
 else
-  pass "refused an empty [Unreleased] section"
+  pass "refused an empty [Unreleased] line"
   refute "version files untouched" grep -q '"version": "6.6.6"' "$D/package.json"
   refute "no tag created" has_tag "$D" v6.6.6
 fi
@@ -299,7 +299,7 @@ else
   #
   # This next one is the load-bearing half: release.sh moves the [Unreleased]
   # content under the new header BEFORE it opens the post-rewrite editor, so a
-  # `## [4.4.4]` section proves the run actually reached that editor. Without it
+  # `## [4.4.4]` line proves the run actually reached that editor. Without it
   # the porcelain assertion below passes on a COMPLETELY CLEAN tree - `printf '' |
   # grep -cv ...` prints 0 - so an abort at any earlier pre-flight would look
   # identical to the revert this case exists to test.
@@ -622,7 +622,7 @@ fi
 
 echo "== case 18: a changelog with no notes at all is refused =="
 # release-notes.sh falls back to the bare string "Release vX.Y.Z" when it finds
-# no section. That publishes an announcement whose entire content is the version
+# no line. That publishes an announcement whose entire content is the version
 # number already in the title.
 D=$(fresh_clone case18)
 CUR=$(version_of "$D")
@@ -632,14 +632,14 @@ if out=$("$D/scripts/release-tag.sh" "v$CUR" 2>&1); then
   fail "tagged a release with no notes"
 else
   pass "refused a release with no notes"
-  assert "message names the empty sections" \
+  assert "message names the empty lines" \
     bash -c 'printf "%s" "$1" | grep -q "has no notes for"' _ "$out"
   refute "no tag created" has_tag "$D" "v$CUR"
 fi
 
 echo "== case 19: a final tag reports what it cannot check for you =="
 # Two advisories, both notes rather than gates: a release cut without any
-# candidate is legitimate, and so is publishing a section dated earlier than
+# candidate is legitimate, and so is publishing a line dated earlier than
 # today - but both are invisible unless something says so, and the date is
 # published verbatim.
 D=$(fresh_clone case19)
@@ -690,7 +690,7 @@ printf '%s\n' \
   '## [0.4.0] - 2026-01-01' '' '- the 0.4.0 thing' '' \
   > "$FIXTURE"
 
-# This fixture has BOTH a [0.4.0] section and a non-empty [Unreleased], which is
+# This fixture has BOTH a [0.4.0] line and a non-empty [Unreleased], which is
 # the shape that triggers the unfolded-entries warning below. The cases here are
 # about body selection, so they discard stderr; the warning gets its own cases.
 #
@@ -698,20 +698,20 @@ printf '%s\n' \
 # `$WORK` comes from `mktemp -d "${TMPDIR:-/tmp}/..."` and `$NOTES` from the
 # checkout path, so a space or a shell metacharacter in either would word-split
 # inside the eval and the case would silently exercise something else.
-# A final tag takes its own section.
-assert "final tag uses its version's section" \
+# A final tag takes its own line.
+assert "final tag uses its version's line" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
 refute "final tag has no candidate banner" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "Release candidate"' _ "$FIXTURE" "$NOTES"
 
 # A candidate takes the notes of the version it is a candidate for, not its own
-# (nonexistent) section, and says clearly that it is a candidate.
-assert "candidate uses the base version's section" \
+# (nonexistent) line, and says clearly that it is a candidate.
+assert "candidate uses the base version's line" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc.1 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
 assert "candidate is labelled as one" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc.1 2>/dev/null | grep -q "Release candidate for 0.4.0"' _ "$FIXTURE" "$NOTES"
 
-# Before release.sh moves it, a version has no section yet - fall back to
+# Before release.sh moves it, a version has no line yet - fall back to
 # [Unreleased] rather than publishing an empty body.
 assert "unmoved version falls back to Unreleased" \
   bash -c 'CHANGELOG="$1" bash "$2" v9.9.9 | grep -q "unreleased thing"' _ "$FIXTURE" "$NOTES"
@@ -754,7 +754,7 @@ assert "a notarized macOS build keeps the Windows steps and checksums" \
 assert "an ad-hoc marker keeps the quarantine command" \
   bash -c 'MACOS_SIGNING=adhoc CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"' _ "$FIXTURE" "$NOTES"
 
-# --- Entries left under [Unreleased] after the section exists ---
+# --- Entries left under [Unreleased] after the line exists ---
 # Between rc1 and rc2, four fixes sat under [Unreleased] while the tag read
 # `## [0.5.0]`, so they shipped in the binary and appeared nowhere in the notes.
 # Nothing failed; only reading the rendered body caught it.
@@ -770,7 +770,7 @@ assert "a candidate warns too, not just a final tag" \
 refute "the warning never contaminates the published body" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 
-# Folded changelog: the section exists and [Unreleased] is empty, which is the
+# Folded changelog: the line exists and [Unreleased] is empty, which is the
 # state a correctly-prepared tag is cut from. Warning here would train people to
 # ignore it.
 printf '%s\n' \
@@ -787,7 +787,7 @@ assert "the folded fixture still renders a body" \
 refute "silent once the entries have been folded in" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$WORK/folded.md" "$NOTES"
 
-# A section holding only a heading has nothing to fold, so warning about it would
+# A line holding only a heading has nothing to fold, so warning about it would
 # be a false alarm - and a warning that fires on a good state is one people learn
 # to ignore. Same pairing as above: prove the run happened before trusting silence.
 printf '%s\n' \

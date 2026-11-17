@@ -5,7 +5,7 @@
 //! edits. We used to discard it and mint our own, so a file that left Ariane and
 //! came back was re-identified shot by shot. These tests pin the contract at
 //! each place identity could be dropped: the parse, the import, the transforms
-//! that rebuild shots from `ShotData` (reverse, section split, project merge),
+//! that rebuild shots from `ShotData` (reverse, line split, project merge),
 //! the undo payload, and the export.
 //!
 //! No fixture files: every `.tml`/`.tmlu` here is synthetic XML built in-test
@@ -17,7 +17,7 @@ use std::path::Path;
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::export::tml::{export_tml, export_tml_for_speleodb};
-use crate::models::{Project, SectionData, ShotData, StationKey, StationRef};
+use crate::models::{Project, LineData, ShotData, StationKey, StationRef};
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ impl Row {
 
 /// A `<SurveyData>` element. `START` rows anchor the chain; every other row is a
 /// REAL shot that becomes one of our shots.
-fn survey_data_xml(row: &Row, shot_type: &str, section: &str) -> String {
+fn survey_data_xml(row: &Row, shot_type: &str, line: &str) -> String {
     let uuid = row
         .uuid
         .map(|u| format!("\n    <UUID>{u}</UUID>"))
@@ -52,7 +52,7 @@ fn survey_data_xml(row: &Row, shot_type: &str, section: &str) -> String {
     <FromID>{from_id}</FromID>
     <ClosureToID>-1</ClosureToID>
     <Type>{shot_type}</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>5.0</Depth>
@@ -73,7 +73,7 @@ fn survey_data_xml(row: &Row, shot_type: &str, section: &str) -> String {
     )
 }
 
-/// A one-section cave file: a START row plus one REAL row per entry in `rows`.
+/// A one-line cave file: a START row plus one REAL row per entry in `rows`.
 fn cave_file_xml(rows: &[Row]) -> String {
     let start = survey_data_xml(&Row::new(0, -1, None), "START", "Main");
     let body: String = rows
@@ -96,14 +96,14 @@ fn cave_file_xml(rows: &[Row]) -> String {
     )
 }
 
-/// A two-section cave file: `main` hangs off the START, `side` hangs off the
-/// last row of `main`. Used to show that a repeat ACROSS sections is legal and
+/// A two-line cave file: `main` hangs off the START, `side` hangs off the
+/// last row of `main`. Used to show that a repeat ACROSS lines is legal and
 /// must survive untouched.
-fn two_section_cave_file_xml(main: &[Row], side: &[Row]) -> String {
+fn two_line_cave_file_xml(main: &[Row], side: &[Row]) -> String {
     let start = survey_data_xml(&Row::new(0, -1, None), "START", "Main");
-    let rows = |rows: &[Row], section: &str| {
+    let rows = |rows: &[Row], line: &str| {
         rows.iter()
-            .map(|r| survey_data_xml(r, "REAL", section))
+            .map(|r| survey_data_xml(r, "REAL", line))
             .collect::<Vec<_>>()
             .join("\n        ")
     };
@@ -137,7 +137,7 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 ///
 /// Deliberately shaped after `speleodb_pull::adopt_build_into` down to the
 /// entry point (`execute_tml_import_sections`, not the generic
-/// `execute_import_sections`) and the surface-elevation derivation (#431), so
+/// `execute_import_lines`) and the surface-elevation derivation (#431), so
 /// the adoption-idempotence claim below is about the pipeline that actually
 /// ships. `adoption_still_builds_through_the_pipeline_the_idempotence_test_drives`
 /// is the tripwire that keeps the two from drifting - it has already caught one
@@ -145,11 +145,11 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 /// import onto the TML-specific entry point.
 fn import_ariane_file(state: &AppState, path: &Path) {
     let tml = parse_tml(path).unwrap();
-    let (sections, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
+    let (lines, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
     let surface_elevation =
         crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
-        sections,
+        lines,
         closures,
         None,
         Vec::new(),
@@ -169,11 +169,11 @@ fn state_with_project() -> AppState {
     state
 }
 
-/// Every shot UUID of section `index`, in section order. `None` becomes an empty
+/// Every shot UUID of line `index`, in line order. `None` becomes an empty
 /// string so a missing identity fails an equality assertion loudly rather than
 /// being skipped.
-fn section_uuids(project: &Project, index: usize) -> Vec<String> {
-    project.sections[index]
+fn line_uuids(project: &Project, index: usize) -> Vec<String> {
+    project.lines[index]
         .shots
         .iter()
         .map(|s| s.uuid.clone().unwrap_or_default())
@@ -211,7 +211,7 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
 
         let project = state.get_project_state().unwrap();
         assert_eq!(
-            section_uuids(&project, 0),
+            line_uuids(&project, 0),
             vec![U1.to_string(), U2.to_string(), U3.to_string()],
             "the file's identities must be the imported shots' identities"
         );
@@ -223,7 +223,7 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
         export_tml(&project, &exported).unwrap();
         let reparsed = parse_tml(&exported).unwrap();
         let out: Vec<String> = reparsed
-            .sections
+            .lines
             .iter()
             .flat_map(|s| s.shots.iter())
             .filter_map(|s| s.uuid.clone())
@@ -263,7 +263,7 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[1], MID, "the covered shot must keep the file's id");
     assert_ne!(uuids[0], MID, "an uncovered shot must not inherit it");
@@ -276,17 +276,17 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Intra-section duplicate
+// 3. Intra-line duplicate
 // ---------------------------------------------------------------------------
 
-/// A source file that repeats an id inside one section is REPAIRED, not
+/// A source file that repeats an id inside one line is REPAIRED, not
 /// rejected and not admitted: the FIRST occurrence keeps the foreign value and
 /// the rest are re-minted, which is what `resolve_key` (first match wins) needs.
 /// Red without the repair - and the import would not merely warn, it would be
 /// rolled back wholesale by the `duplicate_shot_uuid` Critical violation that
 /// `finalize_structural_edit` refuses to commit.
 #[test]
-fn a_repeated_uuid_inside_one_section_is_repaired_keeping_the_first() {
+fn a_repeated_uuid_inside_one_line_is_repaired_keeping_the_first() {
     const DUP: &str = "55555555-5555-4555-8555-555555555555";
 
     let dir = tempfile::tempdir().unwrap();
@@ -304,7 +304,7 @@ fn a_repeated_uuid_inside_one_section_is_repaired_keeping_the_first() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], DUP, "the FIRST occurrence keeps the foreign id");
     assert_ne!(uuids[1], DUP, "the second must be re-minted");
@@ -351,11 +351,11 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
 
     let state = state_with_project();
     let tml = parse_tml(&source).unwrap();
-    let (mut sections, closures, _warnings) =
+    let (mut lines, closures, _warnings) =
         convert_tml_to_import_configs(&tml, false, true).unwrap();
-    sections[0].reverse = true;
+    lines[0].reverse = true;
     let result = state.execute_tml_import_sections(
-        sections,
+        lines,
         closures,
         None,
         Vec::new(),
@@ -366,27 +366,27 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], LAST, "the file's last id must be first now");
     assert_eq!(uuids[2], FIRST, "the file's first id must be last now");
 }
 
 // ---------------------------------------------------------------------------
-// 5. Section split
+// 5. Line split
 // ---------------------------------------------------------------------------
 
-/// Splitting a section keeps the foreign ids on BOTH halves (section B is
+/// Splitting a line keeps the foreign ids on BOTH halves (line B is
 /// rebuilt from `to_shot_data`), and every station cross-reference still points
 /// at the same physical station it did before.
 ///
 /// This is also what pins the split's positional remap as still necessary. A
-/// `StationKey` is `(section_id, anchor)`, so a preserved uuid alone cannot
-/// follow a shot into the NEW section: drop the remap and the B-half comment's
-/// key keeps naming section A, where its anchoring shot no longer exists, and
+/// `StationKey` is `(line_id, anchor)`, so a preserved uuid alone cannot
+/// follow a shot into the NEW line: drop the remap and the B-half comment's
+/// key keeps naming line A, where its anchoring shot no longer exists, and
 /// resolves to `None`.
 #[test]
-fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_halves() {
+fn a_line_split_preserves_the_foreign_ids_and_the_cross_references_of_both_halves() {
     const IDS: [&str; 5] = [
         "aaaaaaaa-0000-4000-8000-000000000001",
         "aaaaaaaa-0000-4000-8000-000000000002",
@@ -411,12 +411,12 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
     let state = state_with_project();
     import_ariane_file(&state, &source);
 
-    let section_id = state.get_project_state().unwrap().sections[0].id;
+    let line_id = state.get_project_state().unwrap().lines[0].id;
     // One cross-reference on each side of the coming split: station 1 stays in
     // A, station 4 moves into B.
     for (index, text) in [(1u32, "stays in A"), (4u32, "moves into B")] {
         let r = state.execute(Command::SetStationComment {
-            station_ref: StationRef::new(section_id, index),
+            station_ref: StationRef::new(line_id, index),
             comment: Some(text.to_string()),
         });
         assert!(r.success, "{:?}", r.error);
@@ -441,19 +441,19 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
 
     // Split at the middle shot (index 2): A keeps shots 0..2, the shot at 2 is
     // deleted, B receives shots 3..5.
-    let mid = before.sections[0].shots[2].id;
-    let r = state.execute_delete_shot_and_split(section_id, mid, "A".to_string(), "B".to_string());
+    let mid = before.lines[0].shots[2].id;
+    let r = state.execute_delete_shot_and_split(line_id, mid, "A".to_string(), "B".to_string());
     assert!(r.success, "{:?}", r.error);
 
     let after = state.get_project_state().unwrap();
-    assert_eq!(after.sections.len(), 2);
+    assert_eq!(after.lines.len(), 2);
     assert_eq!(
-        section_uuids(&after, 0),
+        line_uuids(&after, 0),
         vec![IDS[0].to_string(), IDS[1].to_string()],
         "the A half lost its foreign ids"
     );
     assert_eq!(
-        section_uuids(&after, 1),
+        line_uuids(&after, 1),
         vec![IDS[3].to_string(), IDS[4].to_string()],
         "the B half lost its foreign ids - the case the side-channel design gave up on"
     );
@@ -490,7 +490,7 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
 /// Two projects that each imported the same Ariane file hold the same foreign
 /// ids. Shot UUIDs are unique across the whole project, so the merge keeps the
 /// FIRST source's copy verbatim (its Ariane identity survives) and gives the
-/// second source's shots the derived replacement for their section.
+/// second source's shots the derived replacement for their line.
 #[test]
 fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids() {
     const IDS: [&str; 3] = [
@@ -503,7 +503,7 @@ fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids()
     // file's ids.
     let imported_project = |name: &str| {
         let mut project = Project::new(name.to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             shots: IDS
                 .iter()
@@ -524,7 +524,7 @@ fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids()
 
     let a = imported_project("A");
     let b = imported_project("B");
-    assert_eq!(section_uuids(&a, 0), IDS.map(String::from).to_vec());
+    assert_eq!(line_uuids(&a, 0), IDS.map(String::from).to_vec());
 
     let (db_a, _keep_a) = crate::test_helpers::TestDb::with_project(&a).unwrap();
     let (db_b, _keep_b) = crate::test_helpers::TestDb::with_project(&b).unwrap();
@@ -545,16 +545,16 @@ fn merging_two_projects_that_imported_one_file_keeps_the_first_copy_of_its_ids()
         .unwrap()
         .load_project()
         .unwrap();
-    assert_eq!(merged.sections.len(), 2, "both sections must survive");
+    assert_eq!(merged.lines.len(), 2, "both lines must survive");
     let expected = IDS.map(String::from).to_vec();
     assert_eq!(
-        section_uuids(&merged, 0),
+        line_uuids(&merged, 0),
         expected,
         "the first source's foreign ids must survive the merge"
     );
-    let second = merged.sections[1].id;
+    let second = merged.lines[1].id;
     assert_eq!(
-        section_uuids(&merged, 1),
+        line_uuids(&merged, 1),
         IDS.iter()
             .map(|id| crate::models::reminted_shot_uuid(second, id))
             .collect::<Vec<_>>(),
@@ -582,7 +582,7 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
     const NIL: &str = "00000000-0000-0000-0000-000000000000";
 
     let mut project = Project::new("Spellings".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         name: Some("Main".to_string()),
         shots: [BRACED, HYPHENLESS, NIL]
             .iter()
@@ -599,7 +599,7 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
         ..Default::default()
     });
     assert_eq!(
-        section_uuids(&project, 0),
+        line_uuids(&project, 0),
         vec![BRACED.to_string(), HYPHENLESS.to_string(), NIL.to_string()],
         "the model stores what it was given, un-coerced"
     );
@@ -677,7 +677,7 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     let adopt_once = || {
         let state = state_with_project();
         import_ariane_file(&state, &source);
-        section_uuids(&state.get_project_state().unwrap(), 0)
+        line_uuids(&state.get_project_state().unwrap(), 0)
     };
 
     let first = adopt_once();
@@ -724,25 +724,25 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
     import_ariane_file(&state, &source);
     let expected = IDS.map(String::from).to_vec();
     assert_eq!(
-        section_uuids(&state.get_project_state().unwrap(), 0),
+        line_uuids(&state.get_project_state().unwrap(), 0),
         expected
     );
 
     // Leg 1: delete a shot and undo it. The restored shot must come back with
     // the file's id, not a new one.
-    let (section_id, mid_shot_id) = {
+    let (line_id, mid_shot_id) = {
         let p = state.get_project_state().unwrap();
-        (p.sections[0].id, p.sections[0].shots[1].id)
+        (p.lines[0].id, p.lines[0].shots[1].id)
     };
     let r = state.execute(Command::DeleteShot {
-        section_id,
+        line_id,
         shot_id: mid_shot_id,
     });
     assert!(r.success, "{:?}", r.error);
     let undone = state.undo();
     assert!(undone.success, "{:?}", undone.error);
     assert_eq!(
-        section_uuids(&state.get_project_state().unwrap(), 0),
+        line_uuids(&state.get_project_state().unwrap(), 0),
         expected,
         "undoing a shot delete must restore the shot's own identity"
     );
@@ -751,13 +751,13 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
     let undone = state.undo();
     assert!(undone.success, "{:?}", undone.error);
     assert!(
-        state.get_project_state().unwrap().sections.is_empty(),
-        "undoing the import must remove the imported section"
+        state.get_project_state().unwrap().lines.is_empty(),
+        "undoing the import must remove the imported line"
     );
     let redone = state.redo();
     assert!(redone.success, "{:?}", redone.error);
     assert_eq!(
-        section_uuids(&state.get_project_state().unwrap(), 0),
+        line_uuids(&state.get_project_state().unwrap(), 0),
         expected,
         "redoing the import must bring back the file's identities, not fresh mints"
     );
@@ -807,10 +807,10 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     // which the duplicate is admitted and nothing objects until the pre-save
     // repair re-mints the original - the silent shape of the hazard, and the
     // reason the executor clear is load-bearing rather than belt-and-braces.
-    let (section_id, victim_shot_id) = {
+    let (line_id, victim_shot_id) = {
         let mut p = state.get_project_state().unwrap();
-        let ids = (p.sections[0].id, p.sections[0].shots[1].id);
-        p.add_section(SectionData {
+        let ids = (p.lines[0].id, p.lines[0].shots[1].id);
+        p.add_line(LineData {
             name: Some("Corrupt".to_string()),
             shots: vec![ShotData {
                 length: f64::NAN,
@@ -829,7 +829,7 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     // The attack: create a shot that claims the victim's identity, placed
     // BEFORE it so it becomes the first occurrence.
     let result = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: ShotData {
             uuid: Some(IDS[1].to_string()),
             azimuth_in: 90.0,
@@ -845,7 +845,7 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     assert!(result.success, "{:?}", result.error);
 
     let mut project = state.get_project_state().unwrap();
-    let claimants: Vec<u32> = project.sections[0]
+    let claimants: Vec<u32> = project.lines[0]
         .shots
         .iter()
         .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
@@ -862,7 +862,7 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     // the victim - not the injected shot - still owns the identity.
     let reminted = project.ensure_unique_shot_uuids();
     assert_eq!(reminted, 0, "there was never a duplicate to repair");
-    let victim = project.sections[0]
+    let victim = project.lines[0]
         .shots
         .iter()
         .find(|s| s.id == victim_shot_id)
@@ -878,10 +878,10 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
 /// `execute_batch` is a `#[tauri::command]` taking
 /// `Vec<Command>` verbatim from the webview; the batch allowlist
 /// (`is_batch_allowed`) refuses `CreateShot` today, and this pins that refusal
-/// - but `CreateSection` IS batch-allowed, and `state.execute` itself is
+/// - but `CreateLine` IS batch-allowed, and `state.execute` itself is
 /// reachable by any internal caller holding a constructed command. So the
 /// identity rule cannot live in one IPC wrapper: the executor
-/// (`AppState::create_shot`) and the two `CreateSection` dispatch arms clear
+/// (`AppState::create_shot`) and the two `CreateLine` dispatch arms clear
 /// it, and each surface is pinned here. Same already-critical fixture as
 /// above: a batch takes no integrity snapshot (`finalize_structural_edit`
 /// skips `Command::Batch`), so nothing downstream would roll an injection
@@ -903,10 +903,10 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     let state = state_with_project();
     import_ariane_file(&state, &source);
 
-    let (section_id, victim_shot_id) = {
+    let (line_id, victim_shot_id) = {
         let mut p = state.get_project_state().unwrap();
-        let ids = (p.sections[0].id, p.sections[0].shots[1].id);
-        p.add_section(SectionData {
+        let ids = (p.lines[0].id, p.lines[0].shots[1].id);
+        p.add_line(LineData {
             name: Some("Corrupt".to_string()),
             shots: vec![ShotData {
                 length: f64::NAN,
@@ -936,7 +936,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     // ever allowlists it, the executor clear below still holds.
     let result = state.execute(Command::Batch {
         commands: vec![Command::CreateShot {
-            section_id,
+            line_id,
             shot: smuggling_shot.clone(),
             after_shot_id: None,
             before_shot_id: Some(victim_shot_id),
@@ -951,7 +951,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     // dispatch arm any internal caller lands on. The executor clears the
     // identity, so the victim keeps it and the new shot gets a mint.
     let result = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: smuggling_shot.clone(),
         after_shot_id: None,
         before_shot_id: Some(victim_shot_id),
@@ -959,7 +959,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     assert!(result.success, "{:?}", result.error);
 
     let project = state.get_project_state().unwrap();
-    let claimants: Vec<u32> = project.sections[0]
+    let claimants: Vec<u32> = project.lines[0]
         .shots
         .iter()
         .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
@@ -971,10 +971,10 @@ fn client_named_identities_are_stripped_at_every_command_door() {
         "a directly executed CreateShot must not smuggle an identity past the executor clear"
     );
 
-    // Surface 3: CreateSection IS batch-allowed, so the batched section door is
+    // Surface 3: CreateLine IS batch-allowed, so the batched line door is
     // live. The strip at the `execute_without_undo` dispatch arm must hold.
     let batched = state.execute(Command::Batch {
-        commands: vec![Command::CreateSection {
+        commands: vec![Command::CreateLine {
             name: Some("Batched smuggler".to_string()),
             surveyor: None,
             date: None,
@@ -985,24 +985,24 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     });
     assert!(batched.success, "{:?}", batched.error);
     let project = state.get_project_state().unwrap();
-    let batched_section = project
-        .sections
+    let batched_line = project
+        .lines
         .iter()
         .find(|s| s.name.as_deref() == Some("Batched smuggler"))
         .unwrap();
     assert_ne!(
-        batched_section.shots[0].uuid.as_deref(),
+        batched_line.shots[0].uuid.as_deref(),
         Some(IDS[1]),
-        "a batched CreateSection must not adopt a client-named identity"
+        "a batched CreateLine must not adopt a client-named identity"
     );
 
-    // The section-shaped door too: `Command::CreateSection` carries a whole
+    // The line-shaped door too: `Command::CreateLine` carries a whole
     // `Vec<ShotData>` off IPC. Its executor is shared with the importers (whose
     // identities are legitimate), so the strip lives at the dispatch arms - a
-    // client-named identity must not land through it either. Cross-section
-    // repeats are legal in the model, so the assertion is on the NEW section:
+    // client-named identity must not land through it either. Cross-line
+    // repeats are legal in the model, so the assertion is on the NEW line:
     // its shot must come back with a fresh mint, not the named identity.
-    let created = state.execute(Command::CreateSection {
+    let created = state.execute(Command::CreateLine {
         name: Some("Smuggler".to_string()),
         surveyor: None,
         date: None,
@@ -1020,14 +1020,14 @@ fn client_named_identities_are_stripped_at_every_command_door() {
     });
     assert!(created.success, "{:?}", created.error);
     let project = state.get_project_state().unwrap();
-    let new_section = project.get_section(created.section_id.unwrap()).unwrap();
+    let new_line = project.get_line(created.line_id.unwrap()).unwrap();
     assert_ne!(
-        new_section.shots[0].uuid.as_deref(),
+        new_line.shots[0].uuid.as_deref(),
         Some(IDS[1]),
-        "CreateSection must not adopt a client-named identity"
+        "CreateLine must not adopt a client-named identity"
     );
     assert!(
-        new_section.shots[0].uuid.is_some(),
+        new_line.shots[0].uuid.is_some(),
         "and it still mints one"
     );
 }
@@ -1062,12 +1062,12 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
     import_ariane_file(&state, &source);
 
     // Anchor a comment on the station AFTER shot index 1, i.e. keyed on IDS[1].
-    let (section_id, victim_shot_id) = {
+    let (line_id, victim_shot_id) = {
         let p = state.get_project_state().unwrap();
-        (p.sections[0].id, p.sections[0].shots[1].id)
+        (p.lines[0].id, p.lines[0].shots[1].id)
     };
     let r = state.execute(Command::SetStationComment {
-        station_ref: StationRef::new(section_id, 2),
+        station_ref: StationRef::new(line_id, 2),
         comment: Some("anchored on the victim".to_string()),
     });
     assert!(r.success, "{:?}", r.error);
@@ -1083,7 +1083,7 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
     };
 
     let result = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: ShotData {
             uuid: Some(IDS[1].to_string()),
             azimuth_in: 90.0,
@@ -1101,7 +1101,7 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
     let project = state.get_project_state().unwrap();
     assert_eq!(
         project.resolve_key(&anchored_key),
-        Some(StationRef::new(section_id, 3)),
+        Some(StationRef::new(line_id, 3)),
         "the anchored comment must still resolve to the victim's own station \
          (now one position later), not to the newly created shot"
     );
@@ -1147,7 +1147,7 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], GOOD, "a well-formed id is still adopted verbatim");
     assert!(
@@ -1185,7 +1185,7 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
     );
     let out: Vec<String> = parse_tml(&exported)
         .unwrap()
-        .sections
+        .lines
         .iter()
         .flat_map(|s| s.shots.iter())
         .filter_map(|s| s.uuid.clone())
@@ -1210,7 +1210,7 @@ fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
     let state = state_with_project();
     import_ariane_file(&state, &source);
     let saved = state.get_project_state().unwrap();
-    let before = section_uuids(&saved, 0);
+    let before = line_uuids(&saved, 0);
     assert!(
         before.iter().all(|u| !u.contains('\u{0}') && !u.is_empty()),
         "a NUL-bearing id must never reach the model: {before:?}"
@@ -1222,7 +1222,7 @@ fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
         .load_project()
         .unwrap();
     assert_eq!(
-        section_uuids(&reloaded, 0),
+        line_uuids(&reloaded, 0),
         before,
         "identity must not change across save and reload"
     );
@@ -1237,7 +1237,7 @@ fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
 /// [`ShotData::uuid`]: the TAIL keeps the parent's identity (which is what lets
 /// every existing anchor keep resolving with no remap), the head is new.
 ///
-/// Red if the head copies the parent's uuid: the section then holds the id
+/// Red if the head copies the parent's uuid: the line then holds the id
 /// twice with the head FIRST, and the first-wins repair re-mints the tail -
 /// moving every anchor onto the head.
 #[test]
@@ -1257,22 +1257,22 @@ fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
     let state = state_with_project();
     import_ariane_file(&state, &source);
 
-    let (section_id, target) = {
+    let (line_id, target) = {
         let p = state.get_project_state().unwrap();
-        (p.sections[0].id, p.sections[0].shots[0].id)
+        (p.lines[0].id, p.lines[0].shots[0].id)
     };
     // Anchor a comment on the station after the shot being split.
     let r = state.execute(Command::SetStationComment {
-        station_ref: StationRef::new(section_id, 1),
+        station_ref: StationRef::new(line_id, 1),
         comment: Some("after the split shot".to_string()),
     });
     assert!(r.success, "{:?}", r.error);
 
-    let r = state.execute_split_shot_at_distance(section_id, target, 4.0);
+    let r = state.execute_split_shot_at_distance(line_id, target, 4.0);
     assert!(r.success, "{:?}", r.error);
 
     let mut project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3, "the split adds one shot: {uuids:?}");
     assert_eq!(
         uuids[1], IDS[0],
@@ -1303,7 +1303,7 @@ fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
     );
     assert_eq!(
         state.get_project_state().unwrap().resolve_key(&key),
-        Some(StationRef::new(section_id, 2)),
+        Some(StationRef::new(line_id, 2)),
         "the comment must follow the tail child, not snap onto the head"
     );
 }
@@ -1332,7 +1332,7 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     for (i, u) in uuids.iter().take(2).enumerate() {
         assert!(
@@ -1348,19 +1348,19 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
         .all(|v| v.category != "duplicate_shot_uuid"));
 }
 
-/// A repeat across TWO sections of one file: shot UUIDs are unique across the
-/// project, so the first section keeps the file's id and the second gets the
+/// A repeat across TWO lines of one file: shot UUIDs are unique across the
+/// project, so the first line keeps the file's id and the second gets the
 /// derived replacement for it. The import's integrity epilogue would roll the
 /// whole import back if the repeat survived.
 #[test]
-fn the_same_uuid_in_two_sections_of_one_file_stays_in_the_first_section() {
+fn the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line() {
     const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
 
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
-        "cross-section.tmlu",
-        &two_section_cave_file_xml(
+        "cross-line.tmlu",
+        &two_line_cave_file_xml(
             &[Row::new(1, 0, Some(SHARED)), Row::new(2, 1, None)],
             &[Row::new(3, 2, Some(SHARED)), Row::new(4, 3, None)],
         ),
@@ -1371,25 +1371,25 @@ fn the_same_uuid_in_two_sections_of_one_file_stays_in_the_first_section() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.sections.len(),
+        project.lines.len(),
         2,
-        "the file must import as 2 sections"
+        "the file must import as 2 lines"
     );
     let held: Vec<String> = (0..2)
-        .map(|i| section_uuids(&project, i)[0].clone())
+        .map(|i| line_uuids(&project, i)[0].clone())
         .collect();
-    let second = project.sections[1].id;
+    let second = project.lines[1].id;
     assert_eq!(
         held,
         vec![
             SHARED.to_string(),
             crate::models::reminted_shot_uuid(second, SHARED)
         ],
-        "the first section keeps the id, the second gets the derived one"
+        "the first line keeps the id, the second gets the derived one"
     );
     assert!(
         project.check_structural_integrity().is_empty(),
-        "no shot UUID may be held by two sections"
+        "no shot UUID may be held by two lines"
     );
 }
 
@@ -1415,7 +1415,7 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 2);
     assert_eq!(
         uuids[0], "AA&BB",
@@ -1431,7 +1431,7 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
     export_tml(&project, &exported).unwrap();
     let reparsed = parse_tml(&exported).expect("the export must be well-formed XML");
     let out: Vec<String> = reparsed
-        .sections
+        .lines
         .iter()
         .flat_map(|s| s.shots.iter())
         .filter_map(|s| s.uuid.clone())
@@ -1483,7 +1483,7 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
-    let uuids = section_uuids(&project, 0);
+    let uuids = line_uuids(&project, 0);
     assert_eq!(uuids.len(), 3);
     assert_eq!(uuids[0], GOOD);
     for (i, u) in uuids.iter().enumerate().skip(1) {
@@ -1529,8 +1529,8 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
 #[test]
 fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
     let state = state_with_project();
-    let section_id = state
-        .execute(Command::CreateSection {
+    let line_id = state
+        .execute(Command::CreateLine {
             name: Some("Legacy".to_string()),
             surveyor: None,
             date: None,
@@ -1555,7 +1555,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
                 },
             ],
         })
-        .section_id
+        .line_id
         .unwrap();
 
     // The pre-#423 payload shape: no uuid on the ShotData, and none recorded
@@ -1565,11 +1565,11 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
         let mut stack = state.undo_stack.lock().unwrap();
         stack.push_with_data(
             Command::DeleteShot {
-                section_id,
+                line_id,
                 shot_id: 0,
             },
             crate::core::undo::UndoData::ShotSnapshot {
-                section_id,
+                line_id,
                 shot_id: 9_999,
                 shot_data: ShotData {
                     azimuth_in: 45.0,
@@ -1590,7 +1590,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
 
     let project = state.get_project_state().unwrap();
     let restored = project
-        .get_section(section_id)
+        .get_line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -1604,7 +1604,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
 
     // The point of having one: an AfterShot anchor on it resolves.
     let key = project
-        .key_for_ref(StationRef::new(section_id, 2))
+        .key_for_ref(StationRef::new(line_id, 2))
         .expect("the station after the restored shot must be nameable");
     assert_eq!(
         key.anchor,
@@ -1613,22 +1613,22 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
     );
     assert_eq!(
         project.resolve_key(&key),
-        Some(StationRef::new(section_id, 2)),
+        Some(StationRef::new(line_id, 2)),
         "and it must resolve back to the same station"
     );
 }
 
 /// The redo twin of the test above, for the one insert arm that bypasses the
-/// `section.rs` helpers: a legacy `CreatedShotSnapshot` (both anchors `None`,
+/// `line.rs` helpers: a legacy `CreatedShotSnapshot` (both anchors `None`,
 /// no recorded uuid) redone as a TRUE APPEND takes the raw
-/// `section.shots.insert` path in `core/state/undo.rs`, which used to hand
+/// `line.shots.insert` path in `core/state/undo.rs`, which used to hand
 /// `Shot::with_uuid` a bare `None` - recreating the identity-less shot every
 /// other insert path mints for.
 #[test]
 fn a_legacy_created_shot_redo_append_mints_an_identity() {
     let state = state_with_project();
-    let section_id = state
-        .execute(Command::CreateSection {
+    let line_id = state
+        .execute(Command::CreateLine {
             name: Some("LegacyRedoAppend".to_string()),
             surveyor: None,
             date: None,
@@ -1653,7 +1653,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
                 },
             ],
         })
-        .section_id
+        .line_id
         .unwrap();
 
     // A pre-#423 persisted redo entry: no anchors, no uuid anywhere, and a
@@ -1661,7 +1661,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
     let entry = crate::core::undo::UndoEntry {
         command_bytes: None,
         command: Command::CreateShot {
-            section_id,
+            line_id,
             shot: ShotData {
                 azimuth_in: 45.0,
                 azimuth_out: 45.0,
@@ -1674,7 +1674,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
             before_shot_id: None,
         },
         undo_data: crate::core::undo::UndoData::CreatedShotSnapshot {
-            section_id,
+            line_id,
             shot_id: 9_999,
             shot_data: ShotData {
                 azimuth_in: 45.0,
@@ -1705,7 +1705,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
 
     let project = state.get_project_state().unwrap();
     let restored = project
-        .get_section(section_id)
+        .get_line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -1719,7 +1719,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
 
     // The point of having one: an AfterShot anchor on it resolves.
     let key = project
-        .key_for_ref(StationRef::new(section_id, 3))
+        .key_for_ref(StationRef::new(line_id, 3))
         .expect("the station after the appended shot must be nameable");
     assert_eq!(
         key.anchor,
@@ -1728,7 +1728,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
     );
     assert_eq!(
         project.resolve_key(&key),
-        Some(StationRef::new(section_id, 3)),
+        Some(StationRef::new(line_id, 3)),
         "and it must resolve back to the same station"
     );
 }

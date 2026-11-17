@@ -2,19 +2,19 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::debug;
 
-use crate::{LoopClosureWire, SectionId, StationKey, StationMerge, StationMergeWire, StationRef};
+use crate::{LoopClosureWire, LineId, StationKey, StationMerge, StationMergeWire, StationRef};
 
-use super::{Project, SectionRelationships};
+use super::{Project, LineRelationships};
 
 impl Project {
-    /// Query relationships that reference the given section.
+    /// Query relationships that reference the given line.
     /// Returns merges, closures, offset info, and zero datum count.
-    pub fn get_section_relationships(&self, section_id: SectionId) -> SectionRelationships {
+    pub fn get_line_relationships(&self, line_id: LineId) -> LineRelationships {
         let merges: Vec<StationMergeWire> = self
             .station_merges
             .iter()
             .filter(|m| {
-                m.station_a.section_id == section_id || m.station_b.section_id == section_id
+                m.station_a.line_id == line_id || m.station_b.line_id == line_id
             })
             .filter_map(|m| self.merge_to_wire(m))
             .collect();
@@ -23,52 +23,52 @@ impl Project {
             .loop_closures
             .iter()
             .filter(|lc| {
-                lc.station_a.section_id == section_id || lc.station_b.section_id == section_id
+                lc.station_a.line_id == line_id || lc.station_b.line_id == line_id
             })
             .filter_map(|lc| self.closure_to_wire(lc))
             .collect();
 
-        let has_section_offset = self.section_offsets.contains_key(&section_id);
+        let has_line_offset = self.line_offsets.contains_key(&line_id);
 
         let station_offset_count = self
             .station_offsets
             .keys()
-            .filter(|sr| sr.section_id == section_id)
+            .filter(|sr| sr.line_id == line_id)
             .count();
 
         let zero_datum_count = self
             .zero_datums
             .iter()
-            .filter(|zd| zd.station_ref.section_id == section_id)
+            .filter(|zd| zd.station_ref.line_id == line_id)
             .count();
 
-        SectionRelationships {
+        LineRelationships {
             merges,
             closures,
-            has_section_offset,
+            has_line_offset,
             station_offset_count,
             zero_datum_count,
         }
     }
 
-    /// Preserve merge-group connectivity and rewire closures before removing a section.
+    /// Preserve merge-group connectivity and rewire closures before removing a line.
     ///
-    /// For every station on the deleted section that participates in merges with
-    /// stations on OTHER sections, we find the merge group, remove the deleted
+    /// For every station on the deleted line that participates in merges with
+    /// stations on OTHER lines, we find the merge group, remove the deleted
     /// station, compute connected components among the remaining stations, and
     /// create replacement merges so that the group stays connected.
     ///
-    /// For closures that reference a station on the deleted section, we rewire
-    /// them to a merge-group partner on another section if one exists.
-    pub fn preserve_connections_for_section_deletion(&mut self, section_id: SectionId) {
+    /// For closures that reference a station on the deleted line, we rewire
+    /// them to a merge-group partner on another line if one exists.
+    pub fn preserve_connections_for_line_deletion(&mut self, line_id: LineId) {
         let station_count = self
-            .get_section(section_id)
+            .get_line(line_id)
             .map(|s| s.shots.len() + 1)
             .unwrap_or(0);
 
-        // Collect all stations on this section
-        let section_stations: HashSet<StationRef> = (0..station_count as u32)
-            .map(|i| StationRef::new(section_id, i))
+        // Collect all stations on this line
+        let line_stations: HashSet<StationRef> = (0..station_count as u32)
+            .map(|i| StationRef::new(line_id, i))
             .collect();
 
         // --- Merge preservation ---
@@ -76,13 +76,13 @@ impl Project {
         let mut processed_groups: HashSet<StationRef> = HashSet::new();
         let mut replacement_merges: Vec<(StationRef, StationRef)> = Vec::new();
 
-        for &station in &section_stations {
+        for &station in &line_stations {
             let group = self.get_merge_group(station);
 
-            // Only process groups that touch other sections
+            // Only process groups that touch other lines
             let external_members: HashSet<StationRef> = group
                 .iter()
-                .filter(|s| s.section_id != section_id)
+                .filter(|s| s.line_id != line_id)
                 .copied()
                 .collect();
 
@@ -102,19 +102,19 @@ impl Project {
             }
 
             // Build components among the external members after removing ALL
-            // section stations from the graph
+            // line stations from the graph
             let components =
-                self.build_merge_components_excluding_section(&external_members, section_id);
+                self.build_merge_components_excluding_line(&external_members, line_id);
 
             if components.len() > 1 {
                 // Connect each disconnected component to the first one
                 let base = &components[0];
                 for component in components.iter().skip(1) {
-                    // Find a cross-section pair (prefer different sections)
+                    // Find a cross-line pair (prefer different lines)
                     let mut found = None;
                     for a in base {
                         for b in component {
-                            if a.section_id != b.section_id {
+                            if a.line_id != b.line_id {
                                 found = Some((*a, *b));
                                 break;
                             }
@@ -123,7 +123,7 @@ impl Project {
                             break;
                         }
                     }
-                    // Fall back to same-section pair if needed
+                    // Fall back to same-line pair if needed
                     if found.is_none() {
                         if let (Some(a), Some(b)) = (base.first(), component.first()) {
                             found = Some((*a, *b));
@@ -133,7 +133,7 @@ impl Project {
                         if self.replacement_merge_allowed(
                             a,
                             b,
-                            &section_stations,
+                            &line_stations,
                             &replacement_merges,
                         ) && !replacement_merges
                             .iter()
@@ -158,11 +158,11 @@ impl Project {
                 merged_at: Utc::now(),
             });
             debug!(
-                a_section = a.section_id,
+                a_line = a.line_id,
                 a_station = a.station_index,
-                b_section = b.section_id,
+                b_line = b.line_id,
                 b_station = b.station_index,
-                "Added replacement merge during section deletion"
+                "Added replacement merge during line deletion"
             );
         }
 
@@ -171,20 +171,20 @@ impl Project {
             .loop_closures
             .iter()
             .filter(|lc| {
-                lc.station_a.section_id == section_id || lc.station_b.section_id == section_id
+                lc.station_a.line_id == line_id || lc.station_b.line_id == line_id
             })
             .map(|lc| (lc.id, lc.station_a.clone(), lc.station_b.clone()))
             .collect();
 
         for (closure_id, station_a, station_b) in closures_to_rewire {
-            let (removed_station, other_station) = if station_a.section_id == section_id {
+            let (removed_station, other_station) = if station_a.line_id == line_id {
                 (station_a, station_b)
             } else {
                 (station_b, station_a)
             };
 
-            // If both sides are on the deleted section, it will just be removed
-            if other_station.section_id == section_id {
+            // If both sides are on the deleted line, it will just be removed
+            if other_station.line_id == line_id {
                 continue;
             }
             // Resolve the keys to positional refs for the merge-group walk / checks.
@@ -195,11 +195,11 @@ impl Project {
                 continue;
             };
 
-            // Find a merge-group partner on another section to rewire to
+            // Find a merge-group partner on another line to rewire to
             let group = self.get_merge_group(removed_ref);
             let mut candidates: Vec<StationRef> = group
                 .into_iter()
-                .filter(|s| s.section_id != section_id)
+                .filter(|s| s.line_id != line_id)
                 .collect();
             candidates.sort_by_key(Self::station_ref_key);
 
@@ -217,16 +217,16 @@ impl Project {
 
                 // Rewire the closure in place
                 if let Some(lc) = self.loop_closures.iter_mut().find(|lc| lc.id == closure_id) {
-                    if lc.station_a.section_id == section_id {
+                    if lc.station_a.line_id == line_id {
                         lc.station_a = replacement_key;
                     } else {
                         lc.station_b = replacement_key;
                     }
                     debug!(
                         closure_id,
-                        replacement_section = replacement.section_id,
+                        replacement_line = replacement.line_id,
                         replacement_station = replacement.station_index,
-                        "Rewired closure during section deletion"
+                        "Rewired closure during line deletion"
                     );
                 }
             }
@@ -240,7 +240,7 @@ impl Project {
     /// exactly the states the rest of the integrity machinery exists to repair:
     /// a merge sharing a station pair with a loop closure (what
     /// [`Self::create_loop_closure`] refuses to create), a redundant merge across
-    /// sections an aligned closure already holds rigid (what
+    /// lines an aligned closure already holds rigid (what
     /// [`Self::merge_stations`] refuses interactively), or a merge between two
     /// stations that are not in the same place.
     ///
@@ -282,14 +282,14 @@ impl Project {
         if self.are_stations_in_closure(a, b) {
             return false;
         }
-        // 3. The sections are already rigidly connected without the doomed
+        // 3. The lines are already rigidly connected without the doomed
         //    stations - merges plus ALIGNED closures, the same graph
         //    `merge_stations` tests before rejecting a redundant merge. A
-        //    same-section pair lands here too: a section's own shots already
+        //    same-line pair lands here too: a line's own shots already
         //    hold its stations rigid.
         if self
-            .connected_sections_after_removal(a.section_id, doomed, planned, true)
-            .contains(&b.section_id)
+            .connected_lines_after_removal(a.line_id, doomed, planned, true)
+            .contains(&b.line_id)
         {
             return false;
         }
@@ -319,7 +319,7 @@ impl Project {
         //    re-stitched, so this logs at WARN with the measured gap rather than
         //    at debug. It deliberately does not set
         //    `DeleteShotImpact::merge_rewire_skipped`: that flag's user-facing
-        //    copy names a different cause ("only same-section candidates"), this
+        //    copy names a different cause ("only same-line candidates"), this
         //    function answers with a bool so no caller can tell the two refusals
         //    apart, and two of its three call sites have no impact struct at all.
         //    Telling the user which one happened needs an IPC field of its own.
@@ -348,36 +348,36 @@ impl Project {
         coincident
     }
 
-    /// Sections reachable from `from` through merges - and, when
+    /// Lines reachable from `from` through merges - and, when
     /// `follow_aligned_closures`, aligned loop closures - once every edge
     /// anchored on a `doomed` station is gone and the `planned` replacement
     /// merges are in place.
     ///
-    /// Post-deletion twin of [`Self::get_rigid_connected_section_ids`] /
-    /// [`Self::get_merged_section_ids`], which read the live graph (the latter
+    /// Post-deletion twin of [`Self::get_rigid_connected_line_ids`] /
+    /// [`Self::get_merged_line_ids`], which read the live graph (the latter
     /// through a memo that must keep describing the merges that actually exist,
     /// so a "what if these were gone" question must never go through it).
-    fn connected_sections_after_removal(
+    fn connected_lines_after_removal(
         &self,
-        from: SectionId,
+        from: LineId,
         doomed: &HashSet<StationRef>,
         planned: &[(StationRef, StationRef)],
         follow_aligned_closures: bool,
-    ) -> HashSet<SectionId> {
+    ) -> HashSet<LineId> {
         // An endpoint that no longer resolves cannot carry connectivity either
-        // (matching `build_merge_components_excluding_section`).
-        let survives = |key: &StationKey| -> Option<SectionId> {
+        // (matching `build_merge_components_excluding_line`).
+        let survives = |key: &StationKey| -> Option<LineId> {
             let station = self.resolve_key(key)?;
-            (!doomed.contains(&station)).then_some(station.section_id)
+            (!doomed.contains(&station)).then_some(station.line_id)
         };
-        let mut edges: Vec<(SectionId, SectionId)> = Vec::new();
+        let mut edges: Vec<(LineId, LineId)> = Vec::new();
         for merge in &self.station_merges {
             if let (Some(x), Some(y)) = (survives(&merge.station_a), survives(&merge.station_b)) {
                 edges.push((x, y));
             }
         }
         for (x, y) in planned {
-            edges.push((x.section_id, y.section_id));
+            edges.push((x.line_id, y.line_id));
         }
         if follow_aligned_closures {
             for closure in self.loop_closures.iter().filter(|lc| lc.is_aligned) {
@@ -389,7 +389,7 @@ impl Project {
             }
         }
 
-        let mut connected: HashSet<SectionId> = HashSet::new();
+        let mut connected: HashSet<LineId> = HashSet::new();
         let mut queue = vec![from];
         while let Some(current) = queue.pop() {
             if !connected.insert(current) {
@@ -406,7 +406,7 @@ impl Project {
         connected
     }
 
-    /// Would merging sections `a` and `b` put two zero datums in one rigid merge
+    /// Would merging lines `a` and `b` put two zero datums in one rigid merge
     /// group, once the `doomed` stations (and any datum they carry) are gone and
     /// the `planned` replacement merges are in place?
     ///
@@ -416,33 +416,33 @@ impl Project {
     /// two placed groups.
     pub(crate) fn would_double_anchor_after_removal(
         &self,
-        a: SectionId,
-        b: SectionId,
+        a: LineId,
+        b: LineId,
         doomed: &HashSet<StationRef>,
         planned: &[(StationRef, StationRef)],
     ) -> bool {
-        let component_a = self.connected_sections_after_removal(a, doomed, planned, false);
+        let component_a = self.connected_lines_after_removal(a, doomed, planned, false);
         if component_a.contains(&b) {
             // Already one merge component - a redundant merge adds no anchor.
             return false;
         }
-        let anchored = |component: &HashSet<SectionId>| {
+        let anchored = |component: &HashSet<LineId>| {
             self.zero_datums
                 .iter()
                 .filter_map(|zd| self.resolve_key(&zd.station_ref))
                 .filter(|sr| !doomed.contains(sr))
-                .any(|sr| component.contains(&sr.section_id))
+                .any(|sr| component.contains(&sr.line_id))
         };
         anchored(&component_a)
-            && anchored(&self.connected_sections_after_removal(b, doomed, planned, false))
+            && anchored(&self.connected_lines_after_removal(b, doomed, planned, false))
     }
 
-    /// Like `build_merge_components` but excludes ALL stations from a given section
-    /// (not just a single station). Used during section deletion.
-    fn build_merge_components_excluding_section(
+    /// Like `build_merge_components` but excludes ALL stations from a given line
+    /// (not just a single station). Used during line deletion.
+    fn build_merge_components_excluding_line(
         &self,
         stations: &HashSet<StationRef>,
-        excluded_section: SectionId,
+        excluded_line: LineId,
     ) -> Vec<Vec<StationRef>> {
         let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         for station in stations {
@@ -450,8 +450,8 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            if merge.station_a.section_id == excluded_section
-                || merge.station_b.section_id == excluded_section
+            if merge.station_a.line_id == excluded_line
+                || merge.station_b.line_id == excluded_line
             {
                 continue;
             }
@@ -500,9 +500,9 @@ impl Project {
         components
     }
 
-    /// Like [`Self::preserve_connections_for_section_deletion`] but for an
+    /// Like [`Self::preserve_connections_for_line_deletion`] but for an
     /// arbitrary SET of stations being removed (e.g. the interior stations
-    /// dropped by a contiguous range delete) rather than a whole section. Adds
+    /// dropped by a contiguous range delete) rather than a whole line. Adds
     /// replacement merges so external merge groups stay connected after the
     /// stations vanish, and rewires closures off the removed stations to a
     /// surviving merge-group partner. Call this BEFORE dropping the removed
@@ -542,7 +542,7 @@ impl Project {
                     let mut found = None;
                     for a in base {
                         for b in component {
-                            if a.section_id != b.section_id {
+                            if a.line_id != b.line_id {
                                 found = Some((*a, *b));
                                 break;
                             }
@@ -610,16 +610,16 @@ impl Project {
             let mut candidates: Vec<StationRef> =
                 group.into_iter().filter(|s| !removed.contains(s)).collect();
             candidates.sort_by_key(Self::station_ref_key);
-            // Prefer a survivor on a DIFFERENT section than the surviving
-            // endpoint so the rewired closure stays cross-section. A same-section
+            // Prefer a survivor on a DIFFERENT line than the surviving
+            // endpoint so the rewired closure stays cross-line. A same-line
             // closure would be degenerate (a self-loop) and is silently skipped
             // by convert_orphan_closures_to_merges and the integrity checks, so
-            // it would persist undetected. If no cross-section survivor exists
-            // the loop has genuinely collapsed into one section - leave the
+            // it would persist undetected. If no cross-line survivor exists
+            // the loop has genuinely collapsed into one line - leave the
             // closure for cleanup to drop rather than rewire it into a self-loop.
             let replacement = candidates
                 .iter()
-                .find(|s| s.section_id != other_ref.section_id)
+                .find(|s| s.line_id != other_ref.line_id)
                 .copied();
             if let Some(replacement) = replacement {
                 if replacement == other_ref
@@ -642,7 +642,7 @@ impl Project {
         }
     }
 
-    /// Like [`Self::build_merge_components_excluding_section`] but excludes any
+    /// Like [`Self::build_merge_components_excluding_line`] but excludes any
     /// merge edge whose endpoints resolve into the given `removed` station set.
     fn build_merge_components_excluding_stations(
         &self,
@@ -703,14 +703,14 @@ impl Project {
     /// Drop every project-level reference (merge, closure, station offset,
     /// station comment, zero datum) anchored on a station in `removed`. Call
     /// AFTER [`Self::preserve_connections_for_removed_stations`] and BEFORE
-    /// re-deriving geometry, when removing a sub-range of a section's stations.
+    /// re-deriving geometry, when removing a sub-range of a line's stations.
     pub fn cleanup_removed_station_references(&mut self, removed: &HashSet<StationRef>) {
         let is_removed = |this: &Self, key: &StationKey| -> bool {
             this.resolve_key(key)
                 .is_some_and(|sr| removed.contains(&sr))
         };
         // `mem::take` so the predicate can borrow `self` immutably (resolve_key
-        // reads section shots, not these fields) while we rebuild each list.
+        // reads line shots, not these fields) while we rebuild each list.
         let merges = std::mem::take(&mut self.station_merges);
         self.station_merges = merges
             .into_iter()
@@ -744,36 +744,36 @@ impl Project {
         }
     }
 
-    /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
-    /// that reference the given section. Call before `remove_section()` to avoid orphans.
-    pub fn cleanup_section_references(&mut self, section_id: SectionId) {
-        // Remove merges referencing this section.
+    /// Remove all merges, closures, line_offsets, station_offsets, and zero_datums
+    /// that reference the given line. Call before `remove_line()` to avoid orphans.
+    pub fn cleanup_line_references(&mut self, line_id: LineId) {
+        // Remove merges referencing this line.
         self.station_merges.retain(|m| {
-            m.station_a.section_id != section_id && m.station_b.section_id != section_id
+            m.station_a.line_id != line_id && m.station_b.line_id != line_id
         });
 
-        // Remove closures referencing this section
+        // Remove closures referencing this line
         self.loop_closures.retain(|lc| {
-            lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
+            lc.station_a.line_id != line_id && lc.station_b.line_id != line_id
         });
 
-        // Remove section offset
-        self.remove_section_offset(section_id);
+        // Remove line offset
+        self.remove_line_offset(line_id);
 
-        // Remove station offsets referencing this section
+        // Remove station offsets referencing this line
         self.station_offsets
-            .retain(|sr, _| sr.section_id != section_id);
+            .retain(|sr, _| sr.line_id != line_id);
 
-        // Remove station comments referencing this section
+        // Remove station comments referencing this line
         self.station_comments
-            .retain(|sr, _| sr.section_id != section_id);
+            .retain(|sr, _| sr.line_id != line_id);
 
-        // Remove station names referencing this section
+        // Remove station names referencing this line
         self.station_names
-            .retain(|sr, _| sr.section_id != section_id);
+            .retain(|sr, _| sr.line_id != line_id);
 
-        // Remove zero datums referencing this section
+        // Remove zero datums referencing this line
         self.zero_datums
-            .retain(|zd| zd.station_ref.section_id != section_id);
+            .retain(|zd| zd.station_ref.line_id != line_id);
     }
 }

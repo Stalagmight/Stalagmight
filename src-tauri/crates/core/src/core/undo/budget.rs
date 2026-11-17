@@ -15,14 +15,14 @@ impl UndoStack {
     /// EVERY variant that owns a `previous_offsets` map charges `BYTES_PER_OFFSET`
     /// per entry on top of whatever else its arm counts. The map is the one field
     /// that grows with the survey rather than with the edit - the rigid connected
-    /// set of the edited section - and a keystroke-scale shot edit records one, so
+    /// set of the edited line - and a keystroke-scale shot edit records one, so
     /// leaving an arm's map uncounted lets a Full-mode history grow past its budget
     /// while the estimate says it has not.
     pub fn estimated_size(entry: &UndoEntry) -> usize {
         /// Roughly the JSON size of one serialized shot, from the measured
         /// project-shaped payload (~420 bytes/shot).
         const BYTES_PER_SHOT: usize = 420;
-        /// Roughly the JSON size of one `previous_offsets` entry: a section id
+        /// Roughly the JSON size of one `previous_offsets` entry: a line id
         /// keyed to an `Option<(f64, f64)>`. Charged by EVERY variant that owns
         /// such a map, so a long merge chain's offsets count against the budget
         /// wherever they were recorded.
@@ -37,11 +37,11 @@ impl UndoStack {
                 previous_offsets,
                 ..
             } => values_json.len() + previous_offsets.len() * BYTES_PER_OFFSET,
-            // Approximated from element counts - a section snapshot of a big section is
+            // Approximated from element counts - a line snapshot of a big line is
             // the only other variant that can reach megabytes.
-            UndoData::SectionSnapshot { section_data, .. }
-            | UndoData::CreatedSectionSnapshot { section_data, .. } => {
-                section_data.shots.len() * BYTES_PER_SHOT
+            UndoData::LineSnapshot { line_data, .. }
+            | UndoData::CreatedLineSnapshot { line_data, .. } => {
+                line_data.shots.len() * BYTES_PER_SHOT
             }
             UndoData::ShotSnapshot { .. } => BYTES_PER_SHOT,
             UndoData::CreatedShotSnapshot {
@@ -60,15 +60,15 @@ impl UndoStack {
                 previous_offsets, ..
             } => previous_offsets.len() * BYTES_PER_OFFSET,
             UndoData::SegmentMoveInfo {
-                affected_sections,
+                affected_lines,
                 previous_offsets,
                 ..
-            } => affected_sections.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
+            } => affected_lines.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
             UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
             // Sized by what the add brought (#674) - which is the point of the
             // variant: it grows with the added file, never with the open cave.
             UndoData::AddedProjectContent(content) => {
-                let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
+                let shots: usize = content.lines.iter().map(|s| s.shots.len()).sum();
                 let refs = content.station_offsets.len()
                     + content.station_comments.len()
                     + content.station_names.len()
@@ -77,17 +77,17 @@ impl UndoStack {
                     + content.loop_closures.len()
                     + content.ignores.len()
                     + content.file_hashes.len()
-                    + content.section_hashes.len();
+                    + content.line_hashes.len();
                 shots * BYTES_PER_SHOT
                     + refs * 256
-                    + (content.section_offsets.len() + content.moved_offsets.len())
+                    + (content.line_offsets.len() + content.moved_offsets.len())
                         * BYTES_PER_OFFSET
             }
             // Two credits per touched shot, each a handful of names.
             UndoData::ShotCredits {
                 changes,
-                section_values,
-            } => changes.len() * 256 + section_values.as_ref().map_or(0, |(_, json)| json.len()),
+                line_values,
+            } => changes.len() * 256 + line_values.as_ref().map_or(0, |(_, json)| json.len()),
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild

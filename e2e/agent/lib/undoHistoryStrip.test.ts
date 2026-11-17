@@ -92,8 +92,8 @@ describe('stripUndoHistory', () => {
     stripUndoHistory(file);
 
     // Tables are emptied, never dropped (the app reopens and writes into them).
-    expect(tableNames(file)).toEqual([...UNDO_HISTORY_TABLES, 'sections'].sort());
-    expect(countRows(file, 'sections')).toBe(1);
+    expect(tableNames(file)).toEqual([...UNDO_HISTORY_TABLES, 'lines'].sort());
+    expect(countRows(file, 'lines')).toBe(1);
   });
 
   it('treats a missing table as fine, matching clear_undo_history_at', () => {

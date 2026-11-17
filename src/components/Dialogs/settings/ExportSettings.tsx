@@ -74,7 +74,7 @@ export function ExportSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.export.title')}</h2>
 
-      <SettingsSection title={t('settings.export.sections.imageFormat')} data-testid="section-image-format">
+      <SettingsSection title={t('settings.export.sections.imageFormat')} data-testid="line-image-format">
         <SettingRow
           label={t('settings.export.format.label')}
           helpText={t('settings.export.format.help')}
@@ -112,7 +112,7 @@ export function ExportSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.export.sections.layers')} data-testid="section-default-layers">
+      <SettingsSection title={t('settings.export.sections.layers')} data-testid="line-default-layers">
         <SettingRow
           label={t('settings.export.layers.satellite.label')}
           helpText={t('settings.export.layers.satellite.help')}

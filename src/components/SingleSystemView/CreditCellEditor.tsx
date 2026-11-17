@@ -19,7 +19,7 @@ import { Button } from '../common/Button';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { usePeopleSuggestions } from '../../hooks/usePeopleSuggestions';
 import { rememberPeople } from '../../store/recentPeople';
-import { peopleValues, withPerson, withoutPerson } from '../common/SectionMetadataForm';
+import { peopleValues, withPerson, withoutPerson } from '../common/LineMetadataForm';
 import { personKey, type PersonLike } from '../../utils/people';
 import type { CreditEdit, Person, Shot } from '../../types/ipc.generated';
 import type { CreditColumnKey } from './dataTableCreditColumns';

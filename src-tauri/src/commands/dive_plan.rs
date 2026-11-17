@@ -67,7 +67,7 @@ pub async fn save_dive_plan(
 /// and give it back to [`plan_refs_for_anchors`], nothing else.
 ///
 /// The batch is length-capped in `AppState` (`MAX_PLAN_ANCHOR_BATCH`), like every other list a
-/// plan can hold: each entry costs a section scan under the project mutex.
+/// plan can hold: each entry costs a line scan under the project mutex.
 #[tauri::command]
 pub async fn plan_anchors_for_refs(
     app_handle: tauri::AppHandle,

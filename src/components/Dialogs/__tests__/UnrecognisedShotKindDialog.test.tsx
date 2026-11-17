@@ -54,10 +54,10 @@ vi.mock('../../common/Button', () => ({
 import UnrecognisedShotKindDialog from '../UnrecognisedShotKindDialog';
 
 const shot = (shotId: number, raw: string) => ({
-  section_id: 0,
+  line_id: 0,
   shot_id: shotId,
   shot_number: shotId + 1,
-  section_name: 'Main',
+  line_name: 'Main',
   raw_value: raw,
 });
 
@@ -101,7 +101,7 @@ describe('UnrecognisedShotKindDialog', () => {
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(executeBatch).toHaveBeenCalledTimes(1);
     expect(executeBatch).toHaveBeenCalledWith([
-      { type: 'update_shot', section_id: 0, shot_id: 1, updates: { kind: 'Jump' } },
+      { type: 'update_shot', line_id: 0, shot_id: 1, updates: { kind: 'Jump' } },
     ]);
   });
 

@@ -1,13 +1,13 @@
 /**
- * The last stop before a section payload becomes IPC.
+ * The last stop before a line payload becomes IPC.
  *
  * A cleared cell in the shot grid writes `NaN` - the grid will never put a 0
  * into a survey - and every UI gate that refuses to proceed while a row is
- * half-filled is a gate on ONE section's rows. The batch builders serialize
- * every SELECTED section, so a route that reaches them past the gate (edit
- * section B, switch the active section, place) sends the `NaN` on: it
+ * half-filled is a gate on ONE line's rows. The batch builders serialize
+ * every SELECTED line, so a route that reaches them past the gate (edit
+ * line B, switch the active line, place) sends the `NaN` on: it
  * serializes to `null`, and Rust's serde rejects the whole batch with an error
- * that names no section, no row and no field.
+ * that names no line, no row and no field.
  *
  * So the payload itself is checked, once, on the way out. The guard is about
  * what CANNOT be sent rather than what the user still has to fill in - the two
@@ -16,7 +16,7 @@
  */
 import { countIncompleteShots } from '../components/common/incompleteShots';
 import type { ShotData } from '../types/project';
-import type { SectionEditState } from './batchImportHelpers';
+import type { LineEditState } from './batchImportHelpers';
 
 /** Fields that must carry a real measurement (the nullable ones are allowed to
  *  be absent, but never `NaN`/`Infinity` when present). */
@@ -49,18 +49,18 @@ export interface NonFiniteShotLocation {
  * can tell it apart from an IPC failure; `message` is already user-facing.
  */
 export class NonFiniteShotError extends Error {
-  readonly sectionIndex: number;
-  readonly sectionName: string;
+  readonly lineIndex: number;
+  readonly lineName: string;
   readonly location: NonFiniteShotLocation;
 
-  constructor(sectionIndex: number, sectionName: string, location: NonFiniteShotLocation) {
+  constructor(lineIndex: number, lineName: string, location: NonFiniteShotLocation) {
     super(
-      `Section "${sectionName}" row ${location.row}: ${location.field} has no value. ` +
+      `Line "${lineName}" row ${location.row}: ${location.field} has no value. ` +
         `Fill it in or delete the row before importing.`,
     );
     this.name = 'NonFiniteShotError';
-    this.sectionIndex = sectionIndex;
-    this.sectionName = sectionName;
+    this.lineIndex = lineIndex;
+    this.lineName = lineName;
     this.location = location;
   }
 }
@@ -83,42 +83,42 @@ export function findNonFiniteShot(shots: readonly ShotData[]): NonFiniteShotLoca
   return null;
 }
 
-/** A section the user still has to finish, named so a toast can say which. */
-export interface IncompleteSection {
-  sectionIndex: number;
+/** A line the user still has to finish, named so a toast can say which. */
+export interface IncompleteLine {
+  lineIndex: number;
   name: string;
   count: number;
 }
 
 /**
- * Every section that will be serialized and still holds a half-filled row, in
- * section order.
+ * Every line that will be serialized and still holds a half-filled row, in
+ * line order.
  *
- * A gate on the section currently on screen is not a gate on the payload: the
- * batch builders walk every selected section's edits, so clearing a cell in one
- * section and switching to another passed the check and died at Rust's
+ * A gate on the line currently on screen is not a gate on the payload: the
+ * batch builders walk every selected line's edits, so clearing a cell in one
+ * line and switching to another passed the check and died at Rust's
  * deserializer instead.
  */
-export function findIncompleteSections(
+export function findIncompleteLines(
   selectedIndices: Iterable<number>,
-  sectionEdits: ReadonlyMap<number, SectionEditState>,
-): IncompleteSection[] {
-  const out: IncompleteSection[] = [];
-  for (const sectionIndex of selectedIndices) {
-    const edits = sectionEdits.get(sectionIndex);
+  lineEdits: ReadonlyMap<number, LineEditState>,
+): IncompleteLine[] {
+  const out: IncompleteLine[] = [];
+  for (const lineIndex of selectedIndices) {
+    const edits = lineEdits.get(lineIndex);
     if (!edits) continue;
     const count = countIncompleteShots(edits.shots);
-    if (count > 0) out.push({ sectionIndex, name: edits.name, count });
+    if (count > 0) out.push({ lineIndex, name: edits.name, count });
   }
-  return out.sort((a, b) => a.sectionIndex - b.sectionIndex);
+  return out.sort((a, b) => a.lineIndex - b.lineIndex);
 }
 
 /** Throw {@link NonFiniteShotError} if any of these shots cannot be serialized. */
 export function assertSendableShots(
   shots: readonly ShotData[],
-  sectionIndex: number,
-  sectionName: string,
+  lineIndex: number,
+  lineName: string,
 ): void {
   const found = findNonFiniteShot(shots);
-  if (found) throw new NonFiniteShotError(sectionIndex, sectionName, found);
+  if (found) throw new NonFiniteShotError(lineIndex, lineName, found);
 }

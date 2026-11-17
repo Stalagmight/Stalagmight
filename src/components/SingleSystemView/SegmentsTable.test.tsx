@@ -36,10 +36,10 @@ import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
 
-const A = { section_id: 1, station_index: 2 };
-const B = { section_id: 1, station_index: 5 };
-const C = { section_id: 1, station_index: 8 };
-const D = { section_id: 1, station_index: 11 };
+const A = { line_id: 1, station_index: 2 };
+const B = { line_id: 1, station_index: 5 };
+const C = { line_id: 1, station_index: 8 };
+const D = { line_id: 1, station_index: 11 };
 
 const RIG: DpvRig = {
   primary: { speed_m_per_min: 24, burn_minutes: 60 },

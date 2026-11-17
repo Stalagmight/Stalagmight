@@ -6,12 +6,12 @@ import {
   WIZARD_MAP_PANEL_DEFAULT_WIDTH,
 } from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
-import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { Coordinates, DistanceField, PathShot, LineId, ShotId, StationRef, LineData } from '../types/project';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
   stationRef?: StationRef;
-  sectionId?: SectionId;
+  lineId?: LineId;
   shotId?: ShotId;
   screenPos: { x: number; y: number };
   currentComment: string;
@@ -106,7 +106,7 @@ import { visitColorPatch, visitEndPatch, visitErrorsPatch, visitToggleColorPatch
 export type PanelMode = 'hover' | 'pin';
 
 /** Identifies one of the three in-project panels (matches telemetry PanelName). */
-export type PanelId = 'sections' | 'detail' | 'data-table';
+export type PanelId = 'lines' | 'detail' | 'data-table';
 
 /**
  * A panel whose SIZE persists. Wider than {@link PanelId}: the import wizards'
@@ -120,8 +120,8 @@ export type SizedPanelId = PanelId | 'wizard-map';
  * A transient "ghost" geometry overlay shown on the map (in survey meters),
  * used to preview a proposed edit before it is committed - e.g. as the user
  * tries different warning-resolution options (issue #57). Structurally matches
- * the map's GhostSectionData so MapCanvas can hand it straight to the survey
- * layer's setGhostSection.
+ * the map's GhostLineData so MapCanvas can hand it straight to the survey
+ * layer's setGhostLine.
  */
 export interface GeometryPreview {
   shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
@@ -150,8 +150,8 @@ export type ToolType =
  */
 export type MeasureEndpoint =
   | { kind: 'point'; x: number; y: number; z: number }
-  | { kind: 'station'; section_id: SectionId; station_index: number; coords: Coordinates }
-  | { kind: 'shotPoint'; section_id: SectionId; shot_id: ShotId; t: number; coords: Coordinates };
+  | { kind: 'station'; line_id: LineId; station_index: number; coords: Coordinates }
+  | { kind: 'shotPoint'; line_id: LineId; shot_id: ShotId; t: number; coords: Coordinates };
 
 /** Resolved along-cave-line query result for the current measurement. */
 export interface MeasureAlongLine {
@@ -166,7 +166,7 @@ export interface MeasureAlongLine {
 /** Live shot-snap candidate while the measure tool hovers a shot (not a station).
  *  The on-shot 3D coords are derived from `t` at click time (geometry-mode aware). */
 export interface MeasureSnapShot {
-  section_id: SectionId;
+  line_id: LineId;
   shot_id: ShotId;
   t: number;
 }
@@ -196,21 +196,21 @@ export interface PlacementResult {
 }
 
 /**
- * Placement mode state for manually placing a newly imported section on the map.
- * The section preview follows the cursor until the user clicks to confirm placement.
+ * Placement mode state for manually placing a newly imported line on the map.
+ * The line preview follows the cursor until the user clicks to confirm placement.
  */
-/** Additional section to render alongside the primary placement section. */
-export interface AdditionalPlacementSection {
-  sectionData: SectionData;
+/** Additional line to render alongside the primary placement line. */
+export interface AdditionalPlacementLine {
+  lineData: LineData;
   color: string;
-  offsetX: number;  // meters relative to primary section station 0
+  offsetX: number;  // meters relative to primary line station 0
   offsetY: number;
 }
 
 export interface PlacementModeState {
-  /** The section data to be created (not yet in the project) */
-  sectionData: SectionData;
-  /** Which station index of the new section aligns to cursor (0 = first, N = last) */
+  /** The line data to be created (not yet in the project) */
+  lineData: LineData;
+  /** Which station index of the new line aligns to cursor (0 = first, N = last) */
   alignStationIndex: number;
   /** Current cursor position in map coordinates (meters) */
   cursorPosition: Coordinates | null;
@@ -220,14 +220,14 @@ export interface PlacementModeState {
   onComplete?: (result: PlacementResult) => void;
   /** Callback when placement is canceled */
   onCancel?: () => void;
-  /** Additional sections to render alongside primary (for segment placement) */
-  additionalSections?: AdditionalPlacementSection[];
+  /** Additional lines to render alongside primary (for segment placement) */
+  additionalLines?: AdditionalPlacementLine[];
 }
 
 export interface Selection {
-  type: 'station' | 'shot' | 'section';
+  type: 'station' | 'shot' | 'line';
   stationRef?: StationRef;
-  sectionId?: SectionId;
+  lineId?: LineId;
   shotId?: ShotId;
 }
 
@@ -236,15 +236,15 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'station' && b.type === 'station') {
     return (
-      a.stationRef?.section_id === b.stationRef?.section_id &&
+      a.stationRef?.line_id === b.stationRef?.line_id &&
       a.stationRef?.station_index === b.stationRef?.station_index
     );
   }
   if (a.type === 'shot' && b.type === 'shot') {
-    return a.sectionId === b.sectionId && a.shotId === b.shotId;
+    return a.lineId === b.lineId && a.shotId === b.shotId;
   }
-  if (a.type === 'section' && b.type === 'section') {
-    return a.sectionId === b.sectionId;
+  if (a.type === 'line' && b.type === 'line') {
+    return a.lineId === b.lineId;
   }
   return false;
 }
@@ -343,7 +343,7 @@ export const TOAST_DEDUP_WINDOW_MS = 1000;
 /** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
 let nextToastId = 1;
 
-/** The people a section was last created or imported with, this session. */
+/** The people a line was last created or imported with, this session. */
 export interface LastUsedCredit {
   surveyors: Person[];
   explorers: Person[];
@@ -368,7 +368,7 @@ export interface UIStore {
   removeFromSelection: (selection: Selection) => void;
   toggleSelection: (selection: Selection) => void;
   clearSelection: () => void;
-  clearSelectionByType: (type: 'station' | 'shot' | 'section') => void;
+  clearSelectionByType: (type: 'station' | 'shot' | 'line') => void;
   filterSelection: (predicate: (s: Selection) => boolean) => void;
   selectAll: (selections: Selection[]) => void;
   isSelected: (selection: Selection) => boolean;
@@ -400,14 +400,14 @@ export interface UIStore {
   clearMeasure: () => void;
 
   // Left workspace navigation is session-only and never changes lock ownership.
-  leftWorkspace: 'sections' | 'speleodb';
-  surveyLeftWorkspace: 'sections' | 'speleodb';
-  speleoWorkspaceSection: 'history' | null;
+  leftWorkspace: 'lines' | 'speleodb';
+  surveyLeftWorkspace: 'lines' | 'speleodb';
+  speleoWorkspaceLine: 'history' | null;
   speleoRevealNonce: number;
   speleoOutsideSurvey: boolean;
   leftWorkspaceVisible: boolean;
-  selectLeftWorkspace: (tab: 'sections' | 'speleodb') => void;
-  openSpeleoWorkspace: (section?: 'history') => void;
+  selectLeftWorkspace: (tab: 'lines' | 'speleodb') => void;
+  openSpeleoWorkspace: (line?: 'history') => void;
   resetLeftWorkspace: () => void;
 
   // Panel state
@@ -459,21 +459,21 @@ export interface UIStore {
   // toolbar. Session-only - never persisted, so the app always starts windowed.
   dataTableFullScreen: boolean;
   /** Raw sqlite table browsed read-only while fullscreen (null = the normal
-   *  Sections-backed view). Only reachable from the fullscreen toolbar. */
+   *  Lines-backed view). Only reachable from the fullscreen toolbar. */
   rawTableSelection: string | null;
   enterDataTableFullScreen: () => void;
   exitDataTableFullScreen: () => void;
   setRawTableSelection: (table: string | null) => void;
 
-  // Section focus mode (#50): double-clicking a section collapses both side
-  // panels and opens the data table so the screen is dedicated to one section.
+  // Line focus mode (#50): double-clicking a line collapses both side
+  // panels and opens the data table so the screen is dedicated to one line.
   // Exiting restores the layout captured at entry.
-  focusedSectionId: SectionId | null;
-  enterSectionFocus: (sectionId: SectionId, dataTableHeight: number) => void;
-  exitSectionFocus: () => void;
-  /** While focused, follow the selected section so the heading tracks the table
+  focusedLineId: LineId | null;
+  enterLineFocus: (lineId: LineId, dataTableHeight: number) => void;
+  exitLineFocus: () => void;
+  /** While focused, follow the selected line so the heading tracks the table
    *  (does not re-snapshot layout or re-fit the map). */
-  setFocusedSection: (sectionId: SectionId) => void;
+  setFocusedLine: (lineId: LineId) => void;
 
   // Map state
   /** Camera zoom, NOT written per frame. Two writers only, both in MapCanvas:
@@ -487,17 +487,17 @@ export interface UIStore {
   requestFitToBounds: false | 'animate' | 'snap';
   triggerFitToBounds: (options?: { snap?: boolean }) => void;
   clearFitToBoundsRequest: () => void;
-  requestZoomToSection: SectionId | null;
-  triggerZoomToSection: (sectionId: SectionId) => void;
-  clearZoomToSectionRequest: () => void;
-  requestPanToShot: { sectionId: SectionId; shotId: ShotId } | null;
-  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  requestZoomToLine: LineId | null;
+  triggerZoomToLine: (lineId: LineId) => void;
+  clearZoomToLineRequest: () => void;
+  requestPanToShot: { lineId: LineId; shotId: ShotId } | null;
+  triggerPanToShot: (lineId: LineId, shotId: ShotId) => void;
   clearPanToShotRequest: () => void;
   requestCenterOnStation: StationRef | null;
   triggerCenterOnStation: (ref: StationRef) => void;
   clearCenterOnStationRequest: () => void;
-  requestCenterOnShot: { sectionId: SectionId; shotId: ShotId } | null;
-  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => void;
+  requestCenterOnShot: { lineId: LineId; shotId: ShotId } | null;
+  triggerCenterOnShot: (lineId: LineId, shotId: ShotId) => void;
   clearCenterOnShotRequest: () => void;
 
   /** Transient ghost-geometry preview on the map (null = none). */
@@ -506,8 +506,8 @@ export interface UIStore {
 
   /** Request to open the Warnings tab and start resolving a shot's issue
    *  (e.g. clicking the warning indicator in the data table). */
-  requestResolveWarning: { sectionId: SectionId; shotId: ShotId } | null;
-  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
+  requestResolveWarning: { lineId: LineId; shotId: ShotId } | null;
+  triggerResolveWarning: (lineId: LineId, shotId: ShotId) => void;
   clearResolveWarningRequest: () => void;
   /** Show the project view's Details panel on the Warnings tab, listing every
    *  issue, without starting to resolve one (the SpeleoDB upload dialog's
@@ -516,14 +516,14 @@ export interface UIStore {
 
   /** Progressive zoom-in centered on a shot: each request recenters and zooms
    *  one step closer (used by the resolve view's zoom button, #57). */
-  requestZoomToShot: { sectionId: SectionId; shotId: ShotId } | null;
-  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  requestZoomToShot: { lineId: LineId; shotId: ShotId } | null;
+  triggerZoomToShot: (lineId: LineId, shotId: ShotId) => void;
   clearZoomToShotRequest: () => void;
 
   // Display toggles
   showStations: boolean;
   showShots: boolean;
-  showSectionNames: boolean;
+  showLineNames: boolean;
   showStationLabels: boolean;
   /** Station names as the station labels; exclusive with showStationLabels. */
   showStationNames: boolean;
@@ -611,11 +611,11 @@ export interface UIStore {
 
   // Hover state
   hoveredStation: StationRef | null;
-  hoveredShot: { sectionId: SectionId; shotId: ShotId } | null;
-  hoveredSectionId: SectionId | null;
+  hoveredShot: { lineId: LineId; shotId: ShotId } | null;
+  hoveredLineId: LineId | null;
   setHoveredStation: (ref: StationRef | null) => void;
-  setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
-  setHoveredSectionId: (sectionId: SectionId | null) => void;
+  setHoveredShot: (shot: { lineId: LineId; shotId: ShotId } | null) => void;
+  setHoveredLineId: (lineId: LineId | null) => void;
 
   // Toast stack (oldest first, newest last - see src/components/common/ToastStack.tsx)
   toasts: ToastItem[];
@@ -703,20 +703,20 @@ export interface UIStore {
   importContext: 'new-project' | 'existing-project' | null;
   setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
 
-  // Session memory of the last surveyors / explorers a section was created or
+  // Session memory of the last surveyors / explorers a line was created or
   // imported with (not persisted; the cross-project autocomplete is
-  // `store/recentPeople`). New Section and the MNemo wizard prefill from it.
+  // `store/recentPeople`). New Line and the MNemo wizard prefill from it.
   lastUsedCredit: LastUsedCredit;
   setLastUsedCredit: (credit: LastUsedCredit) => void;
 
-  // Placement mode state (for manual map placement of imported sections)
+  // Placement mode state (for manual map placement of imported lines)
   placementMode: PlacementModeState | null;
   startPlacementMode: (
-    sectionData: SectionData,
+    lineData: LineData,
     alignStationIndex: number,
     onComplete?: (result: PlacementResult) => void,
     onCancel?: () => void,
-    additionalSections?: AdditionalPlacementSection[],
+    additionalLines?: AdditionalPlacementLine[],
   ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
@@ -753,7 +753,7 @@ export interface UIStore {
   moveCommentSource: {
     type: 'station' | 'shot';
     stationRef?: StationRef;
-    sectionId?: SectionId;
+    lineId?: LineId;
     shotId?: ShotId;
     comment: string;
     /** Screen position of the click that picked up the comment (for cursor tag) */
@@ -815,9 +815,9 @@ const EXCLUSIVE_DISPLAY_PARTNER: Partial<Record<DisplayToggleKey, DisplayToggleK
 };
 
 /**
- * Layout captured when entering section-focus mode (#50), restored on exit.
+ * Layout captured when entering line-focus mode (#50), restored on exit.
  * Module-level (not store state) since it's internal bookkeeping the UI never
- * reads. Re-focusing a different section while already focused keeps the
+ * reads. Re-focusing a different line while already focused keeps the
  * original snapshot, so exiting always returns to the pre-focus layout.
  */
 let focusLayoutSnapshot:
@@ -912,7 +912,7 @@ let fullScreenTableSnapshot:
 
 /**
  * Show the Details panel on its Warnings tab, making sure it will actually mount
- * and be visible: section-focus and data-table fullscreen hide or cover the
+ * and be visible: line-focus and data-table fullscreen hide or cover the
  * panel, and the panel may simply be collapsed. WarningsContent only consumes a
  * resolve request while mounted (detailPanelOpen && tab === 'warnings'), so
  * without this a request would be a no-op that sat stale and fired on a later
@@ -932,7 +932,7 @@ function revealWarningsTab(
   extra: Partial<UIStore>,
 ): void {
   let s = useUIStore.getState();
-  if (s.focusedSectionId !== null) s.exitSectionFocus();
+  if (s.focusedLineId !== null) s.exitLineFocus();
   if (s.dataTableFullScreen) s.exitDataTableFullScreen();
   // Re-read: the exits above can change the panel's mode/open.
   s = useUIStore.getState();
@@ -948,12 +948,12 @@ function revealWarningsTab(
 }
 
 /**
- * Apply a panel mutation that also exits section-focus (#50). Restores the
+ * Apply a panel mutation that also exits line-focus (#50). Restores the
  * pre-focus layout snapshot (a no-op when not focused, since the snapshot is
  * null), then layers the caller's panel-specific overrides on top and clears
- * focusedSectionId. The spread order is load-bearing: snapshot first (the OTHER
+ * focusedLineId. The spread order is load-bearing: snapshot first (the OTHER
  * panels' real pre-focus values), the caller's overrides second (this panel's
- * intended new state wins), focusedSectionId:null last. Shared by the five
+ * intended new state wins), focusedLineId:null last. Shared by the five
  * focus-dropping mutators so the snapshot ritual lives in exactly one place.
  */
 function exitFocusMerge(
@@ -962,7 +962,7 @@ function exitFocusMerge(
 ): void {
   const snap = focusLayoutSnapshot;
   focusLayoutSnapshot = null;
-  set({ ...(snap ?? {}), ...overrides, focusedSectionId: null });
+  set({ ...(snap ?? {}), ...overrides, focusedLineId: null });
 }
 
 /**
@@ -971,7 +971,7 @@ function exitFocusMerge(
  * instead of repeating a 3-way ternary. Exported for usePanelReveal.
  */
 export const PANEL_FIELDS = {
-  sections: { open: 'sectionsPanelOpen', mode: 'sectionsPanelMode', width: 'sectionsPanelWidth' },
+  lines: { open: 'sectionsPanelOpen', mode: 'sectionsPanelMode', width: 'sectionsPanelWidth' },
   detail: { open: 'detailPanelOpen', mode: 'detailPanelMode', width: 'detailPanelWidth' },
   'data-table': { open: 'dataTableOpen', mode: 'dataTableMode', width: 'dataTableHeight' },
 } as const satisfies Record<PanelId, { open: string; mode: string; width: string }>;
@@ -982,7 +982,7 @@ export const PANEL_FIELDS = {
  * panel; the wizard map column has no reveal state and so appears only here.
  */
 export const PANEL_WIDTH_FIELDS = {
-  sections: PANEL_FIELDS.sections.width,
+  lines: PANEL_FIELDS.lines.width,
   detail: PANEL_FIELDS.detail.width,
   'data-table': PANEL_FIELDS['data-table'].width,
   'wizard-map': 'wizardMapPanelWidth',
@@ -1007,10 +1007,10 @@ export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
   setView: (view) => {
-    // Section-focus mode (#50) is single-view, single-project scoped: drop it on
+    // Line-focus mode (#50) is single-view, single-project scoped: drop it on
     // any view switch so a stale focus can't outlive the view or project that
     // opened it. No-op when not focused; restores the pre-focus panel layout.
-    useUIStore.getState().exitSectionFocus();
+    useUIStore.getState().exitLineFocus();
     // Fullscreen table is single-view scoped too - a view switch can't strand it.
     useUIStore.getState().exitDataTableFullScreen();
     // Gas-planning sub-mode (#38) is single-view scoped too - drop it on any view
@@ -1082,12 +1082,12 @@ export const useUIStore = create<UIStore>((set) => ({
 
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
-      // Use explicit null checks (not truthiness) because SectionId can be 0
+      // Use explicit null checks (not truthiness) because LineId can be 0
       if (
         isNonInteractiveTool(activeTool) &&
-        (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
+        (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredLineId !== null)
       ) {
-        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment, ...clearMeasure };
+        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredLineId: null, ...clearComment, ...clearMoveComment, ...clearMeasure };
       }
       return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment, ...clearMeasure };
     }),
@@ -1216,21 +1216,21 @@ export const useUIStore = create<UIStore>((set) => ({
   clearMeasure: () => set({ ...MEASURE_CLEARED }),
 
   // Panel state
-  leftWorkspace: 'sections',
-  surveyLeftWorkspace: 'sections',
-  speleoWorkspaceSection: null,
+  leftWorkspace: 'lines',
+  surveyLeftWorkspace: 'lines',
+  speleoWorkspaceLine: null,
   speleoRevealNonce: 0,
   speleoOutsideSurvey: false,
   leftWorkspaceVisible: false,
-  resetLeftWorkspace: () => set({ leftWorkspace: 'sections', surveyLeftWorkspace: 'sections', speleoWorkspaceSection: null, speleoOutsideSurvey: false }),
+  resetLeftWorkspace: () => set({ leftWorkspace: 'lines', surveyLeftWorkspace: 'lines', speleoWorkspaceLine: null, speleoOutsideSurvey: false }),
   selectLeftWorkspace: (tab) => set({ leftWorkspace: tab, ...(useUIStore.getState().appMode === 'survey' ? { surveyLeftWorkspace: tab } : {}) }),
-  openSpeleoWorkspace: (section) => {
+  openSpeleoWorkspace: (line) => {
     const state = useUIStore.getState();
     state.exitDataTableFullScreen();
     set({
       leftWorkspace: 'speleodb',
       ...(state.appMode === 'survey' ? { surveyLeftWorkspace: 'speleodb' } : { speleoOutsideSurvey: true }),
-      ...(section ? { speleoWorkspaceSection: section } : {}),
+      ...(line ? { speleoWorkspaceLine: line } : {}),
       speleoRevealNonce: state.speleoRevealNonce + 1,
     });
   },
@@ -1253,13 +1253,13 @@ export const useUIStore = create<UIStore>((set) => ({
   detailRevealNonce: 0,
   // Keyboard shortcuts / menu items are deliberate commands → pin open/close
   // (mode forced to 'pin' so the panel reflows and stays). Manually changing the
-  // layout drops section-focus mode (#50) so the toolbar can't keep showing a
-  // focused-section name with panels reopened; the new layout is persisted.
+  // layout drops line-focus mode (#50) so the toolbar can't keep showing a
+  // focused-line name with panels reopened; the new layout is persisted.
   toggleSectionsPanel: () => {
     const s = useUIStore.getState();
     const opening = !s.sectionsPanelOpen;
-    trackPanelToggle('sections', opening);
-    // Exiting section-focus via a toggle must restore the OTHER panels' pre-focus
+    trackPanelToggle('lines', opening);
+    // Exiting line-focus via a toggle must restore the OTHER panels' pre-focus
     // open/mode (kept in the snapshot) before savePanelLayout persists live state.
     // Otherwise the focus-forced collapse/pin of the untouched panels would be
     // saved as the user's layout, silently overwriting their preferences. `snap`
@@ -1280,12 +1280,12 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   revealDetailPanel: () => {
     const s = useUIStore.getState();
-    // Hover mode (and NOT section-focused, where the mode is force-pinned): float it
+    // Hover mode (and NOT line-focused, where the mode is force-pinned): float it
     // open transiently via the nonce - the same non-persisting idiom as
     // triggerResolveWarning - so viewing details never overwrites the user's hover
     // preference with a persisted 'pin'. Every other case keeps the prior behavior
     // (the deliberate open-and-pin command), so only the buggy path changes.
-    if (s.detailPanelMode === 'hover' && s.focusedSectionId === null) {
+    if (s.detailPanelMode === 'hover' && s.focusedLineId === null) {
       set({ detailRevealNonce: s.detailRevealNonce + 1 });
     } else if (!s.detailPanelOpen) {
       s.toggleDetailPanel();
@@ -1406,13 +1406,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // would leave it stuck pinned-open afterward, silently losing the user's
     // hover/closed preference.
     if (!s.dataTableFullScreen) {
-      // Snapshot the table's prior open/mode so exit can restore it. While section-
+      // Snapshot the table's prior open/mode so exit can restore it. While line-
       // focused (#50), the live dataTableOpen/Mode are focus-forced (open+'pin'),
       // NOT the user's real preference - that lives in focusLayoutSnapshot. Capture
       // from there so a hover/closed table isn't stranded pinned-open after exiting
       // fullscreen (exit-fullscreen and exit-focus are independent paths).
       fullScreenTableSnapshot =
-        s.focusedSectionId !== null && focusLayoutSnapshot
+        s.focusedLineId !== null && focusLayoutSnapshot
           ? { dataTableOpen: focusLayoutSnapshot.dataTableOpen, dataTableMode: focusLayoutSnapshot.dataTableMode }
           : { dataTableOpen: s.dataTableOpen, dataTableMode: s.dataTableMode };
     }
@@ -1424,34 +1424,34 @@ export const useUIStore = create<UIStore>((set) => ({
     // (fullscreen forces them) and never persisted, so no savePanelLayout call.
     const snap = fullScreenTableSnapshot;
     fullScreenTableSnapshot = null;
-    // If section focus is STILL active, its workspace requires the table open+pinned
+    // If line focus is STILL active, its workspace requires the table open+pinned
     // - re-apply that instead of restoring the pre-fullscreen snapshot (exit-focus
     // will restore the user's real state later). Only restore the snapshot when no
     // other override remains, so the table is never stranded pinned-open or wrongly
     // closed while focused.
-    const stillFocused = useUIStore.getState().focusedSectionId !== null;
+    const stillFocused = useUIStore.getState().focusedLineId !== null;
     const restored: Partial<UIStore> = stillFocused
       ? { dataTableOpen: true, dataTableMode: 'pin' }
       : (snap ?? {});
     // Leaving fullscreen also leaves the raw-data view: the picker that could
-    // switch back to Sections only exists in the fullscreen toolbar.
+    // switch back to Lines only exists in the fullscreen toolbar.
     set({ dataTableFullScreen: false, rawTableSelection: null, ...restored });
   },
   setRawTableSelection: (rawTableSelection) => set({ rawTableSelection }),
 
-  // Section focus mode (#50)
-  focusedSectionId: null,
-  enterSectionFocus: (focusedSectionId, dataTableHeight) => {
+  // Line focus mode (#50)
+  focusedLineId: null,
+  enterLineFocus: (focusedLineId, dataTableHeight) => {
     const s = useUIStore.getState();
-    // Focus mode is an editable workspace for one section. The closure-adjusted
+    // Focus mode is an editable workspace for one line. The closure-adjusted
     // view (#70) is read-only, so entering focus leaves it and returns to the
     // measured geometry - guaranteeing the focused data table is editable.
     if (s.geometryMode !== 'measured') {
       s.setGeometryMode('measured', 'sections-panel');
     }
-    // Snapshot the layout only on first entry; re-focusing another section
+    // Snapshot the layout only on first entry; re-focusing another line
     // while already focused must not overwrite the pre-focus layout.
-    if (s.focusedSectionId === null) {
+    if (s.focusedLineId === null) {
       focusLayoutSnapshot = {
         sectionsPanelOpen: s.sectionsPanelOpen,
         sectionsPanelMode: s.sectionsPanelMode,
@@ -1469,7 +1469,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // size from this height. If the table is already open we leave its height
     // alone rather than force a remount that would reset DataTable state.
     set({
-      focusedSectionId,
+      focusedLineId,
       sectionsPanelOpen: false,
       // Force pin mode while collapsed so a hover-mode side panel can't pop open
       // over the focused workspace. Prior modes are captured in the snapshot above
@@ -1482,20 +1482,20 @@ export const useUIStore = create<UIStore>((set) => ({
       ...(s.dataTableOpen ? {} : { dataTableHeight }),
     });
   },
-  exitSectionFocus: () => {
-    if (useUIStore.getState().focusedSectionId === null) return;
+  exitLineFocus: () => {
+    if (useUIStore.getState().focusedLineId === null) return;
     const snap = focusLayoutSnapshot;
     focusLayoutSnapshot = null;
     // Restores the captured panel layout. The geometry switch to 'measured' on
     // entry is intentionally one-way (per the #50/#70 design resolution): exiting
     // leaves you in measured to keep editing, not back in the read-only view.
-    set({ focusedSectionId: null, ...(snap ?? {}) });
+    set({ focusedLineId: null, ...(snap ?? {}) });
   },
-  setFocusedSection: (focusedSectionId) => {
+  setFocusedLine: (focusedLineId) => {
     // Only meaningful while already focused (follow the selection). Guarded so it
     // can't enter focus without a layout snapshot.
-    if (useUIStore.getState().focusedSectionId === null) return;
-    set({ focusedSectionId });
+    if (useUIStore.getState().focusedLineId === null) return;
+    set({ focusedLineId });
   },
 
   // Map state
@@ -1507,16 +1507,16 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ requestFitToBounds: options?.snap ? 'snap' : 'animate' });
   },
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
-  requestZoomToSection: null,
-  triggerZoomToSection: (sectionId: SectionId) => {
-    trackNav('zoom-to-section');
-    set({ requestZoomToSection: sectionId });
+  requestZoomToLine: null,
+  triggerZoomToLine: (lineId: LineId) => {
+    trackNav('zoom-to-line');
+    set({ requestZoomToLine: lineId });
   },
-  clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
+  clearZoomToLineRequest: () => set({ requestZoomToLine: null }),
   requestPanToShot: null,
-  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => {
+  triggerPanToShot: (lineId: LineId, shotId: ShotId) => {
     trackNav('pan-to-shot');
-    set({ requestPanToShot: { sectionId, shotId } });
+    set({ requestPanToShot: { lineId, shotId } });
   },
   clearPanToShotRequest: () => set({ requestPanToShot: null }),
   requestCenterOnStation: null,
@@ -1529,8 +1529,8 @@ export const useUIStore = create<UIStore>((set) => ({
   geometryPreview: null,
   setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
   requestResolveWarning: null,
-  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => {
-    revealWarningsTab(set, { requestResolveWarning: { sectionId, shotId } });
+  triggerResolveWarning: (lineId: LineId, shotId: ShotId) => {
+    revealWarningsTab(set, { requestResolveWarning: { lineId, shotId } });
   },
   openWarningsTab: () => {
     // The Warnings tab lives in the Details panel, which Plan and Export replace
@@ -1540,19 +1540,19 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,
-  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) =>
-    set({ requestZoomToShot: { sectionId, shotId } }),
+  triggerZoomToShot: (lineId: LineId, shotId: ShotId) =>
+    set({ requestZoomToShot: { lineId, shotId } }),
   clearZoomToShotRequest: () => set({ requestZoomToShot: null }),
-  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
+  triggerCenterOnShot: (lineId: LineId, shotId: ShotId) => {
     trackNav('center-on-shot');
-    set({ requestCenterOnShot: { sectionId, shotId } });
+    set({ requestCenterOnShot: { lineId, shotId } });
   },
   clearCenterOnShotRequest: () => set({ requestCenterOnShot: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
   showStations: DISPLAY_DEFAULTS.showStations,
   showShots: DISPLAY_DEFAULTS.showShots,
-  showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
+  showLineNames: DISPLAY_DEFAULTS.showLineNames,
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
   showStationNames: DISPLAY_DEFAULTS.showStationNames,
   showShotData: DISPLAY_DEFAULTS.showShotData,
@@ -1633,7 +1633,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setColorMode: (mode) => {
     // Selecting any color overlay leaves the gas sub-mode - both own the shots
     // layer paint, so they can't coexist (gas entry is the toolbar toggle,
-    // outside this menu). Done FIRST, before the flags are read: picking 'section'
+    // outside this menu). Done FIRST, before the flags are read: picking 'line'
     // while gas is active must still exit it, and the exit restores the Plan-entry
     // display snapshot - so a state read taken before it would be stale. No-op
     // when gas is off.
@@ -1670,7 +1670,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // so persist directly, with the toggle's telemetry so the pairing above holds.
     // The write is idempotent when the saved value was already false; only this one
     // transition can even reach it.
-    if (mode === 'depth' || mode === 'section') {
+    if (mode === 'depth' || mode === 'line') {
       const wantDepth = mode === 'depth';
       if (s.showDepthGradient !== wantDepth) {
         s.toggleDisplay('showDepthGradient');
@@ -1722,7 +1722,7 @@ export const useUIStore = create<UIStore>((set) => ({
       return;
     }
     // Entering Plan or Export. Both show the read-only closure map, so:
-    //  - drop the survey-editing modes (section focus, fullscreen table) that
+    //  - drop the survey-editing modes (line focus, fullscreen table) that
     //    assume an editable measured view;
     //  - remember the survey geometry mode (only when coming FROM survey - a
     //    plan↔export switch must not overwrite the saved survey value with
@@ -1731,7 +1731,7 @@ export const useUIStore = create<UIStore>((set) => ({
     //    "remember last used" preference;
     //  - suppress the three color overlays (they paint the same shots/stations
     //    layer the gas overlay uses, and are a survey concern).
-    s.exitSectionFocus();
+    s.exitLineFocus();
     s.exitDataTableFullScreen();
     if (s.appMode === 'survey') {
       prePlanGeometryMode = s.geometryMode;
@@ -1753,9 +1753,9 @@ export const useUIStore = create<UIStore>((set) => ({
       geometryMode: 'closureAdjusted',
       // Through colorModeFlags like every other overlay writer, so the "ONE place
       // that maps a mode back onto the three booleans" claim on it stays true and a
-      // fourth overlay can never be added here and forgotten. 'section' = no
+      // fourth overlay can never be added here and forgotten. 'line' = no
       // overlay, and it clears the distance cache the same way.
-      ...colorModeFlags('section'),
+      ...colorModeFlags('line'),
       ...MEASURE_CLEARED,
     });
     // Both Plan (setup sidebar) and Export (export stub) render in the right Dock -
@@ -1764,7 +1764,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // a user action: it must never persist via savePanelLayout, or the user's
     // real closed-panel preference gets silently overwritten on disk.
     const revealState = useUIStore.getState();
-    if (revealState.detailPanelMode === 'hover' && revealState.focusedSectionId === null) {
+    if (revealState.detailPanelMode === 'hover' && revealState.focusedLineId === null) {
       set({ detailRevealNonce: revealState.detailRevealNonce + 1 });
     } else if (!revealState.detailPanelOpen) {
       set({ detailPanelOpen: true });
@@ -1792,7 +1792,7 @@ export const useUIStore = create<UIStore>((set) => ({
         return;
       }
       if (key === 'showDepthGradient') {
-        set(visitColorPatch(state, selectEffectiveColorMode(state) === 'depth' ? 'section' : 'depth'));
+        set(visitColorPatch(state, selectEffectiveColorMode(state) === 'depth' ? 'line' : 'depth'));
         return;
       }
     }
@@ -1863,7 +1863,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set({
       showStations: DISPLAY_DEFAULTS.showStations,
       showShots: DISPLAY_DEFAULTS.showShots,
-      showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
+      showLineNames: DISPLAY_DEFAULTS.showLineNames,
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
       showStationNames: DISPLAY_DEFAULTS.showStationNames,
       showShotData: DISPLAY_DEFAULTS.showShotData,
@@ -1937,7 +1937,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStations: settings.showStations ?? state.showStations,
       showShots: settings.showShots ?? state.showShots,
       showShotComments: settings.showShotComments ?? state.showShotComments,
-      showSectionNames: settings.showSectionNames ?? state.showSectionNames,
+      showLineNames: settings.showLineNames ?? state.showLineNames,
       showStationLabels,
       showStationNames,
       showShotData: settings.showShotData ?? state.showShotData,
@@ -1970,7 +1970,7 @@ export const useUIStore = create<UIStore>((set) => ({
       // traffic lights into the next project (issue #57 / Codex; the Warnings-tab
       // auto-switch re-derives it transiently via effectiveIssueSeverity), and the
       // distance overlay's origin/field name a station in the project we just left.
-      ...colorModeFlags((settings.showDepthGradient ?? state.showDepthGradient) ? 'depth' : 'section'),
+      ...colorModeFlags((settings.showDepthGradient ?? state.showDepthGradient) ? 'depth' : 'line'),
       // Restore the saved geometry mode ("remember last used"). The backend
       // defaults geometryMode to "measured" for projects with no saved
       // preference, so a load is authoritative and never inherits the previous
@@ -2000,10 +2000,10 @@ export const useUIStore = create<UIStore>((set) => ({
   // Hover state
   hoveredStation: null,
   hoveredShot: null,
-  hoveredSectionId: null,
+  hoveredLineId: null,
   setHoveredStation: (hoveredStation) => set({ hoveredStation }),
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
-  setHoveredSectionId: (hoveredSectionId) => set({ hoveredSectionId }),
+  setHoveredLineId: (hoveredLineId) => set({ hoveredLineId }),
 
   // Toast stack. Pure data: no timers live here. The dwell/fade clock (and with
   // it hover/focus pausing, which only the DOM knows about) belongs to
@@ -2157,7 +2157,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
+  startPlacementMode: (lineData, alignStationIndex, onComplete, onCancel, additionalLines) => {
     // Placement mode bypasses the setView() cleanup funnel, so leave the gas sub-mode
     // (#38) here too - its overlay/panel must not outlive entry into placement
     // (idempotent no-op when gas is off).
@@ -2175,20 +2175,20 @@ export const useUIStore = create<UIStore>((set) => ({
       //
       // NOT restored on exit, and NOT persisted. Not restored because no sibling
       // does - gas exit, the measure clear and the dwell state are all one-way -
-      // and because re-hiding the stations the instant a section lands would
+      // and because re-hiding the stations the instant a line lands would
       // take away the thing the user just placed it against. Not persisted
       // because this is a prerequisite of a transient mode, not a preference:
       // `set` writes session state only, where `toggleDisplay` would also call
       // `saveDisplaySetting` and silently rewrite the project's saved config.
       showStations: true,
       placementMode: {
-        sectionData,
+        lineData,
         alignStationIndex,
         cursorPosition: null,
         snappedToStation: null,
         ...(onComplete !== undefined && { onComplete }),
         ...(onCancel !== undefined && { onCancel }),
-        ...(additionalSections !== undefined && { additionalSections }),
+        ...(additionalLines !== undefined && { additionalLines }),
       },
       // Placement and the ruler readout both occupy top-center (#26 reset).
       ...MEASURE_CLEARED,
@@ -2265,7 +2265,7 @@ export const useUIStore = create<UIStore>((set) => ({
 }));
 
 // Drop the Warnings-tab visit's changes as soon as the visit ends - whatever
-// ended it (another tab, closing the panel, section focus, Plan / Export, the
+// ended it (another tab, closing the panel, line focus, Plan / Export, the
 // Global view, a full-screen table, the setting turned off). A subscription
 // sees every one of those paths, including direct setState calls.
 useUIStore.subscribe((s) => {

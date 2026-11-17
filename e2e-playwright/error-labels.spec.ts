@@ -2,14 +2,14 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
   waitForDrawnShots,
   getMapLabels,
   LABEL_KIND_SHOT_ERROR,
   LABEL_KIND_CLOSURE_ERROR,
   type MapLabel,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -22,7 +22,7 @@ import {
  * default), B comes 1 m back west 6° apart (score 0.3), so their midpoints are
  * 4.5 m apart and the labels overlap until the map is zoomed far in; C agrees.
  */
-const seeds: SectionSeed[] = [
+const seeds: LineSeed[] = [
   {
     name: 'Errors',
     direction: 'in',
@@ -64,7 +64,7 @@ test.describe('Errors labels', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Errors Labels Test');
-    await seedProjectWithSections(page, seeds);
+    await seedProjectWithLines(page, seeds);
     await waitForMapIdle(page);
     await waitForDrawnShots(page, 3);
   });
@@ -78,8 +78,8 @@ test.describe('Errors labels', () => {
   });
 
   test('where two labels collide the worse error is shown first', async ({ page }) => {
-    // Section names are placed from z10 and keep their place, so take this
-    // section's name out of the contest to compare the two Errors labels only.
+    // Line names are placed from z10 and keep their place, so take this
+    // line's name out of the contest to compare the two Errors labels only.
     await page.evaluate(() => {
       const ui = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toggleDisplay: (k: string) => void } } } })
         .__E2E_TEST__?.uiStore;
@@ -124,21 +124,21 @@ test.describe('Errors labels', () => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           projectStore: {
-            getState: () => { project: { sections: Array<{ id: number }>; loop_closures: unknown[] } | null };
+            getState: () => { project: { lines: Array<{ id: number }>; loop_closures: unknown[] } | null };
             setState: (s: unknown) => void;
           };
         };
       }).__E2E_TEST__!;
       const project = e2e.projectStore.getState().project!;
-      const sid = project.sections[0]!.id;
+      const sid = project.lines[0]!.id;
       e2e.projectStore.setState({
         project: {
           ...project,
           loop_closures: [
             {
               id: BigInt(1),
-              station_a: { section_id: sid, station_index: 0 },
-              station_b: { section_id: sid, station_index: 3 },
+              station_a: { line_id: sid, station_index: 0 },
+              station_b: { line_id: sid, station_index: 3 },
               path_length: 19,
               misclosure_distance: 0.42,
               error_percentage: 2.21,

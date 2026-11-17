@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    ClosureStrategy, LoopClosure, Project, SectionData, SectionId, ShotData, SplitSectionOptions,
+    ClosureStrategy, LoopClosure, Project, LineData, LineId, ShotData, SplitLineOptions,
     SplitSide, StationRef,
 };
 
@@ -18,9 +18,9 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some(name.to_string()),
             shots,
             ..Default::default()
@@ -28,8 +28,8 @@ fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
         .id
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 /// Plant a closure directly, as a file written before #738 can carry it
@@ -59,7 +59,7 @@ fn ids(closures: &[LoopClosure]) -> Vec<u64> {
 /// R is a loop on itself (east, north, west, south to 0.2 m short of its
 /// start); T starts merged at R:1 and U at T:0, so R:1, T:0 and U:0 are one
 /// point; V starts merged at R:3.
-fn network() -> (Project, [SectionId; 4]) {
+fn network() -> (Project, [LineId; 4]) {
     let mut p = Project::new("sweep".to_string(), None);
     let r = add(
         &mut p,
@@ -83,7 +83,7 @@ fn network() -> (Project, [SectionId; 4]) {
 /// A closure already between merged stations - on a directly merged pair, or
 /// through a chain of merges - is removed whenever the sweep runs (the load
 /// is one of those runs). Nothing else is: not a real loop, not a closure
-/// whose two sections are merged elsewhere, not one tying a station to a
+/// whose two lines are merged elsewhere, not one tying a station to a
 /// station merely co-located with it, not one with an end that no longer
 /// resolves. No merge is added for a removal.
 #[test]
@@ -105,7 +105,7 @@ fn a_closure_already_between_merged_stations_goes_and_nothing_else_does() {
     let elsewhere = plant(&mut p, st(u, 0), st(r, 2));
     // An end that no longer resolves: its shot is gone.
     let dangling = plant(&mut p, st(t, 2), st(r, 1));
-    p.get_section_mut(t).unwrap().shots.pop();
+    p.get_line_mut(t).unwrap().shots.pop();
     p.rebuild_shot_uuid_index();
     assert!(p
         .resolve_key(&p.loop_closures.last().unwrap().station_a)
@@ -159,8 +159,8 @@ fn the_sweep_removes_a_closure_only_when_its_stations_are_merged() {
     assert_eq!(ids(&p.loop_closures), [real, across, elsewhere]);
 }
 
-fn split_options() -> SplitSectionOptions {
-    SplitSectionOptions {
+fn split_options() -> SplitLineOptions {
+    SplitLineOptions {
         name_a: "S-A".to_string(),
         name_b: "S-B".to_string(),
         color_a: "#111111".to_string(),
@@ -200,7 +200,7 @@ fn the_scoped_sweep_removes_what_its_promotion_merged_and_keeps_what_it_found() 
     let preexisting = p.swept_closure_ids();
     assert_eq!(preexisting, HashSet::from([recorded]));
 
-    p.split_section_at_station(s, 2, &split_options()).unwrap();
+    p.split_line_at_station(s, 2, &split_options()).unwrap();
     let sweep = p.convert_closures_orphaned_since(&preexisting);
     p.settle_minted_merges(&sweep.minted);
 
@@ -213,7 +213,7 @@ fn the_scoped_sweep_removes_what_its_promotion_merged_and_keeps_what_it_found() 
 }
 
 /// A closure from a station to itself closes nothing either, and goes too. It
-/// used to be kept: it is in one section, so it was never an orphan.
+/// used to be kept: it is in one line, so it was never an orphan.
 #[test]
 fn a_closure_from_a_station_to_itself_goes() {
     let (mut p, [r, t, _, _]) = network();
@@ -233,7 +233,7 @@ fn a_closure_from_a_station_to_itself_goes() {
 
 /// A merge never leaves a closure between merged stations (#738). Every
 /// closure shape the app keeps, with each end merged to the other, directly or
-/// through the other's merge group: a loop on one section and two branches off
+/// through the other's merge group: a loop on one line and two branches off
 /// one point tied at their far ends are refused as already connected, and
 /// nothing changes. Two anchored surveys tied by a closure MAY merge (#741: the
 /// later placement datum becomes a GPS fix); the merge makes that closure's two

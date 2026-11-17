@@ -657,7 +657,7 @@ export interface GpxPointSpec {
   desc?: string;
   /** Emit `<tag .../>` with no children. */
   selfClosing?: boolean;
-  /** Wrap `ele` in a CDATA section, which the reader silently drops. */
+  /** Wrap `ele` in a CDATA line, which the reader silently drops. */
   eleCdata?: boolean;
 }
 
@@ -765,7 +765,7 @@ function gpxTrackLines(track: GpxTrackSpec): string[] {
   if (track.desc !== undefined) lines.push(`    ${gpxTextElement('desc', track.desc)}`);
   for (const segment of track.segments) {
     // A segment with fewer than 2 points is skipped at import but still consumes
-    // a `section_index` (`gpx.rs:920-923`), shifting every later placement.
+    // a `line_index` (`gpx.rs:920-923`), shifting every later placement.
     lines.push('    <trkseg>');
     for (const point of segment) lines.push(...gpxPointLines('trkpt', point, '      '));
     lines.push('    </trkseg>');

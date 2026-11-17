@@ -135,7 +135,7 @@ describe('MapTopLeftOverlay', () => {
         showClosureReadOnly
         adjustmentReport={{
           skipped_closures: [],
-          failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+          failures: [{ anchor: { line_id: 0, station_index: 0 }, line_ids: [0], reason: 'x' }],
           far_gps_fixes: [],
         }}
       />
@@ -156,14 +156,14 @@ describe('MapTopLeftOverlay', () => {
   describe('adjustment notice (#737)', () => {
     const skipped = (closure_id: number) => ({
       closure_id,
-      station_a: { section_id: 0, station_index: 1 },
-      station_b: { section_id: 0, station_index: 2 },
-      shot_section_id: 0,
+      station_a: { line_id: 0, station_index: 1 },
+      station_b: { line_id: 0, station_index: 2 },
+      shot_line_id: 0,
       shot_index: 1,
     });
     const failure = {
-      anchor: { section_id: 2, station_index: 0 },
-      section_ids: [2, 3],
+      anchor: { line_id: 2, station_index: 0 },
+      line_ids: [2, 3],
       reason: 'loop closures tie two zero datums to the same point.',
     };
     const report = (over: Partial<AdjustmentReport>): AdjustmentReport => ({
@@ -219,8 +219,8 @@ describe('MapTopLeftOverlay', () => {
     });
 
     it('names the GPS fix the computed view is bent to, and how far off it is (#741)', () => {
-      const fix = (section_id: number, station_index: number, gap_m: number) => ({
-        station: { section_id, station_index },
+      const fix = (line_id: number, station_index: number, gap_m: number) => ({
+        station: { line_id, station_index },
         gap_m,
         threshold_m: 25,
       });

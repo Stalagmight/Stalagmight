@@ -3,21 +3,21 @@
  *
  * Verifies that clicking a warning in the Warnings tab navigates to the
  * corresponding shot's details (not "Selection not found").
- * Also covers DMP-imported projects (simulated via multiple seeded sections).
+ * Also covers DMP-imported projects (simulated via multiple seeded lines).
  */
 
 import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 import { warningMessages, warningResolveButtons } from './helpers/testIds';
 
-/** Seed data: one section with shots. */
-const sectionSeeds: SectionSeed[] = [
+/** Seed data: one line with shots. */
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Tunnel',
     direction: 'in',
@@ -29,8 +29,8 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-/** Seed data simulating a DMP import: multiple sections. */
-const dmpSectionSeeds: SectionSeed[] = [
+/** Seed data simulating a DMP import: multiple lines. */
+const dmpSectionSeeds: LineSeed[] = [
   {
     name: 'Main Passage',
     direction: 'in',
@@ -55,7 +55,7 @@ const dmpSectionSeeds: SectionSeed[] = [
 async function injectWarnings(
   page: Page,
   warnings: Array<{
-    sectionId: number;
+    lineId: number;
     shotId: number;
     shotIndex: number;
     code: string;
@@ -63,7 +63,7 @@ async function injectWarnings(
     severity: 'warning' | 'error';
     isResolved: boolean;
     datumStationIndex?: number;
-    datumRefs?: Array<{ section_id: number; station_index: number }>;
+    datumRefs?: Array<{ line_id: number; station_index: number }>;
     shotUuid?: string;
   }>
 ): Promise<void> {
@@ -81,44 +81,44 @@ async function injectWarnings(
   }, warnings);
 }
 
-/** Get section IDs from the project store. */
-async function getSectionIds(page: Page): Promise<number[]> {
+/** Get line IDs from the project store. */
+async function getLineIds(page: Page): Promise<number[]> {
   return page.evaluate(() => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
         projectStore: {
-          getState: () => { project: { sections: Array<{ id: number }> } | null };
+          getState: () => { project: { lines: Array<{ id: number }> } | null };
         };
       };
     }).__E2E_TEST__;
-    return stores?.projectStore.getState().project?.sections.map((s) => s.id) ?? [];
+    return stores?.projectStore.getState().project?.lines.map((s) => s.id) ?? [];
   });
 }
 
-/** Get shot IDs for a section. */
-async function getShotIdsForSection(page: Page, sectionId: number): Promise<number[]> {
+/** Get shot IDs for a line. */
+async function getShotIdsForLine(page: Page, lineId: number): Promise<number[]> {
   return page.evaluate(
     (secId) => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+              project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
             };
           };
         };
       }).__E2E_TEST__;
-      const section = stores?.projectStore.getState().project?.sections.find((s) => s.id === secId);
-      return section?.shots.map((shot) => shot.id) ?? [];
+      const line = stores?.projectStore.getState().project?.lines.find((s) => s.id === secId);
+      return line?.shots.map((shot) => shot.id) ?? [];
     },
-    sectionId
+    lineId
   );
 }
 
 /** Get the current selection state. */
 async function getSelectionState(page: Page): Promise<{
   type: string;
-  sectionId?: number;
+  lineId?: number;
   shotId?: number;
 } | null> {
   return page.evaluate(() => {
@@ -129,7 +129,7 @@ async function getSelectionState(page: Page): Promise<{
     }).__E2E_TEST__;
     return stores?.uiStore.getState().selection as {
       type: string;
-      sectionId?: number;
+      lineId?: number;
       shotId?: number;
     } | null;
   });
@@ -164,25 +164,25 @@ test.describe('Warning Click Navigation', () => {
   });
 
   test('clicking a warning selects the shot and stays on the Warnings tab', async ({ page }) => {
-    // Create project with sections
+    // Create project with lines
     await createProject(page, 'Warning Click Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    // Get section and shot IDs
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, mainSectionId);
+    // Get line and shot IDs
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, mainLineId);
     const targetShotId = shotIds[1]!; // Second shot
 
     // Inject a warning for the second shot
     await injectWarnings(page, [
       {
-        sectionId: mainSectionId,
+        lineId: mainLineId,
         shotId: targetShotId,
         shotIndex: 1,
         code: 'AZIMUTH_DIFF',
-        message: `Shot ${mainSectionId}:2 azimuth difference exceeds threshold`,
+        message: `Shot ${mainLineId}:2 azimuth difference exceeds threshold`,
         severity: 'warning',
         isResolved: false,
       },
@@ -206,7 +206,7 @@ test.describe('Warning Click Navigation', () => {
       (sel) => sel?.type === 'shot' && sel?.shotId === targetShotId
     );
     expect(selection?.type).toBe('shot');
-    expect(selection?.sectionId).toBe(mainSectionId);
+    expect(selection?.lineId).toBe(mainLineId);
     expect(selection?.shotId).toBe(targetShotId);
 
     // Still on the Warnings tab - the row select does not navigate to Details.
@@ -216,27 +216,27 @@ test.describe('Warning Click Navigation', () => {
   test('clicking a warning on a DMP-imported project selects the shot (stays on Warnings tab)', async ({
     page,
   }) => {
-    // Create project with multiple sections (simulating a DMP import)
+    // Create project with multiple lines (simulating a DMP import)
     await createProject(page, 'DMP Warning Test');
-    await seedProjectWithSections(page, dmpSectionSeeds);
+    await seedProjectWithLines(page, dmpSectionSeeds);
     await waitForMapIdle(page);
 
-    // Get section and shot IDs
-    const sectionIds = await getSectionIds(page);
-    expect(sectionIds.length).toBe(2);
-    const firstSectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, firstSectionId);
+    // Get line and shot IDs
+    const lineIds = await getLineIds(page);
+    expect(lineIds.length).toBe(2);
+    const firstLineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, firstLineId);
     expect(shotIds.length).toBeGreaterThanOrEqual(1);
     const targetShotId = shotIds[0]!;
 
-    // Inject a warning for the first shot of the first section
+    // Inject a warning for the first shot of the first line
     await injectWarnings(page, [
       {
-        sectionId: firstSectionId,
+        lineId: firstLineId,
         shotId: targetShotId,
         shotIndex: 0,
         code: 'LENGTH_ZERO',
-        message: `Shot ${firstSectionId}:1 length is zero`,
+        message: `Shot ${firstLineId}:1 length is zero`,
         severity: 'error',
         isResolved: false,
       },
@@ -259,7 +259,7 @@ test.describe('Warning Click Navigation', () => {
       (sel) => sel?.type === 'shot' && sel?.shotId === targetShotId
     );
     expect(selection?.type).toBe('shot');
-    expect(selection?.sectionId).toBe(firstSectionId);
+    expect(selection?.lineId).toBe(firstLineId);
     expect(selection?.shotId).toBe(targetShotId);
 
     // Still on the Warnings tab - the row select does not navigate to Details.
@@ -274,17 +274,17 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('Resolve button is rendered for unresolved warnings', async ({ page }) => {
     await createProject(page, 'Dismiss Warning Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     // Inject two unresolved warnings
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'LENGTH_SHORT',
@@ -293,7 +293,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         isResolved: false,
       },
       {
-        sectionId,
+        lineId,
         shotId: shotIds[1]!,
         shotIndex: 1,
         code: 'AZIMUTH_DIFF',
@@ -318,17 +318,17 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('Resolve all button is visible when unresolved warnings exist', async ({ page }) => {
     await createProject(page, 'Resolve All Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     // Inject warnings
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'LENGTH_ZERO',
@@ -337,7 +337,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         isResolved: false,
       },
       {
-        sectionId,
+        lineId,
         shotId: shotIds[1]!,
         shotIndex: 1,
         code: 'AZIMUTH_DIFF',
@@ -357,16 +357,16 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('Resolve opens the inline resolution view and Back returns to the list', async ({ page }) => {
     await createProject(page, 'Resolve Flow Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'AZIMUTH_DEVIATION',
@@ -394,16 +394,16 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('Resolve all steps through warnings with a progress indicator', async ({ page }) => {
     await createProject(page, 'Resolve All Flow Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     await injectWarnings(page, [
-      { sectionId, shotId: shotIds[0]!, shotIndex: 0, code: 'AZIMUTH_DEVIATION', message: 'Azimuth deviation', severity: 'warning', isResolved: false },
-      { sectionId, shotId: shotIds[1]!, shotIndex: 1, code: 'SHORT_SHOT', message: 'Short shot', severity: 'warning', isResolved: false },
+      { lineId, shotId: shotIds[0]!, shotIndex: 0, code: 'AZIMUTH_DEVIATION', message: 'Azimuth deviation', severity: 'warning', isResolved: false },
+      { lineId, shotId: shotIds[1]!, shotIndex: 1, code: 'SHORT_SHOT', message: 'Short shot', severity: 'warning', isResolved: false },
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
@@ -416,15 +416,15 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('GPS gap warning offers go-to-station and edit-datum, and opens Edit Station', async ({ page }) => {
     await createProject(page, 'Datum Gap Resolve Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'datum_gps_gap',
@@ -452,14 +452,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('inclination/depth mismatch offers use-depth and use-inclination resolutions', async ({ page }) => {
     await createProject(page, 'Inclination Mismatch Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'INCLINATION_DEPTH_MISMATCH',
@@ -483,14 +483,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('short shot offers a delete-shot resolution', async ({ page }) => {
     await createProject(page, 'Short Shot Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'SHORT_SHOT',
@@ -509,28 +509,28 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-delete-shot')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
 
-    // Deleting selects the parent section (not the now-gone shot), so Details
+    // Deleting selects the parent line (not the now-gone shot), so Details
     // doesn't show "Selection not found".
     await page.getByTestId('warning-resolution-option-delete-shot').click();
     await page.getByTestId('warning-resolution-apply').click();
-    const selection = await pollSelectionState(page, (sel) => sel?.type === 'section');
-    expect(selection?.type).toBe('section');
-    expect(selection?.sectionId).toBe(sectionId);
+    const selection = await pollSelectionState(page, (sel) => sel?.type === 'line');
+    expect(selection?.type).toBe('line');
+    expect(selection?.lineId).toBe(lineId);
   });
 
   test('virtualizes the warnings list (only a window of rows is in the DOM)', async ({ page }) => {
     await createProject(page, 'Warnings Virtualization Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     const many = Array.from({ length: 200 }, (_, i) => ({
-      sectionId,
+      lineId,
       shotId: shotIds[i % shotIds.length]!,
       shotIndex: i % shotIds.length,
       code: 'AZIMUTH_DEVIATION',
-      message: `Shot ${sectionId}:${(i % shotIds.length) + 1} azimuth in/out difference #${i}`,
+      message: `Shot ${lineId}:${(i % shotIds.length) + 1} azimuth in/out difference #${i}`,
       severity: 'warning' as const,
       isResolved: false,
     }));
@@ -547,14 +547,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('clicking the data-table warning indicator opens Warnings and the resolve view', async ({ page }) => {
     await createProject(page, 'Table Warning Resolve Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'AZIMUTH_DEVIATION',
@@ -567,7 +567,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     // Open the data table and click the warning indicator on that shot's row.
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-    const indicator = page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`);
+    const indicator = page.getByTestId(`warning-${lineId}-${shotIds[0]!}`);
     await expect(indicator).toBeVisible();
     await indicator.click();
 
@@ -578,14 +578,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('an inclination in/out warning offers keep-in, keep-out, average (default), set and ignore', async ({ page }) => {
     await createProject(page, 'Pitch Deviation Resolve Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'PITCH_DEVIATION',
@@ -597,7 +597,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-    await page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`).click();
+    await page.getByTestId(`warning-${lineId}-${shotIds[0]!}`).click();
 
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
     for (const id of ['pitch-use-in', 'pitch-use-out', 'pitch-average', 'manual', 'ignore']) {
@@ -608,14 +608,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('data-table warning indicator opens the resolve view even when the detail panel is closed', async ({ page }) => {
     await createProject(page, 'Closed Panel Resolve Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'AZIMUTH_DEVIATION',
@@ -628,7 +628,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 
-    // Collapse the detail panel (as section-focus mode does).
+    // Collapse the detail panel (as line-focus mode does).
     await page.evaluate(() => {
       (window as unknown as { __E2E_TEST__?: { uiStore: { setState: (s: Record<string, unknown>) => void } } })
         .__E2E_TEST__?.uiStore.setState({ detailPanelOpen: false });
@@ -636,20 +636,20 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('detail-panel')).toHaveCount(0);
 
     // Clicking the indicator must reopen the panel and open the resolve view.
-    await page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`).click();
+    await page.getByTestId(`warning-${lineId}-${shotIds[0]!}`).click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
   });
 
   test('opening Resolve fully focuses the shot and offers a zoom button', async ({ page }) => {
     await createProject(page, 'Resolve Focus Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'AZIMUTH_DEVIATION',
@@ -664,12 +664,12 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
 
     // Full focus: the shot is selected (which highlights it on the map and
-    // focuses the details, sections and data panels - same as a link click).
+    // focuses the details, lines and data panels - same as a link click).
     const selection = await pollSelectionState(
       page,
       (sel) => sel?.type === 'shot' && sel?.shotId === shotIds[0]!,
     );
-    expect(selection?.sectionId).toBe(sectionId);
+    expect(selection?.lineId).toBe(lineId);
     expect(selection?.shotId).toBe(shotIds[0]!);
 
     // A zoom button is offered to close in on the problematic shot.
@@ -679,17 +679,17 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('badge only counts unresolved warnings', async ({ page }) => {
     await createProject(page, 'Badge Count Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     // Inject 3 warnings: 2 unresolved, 1 resolved
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'LENGTH_SHORT',
@@ -698,7 +698,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         isResolved: false,
       },
       {
-        sectionId,
+        lineId,
         shotId: shotIds[1]!,
         shotIndex: 1,
         code: 'AZIMUTH_DIFF',
@@ -707,7 +707,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         isResolved: false,
       },
       {
-        sectionId,
+        lineId,
         shotId: shotIds[2]!,
         shotIndex: 2,
         code: 'LENGTH_LONG',
@@ -724,17 +724,17 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
   test('resolved warnings hidden by default, shown with toggle', async ({ page }) => {
     await createProject(page, 'Resolved Toggle Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
-    const sectionIds = await getSectionIds(page);
-    const sectionId = sectionIds[0]!;
-    const shotIds = await getShotIdsForSection(page, sectionId);
+    const lineIds = await getLineIds(page);
+    const lineId = lineIds[0]!;
+    const shotIds = await getShotIdsForLine(page, lineId);
 
     // Inject one unresolved and one resolved warning
     await injectWarnings(page, [
       {
-        sectionId,
+        lineId,
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'LENGTH_SHORT',
@@ -743,7 +743,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         isResolved: false,
       },
       {
-        sectionId,
+        lineId,
         shotId: shotIds[1]!,
         shotIndex: 1,
         code: 'AZIMUTH_DIFF',

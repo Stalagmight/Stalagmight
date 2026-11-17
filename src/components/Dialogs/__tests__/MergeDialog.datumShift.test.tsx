@@ -17,7 +17,7 @@ const projectState = {
   mergeStations: vi.fn(),
   executeBatch: vi.fn(),
   project: {
-    sections: [
+    lines: [
       { id: 1, name: 'Upstream' },
       { id: 2, name: 'Second entrance' },
       { id: 3, name: 'Side passage' },
@@ -38,12 +38,12 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
 
-const A = { section_id: 1, station_index: 5 };
-const B = { section_id: 2, station_index: 5 };
+const A = { line_id: 1, station_index: 5 };
+const B = { line_id: 2, station_index: 5 };
 const shift = (extra: Partial<MergeDatumShift> = {}): MergeDatumShift => ({
-  moving_section_ids: [2],
+  moving_line_ids: [2],
   shift_m: 12.047,
-  datum_station: { section_id: 2, station_index: 0 },
+  datum_station: { line_id: 2, station_index: 0 },
   ...extra,
 });
 
@@ -65,11 +65,11 @@ describe('MergeDialog datum shift (#741)', () => {
     );
   });
 
-  it('counts the other sections of a moving piece', () => {
-    dialogData = { ...dialogData, datumShift: shift({ moving_section_ids: [2, 3], shift_m: 4.26 }) };
+  it('counts the other lines of a moving piece', () => {
+    dialogData = { ...dialogData, datumShift: shift({ moving_line_ids: [2, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
-      'Second entrance and 1 more section is placed by its own GPS. It moves 4.3 m'
+      'Second entrance and 1 more line is placed by its own GPS. It moves 4.3 m'
     );
   });
 

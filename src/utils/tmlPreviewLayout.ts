@@ -2,7 +2,7 @@
  * Lay a parsed Ariane file out in ONE frame so the import dialog can draw it
  * before anything is imported (#425).
  *
- * `SectionPreview` already knows how to draw several sections at given
+ * `LinePreview` already knows how to draw several lines at given
  * offsets - that is what the MNemo wizard's segment view uses - but it speaks
  * `DmpSection`. This module is the adapter plus the layout: it applies the same
  * shot filter and the same placement rules the Rust converter applies
@@ -16,34 +16,34 @@
  *     does about depth, azimuth reference, closures and unit conversion. A
  *     preview shot's `depth_in`/`depth_out` are carried verbatim only because
  *     the `DmpShot` shape has the fields.
- * The one thing it must agree with the backend on is TOPOLOGY - which section
- * hangs off which, and which sections lose their anchor when a section is
+ * The one thing it must agree with the backend on is TOPOLOGY - which line
+ * hangs off which, and which lines lose their anchor when a line is
  * deselected - because that is the question the dialog is asking the user.
  */
 import type { DmpSection, DmpShot, TmlFile, TmlSection, TmlShot } from '../types/commands';
 import { importableShots } from './tmlImportStats';
 
-/** One section as the preview needs it: geometry plus where it sits. */
+/** One line as the preview needs it: geometry plus where it sits. */
 export interface TmlPreviewSection {
-  /** Index into `TmlFile.sections` - the same numbering the dialog's rows,
-   *  the selection set and the backend's `selected_sections` all use. */
+  /** Index into `TmlFile.lines` - the same numbering the dialog's rows,
+   *  the selection set and the backend's `selected_lines` all use. */
   index: number;
   name: string;
   color: string;
-  /** The section's own shots, adapted for `SectionPreview`. */
-  section: DmpSection;
+  /** The line's own shots, adapted for `LinePreview`. */
+  line: DmpSection;
   /** Meters east/north of the layout's origin. */
   offsetX: number;
   offsetY: number;
   /**
-   * True when this section will be placed at the ORIGIN rather than connected
+   * True when this line will be placed at the ORIGIN rather than connected
    * to the rest of the survey - i.e. exactly when the backend takes
    * `determine_placement`'s final fallback and emits its warning.
    *
    * Three things are therefore NOT re-anchored, and each was wrong at some
-   * point: the root (it belongs at the origin), a section whose own first shot
+   * point: the root (it belongs at the origin), a line whose own first shot
    * carries usable coordinates (the backend prefers that over the fallback),
-   * and a section whose parent resolved normally. A section with NO parent id
+   * and a line whose parent resolved normally. A line with NO parent id
    * at all IS re-anchored - the file orphan case, which the backend has always
    * warned about and this used to stay silent on.
    */
@@ -51,14 +51,14 @@ export interface TmlPreviewSection {
 }
 
 export interface TmlPreviewLayout {
-  sections: TmlPreviewSection[];
+  lines: TmlPreviewSection[];
   /** How many entries carry `reanchored`. */
   reanchoredCount: number;
 }
 
 export interface TmlPreviewOptions {
   includeExcluded: boolean;
-  /** Section indices to lay out. `null` means every section. */
+  /** Line indices to lay out. `null` means every line. */
   selected: ReadonlySet<number> | null;
 }
 
@@ -89,18 +89,18 @@ function toPreviewShot(shot: TmlShot): DmpShot {
   };
 }
 
-function toPreviewSection(section: TmlSection, shots: TmlShot[]): DmpSection {
+function toPreviewLine(line: TmlSection, shots: TmlShot[]): DmpSection {
   return {
     version: 0,
-    name: section.name,
+    name: line.name,
     direction: 'in',
-    date: section.date ?? '',
+    date: line.date ?? '',
     shots: shots.map(toPreviewShot),
     content_hash: '',
   };
 }
 
-/** Station positions of a section in its OWN frame, station 0 at (0, 0).
+/** Station positions of a line in its OWN frame, station 0 at (0, 0).
  *  Same recurrence as `computeStationsFromDmpShots`, kept here so the layout
  *  does not have to build a DmpSection before it can position anything. */
 function localStations(shots: TmlShot[]): Array<{ x: number; y: number }> {
@@ -165,26 +165,26 @@ function hasUsableGps(shot: TmlShot | undefined): boolean {
 /** A laid-out entry while the offsets are still being resolved. */
 interface WorkingEntry {
   index: number;
-  section: TmlSection;
+  line: TmlSection;
   shots: TmlShot[];
   stations: Array<{ x: number; y: number }>;
-  parent: { section: number; station: number } | undefined;
+  parent: { line: number; station: number } | undefined;
   offsetX: number;
   offsetY: number;
   reanchored: boolean;
 }
 
 /**
- * Where each selected section sits relative to the first one.
+ * Where each selected line sits relative to the first one.
  *
  * The placement rules, in the backend's order (`determine_placement`):
- *   1. the ROOT - the first section the import will CREATE, i.e. the first one
+ *   1. the ROOT - the first line the import will CREATE, i.e. the first one
  *      that is selected AND still has shots after the exclusion filter - sits
  *      at the origin;
- *   2. any other section merges its station 0 onto the station its
+ *   2. any other line merges its station 0 onto the station its
  *      `start_ariane_id` names, but only if that station belongs to a SELECTED
- *      section, since a deselected one is never created;
- *   3. failing that, a section with usable coordinates on its own first shot is
+ *      line, since a deselected one is never created;
+ *   3. failing that, a line with usable coordinates on its own first shot is
  *      anchored on those (drawn at the origin here - the preview has no
  *      georeferencing - but NOT reported as re-anchored, because the import
  *      will not put it at the origin);
@@ -192,8 +192,8 @@ interface WorkingEntry {
  *
  * Rule 1 is the definition the backend now uses too, and it must stay that way:
  * deriving it from the selection alone ("lowest selected index") disagrees
- * whenever the exclusion filter empties that section, and the placement the
- * dialog collected then belongs to a section that is never built.
+ * whenever the exclusion filter empties that line, and the placement the
+ * dialog collected then belongs to a line that is never built.
  *
  * Rule 2 can point forwards, so offsets are resolved by walking a
  * parent -> children adjacency breadth-first from the parentless entries: one
@@ -206,18 +206,18 @@ export function computeTmlPreviewLayout(
 ): TmlPreviewLayout {
   const isSelected = (i: number) => selected === null || selected.has(i);
 
-  // Ariane shot id -> (section index, station index) over the SELECTED sections
+  // Ariane shot id -> (line index, station index) over the SELECTED lines
   // only, so a deselected parent resolves to nothing. Shot `i` ends at station
   // `i + 1`.
   //
   // Keyed by NUMBER, through `normalizeTmlId` on both sides - see its comment
   // for why the declared `bigint` is not what arrives.
-  const idToLoc = new Map<number, { section: number; station: number }>();
-  const kept: TmlShot[][] = tml.sections.map((section, i) => {
-    const shots = importableShots(section, includeExcluded);
+  const idToLoc = new Map<number, { line: number; station: number }>();
+  const kept: TmlShot[][] = tml.lines.map((line, i) => {
+    const shots = importableShots(line, includeExcluded);
     if (isSelected(i)) {
       shots.forEach((shot, si) =>
-        idToLoc.set(normalizeTmlId(shot.id), { section: i, station: si + 1 })
+        idToLoc.set(normalizeTmlId(shot.id), { line: i, station: si + 1 })
       );
     }
     return shots;
@@ -225,28 +225,28 @@ export function computeTmlPreviewLayout(
 
   // The entries the import will create, in file order. `entries[0]` is the
   // root by construction - no spread over the selection, which throws
-  // RangeError on a set big enough to have one entry per section.
+  // RangeError on a set big enough to have one entry per line.
   const entries: WorkingEntry[] = [];
-  for (const [index, section] of tml.sections.entries()) {
+  for (const [index, line] of tml.lines.entries()) {
     if (!isSelected(index) || kept[index]!.length === 0) continue;
     const shots = kept[index]!;
     const isRoot = entries.length === 0;
     // The parent the backend would use: the raw first shot's `from_id`, then
-    // the first surviving shot's, for a section whose lead shots were excluded.
-    const candidates = [section.start_ariane_id, shots[0]?.from_id]
+    // the first surviving shot's, for a line whose lead shots were excluded.
+    const candidates = [line.start_ariane_id, shots[0]?.from_id]
       .filter((id) => id !== undefined)
       .map(normalizeTmlId)
       // Ariane spells "names nothing" as a negative id (`-1`), on both the
-      // section's declared start and a shot's `from_id`.
+      // line's declared start and a shot's `from_id`.
       .filter((id) => id >= 0);
     const parent = isRoot
       ? undefined
       : candidates
           .map((id) => idToLoc.get(id))
-          .find((loc) => loc !== undefined && loc.section !== index);
+          .find((loc) => loc !== undefined && loc.line !== index);
     entries.push({
       index,
-      section,
+      line,
       shots,
       stations: localStations(shots),
       parent,
@@ -264,7 +264,7 @@ export function computeTmlPreviewLayout(
   const children = new Map<number, WorkingEntry[]>();
   const queue: WorkingEntry[] = [];
   for (const entry of entries) {
-    const parentIndex = entry.parent?.section;
+    const parentIndex = entry.parent?.line;
     if (parentIndex === undefined || !positionOf.has(parentIndex)) {
       queue.push(entry);
       continue;
@@ -290,11 +290,11 @@ export function computeTmlPreviewLayout(
   }
 
   return {
-    sections: entries.map((entry) => ({
+    lines: entries.map((entry) => ({
       index: entry.index,
-      name: entry.section.name,
-      color: entry.section.color,
-      section: toPreviewSection(entry.section, entry.shots),
+      name: entry.line.name,
+      color: entry.line.color,
+      line: toPreviewLine(entry.line, entry.shots),
       offsetX: entry.offsetX,
       offsetY: entry.offsetY,
       reanchored: entry.reanchored,

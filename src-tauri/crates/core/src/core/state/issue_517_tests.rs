@@ -26,7 +26,7 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::loading::IGNORES_UNREADABLE_CODE;
-use crate::models::{Project, SectionData, ShotData};
+use crate::models::{Project, LineData, ShotData};
 use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
@@ -34,16 +34,16 @@ const RESOLVED_AT: &str = "2026-01-01T00:00:00+00:00";
 
 /// The pre-v8 `resolved_warnings` shape: every current column except
 /// `shot_uuid`.
-const PRE_V8_COLUMNS: &str = "section_id INTEGER NOT NULL, \
+const PRE_V8_COLUMNS: &str = "line_id INTEGER NOT NULL, \
      shot_id INTEGER NOT NULL, \
      warning_code TEXT NOT NULL, \
      resolved_at TEXT NOT NULL, \
      resolved_comment TEXT, \
-     UNIQUE(section_id, shot_id, warning_code)";
+     UNIQUE(line_id, shot_id, warning_code)";
 
 /// A table whose rows do not say WHICH warning was ignored - no amount of
 /// leniency recovers that.
-const UNREADABLE_COLUMNS: &str = "section_id INTEGER NOT NULL, \
+const UNREADABLE_COLUMNS: &str = "line_id INTEGER NOT NULL, \
      shot_id INTEGER NOT NULL, \
      resolved_at TEXT NOT NULL";
 
@@ -55,7 +55,7 @@ const UNREADABLE_COLUMNS: &str = "section_id INTEGER NOT NULL, \
 /// an integer on insert - so a fixture that stores a text id in a declared
 /// INTEGER column is not testing a text id at all. The tests below assert
 /// `typeof()` afterwards rather than trusting this.
-const UNTYPED_ID_COLUMNS: &str = "section_id INTEGER NOT NULL, \
+const UNTYPED_ID_COLUMNS: &str = "line_id INTEGER NOT NULL, \
      shot_id, \
      warning_code, \
      resolved_at, \
@@ -63,7 +63,7 @@ const UNTYPED_ID_COLUMNS: &str = "section_id INTEGER NOT NULL, \
 
 /// What the seeded file holds, as this build wrote it.
 struct Seeded {
-    section_id: u32,
+    line_id: u32,
     shot_id: u32,
     shot_uuid: String,
 }
@@ -86,7 +86,7 @@ fn synthetic_project() -> Project {
         ..Default::default()
     };
     let mut project = Project::new("Forged".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#abcdef".to_string(),
         shots: vec![unflippable(0.1), unflippable(0.2)],
         ..Default::default()
@@ -100,9 +100,9 @@ fn seed_current_file(path: &std::path::Path) -> Seeded {
     db.save_project(&synthetic_project()).unwrap();
     let saved = db.load_project().unwrap();
     Seeded {
-        section_id: saved.sections[0].id,
-        shot_id: saved.sections[0].shots[0].id,
-        shot_uuid: saved.sections[0].shots[0].uuid.clone().unwrap(),
+        line_id: saved.lines[0].id,
+        shot_id: saved.lines[0].shots[0].id,
+        shot_uuid: saved.lines[0].shots[0].uuid.clone().unwrap(),
     }
 }
 
@@ -198,10 +198,10 @@ fn a_forged_current_stamp_over_pre_v8_tables_does_not_erase_the_ignore_list() {
     forge_ignore_table(
         &path,
         PRE_V8_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
+        "line_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
-            seeded.section_id, seeded.shot_id
+            seeded.line_id, seeded.shot_id
         )],
     );
 
@@ -277,25 +277,25 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
     forge_ignore_table(
         &path,
         UNTYPED_ID_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
+        "line_id, shot_id, warning_code, resolved_at",
         &[
             // Readable, and the row whose survival is the point.
             format!(
                 "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
-                seeded.section_id, seeded.shot_id
+                seeded.line_id, seeded.shot_id
             ),
             // A code and a timestamp that are not text at all, and not even
             // valid UTF-8. Carried inert: it suppresses nothing, but it is the
             // user's row and the save has no business dropping it.
             format!(
                 "{}, {}, X'FFFE', X'FFFE'",
-                seeded.section_id, seeded.shot_id
+                seeded.line_id, seeded.shot_id
             ),
             // Names no shot, so it can never suppress anything on any project.
             // Dropped - the one case where dropping loses nothing.
             format!(
                 "{}, X'FFFE', 'LONG_SHOT', '{RESOLVED_AT}'",
-                seeded.section_id
+                seeded.line_id
             ),
             // A multi-megabyte TEXT id. Rejected on LENGTH before it is decoded
             // or parsed: an id is at most 10 digits, so validating megabytes of
@@ -303,7 +303,7 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
             // to buy, once per row per save.
             format!(
                 "{}, printf('%.*c', 4000000, '7'), 'AZIMUTH_DEVIATION', '{RESOLVED_AT}'",
-                seeded.section_id
+                seeded.line_id
             ),
             // The same guard, made observable: 65 characters of zero-padding in
             // front of a LIVE shot id. Without the byte cap this parses happily
@@ -312,7 +312,7 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
             // this, which is exactly why the cheap check is safe.
             format!(
                 "{}, printf('%065d', {}), 'DEPTH_MISMATCH', '{RESOLVED_AT}'",
-                seeded.section_id, seeded.shot_id
+                seeded.line_id, seeded.shot_id
             ),
         ],
     );
@@ -404,7 +404,7 @@ fn the_row_cap_bounds_the_scan_even_when_no_row_is_usable() {
             SELECT {}, X'FFFE', 'JUNK_' || n, '{RESOLVED_AT}' FROM seq;
          INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
             VALUES ({}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}');",
-        seeded.section_id, seeded.section_id, seeded.shot_id
+        seeded.line_id, seeded.line_id, seeded.shot_id
     ))
     .unwrap();
     let total: i64 = conn
@@ -456,10 +456,10 @@ fn a_save_is_refused_when_the_ignore_list_cannot_be_read_at_all() {
     forge_ignore_table(
         &path,
         UNREADABLE_COLUMNS,
-        "section_id, shot_id, resolved_at",
+        "line_id, shot_id, resolved_at",
         &[format!(
             "{}, {}, '{RESOLVED_AT}'",
-            seeded.section_id, seeded.shot_id
+            seeded.line_id, seeded.shot_id
         )],
     );
     let has_code_column: i64 = rusqlite::Connection::open(&path)
@@ -529,10 +529,10 @@ fn a_save_refuses_while_the_ignore_list_cannot_be_reached() {
     forge_ignore_table(
         &path,
         PRE_V8_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
+        "line_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
-            seeded.section_id, seeded.shot_id
+            seeded.line_id, seeded.shot_id
         )],
     );
 
@@ -651,10 +651,10 @@ fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
     forge_ignore_table(
         &source,
         PRE_V8_COLUMNS,
-        "section_id, shot_id, warning_code, resolved_at",
+        "line_id, shot_id, warning_code, resolved_at",
         &[format!(
             "{}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}'",
-            seeded.section_id, seeded.shot_id
+            seeded.line_id, seeded.shot_id
         )],
     );
     // UNSTAMPED, unlike the forged fixtures: this is the file whose project row

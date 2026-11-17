@@ -8,7 +8,7 @@
  * app needs NO network glyph endpoint (the remote
  * `fonts.openmaptiles.org/{fontstack}/{range}.pbf` dependency this renderer
  * deletes) and rasterization stays synchronous canvas work off the critical
- * path. The charset is tiny (digits, `°`, `m`, `.`, space, section-name /
+ * path. The charset is tiny (digits, `°`, `m`, `.`, space, line-name /
  * comment letters - a few hundred glyphs), so one 1024-wide page holds
  * everything in practice.
  *

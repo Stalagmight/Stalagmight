@@ -36,7 +36,7 @@ test.describe('Structural-integrity banner', () => {
   test('shows issue details in a dialog and repairs from there', async ({ page }) => {
     await seedAndCheck(page, [
       'Merged stations 1:0 and 0:13 are 30.03 m apart but should be the same point',
-      'Station merge #0 station_a references missing section 42',
+      'Station merge #0 station_a references missing line 42',
     ]);
 
     const banner = page.getByTestId('integrity-banner');
@@ -48,7 +48,7 @@ test.describe('Structural-integrity banner', () => {
     const dialog = page.getByTestId('integrity-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('30.03 m apart');
-    await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('missing section 42');
+    await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('missing line 42');
 
     await page.getByTestId('integrity-dialog-repair').click();
 
@@ -66,7 +66,7 @@ test.describe('Structural-integrity banner', () => {
 
   test('repair reports issues that still need manual attention', async ({ page }) => {
     await seedAndCheck(page, [
-      'Station merge #0 station_a references missing section 42',
+      'Station merge #0 station_a references missing line 42',
       'Loop closure 1 (0:2 ↔ 1:0) is marked closed but its ends are 8.10 m apart - recompute or remove it',
     ]);
     // One of the two issues is detect-only and survives repair.
@@ -88,7 +88,7 @@ test.describe('Structural-integrity banner', () => {
   });
 
   test('review dialog can be cancelled without repairing', async ({ page }) => {
-    await seedAndCheck(page, ['Zero datum #0 references missing section 7']);
+    await seedAndCheck(page, ['Zero datum #0 references missing line 7']);
     await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
     await page.getByTestId('integrity-review-button').click();
     await expect(page.getByTestId('integrity-dialog')).toBeVisible();
@@ -99,7 +99,7 @@ test.describe('Structural-integrity banner', () => {
   });
 
   test('banner can be dismissed without opening the dialog', async ({ page }) => {
-    await seedAndCheck(page, ['Zero datum #0 references missing section 7']);
+    await seedAndCheck(page, ['Zero datum #0 references missing line 7']);
     await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
     await page.getByTestId('integrity-dismiss-button').click();
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);

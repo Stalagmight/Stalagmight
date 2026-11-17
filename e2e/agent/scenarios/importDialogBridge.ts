@@ -162,7 +162,7 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'segment-place-on-map-button',
   'toggle-alternatives',
   'shot-editor-expand',
-  // wizard confirm overlays. `cancel-remove-button` DELETES the sections the
+  // wizard confirm overlays. `cancel-remove-button` DELETES the lines the
   // wizard imported (one batched, undoable step) - a real destructive action
   // the walk is allowed to take, since the whole point of the overlay is that
   // both answers are legitimate exits.
@@ -218,7 +218,7 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
  * however long a trace's string is.
  */
 export const CLICKABLE_PATTERNS: readonly RegExp[] = [
-  /^zero-datum-section-card-\d{1,3}$/,
+  /^zero-datum-line-card-\d{1,3}$/,
   /^alternative-\d{1,3}$/,
   /^shot-editor-gutter-\d{1,3}$/,
   /^shot-editor-row-\d{1,3}$/,
@@ -230,11 +230,11 @@ export const TYPEABLE_TESTIDS: ReadonlySet<string> = new Set([
   'default-surveyor-input',
   'default-date-input',
   'zero-datum-gps-input',
-  'section-name-input',
-  'section-surveyor-input',
-  'section-date-input',
-  'section-quality-input',
-  'section-color-hex-input',
+  'line-name-input',
+  'line-surveyor-input',
+  'line-date-input',
+  'line-quality-input',
+  'line-color-hex-input',
   'project-name-input',
   'project-save-path-input',
   'project-location-input',
@@ -247,19 +247,19 @@ export const SELECTABLE_TESTIDS: ReadonlySet<string> = new Set([
   'zero-datum-station-select',
   'merge-station-select',
   'overlap-mode-select',
-  'section-direction-select',
-  'from-existing-import-section-select',
+  'line-direction-select',
+  'from-existing-import-line-select',
   'from-existing-import-station-select',
-  'from-existing-section-select',
+  'from-existing-line-select',
   'from-existing-station-select',
-  'manual-import-section-select',
+  'manual-import-line-select',
   'manual-import-station-select',
 ]);
 
 /**
  * Select id PATTERNS. `GpxPlacementDialog` renders one zero-datum picker per
- * track/route section, so the id carries the section index; the orphan dialog
- * one choice per repeated shot, keyed by the new section's shot index.
+ * track/route line, so the id carries the line index; the orphan dialog
+ * one choice per repeated shot, keyed by the new line's shot index.
  */
 export const SELECTABLE_PATTERNS: readonly RegExp[] = [
   /^gpx-placement-zero-datum-\d{1,3}$/,
@@ -269,7 +269,7 @@ export const SELECTABLE_PATTERNS: readonly RegExp[] = [
 
 /** Ids a `check` move may target (checkboxes and the segment-mode radios). */
 export const CHECKABLE_TESTIDS: ReadonlySet<string> = new Set([
-  'section-reverse-checkbox',
+  'line-reverse-checkbox',
   'segment-mode-suggestion-input',
   'segment-mode-from-existing-input',
   'segment-mode-manual-input',
@@ -293,7 +293,7 @@ export const CHECKABLE_TESTIDS: ReadonlySet<string> = new Set([
 ]);
 
 export const CHECKABLE_PATTERNS: readonly RegExp[] = [
-  /^section-checkbox-\d{1,3}$/,
+  /^line-checkbox-\d{1,3}$/,
   /^walls-survey-\d{1,3}$/,
 ];
 
@@ -469,7 +469,7 @@ const HELPERS = `
       ui.activeDialog === null || ui.activeDialog === undefined ? '-' : ui.activeDialog,
       ui.placementMode ? 'P' : '-',
       document.querySelectorAll('[data-testid^="shot-editor-row-"]').length,
-      document.querySelectorAll('[data-testid^="section-checkbox-"]').length,
+      document.querySelectorAll('[data-testid^="line-checkbox-"]').length,
       busy() ? 'B' : '-',
     ].join('|');
   };

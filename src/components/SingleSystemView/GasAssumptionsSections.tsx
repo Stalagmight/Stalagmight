@@ -29,7 +29,7 @@ export const REQUIRED_STAGES: Record<ReservePreset, number> = {
   free: 0,
 };
 
-function SectionLabel({ children }: { children: ReactNode }) {
+function LineLabel({ children }: { children: ReactNode }) {
   return <h3 className="text-xs font-semibold uppercase tracking-wide opacity-60">{children}</h3>;
 }
 
@@ -57,7 +57,7 @@ export interface GasAssumptionsSectionsProps {
  * The four inputs the R9/R10 entry card's "Adjust assumptions" disclosure reveals, and that the
  * full rig renders unconditionally once an origin is chosen (#395): Diver RMV, Swim speed, Gas
  * strategy and Units. Shared JSX so neither render branch in `GasPlanPanel` duplicates the
- * inputs - only the surrounding chrome (entry card vs. always-visible sidebar section) differs.
+ * inputs - only the surrounding chrome (entry card vs. always-visible sidebar line) differs.
  */
 export function GasAssumptionsSections({
   units,
@@ -83,8 +83,8 @@ export function GasAssumptionsSections({
   return (
     <>
       {/* Diver RMV */}
-      <section className="space-y-1">
-        <SectionLabel>{t('gasPanel.diver.rmvLabel')}</SectionLabel>
+      <line className="space-y-1">
+        <LineLabel>{t('gasPanel.diver.rmvLabel')}</LineLabel>
         <div className="flex items-center gap-2">
           <PositiveNumberField
             value={rmvToDisplay(diver.rmv_l_per_min, units)}
@@ -98,7 +98,7 @@ export function GasAssumptionsSections({
             {t(units === 'imperial' ? 'gasPanel.diver.rmvUnitImperial' : 'gasPanel.diver.rmvUnit')}
           </span>
         </div>
-      </section>
+      </line>
 
       {/* Swim speed - the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
           panel's other (per-session) inputs, swim speed PERSISTS: a commit updates the working
@@ -108,8 +108,8 @@ export function GasAssumptionsSections({
           The disk write is debounced (see persistSwimSpeed) so rapid typing doesn't fire one
           config save per keystroke; only this field is written back, reserve / units / diver
           stay per-session (#241). */}
-      <section className="space-y-1">
-        <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
+      <line className="space-y-1">
+        <LineLabel>{t('gasPanel.swimSpeed.label')}</LineLabel>
         <div className="flex items-center gap-2">
           <PositiveNumberField
             value={speedToDisplay(gasConfig.swim_speed_m_per_min, units)}
@@ -127,11 +127,11 @@ export function GasAssumptionsSections({
             {t(units === 'imperial' ? 'gasPanel.swimSpeed.unitImperial' : 'gasPanel.swimSpeed.unit')}
           </span>
         </div>
-      </section>
+      </line>
 
       {/* Gas strategy */}
-      <section className="space-y-1">
-        <SectionLabel>{t('gasPanel.reserve.label')}</SectionLabel>
+      <line className="space-y-1">
+        <LineLabel>{t('gasPanel.reserve.label')}</LineLabel>
         <div className="flex gap-1">
           {RESERVE_PRESETS.map((preset) => {
             const needs = REQUIRED_STAGES[preset];
@@ -215,11 +215,11 @@ export function GasAssumptionsSections({
             </span>
           </div>
         )}
-      </section>
+      </line>
 
       {/* Units */}
-      <section className="space-y-1">
-        <SectionLabel>{t('gasPanel.units.label')}</SectionLabel>
+      <line className="space-y-1">
+        <LineLabel>{t('gasPanel.units.label')}</LineLabel>
         <div className="flex gap-1">
           {UNIT_OPTIONS.map((u) => (
             <button
@@ -236,7 +236,7 @@ export function GasAssumptionsSections({
           ))}
         </div>
         <p className="text-xs opacity-60">{t('gasPanel.tanks.editHint')}</p>
-      </section>
+      </line>
     </>
   );
 }

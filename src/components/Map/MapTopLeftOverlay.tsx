@@ -89,7 +89,7 @@ function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
           <span data-testid="adjustment-notice-far-gps-fix">
             {t('map.geometry.farGpsFixes', {
               count: far.length,
-              station: formatStationId(largest.station.section_id, largest.station.station_index),
+              station: formatStationId(largest.station.line_id, largest.station.station_index),
               gap: formatDatumMetres(largest.gap_m),
             })}
           </span>
@@ -110,7 +110,7 @@ export function MapTopLeftOverlay({
   showClosureComputing,
   adjustmentReport = null,
 }: {
-  /** In section-focus mode, the fit button doubles as "exit focus". */
+  /** In line-focus mode, the fit button doubles as "exit focus". */
   focused: boolean;
   onFitOrExitFocus: () => void;
   /** Remote project open without the write lock (Survey mode only). */

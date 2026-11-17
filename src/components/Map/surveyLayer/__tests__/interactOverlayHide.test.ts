@@ -1,42 +1,42 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type * as maplibregl from 'maplibre-gl';
 import {
-  overlayTouchesRemovedSections,
+  overlayTouchesRemovedLines,
   overlayPaintDigest,
   InteractOverlayHideController,
   INTERACT_HIDE_FALLBACK_MS,
   type InteractHideMap,
 } from '../interactOverlayHide';
 
-describe('overlayTouchesRemovedSections', () => {
+describe('overlayTouchesRemovedLines', () => {
   it('is false when nothing was removed', () => {
-    expect(overlayTouchesRemovedSections(['4:400002', '6:1'], [])).toBe(false);
+    expect(overlayTouchesRemovedLines(['4:400002', '6:1'], [])).toBe(false);
   });
 
-  it('is true when a highlighted shot id belongs to a removed section', () => {
-    // "sectionId:shotId" - the prefix is the section id.
-    expect(overlayTouchesRemovedSections(['4:400002'], [4])).toBe(true);
+  it('is true when a highlighted shot id belongs to a removed line', () => {
+    // "lineId:shotId" - the prefix is the line id.
+    expect(overlayTouchesRemovedLines(['4:400002'], [4])).toBe(true);
   });
 
-  it('is true when a highlighted station id belongs to a removed section', () => {
-    // "sectionId:stationIndex" - same prefix rule.
-    expect(overlayTouchesRemovedSections(['6:1'], [6])).toBe(true);
+  it('is true when a highlighted station id belongs to a removed line', () => {
+    // "lineId:stationIndex" - same prefix rule.
+    expect(overlayTouchesRemovedLines(['6:1'], [6])).toBe(true);
   });
 
   it('is false when no highlighted id is in the removed set', () => {
-    expect(overlayTouchesRemovedSections(['4:400002', '6:1'], [7, 8])).toBe(false);
+    expect(overlayTouchesRemovedLines(['4:400002', '6:1'], [7, 8])).toBe(false);
   });
 
   it('ignores null / undefined / malformed ids', () => {
-    expect(overlayTouchesRemovedSections([null, undefined, '', 'nope', ':3'], [3])).toBe(false);
-    // ":3" has an empty section prefix -> not section 3.
-    expect(overlayTouchesRemovedSections([':3'], [0])).toBe(false);
+    expect(overlayTouchesRemovedLines([null, undefined, '', 'nope', ':3'], [3])).toBe(false);
+    // ":3" has an empty line prefix -> not line 3.
+    expect(overlayTouchesRemovedLines([':3'], [0])).toBe(false);
   });
 
   it('matches any one id among many (e.g. the spread highlighted-station list)', () => {
     const ids = ['4:400002' /*selected shot*/, null /*hovered shot*/, '9:2', '6:3', '9:5'];
-    expect(overlayTouchesRemovedSections(ids, [6])).toBe(true);
-    expect(overlayTouchesRemovedSections(ids, [10, 11])).toBe(false);
+    expect(overlayTouchesRemovedLines(ids, [6])).toBe(true);
+    expect(overlayTouchesRemovedLines(ids, [10, 11])).toBe(false);
   });
 });
 
@@ -190,7 +190,7 @@ describe('InteractOverlayHideController', () => {
 });
 
 // #301: a dim-set change must hide the overlay across its ~250ms re-tile ONLY
-// when what is actually painted changes. setAnchoredSections /
+// when what is actually painted changes. setAnchoredLines /
 // setImmovableFeatures fire on every tool switch, usually with empty sets, so an
 // unconditional hide would blank the highlight and add flicker where there is none.
 describe('overlayPaintDigest', () => {

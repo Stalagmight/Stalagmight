@@ -56,13 +56,13 @@ function loadMsgpackUmd(): string {
 interface MockProject {
   id: string;
   name: string;
-  sections: MockSection[];
+  lines: MockLine[];
   station_merges: unknown[];
   zero_datums: unknown[];
-  section_offsets: Record<string, [number, number]>;
+  line_offsets: Record<string, [number, number]>;
 }
 
-interface MockSection {
+interface MockLine {
   id: string;
   name: string;
   surveyor: string;
@@ -92,21 +92,21 @@ function createMockProject(overrides?: Partial<MockProject>): MockProject {
   return {
     id: 'mock-project-001',
     name: 'Test Project',
-    sections: [],
+    lines: [],
     station_merges: [],
     zero_datums: [],
-    section_offsets: {},
+    line_offsets: {},
     ...overrides,
   };
 }
 
 /**
- * Create a mock section with optional custom data.
+ * Create a mock line with optional custom data.
  */
-function createMockSection(overrides?: Partial<MockSection>): MockSection {
+function createMockLine(overrides?: Partial<MockLine>): MockLine {
   return {
-    id: 'mock-section-001',
-    name: 'Test Section',
+    id: 'mock-line-001',
+    name: 'Test Line',
     surveyor: 'Test Surveyor',
     date: new Date().toISOString().split('T')[0] ?? '',
     color: '#3b82f6',
@@ -198,11 +198,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         created_at: string;
         modified_at: string;
         file_path: string | null;
-        sections: unknown[];
+        lines: unknown[];
         station_merges: unknown[];
         zero_datums: unknown[];
         loop_closures: unknown[];
-        section_offsets: Record<string, unknown>;
+        line_offsets: Record<string, unknown>;
       } | null = null;
       let projectPath: string | null = null;
       // `BinaryEnvelope::is_remote` (#270): whether the loaded `.stalx` lives in
@@ -215,19 +215,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
       let windowCloseCount = 0;
-      let sectionCounter = 0;
-      // Shot ids are section-encoded, exactly as the backend allocates them:
-      // `Section::new` seeds `next_shot_id = section.id * FEATURE_ID_STRIDE` and
-      // increments from there (src-tauri/src/models/section.rs). Keeping the mock
+      let lineCounter = 0;
+      // Shot ids are line-encoded, exactly as the backend allocates them:
+      // `Line::new` seeds `next_shot_id = line.id * FEATURE_ID_STRIDE` and
+      // increments from there (src-tauri/src/models/line.rs). Keeping the mock
       // on flat 1,2,3 ids made `Math.floor(fid / STRIDE)` accidentally correct and
       // hid a whole class of id-decoding bugs from Playwright (#301).
       const MOCK_FEATURE_ID_STRIDE = 100000;
-      const mockShotId = (sectionId: number, seq: number): number =>
-        sectionId * MOCK_FEATURE_ID_STRIDE + seq;
+      const mockShotId = (lineId: number, seq: number): number =>
+        lineId * MOCK_FEATURE_ID_STRIDE + seq;
 
       // Per-shot survey credit, the shape the backend serves since surveyors,
-      // explorers and the date moved onto every shot (a section keeps none).
-      // Mock sections still carry the legacy section-level `surveyor`/`date`
+      // explorers and the date moved onto every shot (a line keeps none).
+      // Mock lines still carry the legacy line-level `surveyor`/`date`
       // (every fixture builds them that way); exactly like the backend's
       // migration, that is the credit of each shot that has none of its own.
       // `withShotCredit` applies it to every project this mock hands out, so the
@@ -281,14 +281,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return { surveyors: people.surveyors, explorers: people.explorers, date: day };
       };
       const mockShotCredit = (
-        section: Record<string, unknown>,
+        line: Record<string, unknown>,
         shot: Record<string, unknown>,
       ): MockCredit => (shot.credit as MockCredit | undefined)
-        ?? mockLegacyCredit(section.surveyor, section.date)
+        ?? mockLegacyCredit(line.surveyor, line.date)
         ?? { surveyors: [], explorers: [], date: null };
       const mockStoreCredit = (shot: Record<string, unknown>, credit: MockCredit): void => {
         // An explicit empty credit stays EXPLICIT (it must not fall back to the
-        // legacy section template); `withShotCredit` leaves it off the wire, as
+        // legacy line template); `withShotCredit` leaves it off the wire, as
         // the backend's `Shot::set_credit` does.
         if (credit.surveyors.length === 0 && credit.explorers.length === 0 && credit.date === null) {
           shot.credit = { surveyors: [], explorers: [], date: null };
@@ -296,10 +296,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           shot.credit = credit;
         }
       };
-      const withShotCredit = <P extends { sections: unknown[] } | null>(project: P): P => {
+      const withShotCredit = <P extends { lines: unknown[] } | null>(project: P): P => {
         if (!project) return project;
-        const sections = (project.sections as Array<Record<string, unknown>>).map((section) => {
-          const { surveyor, date, ...rest } = section;
+        const lines = (project.lines as Array<Record<string, unknown>>).map((line) => {
+          const { surveyor, date, ...rest } = line;
           const template = mockLegacyCredit(surveyor, date);
           const shots = ((rest.shots as Array<Record<string, unknown>> | undefined) ?? []).map((shot) => {
             const own = shot.credit as MockCredit | undefined;
@@ -312,14 +312,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           });
           return { ...rest, shots };
         });
-        return { ...project, sections };
+        return { ...project, lines };
       };
 
       // #741: a zero datum's ROLE is derived, never stored (backend
       // `datum_roles.rs`): the first datum (list order) of each merge-connected
-      // group of sections places that group, every later one in the group is a GPS
-      // fix. Sections join through station merges.
-      type MockStationRef = { section_id: number; station_index: number };
+      // group of lines places that group, every later one in the group is a GPS
+      // fix. Lines join through station merges.
+      type MockStationRef = { line_id: number; station_index: number };
       const mockDatumRole = (
         project: { station_merges?: unknown[]; zero_datums?: unknown[] },
         ref: MockStationRef
@@ -332,34 +332,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
         const merges = (project.station_merges ?? []) as Array<{ station_a: MockStationRef; station_b: MockStationRef }>;
         for (const m of merges) {
-          const a = root(m.station_a.section_id);
-          const b = root(m.station_b.section_id);
+          const a = root(m.station_a.line_id);
+          const b = root(m.station_b.line_id);
           if (a !== b) parent.set(a, b);
         }
-        const group = root(ref.section_id);
+        const group = root(ref.line_id);
         const datums = (project.zero_datums ?? []) as Array<{ station_ref: MockStationRef }>;
-        const placing = datums.find((d) => root(d.station_ref.section_id) === group);
+        const placing = datums.find((d) => root(d.station_ref.line_id) === group);
         if (!placing) return 'Placement';
         const same =
-          placing.station_ref.section_id === ref.section_id && placing.station_ref.station_index === ref.station_index;
+          placing.station_ref.line_id === ref.line_id && placing.station_ref.station_index === ref.station_index;
         return same ? 'Placement' : 'GpsFix';
       };
       // #741: whether a datum is an ENTRANCE, resolved like the backend
       // (`datum_entrance.rs`): a placement datum always is; a GPS fix follows
-      // its stored `entrance` answer, else is one on its section's first or
+      // its stored `entrance` answer, else is one on its line's first or
       // last station.
       const mockDatumIsEntrance = (
-        project: { sections?: unknown[] },
+        project: { lines?: unknown[] },
         ref: MockStationRef,
         role: 'Placement' | 'GpsFix',
         entrance: boolean | undefined
       ): boolean => {
         if (role === 'Placement') return true;
         if (entrance !== undefined) return entrance;
-        const section = ((project.sections ?? []) as Array<{ id: number; shots?: unknown[] }>).find(
-          (s) => s.id === ref.section_id
+        const line = ((project.lines ?? []) as Array<{ id: number; shots?: unknown[] }>).find(
+          (s) => s.id === ref.line_id
         );
-        return ref.station_index === 0 || ref.station_index === (section?.shots?.length ?? 0);
+        return ref.station_index === 0 || ref.station_index === (line?.shots?.length ?? 0);
       };
       /** A GPS fix's gap. The mock has no geometry, so it is canned; a spec can
        *  override it through `window.__MOCK_DATUM_GAP__`. */
@@ -373,7 +373,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
       /** Stamp each datum's derived role, entrance flag and, for a GPS fix, its
        *  gap on an (already cloned) wire project, as `Project::zero_datums_wire` does. */
-      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; sections?: unknown[] } | null>(project: P): P => {
+      const withDatumRoles = <P extends { station_merges?: unknown[]; zero_datums?: unknown[]; lines?: unknown[] } | null>(project: P): P => {
         if (!project) return project;
         for (const d of (project.zero_datums ?? []) as Array<{
           station_ref: MockStationRef;
@@ -400,11 +400,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // add/delete an e2e can actually drive. The anchor shape below is this mock's own and is
       // opaque to the app (`PlanAnchor` is `unknown` on the TS side).
       interface MockPlanRefLite {
-        section_id: number;
+        line_id: number;
         station_index: number;
       }
       interface MockPlanAnchor {
-        section_id: number;
+        line_id: number;
         before_shot_uuid: string | null;
         after_shot_uuid: string | null;
       }
@@ -412,29 +412,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         id: number;
         uuid?: string;
       }
-      interface MockSectionRef {
+      interface MockLineRef {
         id: number;
         shots: MockShotRef[];
       }
-      const sectionForAnchor = (sectionId: number): MockSectionRef | undefined =>
-        (currentProject?.sections as MockSectionRef[] | undefined)?.find(
-          (s) => s.id === sectionId,
+      const lineForAnchor = (lineId: number): MockLineRef | undefined =>
+        (currentProject?.lines as MockLineRef[] | undefined)?.find(
+          (s) => s.id === lineId,
         );
       /** Describe the station at `ref` by the uuids of its neighbouring shots (station `i` sits
-       *  between shot `i-1` and shot `i`; a section end has no neighbour on that side). `null`
-       *  when the section is gone or the index is out of range - mirrors the backend's
+       *  between shot `i-1` and shot `i`; a line end has no neighbour on that side). `null`
+       *  when the line is gone or the index is out of range - mirrors the backend's
        *  `to_anchor`. */
       const refToAnchor = (ref: MockPlanRefLite | null | undefined): MockPlanAnchor | null => {
         if (!ref) return null;
-        const section = sectionForAnchor(ref.section_id);
-        if (!section || ref.station_index < 0 || ref.station_index > section.shots.length) {
+        const line = lineForAnchor(ref.line_id);
+        if (!line || ref.station_index < 0 || ref.station_index > line.shots.length) {
           return null;
         }
-        const before = ref.station_index > 0 ? section.shots[ref.station_index - 1] : undefined;
+        const before = ref.station_index > 0 ? line.shots[ref.station_index - 1] : undefined;
         const after =
-          ref.station_index < section.shots.length ? section.shots[ref.station_index] : undefined;
+          ref.station_index < line.shots.length ? line.shots[ref.station_index] : undefined;
         return {
-          section_id: ref.section_id,
+          line_id: ref.line_id,
           before_shot_uuid: before?.uuid ?? null,
           after_shot_uuid: after?.uuid ?? null,
         };
@@ -443,50 +443,50 @@ export async function setupTauriMocks(page: Page): Promise<void> {
        *  `resolve_anchor` rules: with BOTH neighbours found the station is the boundary between
        *  them regardless of which now comes first (`pa < pb ? pa+1 : pa` - the order-agnosticism
        *  is what makes a reverse a no-op for interior stations); with one side that was NEVER
-       *  recorded (a section END at capture), the station follows its sole shot to whichever end
+       *  recorded (a line END at capture), the station follows its sole shot to whichever end
        *  it currently touches (a reverse carries station 0 to station N and back); with one side
        *  recorded but deleted, the surviving side keeps its directional meaning. `null` only when
        *  NEITHER uuid is found anymore. */
       const anchorToRef = (anchor: MockPlanAnchor | null | undefined): MockPlanRefLite | null => {
         if (!anchor) return null;
-        const section = sectionForAnchor(anchor.section_id);
-        if (!section) return null;
+        const line = lineForAnchor(anchor.line_id);
+        if (!line) return null;
         const find = (u: string | null) =>
-          u ? section.shots.findIndex((s) => s.uuid === u) : -1;
+          u ? line.shots.findIndex((s) => s.uuid === u) : -1;
         const pa = find(anchor.before_shot_uuid);
         const pb = find(anchor.after_shot_uuid);
-        const n = section.shots.length;
+        const n = line.shots.length;
         if (pa >= 0 && pb >= 0) {
-          return { section_id: anchor.section_id, station_index: pa < pb ? pa + 1 : pa };
+          return { line_id: anchor.line_id, station_index: pa < pb ? pa + 1 : pa };
         }
         if (pa >= 0) {
           if (anchor.after_shot_uuid === null) {
             // Tail-end station at capture: stay on the end its shot touches now.
             const idx = pa === 0 ? 0 : n;
-            return { section_id: anchor.section_id, station_index: idx };
+            return { line_id: anchor.line_id, station_index: idx };
           }
-          return { section_id: anchor.section_id, station_index: pa + 1 };
+          return { line_id: anchor.line_id, station_index: pa + 1 };
         }
         if (pb >= 0) {
           if (anchor.before_shot_uuid === null) {
             // Head-end station at capture: stay on the end its shot touches now.
             const idx = pb === n - 1 ? n : 0;
-            return { section_id: anchor.section_id, station_index: idx };
+            return { line_id: anchor.line_id, station_index: idx };
           }
-          return { section_id: anchor.section_id, station_index: pb };
+          return { line_id: anchor.line_id, station_index: pb };
         }
         return null;
       };
 
-      // `section_offsets` reaches the mock in TWO shapes, so nothing may index it
-      // directly. `create_project_full` / `import_sections` / `execute_gpx_import`
-      // build the JS `Record<sectionId, [dx, dy]>`, while the binary envelope
+      // `line_offsets` reaches the mock in TWO shapes, so nothing may index it
+      // directly. `create_project_full` / `import_lines` / `execute_gpx_import`
+      // build the JS `Record<lineId, [dx, dy]>`, while the binary envelope
       // (`load_project_full_binary`, mirroring `core/load_binary.rs`) and anything
       // injected through `__E2E_MOCKS__.setCurrentProject` carry the backend's
-      // `Array<[sectionId, [dx, dy]]>` pairs. `offsets["1"] = [dx, dy]` on the
-      // array form sets ELEMENT 1 - silently clobbering a neighbouring section's
+      // `Array<[lineId, [dx, dy]]>` pairs. `offsets["1"] = [dx, dy]` on the
+      // array form sets ELEMENT 1 - silently clobbering a neighbouring line's
       // pair with a bare coordinate - so every read/write goes through these.
-      const sectionOffsetPairs = (offsets: unknown): Array<[number, [number, number]]> => {
+      const lineOffsetPairs = (offsets: unknown): Array<[number, [number, number]]> => {
         if (Array.isArray(offsets)) {
           return (offsets as Array<[number, [number, number]]>).map(
             ([k, v]) => [Number(k), v] as [number, [number, number]],
@@ -496,33 +496,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           ([k, v]) => [Number(k), v] as [number, [number, number]],
         );
       };
-      const readSectionOffset = (offsets: unknown, sectionId: number): [number, number] => {
+      const readLineOffset = (offsets: unknown, lineId: number): [number, number] => {
         if (Array.isArray(offsets)) {
           const entry = (offsets as Array<[number, [number, number]]>).find(
-            ([k]) => Number(k) === sectionId,
+            ([k]) => Number(k) === lineId,
           );
           return entry?.[1] ?? [0, 0];
         }
         return (
           (offsets as Record<string, [number, number] | undefined> | null | undefined)?.[
-            String(sectionId)
+            String(lineId)
           ] ?? [0, 0]
         );
       };
-      const writeSectionOffset = (
+      const writeLineOffset = (
         offsets: unknown,
-        sectionId: number,
+        lineId: number,
         value: [number, number],
       ): void => {
         if (Array.isArray(offsets)) {
           const pairs = offsets as Array<[number, [number, number]]>;
-          const at = pairs.findIndex(([k]) => Number(k) === sectionId);
-          if (at >= 0) pairs[at] = [sectionId, value];
-          else pairs.push([sectionId, value]);
+          const at = pairs.findIndex(([k]) => Number(k) === lineId);
+          if (at >= 0) pairs[at] = [lineId, value];
+          else pairs.push([lineId, value]);
           return;
         }
         if (offsets && typeof offsets === 'object') {
-          (offsets as Record<string, [number, number]>)[String(sectionId)] = value;
+          (offsets as Record<string, [number, number]>)[String(lineId)] = value;
         }
       };
 
@@ -599,12 +599,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let mockCheckDuplicateResult = false; // Default: no duplicate
       let trackImportedFileCalls: Array<{ hash: string }> = [];
       let mergeStationCalls: Array<{
-        stationA: { section_id: number; station_index: number };
-        stationB: { section_id: number; station_index: number };
+        stationA: { line_id: number; station_index: number };
+        stationB: { line_id: number; station_index: number };
       }> = [];
       let unmergeStationPairCalls: Array<{
-        stationA: { section_id: number; station_index: number };
-        stationB: { section_id: number; station_index: number };
+        stationA: { line_id: number; station_index: number };
+        stationB: { line_id: number; station_index: number };
       }> = [];
       let mockOrphanPlacementSuggestions: unknown[] = [];
       let mockImportPlacementSuggestions: unknown[] = [];
@@ -696,38 +696,38 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Records undo/redo invocations so specs can prove the shortcuts are inert in the
       // read-only workspaces (zero calls in Plan/Export, then one back in Survey).
       let undoRedoCalls: string[] = [];
-      // Split Section Here and Combine Sections each push a whole-project
+      // Split Line Here and Combine Lines each push a whole-project
       // snapshot here, and `undo` restores the newest one, so a spec can prove
-      // one Undo puts the sections back. Only these two commands record one:
+      // one Undo puts the lines back. Only these two commands record one:
       // every other mocked mutation stays a no-op under undo, as before.
       const structuralUndo: Array<Record<string, unknown>> = [];
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
-      let colocatedJoins: Array<[{ section_id: number; station_index: number }, { section_id: number; station_index: number }]> = [];
+      let colocatedJoins: Array<[{ line_id: number; station_index: number }, { line_id: number; station_index: number }]> = [];
       // The ties a combine at `keptJoin` / `otherJoin` removes because, combined,
       // they would be a loop closure across one shot (#746). A narrow model of
       // the real plan's sweep, for the issue's shape: a one-shot passage X
-      // merged to the kept join station at one end and to the other section's
+      // merged to the kept join station at one end and to the other line's
       // join station at the other. The join makes the two one point, so the
-      // merge at the other section's end (the side that moves here) would tear
+      // merge at the other line's end (the side that moves here) would tear
       // into a closure across X's one shot. The candidate query lists exactly
-      // what `combine_sections` removes: both call this.
+      // what `combine_lines` removes: both call this.
       const mockCombineRemovals = (
-        keptJoin: { section_id: number; station_index: number },
-        otherJoin: { section_id: number; station_index: number },
+        keptJoin: { line_id: number; station_index: number },
+        otherJoin: { line_id: number; station_index: number },
       ) => {
-        type Ref = { section_id: number; station_index: number };
+        type Ref = { line_id: number; station_index: number };
         const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
-        const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: unknown[] }>;
-        const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+        const lines = (currentProject?.lines ?? []) as Array<{ id: number; shots: unknown[] }>;
+        const same = (x: Ref, y: Ref) => x.line_id === y.line_id && x.station_index === y.station_index;
         const merged = (x: Ref, y: Ref) =>
           merges.some((m) => (same(m.station_a, x) && same(m.station_b, y)) || (same(m.station_a, y) && same(m.station_b, x)));
         return merges.flatMap((m) => {
           const passage = same(m.station_a, otherJoin) ? m.station_b : same(m.station_b, otherJoin) ? m.station_a : null;
-          if (!passage || [keptJoin.section_id, otherJoin.section_id].includes(passage.section_id)) return [];
-          const x = sections.find((s) => s.id === passage.section_id);
+          if (!passage || [keptJoin.line_id, otherJoin.line_id].includes(passage.line_id)) return [];
+          const x = lines.find((s) => s.id === passage.line_id);
           if (x?.shots.length !== 1) return [];
-          const far = { section_id: x.id, station_index: 1 - passage.station_index };
+          const far = { line_id: x.id, station_index: 1 - passage.station_index };
           return merged(far, keptJoin) ? [{ station_a: m.station_a, station_b: m.station_b, kind: 'merge' as const }] : [];
         });
       };
@@ -801,31 +801,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
-      // The new-section dialog's grid layout, persisted via
-      // update_new_section_view. Its own store rather than more keys in
+      // The new-line dialog's grid layout, persisted via
+      // update_new_line_view. Its own store rather than more keys in
       // mockDataTableView, mirroring the Rust side where the two are separate
       // commands writing disjoint `panels` fields - a shared object would let one
       // view's partial write appear to carry the other's keys. Overlaid onto
       // get_config / reload_config alongside it, and seedable the same way via
-      // `window.__E2E_SEED_NEW_SECTION_VIEW__`.
-      const mockNewSectionView: Record<string, unknown> = {
-        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_NEW_SECTION_VIEW__ as
+      // `window.__E2E_SEED_NEW_LINE_VIEW__`.
+      const mockNewLineView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_NEW_LINE_VIEW__ as
           | Record<string, unknown>
           | undefined) ?? {}),
       };
 
-      // The edit-section dialog's shot grid, persisted via
-      // update_edit_section_view. Third store for the third grid, matching the
+      // The edit-line dialog's shot grid, persisted via
+      // update_edit_line_view. Third store for the third grid, matching the
       // Rust side's three disjoint `panels` field sets.
-      const mockEditSectionView: Record<string, unknown> = {
-        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_EDIT_SECTION_VIEW__ as
+      const mockEditLineView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_EDIT_LINE_VIEW__ as
           | Record<string, unknown>
           | undefined) ?? {}),
       };
-      // Its OWN seed, deliberately not derived from the edit-section one. The
+      // Its OWN seed, deliberately not derived from the edit-line one. The
       // production change gave the import-time grids separate `import_shots_*`
       // fields precisely so reshaping columns mid-import cannot rewrite the
-      // edit-section layout; seeding both from one hook would let a regression
+      // edit-line layout; seeding both from one hook would let a regression
       // that reads or writes the wrong slice look identical to correct
       // behaviour, in the mock that exists to prove they stay apart.
       const mockImportShotsView: Record<string, unknown> = {
@@ -870,23 +870,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
 
       // Station comments set via set_station_comment, keyed
-      // "sectionId:stationIndex". get_project_state derives its station array
-      // from the project's sections on every refresh, so comments must be
+      // "lineId:stationIndex". get_project_state derives its station array
+      // from the project's lines on every refresh, so comments must be
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
 
       // Station names (the MNemo numbers a DMP import sends as `station_names`),
-      // keyed "sectionId:stationIndex" and threaded into get_project_state's
-      // derived stations like the comments above. Filled by import_sections;
+      // keyed "lineId:stationIndex" and threaded into get_project_state's
+      // derived stations like the comments above. Filled by import_lines;
       // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
-      // never reverses an imported section, so the indexes are used as sent.
+      // never reverses an imported line, so the indexes are used as sent.
       const mockStationNames: Record<string, string> = {};
       (window as unknown as Record<string, unknown>).__MOCK_SET_STATION_NAME__ = (
-        sectionId: number,
+        lineId: number,
         stationIndex: number,
         name: string | null,
       ) => {
-        const key = `${sectionId}:${stationIndex}`;
+        const key = `${lineId}:${stationIndex}`;
         if (name === null) delete mockStationNames[key];
         else mockStationNames[key] = name;
       };
@@ -957,7 +957,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockDisplaySettings: Record<string, string> = {
         showStations: 'true',
         showShots: 'true',
-        showSectionNames: 'true',
+        showLineNames: 'true',
         showDepthGradient: 'false',
       };
 
@@ -1025,7 +1025,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const buildMockTmlShot = (
         id: number,
         fromId: number,
-        section: string,
+        line: string,
         depth: number,
         overrides: Partial<TmlWire<TmlShot>> = {}
       ): TmlWire<TmlShot> => ({
@@ -1049,7 +1049,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         latitude: 0,
         longitude: 0,
         closure_to_id: 0,
-        section,
+        line,
         ...overrides,
       });
 
@@ -1060,22 +1060,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // shot lists, including Closure/excluded rows). The real START-target
       // fallback is not modeled - this fixture has no START shots.
       const deriveTmlClosures = (
-        sections: TmlWire<TmlFile>['sections']
+        lines: TmlWire<TmlFile>['lines']
       ): TmlWire<TmlFile>['closures'] => {
         const idToRawLoc = new Map<number, [number, number]>();
-        sections.forEach((section, si) =>
-          section.shots.forEach((shot, idx) => idToRawLoc.set(shot.id, [si, idx]))
+        lines.forEach((line, si) =>
+          line.shots.forEach((shot, idx) => idToRawLoc.set(shot.id, [si, idx]))
         );
         const closures: TmlWire<TmlFile>['closures'] = [];
-        sections.forEach((section, si) =>
-          section.shots.forEach((shot, idx) => {
+        lines.forEach((line, si) =>
+          line.shots.forEach((shot, idx) => {
             if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) return;
             const to = idToRawLoc.get(shot.closure_to_id);
             if (to) {
               closures.push({
-                from_section_index: si,
+                from_line_index: si,
                 from_station_index: idx,
-                to_section_index: to[0],
+                to_line_index: to[0],
                 to_station_index: to[1],
               });
             }
@@ -1117,7 +1117,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
               }
             : {};
-        const sections: TmlWire<TmlFile>['sections'] = [
+        const lines: TmlWire<TmlFile>['lines'] = [
           {
             name: 'Main Line',
             shots: [
@@ -1166,8 +1166,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           use_magnetic_azimuth: true,
           first_start_absolute_elevation: 0,
           geo_coding: null,
-          sections,
-          closures: deriveTmlClosures(sections),
+          lines,
+          closures: deriveTmlClosures(lines),
         };
       };
 
@@ -1256,7 +1256,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (currentProject as Record<string, unknown>).validation = args.validation;
               }
             }
-            return { success: true, section_ids: [], project: currentProject };
+            return { success: true, line_ids: [], project: currentProject };
           }
 
           case 'set_surface_elevation': {
@@ -1286,7 +1286,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             (currentProject as Record<string, unknown>).surface_elevation =
               typeof elevation === 'number' ? elevation : null;
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'create_project_full': {
@@ -1296,7 +1296,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const savePathArg = (args?.savePath as string | undefined) ?? undefined;
             const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
             const now = new Date().toISOString();
-            sectionCounter = 0;
+            lineCounter = 0;
             const sanitizedName = name.replace(/[^a-zA-Z0-9]/g, '_');
             const resolvedPath = savePathArg
               ?? (saveDirectoryArg
@@ -1311,11 +1311,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               created_at: now,
               modified_at: now,
               file_path: projectPath,
-              sections: [],
+              lines: [],
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
-              section_offsets: {},
+              line_offsets: {},
             };
 
             // Return CreateProjectFullResult format
@@ -1324,7 +1324,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               project: currentProject,
               displaySettings: {
                 showStations: true,
-                showSectionNames: true,
+                showLineNames: true,
                 showStationLabels: false,
                 showStationNames: false,
                 showShotData: false,
@@ -1346,7 +1346,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Consolidated load_project_full command for loading progress feature
             projectPath = (args?.path as string) ?? null;
             const now = new Date().toISOString();
-            sectionCounter = 0;
+            lineCounter = 0;
 
             // Generate a consistent loadingId for this load operation
             const loadingId = Date.now();
@@ -1364,17 +1364,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: true,
             });
 
-            // Create a project with sections for testing
-            const defaultSections = [
+            // Create a project with lines for testing
+            const defaultLines = [
               {
-                id: ++sectionCounter,
+                id: ++lineCounter,
                 name: 'Mock Tunnel A',
                 surveyor: 'Test Surveyor',
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: mockShotId(sectionCounter, 0), azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, kind: 'Normal' },
-                  { id: mockShotId(sectionCounter, 1), azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, kind: 'Normal' },
+                  { id: mockShotId(lineCounter, 0), azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, kind: 'Normal' },
+                  { id: mockShotId(lineCounter, 1), azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, kind: 'Normal' },
                 ],
               },
             ];
@@ -1386,11 +1386,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               created_at: now,
               modified_at: now,
               file_path: projectPath,
-              sections: defaultSections,
+              lines: defaultLines,
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
-              section_offsets: {},
+              line_offsets: {},
             };
 
             // Phase 2: Loading project data
@@ -1405,44 +1405,44 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: false,
             });
 
-            // Generate mock stations from sections
+            // Generate mock stations from lines
             const mockStations: Array<{
-              station_ref: { section_id: number; station_index: number };
+              station_ref: { line_id: number; station_index: number };
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
-              merged_with: Array<{ section_id: number; station_index: number }>;
+              merged_with: Array<{ line_id: number; station_index: number }>;
               // Optional, exactly like the generated `Station` type: the backend
               // omits `closures_with` when empty (#441), so the mock must too -
               // a present-but-empty array is a wire shape the app never sees.
               closures_with?: Array<{
                 closure_id: bigint;
-                station_ref: { section_id: number; station_index: number };
-                via_station: { section_id: number; station_index: number } | null;
+                station_ref: { line_id: number; station_index: number };
+                via_station: { line_id: number; station_index: number } | null;
                 is_transitive: boolean;
               }>;
             }> = [];
 
-            // Collect all section IDs for merged station setup
-            const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
+            // Collect all line IDs for merged station setup
+            const lineIds = (currentProject.lines as Array<{ id: number }>).map(s => s.id);
             const currentMerges = (currentProject.station_merges ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>;
             const currentClosures = (currentProject.loop_closures ?? []) as Array<{
               id: bigint;
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>;
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const loadDatums = (currentProject.zero_datums ?? []) as Array<{
-              station_ref: { section_id: number; station_index: number };
+              station_ref: { line_id: number; station_index: number };
               gps: { latitude: number; longitude: number; depth_reference: number };
             }>;
 
-            for (const section of currentProject.sections as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
-              const shots = section.shots ?? [];
+            for (const line of currentProject.lines as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
+              const shots = line.shots ?? [];
               const depths: number[] = [];
               if (shots.length > 0) {
                 const firstDepth = shots[0]?.depth_in ?? 0;
@@ -1455,46 +1455,46 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
 
               for (let i = 0; i < depths.length; i++) {
-                const stationRef = { section_id: section.id, station_index: i };
-                let mergedWith: Array<{ section_id: number; station_index: number }> = currentMerges
+                const stationRef = { line_id: line.id, station_index: i };
+                let mergedWith: Array<{ line_id: number; station_index: number }> = currentMerges
                   .flatMap((merge) => {
                     const isA =
-                      merge.station_a.section_id === stationRef.section_id &&
+                      merge.station_a.line_id === stationRef.line_id &&
                       merge.station_a.station_index === stationRef.station_index;
                     const isB =
-                      merge.station_b.section_id === stationRef.section_id &&
+                      merge.station_b.line_id === stationRef.line_id &&
                       merge.station_b.station_index === stationRef.station_index;
                     if (isA) return [merge.station_b];
                     if (isB) return [merge.station_a];
                     return [];
                   });
 
-                const sectionIndex = sectionIds.indexOf(section.id);
+                const lineIndex = lineIds.indexOf(line.id);
                 const isLastStation = i === depths.length - 1;
                 const isFirstStation = i === 0;
 
                 // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
                 if (mergedWith.length === 0 && currentMerges.length === 0) {
-                  if (sectionIndex === 0 && isLastStation && sectionIds.length > 1) {
-                    mergedWith = [{ section_id: sectionIds[1]!, station_index: 0 }];
+                  if (lineIndex === 0 && isLastStation && lineIds.length > 1) {
+                    mergedWith = [{ line_id: lineIds[1]!, station_index: 0 }];
                   }
-                  if (sectionIndex === 1 && isFirstStation && sectionIds.length > 1) {
-                    const firstSection = currentProject.sections[0] as { shots: unknown[] } | undefined;
-                    const firstSectionLastStationIndex = firstSection ? (firstSection.shots?.length ?? 0) : 0;
-                    mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
+                  if (lineIndex === 1 && isFirstStation && lineIds.length > 1) {
+                    const firstLine = currentProject.lines[0] as { shots: unknown[] } | undefined;
+                    const firstLineLastStationIndex = firstLine ? (firstLine.shots?.length ?? 0) : 0;
+                    mergedWith = [{ line_id: lineIds[0]!, station_index: firstLineLastStationIndex }];
                   }
                 }
 
                 // Derive is_zero_datum and gps_coordinates from project zero_datums
                 const loadDatum = loadDatums.find(
-                  (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
+                  (d) => d.station_ref.line_id === line.id && d.station_ref.station_index === i
                 );
                 const closuresWith = currentClosures.flatMap((closure) => {
                   const isA =
-                    closure.station_a.section_id === stationRef.section_id &&
+                    closure.station_a.line_id === stationRef.line_id &&
                     closure.station_a.station_index === stationRef.station_index;
                   const isB =
-                    closure.station_b.section_id === stationRef.section_id &&
+                    closure.station_b.line_id === stationRef.line_id &&
                     closure.station_b.station_index === stationRef.station_index;
                   if (isA) {
                     return [{
@@ -1551,8 +1551,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             });
 
             // Surveyed length leaves out Reference shots, as the backend does (#689).
-            const shotLengths = defaultSections.flatMap((section) =>
-              (section.shots ?? [])
+            const shotLengths = defaultLines.flatMap((line) =>
+              (line.shots ?? [])
                 .filter((shot: { kind?: string }) => shot.kind !== 'Reference')
                 .map((shot: { length?: number }) => shot.length ?? 0)
             );
@@ -1562,7 +1562,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const depthValues = mockStations.map((station) => station.coordinates.z);
             const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
             const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
-            const shotCount = defaultSections.reduce((count, section) => count + (section.shots?.length ?? 0), 0);
+            const shotCount = defaultLines.reduce((count, line) => count + (line.shots?.length ?? 0), 0);
 
             // Return LoadProjectFullResult format
             return {
@@ -1570,7 +1570,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               project: withShotCredit(currentProject),
               stations: mockStations,
               stats: {
-                section_count: currentProject.sections.length,
+                line_count: currentProject.lines.length,
                 shot_count: shotCount,
                 total_length: totalLength,
                 min_depth: minDepth,
@@ -1582,7 +1582,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               warnings: [],
               displaySettings: {
                 showStations: true,
-                showSectionNames: true,
+                showLineNames: true,
                 showStationLabels: false,
                 showStationNames: false,
                 showShotData: false,
@@ -1616,11 +1616,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               project: {
                 id?: number; name?: string; location?: string | null;
                 created_at?: string; modified_at?: string; file_path?: string | null;
-                next_section_id?: number; next_closure_id?: number;
-                sections: Array<{
+                next_line_id?: number; next_closure_id?: number;
+                lines: Array<{
                   id: number; name?: string | null; surveyor?: string | null;
                   date?: string | null; color?: string; direction?: string; quality?: number;
-                  // The section's north reference (#438); undefined until an
+                  // The line's north reference (#438); undefined until an
                   // importer declares one.
                   azimuth_reference?: unknown | null;
                   shots?: Array<{
@@ -1637,7 +1637,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   }>;
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
-                loop_closures?: unknown[]; section_offsets?: Record<string, [number, number]>;
+                loop_closures?: unknown[]; line_offsets?: Record<string, [number, number]>;
                 // Present once `update_project_settings` has stored per-project
                 // thresholds on the mock project (#57).
                 validation?: Record<string, number>;
@@ -1648,7 +1648,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 default_azimuth_reference?: unknown | null;
               };
               stations: Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
                 coordinates?: { x: number; y: number; z: number };
                 is_zero_datum?: boolean;
                 gps_coordinates?: unknown | null;
@@ -1662,7 +1662,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               displaySettings: Record<string, unknown>;
             };
 
-            const totalShots = jsonResult.project.sections.reduce(
+            const totalShots = jsonResult.project.lines.reduce(
               (n, s) => n + (s.shots?.length ?? 0),
               0,
             );
@@ -1673,9 +1673,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotsFlags = new Uint8Array(totalShots);
             const shotsFloatsView = new DataView(shotsFloats.buffer);
             const shotsUintsView = new DataView(shotsUints.buffer);
-            const sectionsMeta: Array<Record<string, unknown>> = [];
+            const linesMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
-            // Binary wire v7: one project-wide people table, each section's
+            // Binary wire v7: one project-wide people table, each line's
             // distinct credits as indices into it, one u32 per shot (empty
             // buffer when no shot is credited) - `load_binary.rs::encode`.
             const creditPeople: MockPerson[] = [];
@@ -1694,18 +1694,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             let anyCredit = false;
             let shotCursor = 0;
 
-            for (const section of jsonResult.project.sections) {
+            for (const line of jsonResult.project.lines) {
               const shot_offset = shotCursor;
-              const shot_count = section.shots?.length ?? 0;
-              const sectionCredits: Array<{ surveyors: number[]; explorers: number[]; date: string | null }> = [];
+              const shot_count = line.shots?.length ?? 0;
+              const lineCredits: Array<{ surveyors: number[]; explorers: number[]; date: string | null }> = [];
               const creditKey = new Map<string, number>();
-              for (const shot of section.shots ?? []) {
+              for (const shot of line.shots ?? []) {
                 if (shot.credit) {
                   const key = JSON.stringify(shot.credit);
                   let ci = creditKey.get(key);
                   if (ci === undefined) {
-                    ci = sectionCredits.length;
-                    sectionCredits.push({
+                    ci = lineCredits.length;
+                    lineCredits.push({
                       surveyors: shot.credit.surveyors.map(internPerson),
                       explorers: shot.credit.explorers.map(internPerson),
                       date: shot.credit.date,
@@ -1731,7 +1731,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 shotsFloatsView.setFloat32(fOff + 40, nullToNaN(shot.down), true);
                 shotsFloatsView.setFloat32(fOff + 44, nullToNaN(shot.temperature), true);
                 const uOff = shotCursor * SHOT_UINT_STRIDE;
-                shotsUintsView.setUint32(uOff + 0, section.id >>> 0, true);
+                shotsUintsView.setUint32(uOff + 0, line.id >>> 0, true);
                 shotsUintsView.setUint32(uOff + 4, shot.id >>> 0, true);
                 shotsUintsView.setUint32(
                   uOff + 8,
@@ -1746,22 +1746,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
                 shotCursor++;
               }
-              sectionsMeta.push({
-                id: section.id,
-                name: section.name ?? null,
-                color: section.color ?? '#888888',
-                direction: section.direction ?? 'Forward',
-                quality: section.quality ?? 1.0,
+              linesMeta.push({
+                id: line.id,
+                name: line.name ?? null,
+                color: line.color ?? '#888888',
+                direction: line.direction ?? 'Forward',
+                quality: line.quality ?? 1.0,
                 shot_offset,
                 shot_count,
-                // The band this section's shot ids actually live in - a flat
+                // The band this line's shot ids actually live in - a flat
                 // cursor here would advertise an id the backend could never mint.
-                next_shot_id: mockShotId(section.id as number, shot_count),
-                // This section's own north reference (#438); `null` inherits the
-                // project default above, which is what a section that declares
+                next_shot_id: mockShotId(line.id as number, shot_count),
+                // This line's own north reference (#438); `null` inherits the
+                // project default above, which is what a line that declares
                 // nothing carries on disk.
-                azimuth_reference: section.azimuth_reference ?? null,
-                credits: sectionCredits,
+                azimuth_reference: line.azimuth_reference ?? null,
+                credits: lineCredits,
               });
             }
             const shotsCredit = anyCredit
@@ -1788,7 +1788,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               stationsFloatsView.setFloat64(fOff + 8,  station.coordinates?.y ?? 0, true);
               stationsFloatsView.setFloat64(fOff + 16, station.coordinates?.z ?? 0, true);
               const uOff = idx * STATION_UINT_STRIDE;
-              stationsUintsView.setUint32(uOff + 0, station.station_ref.section_id >>> 0, true);
+              stationsUintsView.setUint32(uOff + 0, station.station_ref.line_id >>> 0, true);
               stationsUintsView.setUint32(uOff + 4, station.station_ref.station_index >>> 0, true);
               stationsFlags[idx] = station.is_zero_datum ? 1 : 0;
               if (station.gps_coordinates) stationGps.push([idx, station.gps_coordinates]);
@@ -1805,7 +1805,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Bumped from 3 to 4 when Ariane collaboration mode was removed:
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
-              // section header); 6 to 7 for per-shot survey credit.
+              // line header); 6 to 7 for per-shot survey credit.
               version: 7,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
@@ -1820,22 +1820,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 created_at: jsonResult.project.created_at ?? new Date().toISOString(),
                 modified_at: jsonResult.project.modified_at ?? new Date().toISOString(),
                 file_path: jsonResult.project.file_path ?? null,
-                next_section_id: jsonResult.project.next_section_id
-                  ?? (sectionsMeta.length + 1),
+                next_line_id: jsonResult.project.next_line_id
+                  ?? (linesMeta.length + 1),
                 next_closure_id: jsonResult.project.next_closure_id ?? 1,
-                sections: sectionsMeta,
+                lines: linesMeta,
                 station_merges: jsonResult.project.station_merges ?? [],
                 zero_datums: jsonResult.project.zero_datums ?? [],
                 loop_closures: jsonResult.project.loop_closures ?? [],
-                section_offsets: sectionOffsetPairs(jsonResult.project.section_offsets),
+                line_offsets: lineOffsetPairs(jsonResult.project.line_offsets),
                 // The mock has no `station_offsets` state: no mocked command ever
                 // writes one, so there is nothing for a reverse to mirror either
                 // (the backend's `for_each_station_ref` does mirror them). Give
-                // one a home here and `reverse_section` must mirror it too.
+                // one a home here and `reverse_line` must mirror it too.
                 station_offsets: [],
                 station_comments_map: [],
                 imported_file_hashes: [],
-                imported_section_hashes: [],
+                imported_line_hashes: [],
                 // Per-project validation thresholds (#57), sourced like every
                 // sibling above: whatever `update_project_settings` last stored
                 // on the mock project, else `ValidationConfig::default()` - what
@@ -1862,7 +1862,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // The project-level north reference (#438), same provenance as
                 // the two above. `null` is "nothing recorded", which is what a
                 // project that never declared one carries - and what every
-                // section that declares none inherits.
+                // line that declares none inherits.
                 default_azimuth_reference:
                   jsonResult.project.default_azimuth_reference ?? null,
                 // Every distinct person any shot credits, once (v7).
@@ -1915,27 +1915,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unlinked_copy_path: args.path as string,
                 error: null,
                 warnings: [],
-                section_ids: [],
+                line_ids: [],
               };
             }
             projectPath = (args?.path as string) ?? projectPath;
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
             }
-            return { success: true, saved_path: projectPath, error: null, warnings: [], section_ids: [] };
+            return { success: true, saved_path: projectPath, error: null, warnings: [], line_ids: [] };
           }
 
           case 'close_project': {
             currentProject = null;
             projectPath = null;
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           // A project switch / quit hands the open project's lock back first. Nothing
           // is held in a mocked run, so nothing is released (no `lock_release`); specs
           // that drive a failed release override this reply.
           case 'speleodb_settle_open_lock':
-            return { success: true, warnings: [], error: null, section_ids: [] };
+            return { success: true, warnings: [], error: null, line_ids: [] };
 
           case 'cancel_loading': {
             // Idempotent - does nothing but shouldn't error
@@ -1948,58 +1948,58 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
-            // Generate mock stations from sections with merged_with data
+            // Generate mock stations from lines with merged_with data
             const mockStations: Array<{
-              station_ref: { section_id: number; station_index: number };
+              station_ref: { line_id: number; station_index: number };
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
-              merged_with: Array<{ section_id: number; station_index: number }>;
+              merged_with: Array<{ line_id: number; station_index: number }>;
               // Optional, exactly like the generated `Station` type: the backend
               // omits `closures_with` when empty (#441), so the mock must too -
               // a present-but-empty array is a wire shape the app never sees.
               closures_with?: Array<{
                 closure_id: bigint;
-                station_ref: { section_id: number; station_index: number };
-                via_station: { section_id: number; station_index: number } | null;
+                station_ref: { line_id: number; station_index: number };
+                via_station: { line_id: number; station_index: number } | null;
                 is_transitive: boolean;
               }>;
               comment?: string;
             }> = [];
 
-            // Collect all section IDs for merged station setup
-            const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
+            // Collect all line IDs for merged station setup
+            const lineIdList = (currentProject?.lines as Array<{ id: number }> ?? []).map(s => s.id);
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>;
             const stateClosures = (currentProject?.loop_closures ?? []) as Array<{
               id: bigint;
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>;
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const zeroDatums = (currentProject?.zero_datums ?? []) as Array<{
-              station_ref: { section_id: number; station_index: number };
+              station_ref: { line_id: number; station_index: number };
               gps: { latitude: number; longitude: number; depth_reference: number };
             }>;
 
-            if (currentProject?.sections) {
-              for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
-                // Each section gets (shots.length + 1) stations
-                const shotCount = section.shots?.length ?? 0;
-                const sectionIndex = sectionIdList.indexOf(section.id);
+            if (currentProject?.lines) {
+              for (const line of currentProject.lines as Array<{ id: number; shots: unknown[] }>) {
+                // Each line gets (shots.length + 1) stations
+                const shotCount = line.shots?.length ?? 0;
+                const lineIndex = lineIdList.indexOf(line.id);
 
                 for (let i = 0; i <= shotCount; i++) {
-                  const stationRef = { section_id: section.id, station_index: i };
-                  let mergedWith: Array<{ section_id: number; station_index: number }> = stateMerges
+                  const stationRef = { line_id: line.id, station_index: i };
+                  let mergedWith: Array<{ line_id: number; station_index: number }> = stateMerges
                     .flatMap((merge) => {
                       const isA =
-                        merge.station_a.section_id === stationRef.section_id &&
+                        merge.station_a.line_id === stationRef.line_id &&
                         merge.station_a.station_index === stationRef.station_index;
                       const isB =
-                        merge.station_b.section_id === stationRef.section_id &&
+                        merge.station_b.line_id === stationRef.line_id &&
                         merge.station_b.station_index === stationRef.station_index;
                       if (isA) return [merge.station_b];
                       if (isB) return [merge.station_a];
@@ -2010,26 +2010,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
                   // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
                   if (mergedWith.length === 0 && stateMerges.length === 0) {
-                    if (sectionIndex === 0 && isLastStation && sectionIdList.length > 1) {
-                      mergedWith = [{ section_id: sectionIdList[1]!, station_index: 0 }];
+                    if (lineIndex === 0 && isLastStation && lineIdList.length > 1) {
+                      mergedWith = [{ line_id: lineIdList[1]!, station_index: 0 }];
                     }
-                    if (sectionIndex === 1 && isFirstStation && sectionIdList.length > 1) {
-                      const firstSection = currentProject.sections[0] as { shots?: unknown[] } | undefined;
-                      const firstSectionLastStationIndex = firstSection?.shots?.length ?? 0;
-                      mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
+                    if (lineIndex === 1 && isFirstStation && lineIdList.length > 1) {
+                      const firstLine = currentProject.lines[0] as { shots?: unknown[] } | undefined;
+                      const firstLineLastStationIndex = firstLine?.shots?.length ?? 0;
+                      mergedWith = [{ line_id: lineIdList[0]!, station_index: firstLineLastStationIndex }];
                     }
                   }
 
                   // Derive is_zero_datum and gps_coordinates from project zero_datums
                   const matchingDatum = zeroDatums.find(
-                    (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
+                    (d) => d.station_ref.line_id === line.id && d.station_ref.station_index === i
                   );
                   const closuresWith = stateClosures.flatMap((closure) => {
                     const isA =
-                      closure.station_a.section_id === stationRef.section_id &&
+                      closure.station_a.line_id === stationRef.line_id &&
                       closure.station_a.station_index === stationRef.station_index;
                     const isB =
-                      closure.station_b.section_id === stationRef.section_id &&
+                      closure.station_b.line_id === stationRef.line_id &&
                       closure.station_b.station_index === stationRef.station_index;
                     if (isA) {
                       return [{
@@ -2050,8 +2050,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return [];
                   });
 
-                  const storedComment = mockStationComments[`${section.id}:${i}`];
-                  const storedName = mockStationNames[`${section.id}:${i}`];
+                  const storedComment = mockStationComments[`${line.id}:${i}`];
+                  const storedName = mockStationNames[`${line.id}:${i}`];
                   mockStations.push({
                     station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
@@ -2070,15 +2070,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
             const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
             const shotCount =
-              currentProject?.sections.reduce(
-                (count: number, section) =>
-                  count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
+              currentProject?.lines.reduce(
+                (count: number, line) =>
+                  count + ((line as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
                 0
               ) ?? 0;
             // Surveyed length leaves out Reference shots, as the backend does (#689).
             const totalLength =
-              currentProject?.sections.reduce((total: number, section) => {
-                const shots = (section as { shots?: Array<{ length?: number; kind?: string }> }).shots ?? [];
+              currentProject?.lines.reduce((total: number, line) => {
+                const shots = (line as { shots?: Array<{ length?: number; kind?: string }> }).shots ?? [];
                 return (
                   total +
                   shots.reduce((sum, shot) => (shot.kind === 'Reference' ? sum : sum + (shot.length ?? 0)), 0)
@@ -2088,18 +2088,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return {
               // Return a FRESH (deep-cloned) project each call, mirroring the real Tauri
               // IPC: the backend returns `project.clone()` serialized over IPC, so the
-              // project AND every nested array (sections, zero_datums, loop_closures, …)
+              // project AND every nested array (lines, zero_datums, loop_closures, …)
               // gets a new identity per call. The mock mutates those arrays in place
-              // (e.g. sections.push in create_section, datums.push in set_zero_datum),
+              // (e.g. lines.push in create_line, datums.push in set_zero_datum),
               // so returning the same reference froze #160's reference-keyed memos -
-              // `useMemo([sections])` left the SectionsPanel empty even as fresh `stats`
+              // `useMemo([lines])` left the SectionsPanel empty even as fresh `stats`
               // showed the populated count. A deep clone keeps every consumer's
-              // ref-identity check honest, not just the sections one. (Caused ~50
+              // ref-identity check honest, not just the lines one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
               project: currentProject ? withDatumRoles(withShotCredit(structuredClone(currentProject))) : currentProject,
               stations: mockStations,
               stats: {
-                section_count: currentProject?.sections.length ?? 0,
+                line_count: currentProject?.lines.length ?? 0,
                 shot_count: shotCount,
                 total_length: totalLength,
                 min_depth: minDepth,
@@ -2139,7 +2139,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const state = mockHandler('get_project_state', args) as
               | {
                   stations?: Array<{
-                    station_ref: { section_id: number; station_index: number };
+                    station_ref: { line_id: number; station_index: number };
                     coordinates: { x: number; y: number; z: number };
                   }>;
                 }
@@ -2294,7 +2294,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const state = mockHandler('get_project_state', args) as
               | {
                   stations?: Array<{
-                    station_ref: { section_id: number; station_index: number };
+                    station_ref: { line_id: number; station_index: number };
                     coordinates: { x: number; y: number; z: number };
                   }>;
                 }
@@ -2371,14 +2371,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
             const endpoint = (args?.endpoint ?? null) as {
-              section_id: number;
+              line_id: number;
               station_index: number;
             } | null;
             const endpointReachable =
               endpoint != null &&
               reachableRefs.some(
                 (r) =>
-                  r.section_id === endpoint.section_id && r.station_index === endpoint.station_index,
+                  r.line_id === endpoint.line_id && r.station_index === endpoint.station_index,
               );
             const targetRef = endpointReachable
               ? endpoint
@@ -2412,13 +2412,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // semantics + the recompute math are covered by the Rust unit tests, which are the source
             // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
             const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
-              section_id: number;
+              line_id: number;
               station_index: number;
             } | null>;
-            const gasAtRef = (r: { section_id: number; station_index: number }) => {
+            const gasAtRef = (r: { line_id: number; station_index: number }) => {
               const idx = stations.findIndex(
                 (s) =>
-                  s.station_ref.section_id === r.section_id &&
+                  s.station_ref.line_id === r.line_id &&
                   s.station_ref.station_index === r.station_index,
               );
               return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
@@ -2431,7 +2431,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return over;
             });
             // Route legs to the target (consecutive reachable stations; the real graph path is
-            // exercised in Rust). is_jump stays false - the seeded e2e sections carry no jumps.
+            // exercised in Rust). is_jump stays false - the seeded e2e lines carry no jumps.
             const route =
               targetRef != null
                 ? reachableRefs
@@ -2441,12 +2441,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             // Route physical metrics (#236) over the route's stations, in order (origin→turnaround),
             // derived from the route legs the mock returns - so it mirrors the backend's route_refs
-            // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear section
+            // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear line
             // with no merge/closure ties, so this is an approximation for the linear seed, not a
             // re-implementation of the backend's tie-aware shortest path (exact math is Rust-tested).
             const coordByRef = new Map(
               stations.map((s) => [
-                `${s.station_ref.section_id}:${s.station_ref.station_index}`,
+                `${s.station_ref.line_id}:${s.station_ref.station_index}`,
                 s.coordinates,
               ]),
             );
@@ -2457,7 +2457,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ? [targetRef]
                   : [];
             const routePts = routeRefsOrdered
-              .map((r) => coordByRef.get(`${r.section_id}:${r.station_index}`))
+              .map((r) => coordByRef.get(`${r.line_id}:${r.station_index}`))
               .filter((c): c is { x: number; y: number; z: number } => c != null);
             let route_line_length_m = 0;
             let route_max_depth_m: number | null = null;
@@ -2514,7 +2514,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             const stage_drop_distances_m = stage_drop_refs.map((d) => {
               const j = routeRefsOrdered.findIndex(
-                (r) => r.section_id === d.section_id && r.station_index === d.station_index,
+                (r) => r.line_id === d.line_id && r.station_index === d.station_index,
               );
               return j >= 0 ? (cumDist[j] ?? 0) : 0;
             });
@@ -2551,13 +2551,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // the panel's "unreachable" warning keys off) rather than accumulating the legs. The
             // real accumulation is unit-tested in Rust; the e2e asserts UI wiring only.
             const waypointArgs = (args?.waypoints ?? []) as Array<{
-              section_id: number;
+              line_id: number;
               station_index: number;
             }>;
             const waypoint_gas_litres = waypointArgs.map((w) => {
               const idx = stations.findIndex(
                 (s) =>
-                  s.station_ref.section_id === w.section_id &&
+                  s.station_ref.line_id === w.line_id &&
                   s.station_ref.station_index === w.station_index,
               );
               return idx >= 0 ? gas_to_reach[idx] : null;
@@ -2571,10 +2571,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // stand-in does not model that. The exact math is pinned by the Rust tests.
             const inSpeed = gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min ?? 10;
             const outSpeed = gasConfig.swim_speed_m_per_min ?? 10;
-            const routeGasAt = (r: { section_id: number; station_index: number }) => {
+            const routeGasAt = (r: { line_id: number; station_index: number }) => {
               const idx = stations.findIndex(
                 (s) =>
-                  s.station_ref.section_id === r.section_id &&
+                  s.station_ref.line_id === r.line_id &&
                   s.station_ref.station_index === r.station_index,
               );
               return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
@@ -2621,12 +2621,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // visibly wrong -1 instead, which is the direction a mock should fail in.
             const stage_drop_route_indices = stage_drop_refs.map((d) =>
               routeRefsOrdered.findIndex(
-                (r) => r.section_id === d.section_id && r.station_index === d.station_index,
+                (r) => r.line_id === d.line_id && r.station_index === d.station_index,
               ),
             );
             const waypoint_route_indices = waypointArgs.map((w) => {
               const j = routeRefsOrdered.findIndex(
-                (r) => r.section_id === w.section_id && r.station_index === w.station_index,
+                (r) => r.line_id === w.line_id && r.station_index === w.station_index,
               );
               return j >= 0 ? j : null;
             });
@@ -2663,9 +2663,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               : null;
             // Which segment each route leg belongs to: way points split the route, so leg j sits in
             // the segment named by how many way points the route has already passed at that point.
-            const routeIndexOf = (r: { section_id: number; station_index: number }) =>
+            const routeIndexOf = (r: { line_id: number; station_index: number }) =>
               routeRefsOrdered.findIndex(
-                (x) => x.section_id === r.section_id && x.station_index === r.station_index,
+                (x) => x.line_id === r.line_id && x.station_index === r.station_index,
               );
             const waypointRouteIdx = waypointArgs.map(routeIndexOf).filter((i) => i >= 0);
             const segmentAtLeg = (legIdx: number) =>
@@ -2698,7 +2698,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // The park point is DERIVED, never placed: the boundary after the last scootered
             // segment. Null when nothing is scootered, and when the units are carried all the way
             // to the turnaround (the last segment is scootered, so its boundary is the turn).
-            let scooter_drop_ref: { section_id: number; station_index: number } | null = null;
+            let scooter_drop_ref: { line_id: number; station_index: number } | null = null;
             if (rig) {
               let lastOn = -1;
               for (let i = 0; i < segmentArgs.length; i += 1) {
@@ -2749,28 +2749,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_along_line_distance': {
             // Ruler along-line distance (#26). No real survey graph in the mock -
             // return a deterministic distance and tint the first couple of shots
-            // of endpoint `a`'s section so the readout + tint have something to show.
-            const endpointA = (args?.a ?? null) as { section_id?: number } | null;
-            const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: Array<{ id: number }> }>;
-            const sec = sections.find((s) => s.id === endpointA?.section_id) ?? sections[0];
+            // of endpoint `a`'s line so the readout + tint have something to show.
+            const endpointA = (args?.a ?? null) as { line_id?: number } | null;
+            const lines = (currentProject?.lines ?? []) as Array<{ id: number; shots: Array<{ id: number }> }>;
+            const sec = lines.find((s) => s.id === endpointA?.line_id) ?? lines[0];
             const path_shots = sec
-              ? (sec.shots ?? []).slice(0, 2).map((sh) => ({ section_id: sec.id, shot_id: sh.id }))
+              ? (sec.shots ?? []).slice(0, 2).map((sh) => ({ line_id: sec.id, shot_id: sh.id }))
               : [];
             // Stations bounding those shots (one more than the shot count).
             const path_stations = sec
-              ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ section_id: sec.id, station_index: i }))
+              ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ line_id: sec.id, station_index: i }))
               : [];
             return { along_line: 12.34, path_shots, path_stations };
           }
 
-          case 'create_section': {
-            sectionCounter++;
+          case 'create_line': {
+            lineCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
-              id: mockShotId(sectionCounter, index),
+              id: mockShotId(lineCounter, index),
               // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
               // key off this, exactly as the real backend keys off `Shot.uuid`.
-              uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
+              uuid: `mock-shot-uuid-${mockShotId(lineCounter, index)}`,
               azimuth_in: (shot.azimuth_in as number) ?? 0,
               azimuth_out: (shot.azimuth_out as number) ?? 0,
               length: (shot.length as number) ?? 0,
@@ -2786,36 +2786,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               kind: (shot.kind as string | undefined) ?? 'Normal',
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
-              // Per-shot credit (New Section puts its pills on every shot).
+              // Per-shot credit (New Line puts its pills on every shot).
               ...(shot.credit ? { credit: structuredClone(shot.credit) } : {}),
             }));
-            // `SectionData.surveyor/date` are the backend's legacy TEMPLATE for
+            // `LineData.surveyor/date` are the backend's legacy TEMPLATE for
             // shots with no credit of their own; honour what the caller sent
-            // (New Section sends null), defaulting only when the key is absent.
-            const section = {
-              id: sectionCounter,
-              name: (args?.name as string) ?? `Section ${sectionCounter}`,
+            // (New Line sends null), defaulting only when the key is absent.
+            const line = {
+              id: lineCounter,
+              name: (args?.name as string) ?? `Line ${lineCounter}`,
               surveyor: args && 'surveyor' in args ? ((args.surveyor as string | null) ?? null) : 'Test Surveyor',
               date: args && 'date' in args ? ((args.date as string | null) ?? null) : new Date().toISOString().split('T')[0],
               color: '#3b82f6',
               shots,
             };
-            currentProject?.sections.push(section);
-            return { success: true, section, section_id: sectionCounter, section_ids: [], warnings: [], error: null };
+            currentProject?.lines.push(line);
+            return { success: true, line, line_id: lineCounter, line_ids: [], warnings: [], error: null };
           }
 
-          case 'import_sections': {
-            console.log('[Mock IPC] import_sections called with:', args);
-            const rawSections = Array.isArray(args?.sections) ? (args?.sections as Array<Record<string, unknown>>) : [];
-            if (rawSections.length === 0) {
-              // Mirrors the real backend's `sections.is_empty()` early return
-              // (execute_import_sections, command_import.rs): no receipt when
+          case 'import_lines': {
+            console.log('[Mock IPC] import_lines called with:', args);
+            const rawLines = Array.isArray(args?.lines) ? (args?.lines as Array<Record<string, unknown>>) : [];
+            if (rawLines.length === 0) {
+              // Mirrors the real backend's `lines.is_empty()` early return
+              // (execute_import_lines, command_import.rs): no receipt when
               // nothing was imported.
-              return { success: true, warnings: [], error: null, section_ids: [] };
+              return { success: true, warnings: [], error: null, line_ids: [] };
             }
             if (!currentProject) {
               const now = new Date().toISOString();
-              sectionCounter = 0;
+              lineCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -2823,26 +2823,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 created_at: now,
                 modified_at: now,
                 file_path: null,
-                sections: [],
+                lines: [],
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                section_offsets: {},
+                line_offsets: {},
               };
             }
-            const importedSections = rawSections.map((sectionData) => {
-              sectionCounter++;
-              const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
+            const importedLines = rawLines.map((lineData) => {
+              lineCounter++;
+              const rawShots = Array.isArray(lineData.shots) ? (lineData.shots as Array<Record<string, unknown>>) : [];
               // The backend's import overrides (`command_import.rs`): the dialog's
               // Surveyors / Explorers / date, when sent, REPLACE what each shot's
               // own credit said; otherwise the shot keeps the credit it arrived with.
-              const setSurveyors = Array.isArray(sectionData.surveyors)
-                ? mockDedupe(sectionData.surveyors as MockPerson[])
+              const setSurveyors = Array.isArray(lineData.surveyors)
+                ? mockDedupe(lineData.surveyors as MockPerson[])
                 : undefined;
-              const setExplorers = Array.isArray(sectionData.explorers)
-                ? mockDedupe(sectionData.explorers as MockPerson[])
+              const setExplorers = Array.isArray(lineData.explorers)
+                ? mockDedupe(lineData.explorers as MockPerson[])
                 : undefined;
-              const overrideDate = typeof sectionData.override_date === 'string' ? sectionData.override_date : undefined;
+              const overrideDate = typeof lineData.override_date === 'string' ? lineData.override_date : undefined;
               const importedCredit = (shot: Record<string, unknown>): { credit?: MockCredit } => {
                 const own = (shot.credit as MockCredit | undefined) ?? { surveyors: [], explorers: [], date: null };
                 const credit: MockCredit = {
@@ -2855,7 +2855,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               };
               const shots = rawShots.map((shot, index) => ({
                 ...importedCredit(shot),
-                id: mockShotId(sectionCounter, index),
+                id: mockShotId(lineCounter, index),
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
                 length: (shot.length as number) ?? 0,
@@ -2872,47 +2872,47 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 marker_index: (shot.marker_index as number | null | undefined) ?? null,
                 temperature: (shot.temperature as number | null | undefined) ?? null,
               }));
-              const section = {
-                id: sectionCounter,
-                name: (sectionData.name as string) ?? `Section ${sectionCounter}`,
+              const line = {
+                id: lineCounter,
+                name: (lineData.name as string) ?? `Line ${lineCounter}`,
                 // The legacy template for uncredited shots. An explicit null (every
                 // import dialog now sends one) means none; only a config built
                 // without the key gets the fixture default.
-                surveyor: sectionData.surveyor === undefined ? 'Test Surveyor' : (sectionData.surveyor as string | null),
-                date: (sectionData.date as string) ?? new Date().toISOString().split('T')[0],
-                color: (sectionData.color as string) ?? '#3b82f6',
-                direction: (sectionData.direction as string) ?? 'in',
+                surveyor: lineData.surveyor === undefined ? 'Test Surveyor' : (lineData.surveyor as string | null),
+                date: (lineData.date as string) ?? new Date().toISOString().split('T')[0],
+                color: (lineData.color as string) ?? '#3b82f6',
+                direction: (lineData.direction as string) ?? 'in',
                 shots,
               };
-              currentProject?.sections.push(section);
-              const stationNames = Array.isArray(sectionData.station_names)
-                ? (sectionData.station_names as Array<[number, string]>)
+              currentProject?.lines.push(line);
+              const stationNames = Array.isArray(lineData.station_names)
+                ? (lineData.station_names as Array<[number, string]>)
                 : [];
               for (const [stationIndex, name] of stationNames) {
-                if (stationIndex <= shots.length) mockStationNames[`${section.id}:${stationIndex}`] = name;
+                if (stationIndex <= shots.length) mockStationNames[`${line.id}:${stationIndex}`] = name;
               }
-              return section;
+              return line;
             });
-            const sectionIds = importedSections.map((section) => section.id as number);
-            const importedShotCount = importedSections.reduce(
-              (sum, section) => sum + (section.shots as unknown[]).length,
+            const lineIds = importedLines.map((line) => line.id as number);
+            const importedShotCount = importedLines.reduce(
+              (sum, line) => sum + (line.shots as unknown[]).length,
               0
             );
             const sourceLabel = (args?.sourceLabel as string | null | undefined) ?? null;
             const sourceFileName = (args?.sourceFileName as string | null | undefined) ?? null;
-            const sectionsFoundArg = (args?.sectionsFound as number | null | undefined) ?? null;
+            const linesFoundArg = (args?.linesFound as number | null | undefined) ?? null;
             return {
               success: true,
               warnings: [],
               error: null,
-              section_ids: sectionIds,
-              ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
-              sections: importedSections,
+              line_ids: lineIds,
+              ...(lineIds[0] != null ? { line_id: lineIds[0] } : {}),
+              lines: importedLines,
               import_receipt: {
                 source_format: sourceLabel ?? 'MNemo DMP',
                 file_name: sourceFileName ?? '',
-                sections_found: sectionsFoundArg ?? sectionIds.length,
-                sections_imported: sectionIds.length,
+                lines_found: linesFoundArg ?? lineIds.length,
+                lines_imported: lineIds.length,
                 shot_count: importedShotCount,
                 closures_requested: 0,
                 closures_created: 0,
@@ -2925,7 +2925,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'execute_walls_import': {
             // Record the import args (selectedSurveys, includeSplays, …) for
-            // assertions, then return a one-section success so the dialog runs
+            // assertions, then return a one-line success so the dialog runs
             // its "imported" exit path (not the "nothing imported" branch).
             wallsImportCalls.push({ ...(args ?? {}) });
             const wallsPath = (args?.path as string | undefined) ?? '';
@@ -2934,13 +2934,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               success: true,
               warnings: [],
               error: null,
-              section_ids: [1],
-              section_id: 1,
+              line_ids: [1],
+              line_id: 1,
               import_receipt: {
                 source_format: 'Walls',
                 file_name: wallsFileName,
-                sections_found: 1,
-                sections_imported: 1,
+                lines_found: 1,
+                lines_imported: 1,
                 shot_count: 0,
                 closures_requested: 0,
                 closures_created: 0,
@@ -2963,7 +2963,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'track_imported_file':
             console.log('[Mock IPC] track_imported_file called with:', args);
             trackImportedFileCalls.push({ hash: (args?.hash as string) ?? '' });
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'parse_gpx': {
             return buildMockGpxFile(args?.path as string | undefined);
@@ -2975,8 +2975,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const importRoutes = (args?.importRoutes as boolean | undefined) ?? false;
             const depthInverted = (args?.depthInverted as boolean | undefined) ?? false;
             const filePath = (args?.path as string | undefined) ?? null;
-            const sectionPlacements = (Array.isArray(args?.sectionPlacements) ? args?.sectionPlacements : []) as Array<{
-              section_index?: number;
+            const linePlacements = (Array.isArray(args?.linePlacements) ? args?.linePlacements : []) as Array<{
+              line_index?: number;
               placement?: {
                 type?: string;
                 station_index?: number;
@@ -2988,7 +2988,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             if (!currentProject) {
               const now = new Date().toISOString();
-              sectionCounter = 0;
+              lineCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -2996,28 +2996,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 created_at: now,
                 modified_at: now,
                 file_path: null,
-                sections: [],
+                lines: [],
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                section_offsets: {},
+                line_offsets: {},
               };
             }
 
             const gpxFile = buildMockGpxFile(filePath);
-            const placementMap = new Map<number, typeof sectionPlacements[number]>();
-            for (const placement of sectionPlacements) {
-              const sectionIndex = placement.section_index;
-              if (typeof sectionIndex === 'number') {
-                placementMap.set(sectionIndex, placement);
+            const placementMap = new Map<number, typeof linePlacements[number]>();
+            for (const placement of linePlacements) {
+              const lineIndex = placement.line_index;
+              if (typeof lineIndex === 'number') {
+                placementMap.set(lineIndex, placement);
               }
             }
 
-            const createdSectionIds: number[] = [];
-            let backendSectionIndex = 0;
+            const createdLineIds: number[] = [];
+            let backendLineIndex = 0;
             let gpxShotCount = 0;
 
-            const appendSection = (
+            const appendLine = (
               name: string,
               shots: Array<Record<string, unknown>>,
               color: string,
@@ -3028,17 +3028,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   }
                 | null
             ) => {
-              sectionCounter += 1;
-              const sectionId = sectionCounter;
-              // toShot() numbers shots 1..n before the destination section is
-              // known; re-key them onto this section's band so GPX-imported
-              // sections carry the same section-encoded ids as every other path.
+              lineCounter += 1;
+              const lineId = lineCounter;
+              // toShot() numbers shots 1..n before the destination line is
+              // known; re-key them onto this line's band so GPX-imported
+              // lines carry the same line-encoded ids as every other path.
               const encodedShots = shots.map((shot, idx) => ({
                 ...shot,
-                id: mockShotId(sectionId, idx),
+                id: mockShotId(lineId, idx),
               }));
-              const section = {
-                id: sectionId,
+              const line = {
+                id: lineId,
                 name,
                 surveyor: 'GPX Import',
                 date: new Date().toISOString().split('T')[0] ?? '',
@@ -3046,15 +3046,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 direction: 'in',
                 shots: encodedShots,
               };
-              currentProject?.sections.push(section);
-              createdSectionIds.push(sectionId);
+              currentProject?.lines.push(line);
+              createdLineIds.push(lineId);
               gpxShotCount += encodedShots.length;
               if (datum) {
                 (currentProject?.zero_datums as Array<{
-                  station_ref: { section_id: number; station_index: number };
+                  station_ref: { line_id: number; station_index: number };
                   gps: { latitude: number; longitude: number; depth_reference: number };
                 }>).push({
-                  station_ref: { section_id: sectionId, station_index: datum.stationIndex },
+                  station_ref: { line_id: lineId, station_index: datum.stationIndex },
                   gps: datum.gps,
                 });
               }
@@ -3062,7 +3062,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             if (importWaypoints) {
               gpxFile.waypoints.forEach((wpt, index) => {
-                appendSection(
+                appendLine(
                   wpt.name ?? `Waypoint ${index + 1}`,
                   [],
                   '#4a90d9',
@@ -3075,7 +3075,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     },
                   }
                 );
-                backendSectionIndex += 1;
+                backendLineIndex += 1;
               });
             }
 
@@ -3085,7 +3085,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   const shots = segment.points.slice(1).map((point, idx) =>
                     toShot(segment.points[idx]!, point, idx + 1, depthInverted)
                   );
-                  const placement = placementMap.get(backendSectionIndex);
+                  const placement = placementMap.get(backendLineIndex);
                   const placementDatum =
                     placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
                       ? {
@@ -3103,7 +3103,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                           }
                         : null;
 
-                  appendSection(
+                  appendLine(
                     placement?.name ??
                       track.name ??
                       `Track ${trackIndex + 1}${track.segments.length > 1 ? ` - Seg ${segmentIndex + 1}` : ''}`,
@@ -3111,7 +3111,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     placement?.color ?? '#3b82f6',
                     placementDatum
                   );
-                  backendSectionIndex += 1;
+                  backendLineIndex += 1;
                 });
               });
             }
@@ -3121,7 +3121,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 const shots = route.points.slice(1).map((point, idx) =>
                   toShot(route.points[idx]!, point, idx + 1, depthInverted)
                 );
-                const placement = placementMap.get(backendSectionIndex);
+                const placement = placementMap.get(backendLineIndex);
                 const placementDatum =
                   placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
                     ? {
@@ -3139,13 +3139,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                         }
                       : null;
 
-                appendSection(
+                appendLine(
                   placement?.name ?? route.name ?? `Route ${routeIndex + 1}`,
                   shots,
                   placement?.color ?? '#22c55e',
                   placementDatum
                 );
-                backendSectionIndex += 1;
+                backendLineIndex += 1;
               });
             }
 
@@ -3158,13 +3158,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               success: true,
               warnings: [],
               error: null,
-              section_ids: createdSectionIds,
-              ...(createdSectionIds[0] != null ? { section_id: createdSectionIds[0] } : {}),
+              line_ids: createdLineIds,
+              ...(createdLineIds[0] != null ? { line_id: createdLineIds[0] } : {}),
               import_receipt: {
                 source_format: 'GPX',
                 file_name: gpxFileName,
-                sections_found: createdSectionIds.length,
-                sections_imported: createdSectionIds.length,
+                lines_found: createdLineIds.length,
+                lines_imported: createdLineIds.length,
                 shot_count: gpxShotCount,
                 closures_requested: 0,
                 closures_created: 0,
@@ -3187,7 +3187,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             if (!currentProject) {
               const now = new Date().toISOString();
-              sectionCounter = 0;
+              lineCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -3195,11 +3195,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 created_at: now,
                 modified_at: now,
                 file_path: null,
-                sections: [],
+                lines: [],
                 station_merges: [],
                 zero_datums: [],
                 loop_closures: [],
-                section_offsets: {},
+                line_offsets: {},
               };
             }
 
@@ -3211,23 +3211,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // index i ends at station i+1. Placements and closures below both
             // resolve through this, so exclusion renumbering behaves like the
             // real import.
-            // #425: `null` selects every section; a list selects those indices.
-            // Deselected sections contribute nothing to `idToImportLoc` either,
+            // #425: `null` selects every line; a list selects those indices.
+            // Deselected lines contribute nothing to `idToImportLoc` either,
             // mirroring `build_selection_index` - which is what makes a
-            // dependent section fall back to the origin instead of pointing at
-            // a section that was never created.
-            const rawSelection = args?.selectedSections as number[] | null | undefined;
-            const selectedSections = rawSelection ? new Set(rawSelection) : null;
-            const isSectionSelected = (i: number) =>
-              selectedSections === null || selectedSections.has(i);
-            const keptBySection: Array<{ tmlIndex: number; shots: typeof tmlFile.sections[number]['shots'] }> = [];
+            // dependent line fall back to the origin instead of pointing at
+            // a line that was never created.
+            const rawSelection = args?.selectedLines as number[] | null | undefined;
+            const selectedLines = rawSelection ? new Set(rawSelection) : null;
+            const isLineSelected = (i: number) =>
+              selectedLines === null || selectedLines.has(i);
+            const keptByLine: Array<{ tmlIndex: number; shots: typeof tmlFile.lines[number]['shots'] }> = [];
             const idToImportLoc = new Map<number, [number, number]>();
-            tmlFile.sections.forEach((tmlSection, tmlIndex) => {
-              if (!isSectionSelected(tmlIndex)) return;
+            tmlFile.lines.forEach((tmlSection, tmlIndex) => {
+              if (!isLineSelected(tmlIndex)) return;
               const kept = tmlSection.shots.filter(
                 (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
               );
-              keptBySection.push({ tmlIndex, shots: kept });
+              keptByLine.push({ tmlIndex, shots: kept });
               kept.forEach((shot, keptIdx) => idToImportLoc.set(shot.id, [tmlIndex, keptIdx + 1]));
             });
 
@@ -3240,9 +3240,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (!raw) return { shot: null, station: null };
               const shotLines: string[] = [];
               const stationLines: string[] = [];
-              for (const line of raw.split('\n')) {
-                if (line.startsWith('\u200B')) shotLines.push(line.slice(1));
-                else stationLines.push(line);
+              for (const textLine of raw.split('\n')) {
+                if (textLine.startsWith('\u200B')) shotLines.push(textLine.slice(1));
+                else stationLines.push(textLine);
               }
               return {
                 shot: shotLines.length ? shotLines.join('\n') : null,
@@ -3253,13 +3253,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const createdIdByTmlIndex = new Map<number, number>();
             const tmlSectionIds: number[] = [];
             let tmlShotCount = 0;
-            for (const { tmlIndex, shots: keptShots } of keptBySection) {
+            for (const { tmlIndex, shots: keptShots } of keptByLine) {
               if (keptShots.length === 0) continue;
-              const tmlSection = tmlFile.sections[tmlIndex];
-              sectionCounter += 1;
-              const sectionId = sectionCounter;
-              currentProject?.sections.push({
-                id: sectionId,
+              const tmlSection = tmlFile.lines[tmlIndex];
+              lineCounter += 1;
+              const lineId = lineCounter;
+              currentProject?.lines.push({
+                id: lineId,
                 name: tmlSection.name,
                 surveyor: tmlSection.surveyor,
                 date: tmlSection.date,
@@ -3273,13 +3273,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     // Station comments live in the mock's station-comment
                     // store, same as set_station_comment writes - the project
                     // state derives stations per refresh and threads these in.
-                    mockStationComments[`${sectionId}:${index + 1}`] = split.station;
+                    mockStationComments[`${lineId}:${index + 1}`] = split.station;
                   }
                   return {
-                    id: mockShotId(sectionId, index),
-                    // Same stable-uuid idiom as create_section above: the real
+                    id: mockShotId(lineId, index),
+                    // Same stable-uuid idiom as create_line above: the real
                     // backend never produces a uuid-less shot.
-                    uuid: `mock-shot-uuid-${mockShotId(sectionId, index)}`,
+                    uuid: `mock-shot-uuid-${mockShotId(lineId, index)}`,
                     azimuth_in: shot.azimuth,
                     azimuth_out: shot.azimuth,
                     length: shot.length,
@@ -3321,33 +3321,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   };
                 }),
               });
-              createdIdByTmlIndex.set(tmlIndex, sectionId);
-              tmlSectionIds.push(sectionId);
+              createdIdByTmlIndex.set(tmlIndex, lineId);
+              tmlSectionIds.push(lineId);
               tmlShotCount += keptShots.length;
             }
 
-            // Placement, as determine_placement + FromImporting do it: section
+            // Placement, as determine_placement + FromImporting do it: line
             // 0 sits at the origin (no GPS in this fixture); every later
-            // section resolves its start_ariane_id through id_to_import_loc
-            // and, when the target lives in another section, station 0 of the
-            // new section merges with the target station
+            // line resolves its start_ariane_id through id_to_import_loc
+            // and, when the target lives in another line, station 0 of the
+            // new line merges with the target station
             // (command_import.rs, ImportPlacement::FromImporting ->
             // merge_stations).
-            for (const { tmlIndex } of keptBySection) {
+            for (const { tmlIndex } of keptByLine) {
               if (tmlIndex === 0) continue;
-              const sectionId = createdIdByTmlIndex.get(tmlIndex);
-              if (sectionId == null) continue;
-              const startId = tmlFile.sections[tmlIndex].start_ariane_id;
+              const lineId = createdIdByTmlIndex.get(tmlIndex);
+              if (lineId == null) continue;
+              const startId = tmlFile.lines[tmlIndex].start_ariane_id;
               const target = startId >= 0 ? idToImportLoc.get(startId) : undefined;
               if (!target || target[0] === tmlIndex) continue;
-              const targetSectionId = createdIdByTmlIndex.get(target[0]);
-              if (targetSectionId == null) continue;
+              const targetLineId = createdIdByTmlIndex.get(target[0]);
+              if (targetLineId == null) continue;
               (currentProject?.station_merges as Array<{
-                station_a: { section_id: number; station_index: number };
-                station_b: { section_id: number; station_index: number };
+                station_a: { line_id: number; station_index: number };
+                station_b: { line_id: number; station_index: number };
               }>).push({
-                station_a: { section_id: sectionId, station_index: 0 },
-                station_b: { section_id: targetSectionId, station_index: target[1] },
+                station_a: { line_id: lineId, station_index: 0 },
+                station_b: { line_id: targetLineId, station_index: target[1] },
               });
             }
 
@@ -3360,8 +3360,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             let closuresCreated = 0;
             const loopClosures = (currentProject?.loop_closures ?? []) as Array<{
               id: bigint;
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
               path_length: number;
               misclosure_distance: number;
               error_percentage: number;
@@ -3370,23 +3370,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               strategy: string;
               is_aligned: boolean;
             }>;
-            for (const tmlSection of tmlFile.sections) {
+            for (const tmlSection of tmlFile.lines) {
               for (const shot of tmlSection.shots) {
                 if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) continue;
                 const from = idToImportLoc.get(shot.from_id);
                 const to = idToImportLoc.get(shot.closure_to_id);
                 if (!from || !to) continue;
-                const fromSectionId = createdIdByTmlIndex.get(from[0]);
-                const toSectionId = createdIdByTmlIndex.get(to[0]);
-                if (fromSectionId == null || toSectionId == null) continue;
+                const fromLineId = createdIdByTmlIndex.get(from[0]);
+                const toLineId = createdIdByTmlIndex.get(to[0]);
+                if (fromLineId == null || toLineId == null) continue;
                 const maxExistingId = loopClosures.reduce(
                   (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
                   0n
                 );
                 loopClosures.push({
                   id: maxExistingId + 1n,
-                  station_a: { section_id: fromSectionId, station_index: from[1] },
-                  station_b: { section_id: toSectionId, station_index: to[1] },
+                  station_a: { line_id: fromLineId, station_index: from[1] },
+                  station_b: { line_id: toLineId, station_index: to[1] },
                   path_length: 0,
                   misclosure_distance: 0,
                   error_percentage: 0,
@@ -3407,13 +3407,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               success: true,
               warnings: [],
               error: null,
-              section_ids: tmlSectionIds,
-              ...(tmlSectionIds[0] != null ? { section_id: tmlSectionIds[0] } : {}),
+              line_ids: tmlSectionIds,
+              ...(tmlSectionIds[0] != null ? { line_id: tmlSectionIds[0] } : {}),
               import_receipt: {
                 source_format: 'Ariane TML',
                 file_name: tmlPath.split('/').pop() ?? tmlPath,
-                sections_found: tmlFile.sections.length,
-                sections_imported: tmlSectionIds.length,
+                lines_found: tmlFile.lines.length,
+                lines_imported: tmlSectionIds.length,
                 shot_count: tmlShotCount,
                 closures_requested: closuresCreated,
                 closures_created: closuresCreated,
@@ -3428,7 +3428,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'parse_dmp': {
             return {
               version: 5,
-              sections: [
+              lines: [
                 {
                   name: 'Main Passage',
                   direction: 'in',
@@ -3544,7 +3544,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ],
                 },
                 {
-                  name: 'Mixed LRUD Section',
+                  name: 'Mixed LRUD Line',
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],
                   shots: [
@@ -3608,7 +3608,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ],
                 },
                 {
-                  name: 'Undefined LRUD Section',
+                  name: 'Undefined LRUD Line',
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],
                   shots: [
@@ -3650,13 +3650,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ],
                 },
                 {
-                  name: 'Empty Section',
+                  name: 'Empty Line',
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],
                   shots: [],
                 },
                 {
-                  name: 'Validation Test Section',
+                  name: 'Validation Test Line',
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],
                   shots: [
@@ -3753,24 +3753,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'merge_stations': {
             console.log('[Mock IPC] merge_stations called with:', args);
             const stationA = (args?.stationA ?? args?.station_a) as
-              | { section_id: number; station_index: number }
+              | { line_id: number; station_index: number }
               | undefined;
             const stationB = (args?.stationB ?? args?.station_b) as
-              | { section_id: number; station_index: number }
+              | { line_id: number; station_index: number }
               | undefined;
             if (stationA && stationB) {
               mergeStationCalls.push({ stationA, stationB });
               if (currentProject) {
                 (currentProject.station_merges as Array<{
-                  station_a: { section_id: number; station_index: number };
-                  station_b: { section_id: number; station_index: number };
+                  station_a: { line_id: number; station_index: number };
+                  station_b: { line_id: number; station_index: number };
                 }>).push({
                   station_a: stationA,
                   station_b: stationB,
                 });
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'execute_batch': {
@@ -3791,8 +3791,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // The real execute_batch is all-or-nothing: it snapshots the WHOLE
             // project (`capture_project_snapshot`) and restores on any
             // sub-command failure. Snapshot the whole thing here too - a
-            // sections-only snapshot would leave `section_offsets`, the station
-            // refs and the comment map half-mirrored after a failed multi-section
+            // lines-only snapshot would leave `line_offsets`, the station
+            // refs and the comment map half-mirrored after a failed multi-line
             // reverse (#24), i.e. exactly the half-applied state the batching
             // exists to prevent, in the mock that is supposed to pin it.
             const projectBefore = currentProject
@@ -3801,9 +3801,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const commentsBefore = { ...mockStationComments };
             // #24: entries accumulate ACROSS sub-commands, in step order and with repeats -
             // each carries the shot count in force at its own step, which is what lets the
-            // frontend compose rather than replay. A batch reversing the same section twice
+            // frontend compose rather than replay. A batch reversing the same line twice
             // must therefore emit two entries, not one.
-            const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
+            const reversedLines: Array<{ line_id: number; shot_count: number }> = [];
             const creditStep: MockCreditStep = [];
             mockCreditBatchStep = creditStep;
             for (const command of commands) {
@@ -3812,38 +3812,38 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     success?: boolean;
                     error?: string;
                     // Always present on a real CommandResult (#441), unlike
-                    // `reversed_sections` which the wire genuinely omits.
-                    section_ids?: number[];
-                    reversed_sections?: Array<{ section_id: number; shot_count: number }>;
+                    // `reversed_lines` which the wire genuinely omits.
+                    line_ids?: number[];
+                    reversed_lines?: Array<{ line_id: number; shot_count: number }>;
                   }
                 | undefined;
               if (command?.type === 'update_shot') {
                 result = mockHandler('update_shot', {
-                  sectionId: command.section_id,
+                  lineId: command.line_id,
                   shotId: command.shot_id,
                   updates: command.updates,
                 }) as typeof result;
               } else if (command?.type === 'untrack_import') {
                 // Rides the withdrawal batch (#394) so a re-import of the same
                 // file is not reported as a duplicate. This mock does not keep
-                // hash SETS (`check_section_hashes` answers false for everything
+                // hash SETS (`check_line_hashes` answers false for everything
                 // and `check_duplicate_import` reads one configurable flag), so
                 // the faithful replay is to clear that flag and drop the
                 // recorded track calls the withdrawal has just undone.
                 mockCheckDuplicateResult = false;
                 trackImportedFileCalls = [];
-                result = { success: true, section_ids: [] };
-              } else if (command?.type === 'delete_section') {
-                // Withdrawing an abandoned import (#394) removes N sections in
+                result = { success: true, line_ids: [] };
+              } else if (command?.type === 'delete_line') {
+                // Withdrawing an abandoned import (#394) removes N lines in
                 // ONE batch, so the batch has to replay it or a cancelled DMP
                 // import would look like it kept everything.
-                result = mockHandler('delete_section', {
-                  sectionId: command.section_id,
+                result = mockHandler('delete_line', {
+                  lineId: command.line_id,
                 }) as typeof result;
-              } else if (command?.type === 'update_section_metadata') {
-                // Edit Section's Save: a rename beside the credit edit, one step.
-                result = mockHandler('update_section', {
-                  sectionId: command.section_id,
+              } else if (command?.type === 'update_line_metadata') {
+                // Edit Line's Save: a rename beside the credit edit, one step.
+                result = mockHandler('update_line', {
+                  lineId: command.line_id,
                   updates: command.updates,
                 }) as typeof result;
               } else if (command?.type === 'edit_shot_credit') {
@@ -3852,15 +3852,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   targets: command.targets,
                   edit: command.edit,
                 }) as typeof result;
-              } else if (command?.type === 'reverse_section') {
-                // Multi-section reverse (#24) is batched so it is atomic and
+              } else if (command?.type === 'reverse_line') {
+                // Multi-line reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
-                result = mockHandler('reverse_section', {
-                  sectionId: command.section_id,
+                result = mockHandler('reverse_line', {
+                  lineId: command.line_id,
                   swapLeftRight: command.swap_left_right,
                 }) as typeof result;
-                if (result?.reversed_sections) {
-                  reversedSections.push(...result.reversed_sections);
+                if (result?.reversed_lines) {
+                  reversedLines.push(...result.reversed_lines);
                 }
               }
               if (result && result.success === false) {
@@ -3882,8 +3882,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             return {
               success: true,
-              section_ids: [],
-              ...(reversedSections.length > 0 ? { reversed_sections: reversedSections } : {}),
+              line_ids: [],
+              ...(reversedLines.length > 0 ? { reversed_lines: reversedLines } : {}),
             };
           }
 
@@ -3905,10 +3905,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_loop_closure': {
             console.log('[Mock IPC] create_loop_closure called with:', args);
             const stationA = (args?.stationA ?? args?.station_a) as
-              | { section_id: number; station_index: number }
+              | { line_id: number; station_index: number }
               | undefined;
             const stationB = (args?.stationB ?? args?.station_b) as
-              | { section_id: number; station_index: number }
+              | { line_id: number; station_index: number }
               | undefined;
             const closureStrategy = (args?.closureStrategy ?? args?.closure_strategy) as string | undefined;
             if (!stationA || !stationB) {
@@ -3918,8 +3918,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (currentProject) {
               const loopClosures = currentProject.loop_closures as Array<{
                 id: bigint;
-                station_a: { section_id: number; station_index: number };
-                station_b: { section_id: number; station_index: number };
+                station_a: { line_id: number; station_index: number };
+                station_b: { line_id: number; station_index: number };
                 path_length: number;
                 misclosure_distance: number;
                 error_percentage: number;
@@ -3931,14 +3931,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
               const alreadyExists = loopClosures.some((closure) => {
                 const direct =
-                  closure.station_a.section_id === stationA.section_id &&
+                  closure.station_a.line_id === stationA.line_id &&
                   closure.station_a.station_index === stationA.station_index &&
-                  closure.station_b.section_id === stationB.section_id &&
+                  closure.station_b.line_id === stationB.line_id &&
                   closure.station_b.station_index === stationB.station_index;
                 const reverse =
-                  closure.station_a.section_id === stationB.section_id &&
+                  closure.station_a.line_id === stationB.line_id &&
                   closure.station_a.station_index === stationB.station_index &&
-                  closure.station_b.section_id === stationA.section_id &&
+                  closure.station_b.line_id === stationA.line_id &&
                   closure.station_b.station_index === stationA.station_index;
                 return direct || reverse;
               });
@@ -3966,7 +3966,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               });
             }
 
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'remove_loop_closure': {
@@ -3998,30 +3998,30 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
 
             loopClosures.splice(closureIndex, 1);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'unmerge_stations':
             // Mock unmerge stations - return success
             console.log('[Mock IPC] unmerge_stations called with:', args);
             if (currentProject && args) {
-              const stationRef = (args.stationRef ?? args.station_ref) as { section_id: number; station_index: number } | undefined;
+              const stationRef = (args.stationRef ?? args.station_ref) as { line_id: number; station_index: number } | undefined;
               if (stationRef) {
                 const stationMerges = currentProject.station_merges as Array<{
-                  station_a: { section_id: number; station_index: number };
-                  station_b: { section_id: number; station_index: number };
+                  station_a: { line_id: number; station_index: number };
+                  station_b: { line_id: number; station_index: number };
                 }>;
 
                 const removedPairs: Array<{
-                  station_a: { section_id: number; station_index: number };
-                  station_b: { section_id: number; station_index: number };
+                  station_a: { line_id: number; station_index: number };
+                  station_b: { line_id: number; station_index: number };
                 }> = [];
 
                 for (let i = stationMerges.length - 1; i >= 0; i -= 1) {
                   const merge = stationMerges[i]!;
                   const touchesStation =
-                    (merge.station_a.section_id === stationRef.section_id && merge.station_a.station_index === stationRef.station_index) ||
-                    (merge.station_b.section_id === stationRef.section_id && merge.station_b.station_index === stationRef.station_index);
+                    (merge.station_a.line_id === stationRef.line_id && merge.station_a.station_index === stationRef.station_index) ||
+                    (merge.station_b.line_id === stationRef.line_id && merge.station_b.station_index === stationRef.station_index);
                   if (touchesStation) {
                     removedPairs.push(merge);
                     stationMerges.splice(i, 1);
@@ -4031,22 +4031,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (removedPairs.length > 0 && Array.isArray(currentProject.loop_closures)) {
                   const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
                   currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const stationA = closure.station_a as { section_id: number; station_index: number } | undefined;
-                    const stationB = closure.station_b as { section_id: number; station_index: number } | undefined;
+                    const stationA = closure.station_a as { line_id: number; station_index: number } | undefined;
+                    const stationB = closure.station_b as { line_id: number; station_index: number } | undefined;
                     if (!stationA || !stationB) {
                       return true;
                     }
 
                     const matchesRemovedPair = removedPairs.some((pair) => {
                       const direct =
-                        pair.station_a.section_id === stationA.section_id &&
+                        pair.station_a.line_id === stationA.line_id &&
                         pair.station_a.station_index === stationA.station_index &&
-                        pair.station_b.section_id === stationB.section_id &&
+                        pair.station_b.line_id === stationB.line_id &&
                         pair.station_b.station_index === stationB.station_index;
                       const reverse =
-                        pair.station_b.section_id === stationA.section_id &&
+                        pair.station_b.line_id === stationA.line_id &&
                         pair.station_b.station_index === stationA.station_index &&
-                        pair.station_a.section_id === stationB.section_id &&
+                        pair.station_a.line_id === stationB.line_id &&
                         pair.station_a.station_index === stationB.station_index;
                       return direct || reverse;
                     });
@@ -4056,12 +4056,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
-            const stationA = (args?.stationA ?? args?.station_a) as { section_id: number; station_index: number } | undefined;
-            const stationB = (args?.stationB ?? args?.station_b) as { section_id: number; station_index: number } | undefined;
+            const stationA = (args?.stationA ?? args?.station_a) as { line_id: number; station_index: number } | undefined;
+            const stationB = (args?.stationB ?? args?.station_b) as { line_id: number; station_index: number } | undefined;
             if (!stationA || !stationB) {
               return { success: false, error: 'Missing station pair' };
             }
@@ -4070,20 +4070,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             if (currentProject) {
               const stationMerges = currentProject.station_merges as Array<{
-                station_a: { section_id: number; station_index: number };
-                station_b: { section_id: number; station_index: number };
+                station_a: { line_id: number; station_index: number };
+                station_b: { line_id: number; station_index: number };
               }>;
 
               const matchIndex = stationMerges.findIndex((merge) => {
                 const direct =
-                  merge.station_a.section_id === stationA.section_id &&
+                  merge.station_a.line_id === stationA.line_id &&
                   merge.station_a.station_index === stationA.station_index &&
-                  merge.station_b.section_id === stationB.section_id &&
+                  merge.station_b.line_id === stationB.line_id &&
                   merge.station_b.station_index === stationB.station_index;
                 const reverse =
-                  merge.station_b.section_id === stationA.section_id &&
+                  merge.station_b.line_id === stationA.line_id &&
                   merge.station_b.station_index === stationA.station_index &&
-                  merge.station_a.section_id === stationB.section_id &&
+                  merge.station_a.line_id === stationB.line_id &&
                   merge.station_a.station_index === stationB.station_index;
                 return direct || reverse;
               });
@@ -4094,25 +4094,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (Array.isArray(currentProject.loop_closures)) {
                   const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
                   currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const closureA = closure.station_a as { section_id: number; station_index: number } | undefined;
-                    const closureB = closure.station_b as { section_id: number; station_index: number } | undefined;
+                    const closureA = closure.station_a as { line_id: number; station_index: number } | undefined;
+                    const closureB = closure.station_b as { line_id: number; station_index: number } | undefined;
                     if (!closureA || !closureB) {
                       return true;
                     }
                     const direct =
-                      closureA.section_id === stationA.section_id &&
+                      closureA.line_id === stationA.line_id &&
                       closureA.station_index === stationA.station_index &&
-                      closureB.section_id === stationB.section_id &&
+                      closureB.line_id === stationB.line_id &&
                       closureB.station_index === stationB.station_index;
                     const reverse =
-                      closureA.section_id === stationB.section_id &&
+                      closureA.line_id === stationB.line_id &&
                       closureA.station_index === stationB.station_index &&
-                      closureB.section_id === stationA.section_id &&
+                      closureB.line_id === stationA.line_id &&
                       closureB.station_index === stationA.station_index;
                     return !(direct || reverse);
                   });
                 }
-                return { success: true, section_ids: [] };
+                return { success: true, line_ids: [] };
               }
             }
 
@@ -4128,18 +4128,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_segment', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
-          case 'move_section': {
+          case 'move_line': {
             // Record the dispatched offset (mirrors move_segment/move_station) so
             // commit-assertion tests can check the offset that reached the backend.
-            console.log('[Mock IPC] move_section called with:', args);
+            console.log('[Mock IPC] move_line called with:', args);
             const win = window as unknown as Record<string, unknown>;
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
-            calls.push({ command: 'move_section', args: args ?? null });
+            calls.push({ command: 'move_line', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'move_station': {
@@ -4156,14 +4156,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] move_shot called with:', args);
             return { success: true };
 
-          case 'get_anchored_section_ids':
-            // Return section IDs that have zero datums
-            console.log('[Mock IPC] get_anchored_section_ids called');
+          case 'get_anchored_line_ids':
+            // Return line IDs that have zero datums
+            console.log('[Mock IPC] get_anchored_line_ids called');
             if (currentProject) {
               const datums = (currentProject.zero_datums ?? []) as Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
               }>;
-              const anchoredIds = [...new Set(datums.map(d => d.station_ref.section_id))];
+              const anchoredIds = [...new Set(datums.map(d => d.station_ref.line_id))];
               anchoredIds.sort((a, b) => a - b);
               return anchoredIds;
             }
@@ -4181,14 +4181,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // backend (#741), a second datum in a connected survey is accepted: it
             // becomes a GPS fix. The role is derived on read (withDatumRoles).
             if (currentProject && args) {
-              const stationRef = args.stationRef as { section_id: number; station_index: number };
+              const stationRef = args.stationRef as { line_id: number; station_index: number };
               const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
               // Optional accuracy in metres; absent means the backend default.
               const accuracyM = typeof args.accuracyM === 'number' ? args.accuracyM : undefined;
               // Optional entrance answer; absent keeps the stored one (#741).
               const entrance = typeof args.entrance === 'boolean' ? args.entrance : undefined;
               const datums = currentProject.zero_datums as Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
                 gps: { latitude: number; longitude: number; depth_reference: number };
                 accuracy_m?: number;
                 entrance?: boolean;
@@ -4196,7 +4196,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Update in-place if exists, otherwise push
               const existing = datums.find(
                 (d) =>
-                  d.station_ref.section_id === stationRef.section_id &&
+                  d.station_ref.line_id === stationRef.line_id &&
                   d.station_ref.station_index === stationRef.station_index
               );
               if (existing) {
@@ -4218,7 +4218,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 });
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'preview_zero_datum': {
@@ -4230,14 +4230,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             win.__MOCK_PREVIEW_ZERO_DATUM_CALLS__ = calls;
             if (!currentProject || !args) return null;
             const stationRef = args.stationRef as MockStationRef;
-            const section = (currentProject.sections as Array<{ id: number; shots?: unknown[] }>).find(
-              (s) => s.id === stationRef.section_id
+            const line = (currentProject.lines as Array<{ id: number; shots?: unknown[] }>).find(
+              (s) => s.id === stationRef.line_id
             );
-            if (!section || stationRef.station_index > (section.shots?.length ?? 0)) return null;
+            if (!line || stationRef.station_index > (line.shots?.length ?? 0)) return null;
             const role = mockDatumRole(currentProject, stationRef);
             const stored = (currentProject.zero_datums as Array<{ station_ref: MockStationRef; entrance?: boolean }>).find(
               (d) =>
-                d.station_ref.section_id === stationRef.section_id &&
+                d.station_ref.line_id === stationRef.line_id &&
                 d.station_ref.station_index === stationRef.station_index
             );
             const is_entrance = mockDatumIsEntrance(currentProject, stationRef, role, stored?.entrance);
@@ -4249,36 +4249,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] remove_zero_datum called with:', args);
             // Remove datum from currentProject's zero_datums
             if (currentProject && args) {
-              const stationRef = args.stationRef as { section_id: number; station_index: number };
+              const stationRef = args.stationRef as { line_id: number; station_index: number };
               const datums = currentProject.zero_datums as Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
               }>;
               const idx = datums.findIndex(
                 (d) =>
-                  d.station_ref.section_id === stationRef.section_id &&
+                  d.station_ref.line_id === stationRef.line_id &&
                   d.station_ref.station_index === stationRef.station_index
               );
               if (idx >= 0) {
                 datums.splice(idx, 1);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'set_station_comment': {
             console.log('[Mock IPC] set_station_comment called with:', args);
-            const stationRef = args?.stationRef as { section_id: number; station_index: number };
+            const stationRef = args?.stationRef as { line_id: number; station_index: number };
             const comment = (args?.comment as string | null | undefined) ?? null;
-            const key = `${stationRef.section_id}:${stationRef.station_index}`;
+            const key = `${stationRef.line_id}:${stationRef.station_index}`;
             if (comment === null) {
               delete mockStationComments[key];
             } else {
               mockStationComments[key] = comment;
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
-          case 'check_section_hashes': {
+          case 'check_line_hashes': {
             const hashes = (Array.isArray(args?.hashes) ? args?.hashes : []) as string[];
             return hashes.map(() => false);
           }
@@ -4292,14 +4292,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'suggest_orphan_placements':
             return [...mockOrphanPlacementSuggestions];
 
-          case 'count_unanchored_sections':
+          case 'count_unanchored_lines':
             return 0;
 
           case 'get_segment_geometry':
             return {
-              sections: [
+              lines: [
                 {
-                  section_id: (args?.sectionId as number | undefined) ?? 1,
+                  line_id: (args?.lineId as number | undefined) ?? 1,
                   color: '#4a90d9',
                   shot_lines: [[[0, 0], [10, 0]]],
                 },
@@ -4318,7 +4318,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const restored = structuredClone(snapshot) as { project: typeof currentProject; joins: typeof colocatedJoins };
               currentProject = restored.project;
               colocatedJoins = restored.joins;
-              return { success: true, section_ids: [] };
+              return { success: true, line_ids: [] };
             }
             const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
             const to = cmd === 'undo' ? mockCreditRedo : mockCreditUndo;
@@ -4327,7 +4327,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               for (const entry of step) mockRestoreCredit(entry.shot, cmd === 'undo' ? entry.before : entry.after);
               to.push(step);
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'can_undo':
@@ -4349,8 +4349,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 panels: {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
-                  ...mockNewSectionView,
-                  ...mockEditSectionView,
+                  ...mockNewLineView,
+                  ...mockEditLineView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
                 },
@@ -4409,7 +4409,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 font_size: 12,
                 font_color: '#f5f5f5',
               },
-              section_colors: {
+              line_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
               },
               map: {
@@ -4505,7 +4505,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 toggle_satellite: ['B'],
                 toggle_station_labels: ['L'],
                 toggle_shot_labels: ['Shift+L'],
-                toggle_section_labels: ['Ctrl+L'],
+                toggle_line_labels: ['Ctrl+L'],
                 fit_to_bounds: ['F'],
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
@@ -4520,7 +4520,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_hidden_columns: ['line_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
                 data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
@@ -4529,13 +4529,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
                 data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
-                // The new-section dialog's grid layout. Present (not omitted) for
+                // The new-line dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real
                 // backend always serializes these, and the dialog treats an ABSENT
                 // hidden list as "never stored, use the built-in defaults" but a
                 // present empty one as "the user unhid everything".
-                new_section_column_order: [],
-                new_section_hidden_columns: [
+                new_line_column_order: [],
+                new_line_hidden_columns: [
                   'azimuth_in',
                   'azimuth_out',
                   '_pitch_avg',
@@ -4546,9 +4546,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'up',
                   'down',
                 ],
-                new_section_column_widths: {},
-                edit_section_column_order: [],
-                edit_section_hidden_columns: [
+                new_line_column_widths: {},
+                edit_line_column_order: [],
+                edit_line_hidden_columns: [
                   'azimuth_in',
                   'azimuth_out',
                   '_pitch_avg',
@@ -4564,7 +4564,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'pitch_out',
                 ],
                 import_shots_column_widths: {},
-                edit_section_column_widths: {},
+                edit_line_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh
                 // install opens the data table, but most specs want the map
@@ -4578,8 +4578,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_open: false,
                 data_table_mode: 'pin',
                 ...mockDataTableView,
-                ...mockNewSectionView,
-                ...mockEditSectionView,
+                ...mockNewLineView,
+                ...mockEditLineView,
                 ...mockImportShotsView,
               },
               cache: {
@@ -4608,7 +4608,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
-              // The real get_config always sends these sections (Rust Config::default,
+              // The real get_config always sends these lines (Rust Config::default,
               // mirrored in src/types/ipc/defaultConfig.ts). Without them, Settings
               // fills them in on the first edit and reports them as changed.
               import: {
@@ -4746,55 +4746,55 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null; // Tauri serializes () as null
           }
 
-          case 'update_new_section_view': {
-            console.log('[Mock IPC] update_new_section_view called with:', args);
+          case 'update_new_line_view': {
+            console.log('[Mock IPC] update_new_line_view called with:', args);
             // Record calls for assertions, same shape as the data-table one.
             const win = window as unknown as Record<string, unknown>;
-            const existing = win.__MOCK_NEW_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            const existing = win.__MOCK_NEW_LINE_VIEW_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
-            win.__MOCK_NEW_SECTION_VIEW_CALLS__ = calls;
-            // Partial-update semantics, mirroring update_new_section_view_impl:
+            win.__MOCK_NEW_LINE_VIEW_CALLS__ = calls;
+            // Partial-update semantics, mirroring update_new_line_view_impl:
             // only provided fields overwrite the stored layout.
             const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
-            if (columnOrder != null) mockNewSectionView.new_section_column_order = columnOrder;
+            if (columnOrder != null) mockNewLineView.new_line_column_order = columnOrder;
             const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
               | string[]
               | undefined;
-            if (hiddenColumns != null) mockNewSectionView.new_section_hidden_columns = hiddenColumns;
+            if (hiddenColumns != null) mockNewLineView.new_line_hidden_columns = hiddenColumns;
             const columnWidths = (args?.columnWidths ?? args?.column_widths) as
               | Record<string, number>
               | undefined;
-            if (columnWidths != null) mockNewSectionView.new_section_column_widths = columnWidths;
+            if (columnWidths != null) mockNewLineView.new_line_column_widths = columnWidths;
             return null; // Tauri serializes () as null
           }
 
-          case 'update_edit_section_view': {
-            console.log('[Mock IPC] update_edit_section_view called with:', args);
+          case 'update_edit_line_view': {
+            console.log('[Mock IPC] update_edit_line_view called with:', args);
             const win = window as unknown as Record<string, unknown>;
-            const existing = win.__MOCK_EDIT_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            const existing = win.__MOCK_EDIT_LINE_VIEW_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
-            win.__MOCK_EDIT_SECTION_VIEW_CALLS__ = calls;
+            win.__MOCK_EDIT_LINE_VIEW_CALLS__ = calls;
             const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
-            if (columnOrder != null) mockEditSectionView.edit_section_column_order = columnOrder;
+            if (columnOrder != null) mockEditLineView.edit_line_column_order = columnOrder;
             const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
               | string[]
               | undefined;
             if (hiddenColumns != null) {
-              mockEditSectionView.edit_section_hidden_columns = hiddenColumns;
+              mockEditLineView.edit_line_hidden_columns = hiddenColumns;
             }
             const columnWidths = (args?.columnWidths ?? args?.column_widths) as
               | Record<string, number>
               | undefined;
-            if (columnWidths != null) mockEditSectionView.edit_section_column_widths = columnWidths;
+            if (columnWidths != null) mockEditLineView.edit_line_column_widths = columnWidths;
             return null; // Tauri serializes () as null
           }
           case 'update_import_shots_view': {
             console.log('[Mock IPC] update_import_shots_view called with:', args);
             const win = window as unknown as Record<string, unknown>;
-            // Its OWN call list. Recording import saves under the edit-section key
-            // made an import-grid save indistinguishable from an edit-section one,
+            // Its OWN call list. Recording import saves under the edit-line key
+            // made an import-grid save indistinguishable from an edit-line one,
             // so no spec could assert that either slice wrote only its own fields -
             // which is the whole point of the separate `import_shots_*` config.
             const existing = win.__MOCK_IMPORT_SHOTS_VIEW_CALLS__ as unknown[] | undefined;
@@ -4831,8 +4831,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 panels: {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
-                  ...mockNewSectionView,
-                  ...mockEditSectionView,
+                  ...mockNewLineView,
+                  ...mockEditLineView,
                   ...mockImportShotsView,
                 ...mockImportShotsView,
                 },
@@ -4893,7 +4893,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 font_size: 12,
                 font_color: '#f5f5f5',
               },
-              section_colors: {
+              line_colors: {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
               },
               map: {
@@ -4989,7 +4989,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 toggle_satellite: ['B'],
                 toggle_station_labels: ['L'],
                 toggle_shot_labels: ['Shift+L'],
-                toggle_section_labels: ['Ctrl+L'],
+                toggle_line_labels: ['Ctrl+L'],
                 fit_to_bounds: ['F'],
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
@@ -5004,7 +5004,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 wizard_map_panel_width: 480,
                 data_table_shot_column_order: [],
-                data_table_shot_hidden_columns: ['section_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
+                data_table_shot_hidden_columns: ['line_id', 'shot_id', 'surveyors', 'explorers', 'survey_date'],
                 data_table_shot_columns_seen: ['surveyors', 'explorers', 'survey_date'],
                 data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
@@ -5013,13 +5013,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
                 data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
-                // The new-section dialog's grid layout. Present (not omitted) for
+                // The new-line dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real
                 // backend always serializes these, and the dialog treats an ABSENT
                 // hidden list as "never stored, use the built-in defaults" but a
                 // present empty one as "the user unhid everything".
-                new_section_column_order: [],
-                new_section_hidden_columns: [
+                new_line_column_order: [],
+                new_line_hidden_columns: [
                   'azimuth_in',
                   'azimuth_out',
                   '_pitch_avg',
@@ -5030,9 +5030,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'up',
                   'down',
                 ],
-                new_section_column_widths: {},
-                edit_section_column_order: [],
-                edit_section_hidden_columns: [
+                new_line_column_widths: {},
+                edit_line_column_order: [],
+                edit_line_hidden_columns: [
                   'azimuth_in',
                   'azimuth_out',
                   '_pitch_avg',
@@ -5048,7 +5048,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'pitch_out',
                 ],
                 import_shots_column_widths: {},
-                edit_section_column_widths: {},
+                edit_line_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh
                 // install opens the data table, but most specs want the map
@@ -5062,8 +5062,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_open: false,
                 data_table_mode: 'pin',
                 ...mockDataTableView,
-                ...mockNewSectionView,
-                ...mockEditSectionView,
+                ...mockNewLineView,
+                ...mockEditLineView,
                 ...mockImportShotsView,
               },
               cache: {
@@ -5110,7 +5110,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 location: 'Yucatan, Mexico',
                 file_path: '/projects/cave-alpha.stalx',
                 modified_at: new Date().toISOString(),
-                section_count: 5,
+                line_count: 5,
                 total_length: 1250.5,
                 gps_center: [-87.4631, 20.2137],
                 gps_bounds: {
@@ -5125,7 +5125,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 location: 'Florida, USA',
                 file_path: '/projects/cave-beta.stalx',
                 modified_at: new Date(Date.now() - 86400000).toISOString(),
-                section_count: 3,
+                line_count: 3,
                 total_length: 820.0,
                 gps_center: [-82.4584, 29.6516],
                 gps_bounds: {
@@ -5140,7 +5140,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 location: 'Bahamas',
                 file_path: '/projects/cave-gamma.stalx',
                 modified_at: new Date(Date.now() - 172800000).toISOString(),
-                section_count: 8,
+                line_count: 8,
                 total_length: 2100.3,
                 gps_center: [-77.3963, 25.0343],
                 gps_bounds: null,
@@ -5150,7 +5150,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 location: 'Unknown',
                 file_path: '/projects/local-survey.stalx',
                 modified_at: new Date(Date.now() - 259200000).toISOString(),
-                section_count: 2,
+                line_count: 2,
                 total_length: 350.0,
                 gps_center: null,
                 gps_bounds: null,
@@ -5188,21 +5188,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'delete_project':
             // Mock destructive delete - acknowledge success. We don't mutate the
             // hardcoded recents list here (would leak across tests in a worker);
             // the store + Rust tests cover the recents-removal side effect.
             console.log('[Mock IPC] delete_project called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');
             const name = String(args?.name ?? '').trim();
             if (!name) return { success: false, error: 'Project name cannot be empty' };
             recentNameOverrides[p] = name;
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           // Display settings (per-project) - uses in-memory storage for persistence testing
@@ -5422,68 +5422,68 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 500));
           }
 
-          // Section and shot editing commands
+          // Line and shot editing commands
           case 'update_shot': {
             console.log('[Mock IPC] update_shot called with:', args);
             // Mutate currentProject to support persistence testing
             // Note: Tauri invoke passes camelCase from JS side
             if (currentProject && args) {
-              const sectionId = args.sectionId as number;
+              const lineId = args.lineId as number;
               const shotId = args.shotId as number;
               const updates = args.updates as Record<string, unknown>;
-              const section = (currentProject.sections as Array<{ id: number; shots: Array<{ id: number } & Record<string, unknown>> }>)
-                .find(s => s.id === sectionId);
-              if (section) {
-                const shot = section.shots.find(sh => sh.id === shotId);
+              const line = (currentProject.lines as Array<{ id: number; shots: Array<{ id: number } & Record<string, unknown>> }>)
+                .find(s => s.id === lineId);
+              if (line) {
+                const shot = line.shots.find(sh => sh.id === shotId);
                 if (shot && updates) {
                   Object.assign(shot, updates);
                   console.log('[Mock IPC] update_shot: applied updates to shot', shotId, updates);
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           case 'delete_shot': {
             console.log('[Mock IPC] delete_shot called with:', args);
             // #310: a plain no-op response left every station index unchanged, so nothing
             // could ever be renumbered to test a live anchored pin against. Splice the shot
-            // out in place - the real backend's `remove_shot_with_rewire` shortens the section
+            // out in place - the real backend's `remove_shot_with_rewire` shortens the line
             // by one shot the same way, shifting every later station down by one index.
             if (currentProject && args) {
-              const sectionId = args.sectionId as number;
+              const lineId = args.lineId as number;
               const shotId = args.shotId as number;
-              const section = (
-                currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
-              ).find((s) => s.id === sectionId);
-              if (section) {
-                const idx = section.shots.findIndex((sh) => sh.id === shotId);
-                if (idx >= 0) section.shots.splice(idx, 1);
+              const line = (
+                currentProject.lines as Array<{ id: number; shots: Array<{ id: number }> }>
+              ).find((s) => s.id === lineId);
+              if (line) {
+                const idx = line.shots.findIndex((sh) => sh.id === shotId);
+                if (idx >= 0) line.shots.splice(idx, 1);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
-          case 'delete_last_shot_and_section':
-            console.log('[Mock IPC] delete_last_shot_and_section called with:', args);
-            return { success: true, section_ids: [] };
+          case 'delete_last_shot_and_line':
+            console.log('[Mock IPC] delete_last_shot_and_line called with:', args);
+            return { success: true, line_ids: [] };
 
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
-            const sectionId = (args?.sectionId as number | undefined) ?? 1;
+            const lineId = (args?.lineId as number | undefined) ?? 1;
             return {
-              removed_station: { section_id: sectionId, station_index: 0 },
+              removed_station: { line_id: lineId, station_index: 0 },
               removed_merges: [
                 {
-                  station_a: { section_id: sectionId, station_index: 0 },
-                  station_b: { section_id: sectionId, station_index: 1 },
+                  station_a: { line_id: lineId, station_index: 0 },
+                  station_b: { line_id: lineId, station_index: 1 },
                 },
               ],
               removed_closures: [
                 {
                   closure_id: 1n,
-                  station_a: { section_id: sectionId, station_index: 0 },
-                  station_b: { section_id: sectionId, station_index: 2 },
+                  station_a: { line_id: lineId, station_index: 0 },
+                  station_b: { line_id: lineId, station_index: 2 },
                 },
               ],
               replacement_merges: [],
@@ -5498,9 +5498,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
-          case 'split_section_preview': {
+          case 'split_line_preview': {
             // Nothing in the mock's survey ties the halves by a loop closure alone, so a split
             // moves and removes nothing. A spec can set `__MOCK_SPLIT_PREVIEW__` to show the
             // warning (a half that moves, closures the split removes).
@@ -5516,83 +5516,83 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             );
           }
 
-          case 'split_section': {
-            console.log('[Mock IPC] split_section called with:', args);
+          case 'split_line': {
+            console.log('[Mock IPC] split_line called with:', args);
             const win = window as unknown as Record<string, unknown>;
-            const existing = win.__MOCK_SPLIT_SECTION_CALLS__ as unknown[] | undefined;
+            const existing = win.__MOCK_SPLIT_LINE_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
-            win.__MOCK_SPLIT_SECTION_CALLS__ = calls;
+            win.__MOCK_SPLIT_LINE_CALLS__ = calls;
 
-            type MockSection = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
-            const sections = (currentProject?.sections ?? []) as MockSection[];
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            type MockLine = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
+            const lines = (currentProject?.lines ?? []) as MockLine[];
+            const lineId = (args?.lineId ?? args?.line_id) as number;
             const at = args?.at as { type: 'station'; station_index: number } | { type: 'shot'; shot_id: number; distance: number } | undefined;
             const options = args?.options as { name_b: string; color_b: string; name_a: string; color_a: string } | undefined;
-            const section = sections.find((s) => s.id === sectionId);
-            if (!section || !at || !options) {
-              return { success: false, error: `Section ${sectionId} not found`, section_ids: [], warnings: [] };
+            const line = lines.find((s) => s.id === lineId);
+            if (!line || !at || !options) {
+              return { success: false, error: `Line ${lineId} not found`, line_ids: [], warnings: [] };
             }
             let k: number;
             if (at.type === 'station') {
               k = at.station_index;
             } else {
-              const idx = section.shots.findIndex((s) => s.id === at.shot_id);
+              const idx = line.shots.findIndex((s) => s.id === at.shot_id);
               if (idx < 0) {
-                return { success: false, error: `Shot ${at.shot_id} not found`, section_ids: [], warnings: [] };
+                return { success: false, error: `Shot ${at.shot_id} not found`, line_ids: [], warnings: [] };
               }
-              const target = section.shots[idx] as Record<string, unknown> & { id: number };
+              const target = line.shots[idx] as Record<string, unknown> & { id: number };
               const length = (target.length as number) ?? 0;
               if (at.distance < 0.01) {
                 k = idx;
               } else if (length - at.distance < 0.01) {
                 k = idx + 1;
               } else {
-                const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
-                section.shots.splice(idx, 0, { ...target, id: nextId, length: at.distance, comment: null, marker_index: null });
+                const nextId = line.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+                line.shots.splice(idx, 0, { ...target, id: nextId, length: at.distance, comment: null, marker_index: null });
                 target.length = length - at.distance;
                 k = idx + 1;
               }
             }
-            if (k <= 0 || k >= section.shots.length) {
-              return { success: false, error: 'Cannot split a section at its first or last station', section_ids: [], warnings: [] };
+            if (k <= 0 || k >= line.shots.length) {
+              return { success: false, error: 'Cannot split a line at its first or last station', line_ids: [], warnings: [] };
             }
             structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
-            sectionCounter = Math.max(sectionCounter, ...sections.map((s) => s.id)) + 1;
-            const newSection: MockSection = {
-              ...section,
-              id: sectionCounter,
+            lineCounter = Math.max(lineCounter, ...lines.map((s) => s.id)) + 1;
+            const newLine: MockLine = {
+              ...line,
+              id: lineCounter,
               name: options.name_b,
               color: options.color_b,
-              shots: section.shots.slice(k),
+              shots: line.shots.slice(k),
             };
-            section.shots = section.shots.slice(0, k);
-            section.name = options.name_a;
-            section.color = options.color_a;
-            sections.push(newSection);
+            line.shots = line.shots.slice(0, k);
+            line.name = options.name_a;
+            line.color = options.color_a;
+            lines.push(newLine);
             colocatedJoins.push([
-              { section_id: section.id, station_index: section.shots.length },
-              { section_id: newSection.id, station_index: 0 },
+              { line_id: line.id, station_index: line.shots.length },
+              { line_id: newLine.id, station_index: 0 },
             ]);
             // The backend touches the project, as every edit does (the ruler and the reach
             // field reset on modified_at); the undo snapshot keeps the value from before.
             if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
-            return { success: true, section_id: newSection.id, section_ids: [section.id, newSection.id], warnings: [], error: null };
+            return { success: true, line_id: newLine.id, line_ids: [line.id, newLine.id], warnings: [], error: null };
           }
 
           case 'combine_candidate':
-          case 'combine_candidate_for_sections': {
+          case 'combine_candidate_for_lines': {
             // A small model of the real query (`combine_candidate.rs`): two
-            // section ends touch when they are station-merged, a split left
+            // line ends touch when they are station-merged, a split left
             // them co-located, or a loop closure ties them. At a junction the
             // station query lists every partner; the others at the point stay
-            // as branches. A station in the MIDDLE of a section at the point
-            // passes through. Across a closure the other section moves by the
+            // as branches. A station in the MIDDLE of a line at the point
+            // passes through. Across a closure the other line moves by the
             // misclosure, and any other merge between the two becomes a
-            // closure (the real plan also tears ties through third sections).
-            type Ref = { section_id: number; station_index: number };
-            type MockSection = { id: number; shots: unknown[] };
-            const sections = (currentProject?.sections ?? []) as MockSection[];
+            // closure (the real plan also tears ties through third lines).
+            type Ref = { line_id: number; station_index: number };
+            type MockLine = { id: number; shots: unknown[] };
+            const lines = (currentProject?.lines ?? []) as MockLine[];
             const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
             const closures = (currentProject?.loop_closures ?? []) as Array<{
               station_a: Ref;
@@ -5600,12 +5600,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               misclosure_distance?: number;
               horizontal_misclosure?: number;
             }>;
-            const same = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+            const same = (x: Ref, y: Ref) => x.line_id === y.line_id && x.station_index === y.station_index;
             const closureBetween = (x: Ref, y: Ref) =>
               closures.find((c) => (same(c.station_a, x) && same(c.station_b, y)) || (same(c.station_a, y) && same(c.station_b, x)));
             const isEnd = (r: Ref) => {
-              const section = sections.find((s) => s.id === r.section_id);
-              return !!section && (r.station_index === 0 || r.station_index === section.shots.length);
+              const line = lines.find((s) => s.id === r.line_id);
+              return !!line && (r.station_index === 0 || r.station_index === line.shots.length);
             };
             const partnersOf = (r: Ref): Ref[] => [
               ...merges.flatMap((m) => (same(m.station_a, r) ? [m.station_b] : same(m.station_b, r) ? [m.station_a] : [])),
@@ -5613,18 +5613,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ...closures.flatMap((c) => (same(c.station_a, r) ? [c.station_b] : same(c.station_b, r) ? [c.station_a] : [])),
             ];
             const candidate = (at: Ref, partner: Ref, blocked: string | null, branches: number[] = []) => {
-              const [a, b] = at.section_id < partner.section_id ? [at, partner] : [partner, at];
-              const sa = sections.find((s) => s.id === a.section_id);
-              const sb = sections.find((s) => s.id === b.section_id);
-              const end = (r: Ref, s?: MockSection) => (r.station_index === 0 && (s?.shots.length ?? 0) > 0 ? 'start' : 'end');
+              const [a, b] = at.line_id < partner.line_id ? [at, partner] : [partner, at];
+              const sa = lines.find((s) => s.id === a.line_id);
+              const sb = lines.find((s) => s.id === b.line_id);
+              const end = (r: Ref, s?: MockLine) => (r.station_index === 0 && (s?.shots.length ?? 0) > 0 ? 'start' : 'end');
               const endA = end(a, sa);
               const endB = end(b, sb);
               const isMerged = merges.some((m) => (same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a)));
               const isColocated = colocatedJoins.some(([x, y]) => (same(x, a) && same(y, b)) || (same(x, b) && same(y, a)));
               const closure = !isMerged && !isColocated ? closureBetween(a, b) : undefined;
-              const pair = new Set([a.section_id, b.section_id]);
+              const pair = new Set([a.line_id, b.line_id]);
               const torn = merges
-                .filter((m) => pair.has(m.station_a.section_id) && pair.has(m.station_b.section_id) && m.station_a.section_id !== m.station_b.section_id)
+                .filter((m) => pair.has(m.station_a.line_id) && pair.has(m.station_b.line_id) && m.station_a.line_id !== m.station_b.line_id)
                 .filter((m) => !((same(m.station_a, a) && same(m.station_b, b)) || (same(m.station_a, b) && same(m.station_b, a))))
                 .map((m) => ({ station_a: m.station_a, station_b: m.station_b, kind: 'merge', reason: 'loop' }));
               // The mock's co-located ends coincide exactly, so only a closure
@@ -5633,13 +5633,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Horizontal, as the backend's chain gap is.
               const shift = closure ? (closure.horizontal_misclosure ?? closure.misclosure_distance ?? 0) : 0;
               const plan = (kept: number, other: number) => {
-                const [keptJoin, otherJoin] = kept === a.section_id ? [a, b] : [b, a];
+                const [keptJoin, otherJoin] = kept === a.line_id ? [a, b] : [b, a];
                 const removed = mockCombineRemovals(keptJoin, otherJoin);
                 return {
                   kept,
-                  moving_section: shift > 0.001 ? other : null,
+                  moving_line: shift > 0.001 ? other : null,
                   kept_moves_because: null,
-                  moved_sections: shift > 0.001 ? [other] : [],
+                  moved_lines: shift > 0.001 ? [other] : [],
                   shift_m: shift > 0.001 ? shift : 0,
                   torn_ties: torn,
                   azimuth_rotation_deg: null,
@@ -5648,8 +5648,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 };
               };
               return {
-                section_a: a.section_id,
-                section_b: b.section_id,
+                line_a: a.line_id,
+                line_b: b.line_id,
                 end_a: endA,
                 end_b: endB,
                 station_a: a,
@@ -5671,8 +5671,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 loose_ends: [],
                 passing_through: [],
                 repeated_shot_ids: 0,
-                plan_keeping_a: plan(a.section_id, b.section_id),
-                plan_keeping_b: plan(b.section_id, a.section_id),
+                plan_keeping_a: plan(a.line_id, b.line_id),
+                plan_keeping_b: plan(b.line_id, a.line_id),
               };
             };
             const forStation = (at: Ref) => {
@@ -5680,82 +5680,82 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const partners = partnersOf(at);
               const ends = partners.filter((p) => isEnd(p));
               if (ends.length === 0) {
-                return partners.length === 0 ? [] : [candidate(at, partners[0]!, 'Merged to the middle of another section')];
+                return partners.length === 0 ? [] : [candidate(at, partners[0]!, 'Merged to the middle of another line')];
               }
               return ends.map((partner) =>
                 candidate(
                   at,
                   partner,
                   null,
-                  ends.filter((p) => p !== partner).map((p) => p.section_id)
+                  ends.filter((p) => p !== partner).map((p) => p.line_id)
                 )
               );
             };
             if (cmd === 'combine_candidate') {
               // The station menu asks for every pair at the point: the clicked
-              // section's first, then each pair of the others ending there.
+              // line's first, then each pair of the others ending there.
               const at = args?.station as Ref;
               const own = forStation(at);
               const ends = isEnd(at) ? partnersOf(at).filter((p) => isEnd(p)) : [];
               const others = ends.flatMap((x, i) =>
                 ends
                   .slice(i + 1)
-                  .filter((y) => y.section_id !== x.section_id)
-                  .map((y) => candidate(x, y, null, [at.section_id])),
+                  .filter((y) => y.line_id !== x.line_id)
+                  .map((y) => candidate(x, y, null, [at.line_id])),
               );
               return [...own, ...others];
             }
             const [first, second] = [args?.a as number, args?.b as number];
             const ends = (id: number): Ref[] => {
-              const section = sections.find((s) => s.id === id);
-              return section ? [{ section_id: id, station_index: 0 }, { section_id: id, station_index: section.shots.length }] : [];
+              const line = lines.find((s) => s.id === id);
+              return line ? [{ line_id: id, station_index: 0 }, { line_id: id, station_index: line.shots.length }] : [];
             };
             if (first === second || ends(first).length === 0 || ends(second).length === 0) return null;
             for (const at of ends(first)) {
-              const found = forStation(at).find((c) => c.section_a === second || c.section_b === second);
+              const found = forStation(at).find((c) => c.line_a === second || c.line_b === second);
               if (found) return found;
             }
             return candidate(
               ends(first)[1]!,
               ends(second)[0]!,
-              'These sections do not meet at an end station: merge two of their ends, or create a loop closure between them, first'
+              'These lines do not meet at an end station: merge two of their ends, or create a loop closure between them, first'
             );
           }
 
-          case 'combine_sections': {
-            console.log('[Mock IPC] combine_sections called with:', args);
+          case 'combine_lines': {
+            console.log('[Mock IPC] combine_lines called with:', args);
             const win = window as unknown as Record<string, unknown>;
-            const existing = win.__MOCK_COMBINE_SECTIONS_CALLS__ as unknown[] | undefined;
+            const existing = win.__MOCK_COMBINE_LINES_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
-            win.__MOCK_COMBINE_SECTIONS_CALLS__ = calls;
-            type Ref = { section_id: number; station_index: number };
-            type MockSection = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
-            const sections = (currentProject?.sections ?? []) as MockSection[];
-            const kept = sections.find((s) => s.id === (args?.kept as number));
-            const other = sections.find((s) => s.id === (args?.other as number));
+            win.__MOCK_COMBINE_LINES_CALLS__ = calls;
+            type Ref = { line_id: number; station_index: number };
+            type MockLine = { id: number; name: string; color: string; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>;
+            const lines = (currentProject?.lines ?? []) as MockLine[];
+            const kept = lines.find((s) => s.id === (args?.kept as number));
+            const other = lines.find((s) => s.id === (args?.other as number));
             const options = args?.options as { name: string; color: string; join?: { kept: string; other: string } } | undefined;
             if (!kept || !other || !options || kept === other) {
-              return { success: false, error: 'Sections not found', section_ids: [], warnings: [] };
+              return { success: false, error: 'Lines not found', line_ids: [], warnings: [] };
             }
             const merges = (currentProject?.station_merges ?? []) as Array<{ station_a: Ref; station_b: Ref }>;
             const loopClosures = (currentProject?.loop_closures ?? []) as Array<{ station_a: Ref; station_b: Ref } & Record<string, unknown>>;
-            const sameRef = (x: Ref, y: Ref) => x.section_id === y.section_id && x.station_index === y.station_index;
+            const sameRef = (x: Ref, y: Ref) => x.line_id === y.line_id && x.station_index === y.station_index;
             const closureOf = (x: Ref, y: Ref) =>
               loopClosures.find((c) => (sameRef(c.station_a, x) && sameRef(c.station_b, y)) || (sameRef(c.station_a, y) && sameRef(c.station_b, x)));
             const touching = (x: Ref, y: Ref) =>
               Boolean(closureOf(x, y)) ||
-              merges.some((m) => (m.station_a.section_id === x.section_id && m.station_a.station_index === x.station_index && m.station_b.section_id === y.section_id && m.station_b.station_index === y.station_index) ||
-                (m.station_b.section_id === x.section_id && m.station_b.station_index === x.station_index && m.station_a.section_id === y.section_id && m.station_a.station_index === y.station_index)) ||
-              colocatedJoins.some(([a, b]) => (a.section_id === x.section_id && a.station_index === x.station_index && b.section_id === y.section_id && b.station_index === y.station_index) ||
-                (b.section_id === x.section_id && b.station_index === x.station_index && a.section_id === y.section_id && a.station_index === y.station_index));
-            const keptEnd = { section_id: kept.id, station_index: kept.shots.length };
-            const keptStart = { section_id: kept.id, station_index: 0 };
-            const otherStart = { section_id: other.id, station_index: 0 };
-            const otherEnd = { section_id: other.id, station_index: other.shots.length };
+              merges.some((m) => (m.station_a.line_id === x.line_id && m.station_a.station_index === x.station_index && m.station_b.line_id === y.line_id && m.station_b.station_index === y.station_index) ||
+                (m.station_b.line_id === x.line_id && m.station_b.station_index === x.station_index && m.station_a.line_id === y.line_id && m.station_a.station_index === y.station_index)) ||
+              colocatedJoins.some(([a, b]) => (a.line_id === x.line_id && a.station_index === x.station_index && b.line_id === y.line_id && b.station_index === y.station_index) ||
+                (b.line_id === x.line_id && b.station_index === x.station_index && a.line_id === y.line_id && a.station_index === y.station_index));
+            const keptEnd = { line_id: kept.id, station_index: kept.shots.length };
+            const keptStart = { line_id: kept.id, station_index: 0 };
+            const otherStart = { line_id: other.id, station_index: 0 };
+            const otherEnd = { line_id: other.id, station_index: other.shots.length };
             let pairing: 'append' | 'append-reversed' | 'prepend' | 'prepend-reversed' | null = null;
             if (options.join) {
-              // The join the dialog showed: two sections in a loop meet twice.
+              // The join the dialog showed: two lines in a loop meet twice.
               const k = options.join.kept === 'end' ? keptEnd : keptStart;
               const o = options.join.other === 'end' ? otherEnd : otherStart;
               if (touching(k, o)) {
@@ -5768,7 +5768,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             else if (touching(keptStart, otherEnd)) pairing = 'prepend';
             else if (touching(keptStart, otherStart)) pairing = 'prepend-reversed';
             if (!pairing) {
-              return { success: false, error: 'These sections do not meet at an end station', section_ids: [], warnings: [] };
+              return { success: false, error: 'These lines do not meet at an end station', line_ids: [], warnings: [] };
             }
             structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             const mod360 = (a: number) => ((a % 360) + 360) % 360;
@@ -5787,12 +5787,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const nk = kept.shots.length;
             const no = other.shots.length;
             const joined = pairing;
-            // Where a station of either section lands in the combined one.
+            // Where a station of either line lands in the combined one.
             const home = (r: Ref): Ref => {
-              if (r.section_id === kept.id) return { section_id: kept.id, station_index: joined.startsWith('append') ? r.station_index : r.station_index + no };
-              if (r.section_id !== other.id) return r;
+              if (r.line_id === kept.id) return { line_id: kept.id, station_index: joined.startsWith('append') ? r.station_index : r.station_index + no };
+              if (r.line_id !== other.id) return r;
               const i = joined.endsWith('reversed') ? no - r.station_index : r.station_index;
-              return { section_id: kept.id, station_index: joined.startsWith('append') ? nk + i : i };
+              return { line_id: kept.id, station_index: joined.startsWith('append') ? nk + i : i };
             };
             const joinStations = joined.startsWith('append')
               ? [keptEnd, joined.endsWith('reversed') ? otherEnd : otherStart]
@@ -5800,9 +5800,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const isJoin = (x: Ref, y: Ref) =>
               (sameRef(x, joinStations[0]!) && sameRef(y, joinStations[1]!)) || (sameRef(x, joinStations[1]!) && sameRef(y, joinStations[0]!));
             // Any other merge between the two becomes a loop closure inside the
-            // combined section; the closure at the join goes.
+            // combined line; the closure at the join goes.
             const between = (m: { station_a: Ref; station_b: Ref }) => {
-              const ids = new Set([m.station_a.section_id, m.station_b.section_id]);
+              const ids = new Set([m.station_a.line_id, m.station_b.line_id]);
               return ids.has(kept.id) && ids.has(other.id) && ids.size === 2 && !isJoin(m.station_a, m.station_b);
             };
             const tornMerges = merges.filter(between);
@@ -5811,15 +5811,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const removedTies = mockCombineRemovals(joinStations[0]!, joinStations[1]!);
             const isRemoved = (m: { station_a: Ref; station_b: Ref }) =>
               removedTies.some((r) => sameRef(r.station_a, m.station_a) && sameRef(r.station_b, m.station_b));
-            // Each station with its section's name before the combine, as the
-            // backend names them (the other section is gone afterwards).
+            // Each station with its line's name before the combine, as the
+            // backend names them (the other line is gone afterwards).
             const label = (r: Ref) => {
-              const name = sections.find((x) => x.id === r.section_id)?.name?.trim();
-              return `${name ? name : `Section ${r.section_id}`} ${r.section_id}:${r.station_index}`;
+              const name = lines.find((x) => x.id === r.line_id)?.name?.trim();
+              return `${name ? name : `Line ${r.line_id}`} ${r.line_id}:${r.station_index}`;
             };
             const removedWarnings = removedTies.map((r) => ({
               code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT',
-              message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the sections left its two stations at the two ends of one shot.`,
+              message: `Removed the merge of ${label(r.station_a)} and ${label(r.station_b)}: combining the lines left its two stations at the two ends of one shot.`,
               severity: 'warning',
             }));
             if (currentProject) {
@@ -5845,32 +5845,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             kept.shots = joined.startsWith('append') ? [...kept.shots, ...moved] : [...moved, ...kept.shots];
             kept.name = options.name;
             kept.color = options.color;
-            sections.splice(sections.indexOf(other), 1);
+            lines.splice(lines.indexOf(other), 1);
             if (currentProject) {
               currentProject.station_merges = merges.filter(
-                (m) => !between(m) && !isRemoved(m) && m.station_a.section_id !== other.id && m.station_b.section_id !== other.id
+                (m) => !between(m) && !isRemoved(m) && m.station_a.line_id !== other.id && m.station_b.line_id !== other.id
               ) as typeof currentProject.station_merges;
             }
-            colocatedJoins = colocatedJoins.filter(([a, b]) => a.section_id !== other.id && b.section_id !== other.id);
+            colocatedJoins = colocatedJoins.filter(([a, b]) => a.line_id !== other.id && b.line_id !== other.id);
             // The backend touches the project, as every edit does (the ruler and the reach
             // field reset on modified_at); the undo snapshot keeps the value from before.
             if (currentProject) currentProject.modified_at = new Date(Date.now() + 1).toISOString();
-            return { success: true, section_id: kept.id, section_ids: [kept.id], warnings: removedWarnings, error: null };
+            return { success: true, line_id: kept.id, line_ids: [kept.id], warnings: removedWarnings, error: null };
           }
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
-            const sectionId = (args?.sectionId as number | undefined) ?? 1;
+            const lineId = (args?.lineId as number | undefined) ?? 1;
             return {
-              section_id: sectionId,
+              line_id: lineId,
               start_pos: 1,
               end_pos: 2,
               kind: 'interior',
-              removed_stations: [{ section_id: sectionId, station_index: 2 }],
+              removed_stations: [{ line_id: lineId, station_index: 2 }],
               removed_merges: [
                 {
-                  station_a: { section_id: sectionId, station_index: 1 },
-                  station_b: { section_id: sectionId, station_index: 2 },
+                  station_a: { line_id: lineId, station_index: 1 },
+                  station_b: { line_id: lineId, station_index: 2 },
                 },
               ],
               removed_closures: [],
@@ -5888,28 +5888,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_range_split':
             console.log('[Mock IPC] delete_shot_range_split called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'delete_shot_range_shift':
             console.log('[Mock IPC] delete_shot_range_shift called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
-          case 'update_section': {
-            console.log('[Mock IPC] update_section called with:', args);
+          case 'update_line': {
+            console.log('[Mock IPC] update_line called with:', args);
             // Mutate currentProject to support persistence testing
             // Note: Tauri invoke passes camelCase from JS side
             if (currentProject && args) {
-              const sectionId = args.sectionId as number;
+              const lineId = args.lineId as number;
               const updates = args.updates as Record<string, unknown>;
-              const section = (currentProject.sections as Array<{ id: number } & Record<string, unknown>>)
-                .find(s => s.id === sectionId);
-              if (section && updates) {
+              const line = (currentProject.lines as Array<{ id: number } & Record<string, unknown>>)
+                .find(s => s.id === lineId);
+              if (line && updates) {
                 // The legacy surveyor/date land on EVERY shot, as the backend's
-                // `SectionUpdates` does: the surveyors (and, for the Ariane
+                // `LineUpdates` does: the surveyors (and, for the Ariane
                 // "explorers / surveyors" form, the explorers) from the text.
-                const shots = (section.shots as Array<Record<string, unknown>> | undefined) ?? [];
+                const shots = (line.shots as Array<Record<string, unknown>> | undefined) ?? [];
                 for (const shot of shots) {
-                  const credit = structuredClone(mockShotCredit(section, shot));
+                  const credit = structuredClone(mockShotCredit(line, shot));
                   if ('surveyor' in updates) {
                     const people = mockLegacyPeople((updates.surveyor as string | null) ?? '');
                     credit.surveyors = people.surveyors;
@@ -5918,42 +5918,42 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   if ('date' in updates) credit.date = (updates.date as string | null) ?? null;
                   if ('surveyor' in updates || 'date' in updates) mockStoreCredit(shot, credit);
                 }
-                Object.assign(section, updates);
-                console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
+                Object.assign(line, updates);
+                console.log('[Mock IPC] update_line: applied updates to line', lineId, updates);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
-          case 'delete_section': {
-            console.log('[Mock IPC] delete_section called with:', args);
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
-            if (currentProject && sectionId !== undefined) {
-              currentProject.sections = (currentProject.sections as Array<{ id: number }>).filter(
-                (s) => s.id !== sectionId,
+          case 'delete_line': {
+            console.log('[Mock IPC] delete_line called with:', args);
+            const lineId = (args?.lineId ?? args?.line_id) as number;
+            if (currentProject && lineId !== undefined) {
+              currentProject.lines = (currentProject.lines as Array<{ id: number }>).filter(
+                (s) => s.id !== lineId,
               );
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
-          case 'reverse_section': {
-            console.log('[Mock IPC] reverse_section called with:', args);
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+          case 'reverse_line': {
+            console.log('[Mock IPC] reverse_line called with:', args);
+            const lineId = (args?.lineId ?? args?.line_id) as number;
             const swapLr = (args?.swapLeftRight ?? args?.swap_left_right ?? false) as boolean;
-            const section = (currentProject?.sections as Array<{
+            const line = (currentProject?.lines as Array<{
               id: number;
               shots: Array<Record<string, unknown>>;
-            }> | undefined)?.find((s) => s.id === sectionId);
-            if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+            }> | undefined)?.find((s) => s.id === lineId);
+            if (!line) {
+              return { success: false, error: `Line ${lineId} not found` };
             }
-            const shotCount = section.shots.length;
+            const shotCount = line.shots.length;
             // Mirror the backend transform (#24, models/project/reverse.rs):
             // reverse the order, normalise both readings to [0, 360), reciprocate
             // AND swap the azimuths (they are two FORWARD readings, so swapping
             // alone is a no-op), swap depths, swap and negate pitch, optionally
             // swap L/R. Ids stay attached to positions; everything else travels.
-            const ids = section.shots.map((sh) => sh.id);
+            const ids = line.shots.map((sh) => sh.id);
             const num = (v: unknown) => (typeof v === 'number' ? v : 0);
             // Every wrap here is `rem_euclid`, matching `reverse.rs::reciprocal`
             // and `models::shot::average_azimuth_of`. A bare `%` truncates toward
@@ -5962,7 +5962,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // because validation only WARNS on an out-of-range azimuth.
             const mod360 = (a: number) => ((a % 360) + 360) % 360;
             const recip = (a: number) => mod360(a + 180);
-            const reversed = [...section.shots].reverse().map((sh) => {
+            const reversed = [...line.shots].reverse().map((sh) => {
               const next: Record<string, unknown> = { ...sh };
               // Normalise BEFORE the degenerate test, like `reverse_shots`: that
               // branch swaps its operands verbatim, so an out-of-range reading
@@ -5996,12 +5996,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sh.id = ids[i];
             });
 
-            // Station 0 is now the far end, so the section anchor gains the
-            // displacement the section used to span or the whole passage
+            // Station 0 is now the far end, so the line anchor gains the
+            // displacement the line used to span or the whole passage
             // teleports. Measured on the PRE-reverse order, like the backend.
             let dx = 0;
             let dy = 0;
-            for (const sh of section.shots) {
+            for (const sh of line.shots) {
               const azIn = num(sh.azimuth_in);
               const azOut = num(sh.azimuth_out);
               // Circular mean of two FORWARD readings (models::average_azimuth_of),
@@ -6016,57 +6016,57 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               dx += horizontal * Math.sin(meanRad);
               dy += horizontal * Math.cos(meanRad);
             }
-            section.shots = reversed;
+            line.shots = reversed;
 
-            // Finiteness first, like `reverse_section`: `NaN !== 0` is TRUE, so a
-            // bare `!== 0` admits a non-finite displacement into `section_offsets`,
+            // Finiteness first, like `reverse_line`: `NaN !== 0` is TRUE, so a
+            // bare `!== 0` admits a non-finite displacement into `line_offsets`,
             // which has no other finite guard - and `save_project` rewrites a
-            // non-finite offset to 0.0, teleporting the section to the origin. See
+            // non-finite offset to 0.0, teleporting the line to the origin. See
             // the backend's `reverse_refuses_to_write_a_non_finite_offset`.
             if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
-              const offsets = currentProject!.section_offsets;
-              const [ox, oy] = readSectionOffset(offsets, sectionId);
-              writeSectionOffset(offsets, sectionId, [ox + dx, oy + dy]);
+              const offsets = currentProject!.line_offsets;
+              const [ox, oy] = readLineOffset(offsets, lineId);
+              writeLineOffset(offsets, lineId, [ox + dx, oy + dy]);
             }
 
             // Station i became station shotCount - i, so every external ref into
-            // this section moves with it - otherwise a merge, closure or datum
+            // this line moves with it - otherwise a merge, closure or datum
             // silently ends up on the opposite physical end. The mock stores
             // refs positionally (the backend's anchor keys survive the reverse
             // on their own), so mirror the index here.
-            const mirror = (ref: { section_id: number; station_index: number } | undefined) => {
-              if (ref && ref.section_id === sectionId) {
+            const mirror = (ref: { line_id: number; station_index: number } | undefined) => {
+              if (ref && ref.line_id === lineId) {
                 ref.station_index = shotCount - ref.station_index;
               }
             };
             for (const m of (currentProject!.station_merges ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>) {
               mirror(m.station_a);
               mirror(m.station_b);
             }
             for (const c of (currentProject!.loop_closures ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
+              station_a: { line_id: number; station_index: number };
+              station_b: { line_id: number; station_index: number };
             }>) {
               mirror(c.station_a);
               mirror(c.station_b);
             }
             for (const zd of (currentProject!.zero_datums ?? []) as Array<{
-              station_ref: { section_id: number; station_index: number };
+              station_ref: { line_id: number; station_index: number };
             }>) {
               mirror(zd.station_ref);
             }
-            // Comments are keyed "sectionId:stationIndex"; rebuild the section's
+            // Comments are keyed "lineId:stationIndex"; rebuild the line's
             // keys in one pass so a mirror can't collide with a key it just wrote.
             const movedComments: Array<[string, string]> = [];
             for (const key of Object.keys(mockStationComments)) {
               const [sid, stationIndex] = key.split(':');
-              if (Number(sid) !== sectionId) continue;
+              if (Number(sid) !== lineId) continue;
               const text = mockStationComments[key]!;
               delete mockStationComments[key];
-              movedComments.push([`${sectionId}:${shotCount - Number(stationIndex)}`, text]);
+              movedComments.push([`${lineId}:${shotCount - Number(stationIndex)}`, text]);
             }
             for (const [key, text] of movedComments) {
               mockStationComments[key] = text;
@@ -6077,15 +6077,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // inferred from geometry - a reverse keeps every station's world position, so
             // a position diff reports nothing. Omitting it here made the whole forward
             // aftermath a silent no-op under the mock while the specs asserted the mirror.
-            // Matches the backend: `{section_id, shot_count}` with the count IN FORCE at
-            // this step, and a shot-less section is DROPPED (nothing was renumbered, and
+            // Matches the backend: `{line_id, shot_count}` with the count IN FORCE at
+            // this step, and a shot-less line is DROPPED (nothing was renumbered, and
             // it is the divisor for the frontend's mirror).
             return {
               success: true,
-              section_ids: [],
-              section_id: sectionId,
+              line_ids: [],
+              line_id: lineId,
               ...(shotCount > 0
-                ? { reversed_sections: [{ section_id: sectionId, shot_count: shotCount }] }
+                ? { reversed_lines: [{ line_id: lineId, shot_count: shotCount }] }
                 : {}),
             };
           }
@@ -6100,22 +6100,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             calls.push(args ?? null);
             win.__MOCK_EDIT_SHOT_CREDIT_CALLS__ = calls;
             const targets = (args?.targets ?? null) as
-              | { type: 'section'; section_id: number }
+              | { type: 'line'; line_id: number }
               | { type: 'shots'; shots: Array<[number, number]> }
               | null;
             const edit = (args?.edit ?? {}) as Record<string, unknown>;
-            const sections = (currentProject?.sections ?? []) as Array<Record<string, unknown> & { id: number }>;
+            const lines = (currentProject?.lines ?? []) as Array<Record<string, unknown> & { id: number }>;
             const picked: Array<[Record<string, unknown>, Record<string, unknown>]> = [];
-            if (targets?.type === 'section') {
-              const section = sections.find((s) => s.id === targets.section_id);
-              if (!section) return { success: false, error: `Section ${targets.section_id} not found` };
-              for (const shot of (section.shots as Array<Record<string, unknown>>) ?? []) picked.push([section, shot]);
+            if (targets?.type === 'line') {
+              const line = lines.find((s) => s.id === targets.line_id);
+              if (!line) return { success: false, error: `Line ${targets.line_id} not found` };
+              for (const shot of (line.shots as Array<Record<string, unknown>>) ?? []) picked.push([line, shot]);
             } else if (targets?.type === 'shots') {
               for (const [sid, shid] of targets.shots) {
-                const section = sections.find((s) => s.id === sid);
-                const shot = ((section?.shots as Array<Record<string, unknown>> | undefined) ?? []).find((x) => x.id === shid);
-                if (!section || !shot) return { success: false, error: `Shot ${shid} not found in section ${sid}` };
-                picked.push([section, shot]);
+                const line = lines.find((s) => s.id === sid);
+                const shot = ((line?.shots as Array<Record<string, unknown>> | undefined) ?? []).find((x) => x.id === shid);
+                if (!line || !shot) return { success: false, error: `Shot ${shid} not found in line ${sid}` };
+                picked.push([line, shot]);
               }
             } else {
               return { success: false, error: 'edit_shot_credit: missing targets' };
@@ -6131,9 +6131,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
             const touched: number[] = [];
             const step: MockCreditStep = [];
-            for (const [section, shot] of picked) {
+            for (const [line, shot] of picked) {
               const stored = shot.credit === undefined ? undefined : structuredClone(shot.credit);
-              const before = mockShotCredit(section, shot);
+              const before = mockShotCredit(line, shot);
               const after: MockCredit = {
                 surveyors: editRole(before.surveyors, 'surveyors'),
                 explorers: editRole(before.explorers, 'explorers'),
@@ -6141,7 +6141,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               };
               mockStoreCredit(shot, after);
               step.push({ shot, before: stored, after: structuredClone(shot.credit) });
-              const sid = section.id as number;
+              const sid = line.id as number;
               if (!touched.includes(sid)) touched.push(sid);
             }
             if (mockCreditBatchStep) mockCreditBatchStep.push(...step);
@@ -6149,7 +6149,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               mockCreditUndo.push(step);
               mockCreditRedo.length = 0;
             }
-            return { success: true, section_ids: touched };
+            return { success: true, line_ids: touched };
           }
 
           case 'create_shot': {
@@ -6162,23 +6162,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             win.__MOCK_CREATE_SHOT_CALLS__ = calls;
             // Mutate currentProject so the committed shot survives the store's
             // refresh: insert after/before the anchor shot (append by default)
-            // with a section-monotonic id.
+            // with a line-monotonic id.
             // Note: Tauri invoke passes camelCase from JS side
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
-            const section = (currentProject?.sections as Array<{
+            const lineId = (args?.lineId ?? args?.line_id) as number;
+            const line = (currentProject?.lines as Array<{
               id: number;
               shots: Array<{ id: number } & Record<string, unknown>>;
-            }> | undefined)?.find((s) => s.id === sectionId);
-            if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+            }> | undefined)?.find((s) => s.id === lineId);
+            if (!line) {
+              return { success: false, error: `Line ${lineId} not found` };
             }
             const shotData = (args?.shot ?? {}) as Record<string, unknown>;
             const afterShotId = (args?.afterShotId ?? args?.after_shot_id ?? null) as number | null;
             const beforeShotId = (args?.beforeShotId ?? args?.before_shot_id ?? null) as number | null;
             const nextId =
-              section.shots.reduce(
+              line.shots.reduce(
                 (max, s) => Math.max(max, s.id),
-                mockShotId(section.id as number, 0) - 1,
+                mockShotId(line.id as number, 0) - 1,
               ) + 1;
             const newShot = {
               id: nextId,
@@ -6198,12 +6198,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               marker_index: (shotData.marker_index as number | null | undefined) ?? null,
               temperature: (shotData.temperature as number | null | undefined) ?? null,
             };
-            let insertAt = section.shots.length;
+            let insertAt = line.shots.length;
             if (afterShotId !== null) {
-              const i = section.shots.findIndex((s) => s.id === afterShotId);
+              const i = line.shots.findIndex((s) => s.id === afterShotId);
               if (i >= 0) insertAt = i + 1;
             } else if (beforeShotId !== null) {
-              const i = section.shots.findIndex((s) => s.id === beforeShotId);
+              const i = line.shots.findIndex((s) => s.id === beforeShotId);
               if (i >= 0) insertAt = i;
             }
             // A new shot with no credit of its own takes its neighbour's - the
@@ -6212,13 +6212,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (shotData.credit !== undefined) {
               (newShot as Record<string, unknown>).credit = shotData.credit;
             } else {
-              const neighbour = insertAt > 0 ? section.shots[insertAt - 1] : section.shots[0];
+              const neighbour = insertAt > 0 ? line.shots[insertAt - 1] : line.shots[0];
               if (neighbour?.credit !== undefined) {
                 (newShot as Record<string, unknown>).credit = structuredClone(neighbour.credit);
               }
             }
-            section.shots.splice(insertAt, 0, newShot);
-            return { success: true, section_ids: [], shot_id: nextId };
+            line.shots.splice(insertAt, 0, newShot);
+            return { success: true, line_ids: [], shot_id: nextId };
           }
 
           case 'split_shot_at_distance': {
@@ -6230,21 +6230,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             calls.push(args ?? null);
             win.__MOCK_SPLIT_SHOT_CALLS__ = calls;
 
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const lineId = (args?.lineId ?? args?.line_id) as number;
             const shotId = (args?.shotId ?? args?.shot_id) as number;
             const distance = args?.distance as number;
-            const section = (currentProject?.sections as Array<{
+            const line = (currentProject?.lines as Array<{
               id: number;
               shots: Array<{ id: number } & Record<string, unknown>>;
-            }> | undefined)?.find((s) => s.id === sectionId);
-            if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+            }> | undefined)?.find((s) => s.id === lineId);
+            if (!line) {
+              return { success: false, error: `Line ${lineId} not found` };
             }
-            const idx = section.shots.findIndex((s) => s.id === shotId);
+            const idx = line.shots.findIndex((s) => s.id === shotId);
             if (idx < 0) {
-              return { success: false, error: `Shot ${shotId} not found in section ${sectionId}` };
+              return { success: false, error: `Shot ${shotId} not found in line ${lineId}` };
             }
-            const target = section.shots[idx] as Record<string, unknown>;
+            const target = line.shots[idx] as Record<string, unknown>;
             const length = (target.length as number) ?? 0;
             // Mirror the backend floor: both children must be at least
             // MIN_SPLIT_CHILD_LENGTH_M (src/utils/shotSplit.ts + models/project.rs),
@@ -6271,9 +6271,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const depthOut = (target.depth_out as number) ?? 0;
             const midDepth = depthIn + (distance / length) * (depthOut - depthIn);
             const nextId =
-              section.shots.reduce(
+              line.shots.reduce(
                 (max, s) => Math.max(max, s.id),
-                mockShotId(section.id as number, 0) - 1,
+                mockShotId(line.id as number, 0) - 1,
               ) + 1;
             const headShot = {
               ...target,
@@ -6285,13 +6285,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
             target.length = length - distance;
             target.depth_in = midDepth;
-            section.shots.splice(idx, 0, headShot);
-            return { success: true, section_ids: [], shot_id: nextId };
+            line.shots.splice(idx, 0, headShot);
+            return { success: true, line_ids: [], shot_id: nextId };
           }
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
 
           case 'add_project_file': {
             console.log('[Mock IPC] add_project_file called with:', args);
@@ -6301,7 +6301,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             calls.push(args ?? null);
             win.__MOCK_ADD_PROJECT_FILE_CALLS__ = calls;
             if (!currentProject) {
-              return { success: false, warnings: [], error: 'No project is open to add the file to', section_ids: [] };
+              return { success: false, warnings: [], error: 'No project is open to add the file to', line_ids: [] };
             }
             const addedPath = (args?.path as string | undefined) ?? '';
             const addedFileName = addedPath.split('/').pop() ?? addedPath;
@@ -6312,20 +6312,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 success: false,
                 warnings: [],
                 error: `EDIT_DISABLED: Add '${addedFileName}' to project is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.`,
-                section_ids: [],
+                line_ids: [],
               };
             }
-            sectionCounter++;
-            const addedSection = {
-              id: sectionCounter,
-              name: `Added ${sectionCounter}`,
+            lineCounter++;
+            const addedLine = {
+              id: lineCounter,
+              name: `Added ${lineCounter}`,
               surveyor: 'Test Surveyor',
               date: new Date().toISOString().split('T')[0],
               color: '#3b82f6',
               direction: 'in',
               shots: [
                 {
-                  id: mockShotId(sectionCounter, 0),
+                  id: mockShotId(lineCounter, 0),
                   azimuth_in: 0,
                   azimuth_out: 0,
                   length: 5,
@@ -6344,18 +6344,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
               ],
             };
-            currentProject.sections.push(addedSection);
+            currentProject.lines.push(addedLine);
             return {
               success: true,
               warnings: [],
               error: null,
-              section_ids: [addedSection.id],
+              line_ids: [addedLine.id],
               // Shape of `add_receipt` (crates/core/src/core/state/project_add.rs).
               import_receipt: {
                 source_format: 'Stalagmight',
                 file_name: addedFileName,
-                sections_found: 1,
-                sections_imported: 1,
+                lines_found: 1,
+                lines_imported: 1,
                 shot_count: 1,
                 closures_requested: 0,
                 closures_created: 0,
@@ -6369,21 +6369,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const lineId = (args?.lineId ?? args?.line_id) as number;
             const shotId = (args?.shotId ?? args?.shot_id) as number;
             const kind = (args?.kind ?? 'Normal') as string;
-            if (currentProject && sectionId && shotId !== undefined) {
-              const section = (
-                currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
-              ).find((s) => s.id === sectionId);
-              if (section) {
-                const shot = section.shots.find((s) => s.id === shotId);
+            if (currentProject && lineId && shotId !== undefined) {
+              const line = (
+                currentProject.lines as Array<{ id: number; shots: Array<{ id: number }> }>
+              ).find((s) => s.id === lineId);
+              if (line) {
+                const shot = line.shots.find((s) => s.id === shotId);
                 if (shot) {
                   (shot as { kind?: string }).kind = kind;
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           }
 
           // Raw sqlite browsing (data table fullscreen)
@@ -6393,7 +6393,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               throw new Error('No project database; save the project to browse raw data');
             }
             // Alphabetical, mirroring list_raw_table_names' ORDER BY name.
-            return ['project', 'sections', 'shots', 'undo_stack'];
+            return ['project', 'lines', 'shots', 'undo_stack'];
           }
 
           case 'get_raw_table': {
@@ -6409,7 +6409,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // NULL → "NULL", blobs → a size placeholder like "<blob 4.2 KB>".
             const str = (value: unknown): string =>
               value === null || value === undefined ? 'NULL' : String(value);
-            const rawSections = project.sections as Array<{
+            const rawLines = project.lines as Array<{
               id: number;
               name?: string | null;
               surveyor?: string | null;
@@ -6433,29 +6433,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   '1',
                 ]];
                 break;
-              case 'sections':
+              case 'lines':
                 columns = ['id', 'name', 'surveyor', 'date', 'color', 'direction', 'quality', 'created_at'];
-                allRows = rawSections.map((section) => [
-                  String(section.id),
-                  str(section.name),
-                  str(section.surveyor),
-                  str(section.date),
-                  str(section.color),
-                  section.direction ?? 'in',
+                allRows = rawLines.map((line) => [
+                  String(line.id),
+                  str(line.name),
+                  str(line.surveyor),
+                  str(line.date),
+                  str(line.color),
+                  line.direction ?? 'in',
                   '1',
                   project.created_at,
                 ]);
                 break;
               case 'shots':
                 columns = [
-                  'id', 'section_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
+                  'id', 'line_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
                   'depth_in', 'depth_out', 'pitch_in', 'pitch_out', 'left_distance', 'right_distance',
                   'up_distance', 'down_distance', 'comment', 'kind', 'marker_index', 'temperature', 'uuid',
                 ];
-                allRows = rawSections.flatMap((section) =>
-                  (section.shots ?? []).map((shot, index) => [
+                allRows = rawLines.flatMap((line) =>
+                  (line.shots ?? []).map((shot, index) => [
                     String(shot.id),
-                    String(section.id),
+                    String(line.id),
                     String(index),
                     str(shot.azimuth_in),
                     str(shot.azimuth_out),
@@ -6601,8 +6601,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const mockGeometry = {
               origin: [-82.46, 24.93] as [number, number],
               shots: [
-                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], kind: 'Normal', section_id: 1 },
-                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], kind: 'Normal', section_id: 1 },
+                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], kind: 'Normal', line_id: 1 },
+                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], kind: 'Normal', line_id: 1 },
               ],
             };
 
@@ -6693,9 +6693,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               file_name: 'MNemo-2026-11-13_143005.dmp',
               firmware: 'MNemo mock firmware',
               bytes: 4096,
-              sections: 2,
+              lines: 2,
               shots: 14,
-              skipped_sections: 0,
+              skipped_lines: 0,
               unread_trailing_bytes: 0,
               unreadable_reason: null,
             };
@@ -6783,16 +6783,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 success: false,
                 warnings: [],
                 error: 'This copy has changes that were never uploaded to SpeleoDB, or its state could not be read. Nothing was removed.',
-                section_ids: [],
+                line_ids: [],
               };
             }
-            return { success: true, warnings: [], error: null, section_ids: [] };
+            return { success: true, warnings: [], error: null, line_ids: [] };
           // Cached SpeleoDB copies on the home screen. Nothing is cached in a mocked
           // run; specs that need copies (owner-classified) override the listing.
           case 'speleodb_cached_projects':
             return [];
           case 'speleodb_remove_cached_copy':
-            return { success: true, warnings: [], error: null, section_ids: [] };
+            return { success: true, warnings: [], error: null, line_ids: [] };
           case 'speleodb_purge_cached_copies':
             return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_project_collaborators': {
@@ -6957,10 +6957,10 @@ export async function setupTauriMocksWithProject(
       const currentProject = {
         id: projectData.id ?? 'mock-project-001',
         name: projectData.name ?? 'Test Project',
-        sections: projectData.sections ?? [],
+        lines: projectData.lines ?? [],
         station_merges: projectData.station_merges ?? [],
         zero_datums: projectData.zero_datums ?? [],
-        section_offsets: projectData.section_offsets ?? {},
+        line_offsets: projectData.line_offsets ?? {},
       };
 
       const mockHandler = (cmd: string, args?: Record<string, unknown>): unknown => {
@@ -6973,7 +6973,7 @@ export async function setupTauriMocksWithProject(
           case 'load_project':
             return currentProject;
           case 'save_project':
-            return { success: true, section_ids: [] };
+            return { success: true, line_ids: [] };
           case 'push_frontend_log':
             return null;
           default:
@@ -7002,5 +7002,5 @@ export async function setupTauriMocksWithProject(
   );
 }
 
-export { createMockProject, createMockSection };
-export type { MockProject, MockSection, MockShot };
+export { createMockProject, createMockLine };
+export type { MockProject, MockLine, MockShot };

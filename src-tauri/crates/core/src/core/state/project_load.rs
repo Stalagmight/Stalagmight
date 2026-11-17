@@ -200,7 +200,7 @@ impl AppState {
             tracing::warn!(
                 healed_offsets,
                 purpose = "self-heal on open",
-                "open_project: corrected drifted section offsets on load"
+                "open_project: corrected drifted line offsets on load"
             );
         }
         // The #27 one-shot backfill (see `do_load_project_full`) is deliberately
@@ -716,7 +716,7 @@ impl AppState {
         }
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
-        // Section offsets are derived state: re-solve them from the merge/datum
+        // Line offsets are derived state: re-solve them from the merge/datum
         // constraints so a file persisted with drifted offsets (e.g. from an
         // older redo bug) opens geometrically correct, before stations are
         // computed below. No-op for an already-consistent file.
@@ -725,12 +725,12 @@ impl AppState {
             tracing::warn!(
                 healed = healed_offsets,
                 purpose = "self-heal derived geometry on load",
-                "Re-derived drifted section offsets while opening project"
+                "Re-derived drifted line offsets while opening project"
             );
         }
         // One-shot #27 backfill. The v12->v13 migration seeded every legacy
         // `is_reference` row as Jump, which is only q2's guess; the real verdict
-        // needs sections + merges + closures assembled, which is exactly what we
+        // needs lines + merges + closures assembled, which is exactly what we
         // have now and the bare migration connection did not. Runs once, then
         // clears its own flag: classification is import-time only (q14), so a
         // later merge must never silently re-flip a kind.
@@ -791,7 +791,7 @@ impl AppState {
             // process if the user closes without saving - and the next open
             // would then keep the migration's Jump seed for good.
             //
-            // Addressed by (section_id, sequence_order), which is what the rows
+            // Addressed by (line_id, sequence_order), which is what the rows
             // are keyed by on disk - `Shot::id` is a synthesised in-memory value
             // and would hit the wrong rows. Virtual shots only: `Normal` is what
             // the migration already wrote for every non-legacy-reference row, so
@@ -812,23 +812,23 @@ impl AppState {
             // without a lock to produce - is the smaller hazard by a wide margin.
             //
             // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
-            // loader reads `ORDER BY section_id, sequence_order` and pushes
+            // loader reads `ORDER BY line_id, sequence_order` and pushes
             // sequentially, so the index is the shot's RANK, while the id
             // carries the raw stored `sequence_order` (read.rs synthesises
-            // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
+            // `line_id * FEATURE_ID_STRIDE + seq` from the column). They
             // differ the moment a legacy file has a gap in the sequence, and
             // a miss here is permanent because the flag is cleared with it.
             let verdicts: Vec<_> = project
-                .sections
+                .lines
                 .iter()
-                .flat_map(|section| {
-                    section
+                .flat_map(|line| {
+                    line
                         .shots
                         .iter()
                         .filter(|shot| shot.kind.is_virtual())
                         .map(|shot| {
                             (
-                                section.id,
+                                line.id,
                                 shot.id % crate::models::FEATURE_ID_STRIDE,
                                 shot.kind,
                             )
@@ -851,14 +851,14 @@ impl AppState {
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);
 
-        // === PHASE 2: Loading sections (15%) ===
-        progress.start_phase(LoadingPhase::LoadingSections);
-        let total_sections = project.sections.len() as u32;
-        for (i, _section) in project.sections.iter().enumerate() {
+        // === PHASE 2: Loading lines (15%) ===
+        progress.start_phase(LoadingPhase::LoadingLines);
+        let total_lines = project.lines.len() as u32;
+        for (i, _line) in project.lines.iter().enumerate() {
             check_cancelled!();
-            progress.update_phase(LoadingPhase::LoadingSections, i as u32 + 1, total_sections);
+            progress.update_phase(LoadingPhase::LoadingLines, i as u32 + 1, total_lines);
         }
-        progress.complete_phase(LoadingPhase::LoadingSections);
+        progress.complete_phase(LoadingPhase::LoadingLines);
 
         // === PHASE 3: Computing stations (20%) ===
         progress.start_phase(LoadingPhase::ComputingStations);
@@ -868,7 +868,7 @@ impl AppState {
         // shows an indeterminate spinner - the per-station callback only
         // fires once the main walk begins.
         let expected_station_total: u32 = project
-            .sections
+            .lines
             .iter()
             .map(|s| s.shots.len() as u32 + 1)
             .sum();
@@ -893,7 +893,7 @@ impl AppState {
         // Calculate penetration distance with computed stations
         stats.penetration_distance =
             project.calculate_penetration_with(&stations, include_reference_legs);
-        // Depth is the absolute station range, not a per-section delta walk (#481).
+        // Depth is the absolute station range, not a per-line delta walk (#481).
         let (min_depth, max_depth) = crate::models::Project::depth_range(&stations);
         stats.min_depth = min_depth;
         stats.max_depth = max_depth;
@@ -1018,7 +1018,7 @@ impl AppState {
         // OLD project's SpeleoDB write lock must release that lock, or it stays locked
         // for every other editor until the app quits - `close_project`/quit release,
         // but a direct open (Ctrl+O, Open-from-SpeleoDB, recents, discard-and-open)
-        // routes here without a close. Done in this non-cancellable finalize section
+        // routes here without a close. Done in this non-cancellable finalize line
         // (so a failed/cancelled load never releases), reading the OLD link BEFORE the
         // database/gate are swapped below, and detached so it can't stall opening the
         // new project on the old server. A same-project fast-forward reload doesn't
@@ -1068,7 +1068,7 @@ impl AppState {
         // An add's pending ignores (#674) belong to the project that just left.
         self.clear_pending_ignores();
         // [#473] Under the SAME acquisition that commits the project - a cancelled load
-        // never reaches this finalize section, so it cannot leave its verdict on the
+        // never reaches this finalize line, so it cannot leave its verdict on the
         // project the user actually opened.
         self.set_history_discarded(history_discarded);
 

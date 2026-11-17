@@ -2,7 +2,7 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
   openSettingsFromMenu,
@@ -18,7 +18,7 @@ async function addShotByTypingInBlankRow(dialog: Locator): Promise<void> {
   );
   const blankIndex = (await lengthCells.count()) - 1;
   // Fill every required field: a row with only a length is incomplete, and Save
-  // refuses while any row is - the same gate the new-section dialog puts in
+  // refuses while any row is - the same gate the new-line dialog puts in
   // front of Create.
   for (const [col, value] of [
     ['length', '5'],
@@ -33,10 +33,10 @@ async function addShotByTypingInBlankRow(dialog: Locator): Promise<void> {
   }
 }
 
-type StationRef = { section_id: number; station_index: number };
+type StationRef = { line_id: number; station_index: number };
 
 type ProjectDialogIds = {
-  sectionId: number;
+  lineId: number;
   shotId: number;
   midShotId: number;
   stationRef: StationRef;
@@ -62,9 +62,9 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Pro
   await createProject(page, 'Dialog Coverage');
 
   const shots = Array.from({ length: shotCount }, (_, idx) => buildShot(idx));
-  await seedProjectWithSections(page, [
+  await seedProjectWithLines(page, [
     {
-      name: 'Dialog Section',
+      name: 'Dialog Line',
       direction: 'in',
       shots,
     },
@@ -83,21 +83,21 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Pro
     if (!e2e) return null;
 
     const state = e2e.projectStore.getState();
-    const section = state.project?.sections?.[0];
-    const shots = section?.shots ?? [];
+    const line = state.project?.lines?.[0];
+    const shots = line?.shots ?? [];
     const station = state.stations.find(
-      (s) => s.station_ref.section_id === section?.id
+      (s) => s.station_ref.line_id === line?.id
     );
 
     return {
-      sectionId: section?.id ?? null,
+      lineId: line?.id ?? null,
       shotId: shots[0]?.id ?? null,
       midShotId: shots[Math.floor(shots.length / 2)]?.id ?? null,
       stationRef: station?.station_ref ?? null,
     };
   });
 
-  if (!ids || !ids.sectionId || !ids.shotId || !ids.midShotId || !ids.stationRef) {
+  if (!ids || !ids.lineId || !ids.shotId || !ids.midShotId || !ids.stationRef) {
     throw new Error('Failed to resolve project IDs for dialog tests.');
   }
 
@@ -115,9 +115,9 @@ async function openDialog(page: Page, name: string, data: Record<string, unknown
 
 test.describe('Dialog Coverage - Edit Shot', () => {
   test('validates input and saves normalized values', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 2);
+    const { lineId, shotId } = await setupProjectWithShots(page, 2);
 
-    await openDialog(page, 'edit-shot', { sectionId, shotId });
+    await openDialog(page, 'edit-shot', { lineId, shotId });
 
     const dialog = page.getByTestId('edit-shot-dialog');
     await expect(dialog).toBeVisible();
@@ -145,11 +145,11 @@ test.describe('Dialog Coverage - Edit Shot', () => {
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    const updatedShot = await page.evaluate(({ sectionId: sId, shotId: shId }) => {
+    const updatedShot = await page.evaluate(({ lineId: sId, shotId: shId }) => {
       const state = (window as any).__E2E_TEST__.projectStore.getState();
-      const section = state.project.sections.find((s: any) => s.id === sId);
-      return section?.shots.find((s: any) => s.id === shId);
-    }, { sectionId, shotId });
+      const line = state.project.lines.find((s: any) => s.id === sId);
+      return line?.shots.find((s: any) => s.id === shId);
+    }, { lineId, shotId });
 
     expect(updatedShot.azimuth_in).toBe(350);
     expect(updatedShot.azimuth_out).toBe(340);
@@ -161,8 +161,8 @@ test.describe('Dialog Coverage - Edit Shot', () => {
 
   test('keeps the dialog body scrollable in a short viewport', async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 420 });
-    const { sectionId, shotId } = await setupProjectWithShots(page, 2);
-    await openDialog(page, 'edit-shot', { sectionId, shotId });
+    const { lineId, shotId } = await setupProjectWithShots(page, 2);
+    await openDialog(page, 'edit-shot', { lineId, shotId });
 
     const body = page.getByTestId('edit-shot-dialog-body');
     await expect(body).toBeVisible();
@@ -182,7 +182,7 @@ test.describe('Dialog Coverage - Edit Shot', () => {
 
 test.describe('Dialog Coverage - Draw Shot', () => {
   test('auto-fills fields and creates a shot', async ({ page }) => {
-    const { sectionId, stationRef } = await setupProjectWithShots(page, 2);
+    const { lineId, stationRef } = await setupProjectWithShots(page, 2);
 
     await openDialog(page, 'draw-shot', { fromStation: stationRef });
 
@@ -221,17 +221,17 @@ test.describe('Dialog Coverage - Draw Shot', () => {
     });
 
     expect(selection?.type).toBe('shot');
-    expect(selection?.sectionId).toBe(sectionId);
+    expect(selection?.lineId).toBe(lineId);
   });
 });
 
-test.describe('Dialog Coverage - Edit Section', () => {
+test.describe('Dialog Coverage - Edit Line', () => {
   test('shows themed tooltip for shot discrepancy warnings', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 2);
+    const { lineId } = await setupProjectWithShots(page, 2);
 
-    await openDialog(page, 'edit-section', { sectionId });
+    await openDialog(page, 'edit-line', { lineId });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible();
 
     // The data table's indicator: a severity-tinted icon carrying its messages
@@ -246,25 +246,25 @@ test.describe('Dialog Coverage - Edit Section', () => {
   });
 
   test('updates metadata, edits shots, adds and deletes rows', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 2);
+    const { lineId } = await setupProjectWithShots(page, 2);
 
-    await openDialog(page, 'edit-section', { sectionId });
+    await openDialog(page, 'edit-line', { lineId });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible();
 
-    const nameInput = dialog.getByTestId('section-name-input');
-    const surveyorInput = dialog.getByTestId('section-surveyors-input');
-    const colorHexInput = dialog.getByTestId('section-color-hex-input');
-    const dateInput = dialog.getByTestId('section-date-input');
+    const nameInput = dialog.getByTestId('line-name-input');
+    const surveyorInput = dialog.getByTestId('line-surveyors-input');
+    const colorHexInput = dialog.getByTestId('line-color-hex-input');
+    const dateInput = dialog.getByTestId('line-date-input');
 
-    await nameInput.fill('Updated Section');
+    await nameInput.fill('Updated Line');
     // Replace the surveyor: x the seeded one, add the new one (every shot).
-    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('Test Surveyor');
-    await dialog.getByTestId('section-surveyors-pill-0-remove').click();
+    await expect(dialog.getByTestId('line-surveyors-pill-0-label')).toHaveText('Test Surveyor');
+    await dialog.getByTestId('line-surveyors-pill-0-remove').click();
     await surveyorInput.fill('New Surveyor');
     await surveyorInput.press('Enter');
-    await expect(dialog.getByTestId('section-surveyors-pill-0-label')).toHaveText('New Surveyor');
+    await expect(dialog.getByTestId('line-surveyors-pill-0-label')).toHaveText('New Surveyor');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
     // The date commits on Enter (or when the field is left), never per keystroke.
@@ -288,33 +288,33 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    const updatedSection = await page.evaluate((sId) => {
+    const updatedLine = await page.evaluate((sId) => {
       const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project.sections.find((s: any) => s.id === sId);
-    }, sectionId);
+      return state.project.lines.find((s: any) => s.id === sId);
+    }, lineId);
 
-    expect(updatedSection.name).toBe('Updated Section');
-    // The section's surveyor is per-shot now: one credit edit sets every shot.
-    expect(updatedSection.surveyor).toBeUndefined();
+    expect(updatedLine.name).toBe('Updated Line');
+    // The line's surveyor is per-shot now: one credit edit sets every shot.
+    expect(updatedLine.surveyor).toBeUndefined();
     expect(
-      updatedSection.shots.every(
+      updatedLine.shots.every(
         (shot: any) => shot.credit?.surveyors?.map((p: any) => p.name).join(';') === 'New Surveyor',
       ),
     ).toBe(true);
     // Closure-adjustment weight is no longer exposed in this dialog; the stored
     // value must survive a save untouched.
-    expect(updatedSection.quality).toBe(1);
-    expect(updatedSection.color).toBe('#123456');
-    expect(updatedSection.shots.every((shot: any) => shot.credit?.date === '2026-02-01')).toBe(true);
-    expect(updatedSection.shots[0]?.length).toBe(9.5);
+    expect(updatedLine.quality).toBe(1);
+    expect(updatedLine.color).toBe('#123456');
+    expect(updatedLine.shots.every((shot: any) => shot.credit?.date === '2026-02-01')).toBe(true);
+    expect(updatedLine.shots[0]?.length).toBe(9.5);
   });
 
   test('shows mid-shot delete warning and applies shift delete', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 3);
+    const { lineId } = await setupProjectWithShots(page, 3);
 
-    await openDialog(page, 'edit-section', { sectionId });
+    await openDialog(page, 'edit-line', { lineId });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible();
 
     // Delete goes through the grid's row context menu, like the data table's -
@@ -322,7 +322,7 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await dialog.getByTestId('shot-editor-cell-1-length').click({ button: 'right' });
     await dialog.getByTestId('shot-editor-context-delete-rows').click();
 
-    const warning = dialog.locator('text=This is a mid-section shot.');
+    const warning = dialog.locator('text=This is a mid-line shot.');
     await expect(warning).toBeVisible();
 
     const saveButton = dialog.getByRole('button', { name: 'Save' });
@@ -354,19 +354,19 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
   });
 
   test('deletes a shot and clears selection', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 2);
+    const { lineId, shotId } = await setupProjectWithShots(page, 2);
 
-    await page.evaluate(({ sectionId: sId, shotId: shId }) => {
+    await page.evaluate(({ lineId: sId, shotId: shId }) => {
       (window as any).__E2E_TEST__.uiStore.getState().setSelection({
         type: 'shot',
-        sectionId: sId,
+        lineId: sId,
         shotId: shId,
       });
-    }, { sectionId, shotId });
+    }, { lineId, shotId });
 
     await openDialog(page, 'confirm-delete', {
       type: 'shot',
-      sectionId,
+      lineId,
       shotId,
       totalShots: 2,
     });
@@ -384,15 +384,15 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
   });
 
   test('shows split name inputs when split is required', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 2);
+    const { lineId, shotId } = await setupProjectWithShots(page, 2);
 
     await openDialog(page, 'confirm-delete', {
       type: 'shot',
-      sectionId,
+      lineId,
       shotId,
       totalShots: 3,
       splitRequired: true,
-      sectionName: 'SplitTarget',
+      lineName: 'SplitTarget',
     });
 
     const dialog = page.getByTestId('confirm-dialog');
@@ -465,23 +465,23 @@ test.describe('Dialog Coverage - Settings Map', () => {
   });
 });
 
-test.describe('Dialog Coverage - Section Adjust', () => {
-  test('shows missing section state for invalid section id', async ({ page }) => {
+test.describe('Dialog Coverage - Line Adjust', () => {
+  test('shows missing line state for invalid line id', async ({ page }) => {
     await setupMockedPage(page);
 
-    await openDialog(page, 'section-adjust', { sectionId: 9999 });
+    await openDialog(page, 'line-adjust', { lineId: 9999 });
 
-    const dialog = page.getByTestId('section-adjust-dialog');
+    const dialog = page.getByTestId('line-adjust-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('text=Section not found')).toBeVisible();
+    await expect(dialog.locator('text=Line not found')).toBeVisible();
   });
 
   test('applies preview offset and cancels to revert', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 2);
+    const { lineId } = await setupProjectWithShots(page, 2);
 
-    await openDialog(page, 'section-adjust', { sectionId });
+    await openDialog(page, 'line-adjust', { lineId });
 
-    const dialog = page.getByTestId('section-adjust-dialog');
+    const dialog = page.getByTestId('line-adjust-dialog');
     await expect(dialog).toBeVisible();
 
     const dxInput = dialog.getByTestId('dx-input');
@@ -524,20 +524,20 @@ test.describe('Dialog Coverage - Edit Station', () => {
 
 test.describe('Dialog Coverage - Delete Shot Choice', () => {
   test('renders impact details and shifts geometry', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+    const { lineId, shotId } = await setupProjectWithShots(page, 3);
 
-    await page.evaluate(({ sectionId: sId, shotId: shId }) => {
+    await page.evaluate(({ lineId: sId, shotId: shId }) => {
       (window as any).__E2E_TEST__.uiStore.getState().setSelection({
         type: 'shot',
-        sectionId: sId,
+        lineId: sId,
         shotId: shId,
       });
-    }, { sectionId, shotId });
+    }, { lineId, shotId });
 
     await openDialog(page, 'delete-shot-choice', {
-      sectionId,
+      lineId,
       shotId,
-      sectionName: 'Impact Section',
+      lineName: 'Impact Line',
     });
 
     const dialog = page.getByTestId('delete-shot-choice-dialog');
@@ -557,36 +557,36 @@ test.describe('Dialog Coverage - Delete Shot Choice', () => {
     expect(selection).toBeNull();
   });
 
-  test('opens split section dialog from split action', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+  test('opens split line dialog from split action', async ({ page }) => {
+    const { lineId, shotId } = await setupProjectWithShots(page, 3);
 
     await openDialog(page, 'delete-shot-choice', {
-      sectionId,
+      lineId,
       shotId,
-      sectionName: 'SplitTarget',
+      lineName: 'SplitTarget',
     });
 
     const dialog = page.getByTestId('delete-shot-choice-dialog');
     await expect(dialog).toBeVisible();
 
-    await dialog.getByRole('button', { name: 'Split Section' }).click();
+    await dialog.getByRole('button', { name: 'Split Line' }).click();
 
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
-    await expect(page.getByTestId('split-section-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('split-line-dialog')).toBeVisible({ timeout: 5000 });
   });
 });
 
-test.describe('Dialog Coverage - Split Section', () => {
-  test('validates split names and selects the original section', async ({ page }) => {
-    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+test.describe('Dialog Coverage - Split Line', () => {
+  test('validates split names and selects the original line', async ({ page }) => {
+    const { lineId, shotId } = await setupProjectWithShots(page, 3);
 
-    await openDialog(page, 'split-section', {
-      sectionId,
+    await openDialog(page, 'split-line', {
+      lineId,
       shotId,
-      sectionName: 'SplitTarget',
+      lineName: 'SplitTarget',
     });
 
-    const dialog = page.getByTestId('split-section-dialog');
+    const dialog = page.getByTestId('split-line-dialog');
     await expect(dialog).toBeVisible();
 
     const nameA = dialog.getByTestId('split-name-a');
@@ -610,8 +610,8 @@ test.describe('Dialog Coverage - Split Section', () => {
     const selection = await page.evaluate(() => {
       return (window as any).__E2E_TEST__.uiStore.getState().selection;
     });
-    expect(selection?.type).toBe('section');
-    expect(selection?.sectionId).toBe(sectionId);
+    expect(selection?.type).toBe('line');
+    expect(selection?.lineId).toBe(lineId);
   });
 });
 
@@ -625,7 +625,7 @@ test.describe('Dialog Coverage - Merge Projects', () => {
         location: null,
         file_path: '/mock/alpha.stalx',
         modified_at: '2026-01-15T00:00:00Z',
-        section_count: 2,
+        line_count: 2,
         total_length: 120.5,
         station_count: 5,
         gps_center: null,
@@ -636,7 +636,7 @@ test.describe('Dialog Coverage - Merge Projects', () => {
         location: null,
         file_path: '/mock/beta.stalx',
         modified_at: '2026-01-20T00:00:00Z',
-        section_count: 3,
+        line_count: 3,
         total_length: 1500,
         station_count: 6,
         gps_center: null,
@@ -649,7 +649,7 @@ test.describe('Dialog Coverage - Merge Projects', () => {
     const dialog = page.getByTestId('merge-projects-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('merge-output-name-input')).toHaveValue('Alpha_merged');
-    await expect(dialog.locator('text=Total sections:')).toBeVisible();
+    await expect(dialog.locator('text=Total lines:')).toBeVisible();
     await expect(dialog.locator('text=1.6 km')).toBeVisible();
 
     const outputInput = dialog.getByTestId('merge-output-name-input');

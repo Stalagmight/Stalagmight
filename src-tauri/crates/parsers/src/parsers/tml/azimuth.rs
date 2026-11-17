@@ -9,9 +9,9 @@ use crate::models::{AzimuthReference, CorrectionSource};
 
 use super::TmlFile;
 
-/// The north reference to record on every section of this file (#438).
+/// The north reference to record on every line of this file (#438).
 ///
-/// One reference per FILE, not per section: `useMagneticAzimuth` is a file-level
+/// One reference per FILE, not per line: `useMagneticAzimuth` is a file-level
 /// flag in this format, unlike Compass, where the declination is per survey.
 ///
 /// The magnetic case wants a declination, and the reproducible source is the
@@ -51,7 +51,7 @@ pub(super) fn tml_azimuth_reference(tml: &TmlFile, warnings: &mut Vec<String>) -
         return AzimuthReference::magnetic(0.0, CorrectionSource::Unknown);
     };
 
-    // The EARLIEST dated section: the earliest survey date this format records,
+    // The EARLIEST dated line: the earliest survey date this format records,
     // and the one the declination should be evaluated at.
     //
     // An undated file gets no model call at all. Substituting today's date made
@@ -59,7 +59,7 @@ pub(super) fn tml_azimuth_reference(tml: &TmlFile, warnings: &mut Vec<String>) -
     // so from 2026 on every undated file took the failure branch and printed
     // whatever today happened to be into its receipt. The same file has to
     // import to the same project on any two days.
-    let Some(epoch_date) = tml.sections.iter().filter_map(|section| section.date).min() else {
+    let Some(epoch_date) = tml.lines.iter().filter_map(|line| line.date).min() else {
         tracing::info!(
             purpose = "record the file's north reference",
             "The file declares magnetic azimuths and is georeferenced, but carries no survey \
@@ -165,7 +165,7 @@ mod tests {
             "premise: the fixture must be georeferenced, or the date is never reached"
         );
         assert!(
-            tml.sections.iter().all(|s| s.date.is_none()),
+            tml.lines.iter().all(|s| s.date.is_none()),
             "premise: the fixture must carry no survey date"
         );
 
@@ -213,7 +213,7 @@ mod tests {
             undated_georeferenced_magnetic().replace("<Date></Date>", "<Date>2030-04-01</Date>");
         let tml = parse_synthetic_tmlu(&xml);
         assert!(
-            tml.sections.iter().any(|s| s.date.is_some()),
+            tml.lines.iter().any(|s| s.date.is_some()),
             "premise: the fixture must carry a survey date"
         );
 

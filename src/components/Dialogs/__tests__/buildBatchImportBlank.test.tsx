@@ -11,10 +11,10 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 
-// SectionPreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
+// LinePreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
 // execute. Stub it - this test exercises the batch builder, not the preview.
-vi.mock('../SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../SectionPreview')>()),
+vi.mock('../LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
@@ -22,7 +22,7 @@ vi.mock('maplibre-gl', () => ({ default: {} }));
 import { buildBatchImport } from '../DmpNewImportDialog';
 import { NonFiniteShotError } from '../../../utils/importPayloadGuard';
 import type { EditableShot } from '../../common/ShotTableEditor';
-import type { SectionEditState } from '../../../utils/batchImportHelpers';
+import type { LineEditState } from '../../../utils/batchImportHelpers';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import type { VirtualConnection } from '../../../utils/segmentContext';
@@ -73,25 +73,25 @@ const dmpSection = (name: string, shots: number) => ({
 });
 
 function build(shots: EditableShot[]) {
-  const dmpFile = { version: 1, sections: [dmpSection('S', 2)] } as unknown as DmpFile;
+  const dmpFile = { version: 1, lines: [dmpSection('S', 2)] } as unknown as DmpFile;
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0]),
     defaultSurveyors: [{ name: 'S' }],
     defaultExplorers: [],
     defaultDate: null,
     fileHash: null,
-    sectionHashes: [],
+    lineHashes: [],
   };
   const connections: VirtualConnection[] = [
     {
-      importSectionIndex: 0,
+      importLineIndex: 0,
       importStationIndex: 0,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       existingStationIndex: 0,
     },
   ];
-  const sectionEdits = new Map<number, SectionEditState>([
+  const lineEdits = new Map<number, LineEditState>([
     [
       0,
       {
@@ -103,13 +103,13 @@ function build(shots: EditableShot[]) {
         quality: 1,
         reverse: false,
         shots,
-      } as unknown as SectionEditState,
+      } as unknown as LineEditState,
     ],
   ]);
-  return buildBatchImport(connections, null, dmpFile, selectionConfig, sectionEdits);
+  return buildBatchImport(connections, null, dmpFile, selectionConfig, lineEdits);
 }
 
-/** Every shot the batch would send, across the section configs it produced. */
+/** Every shot the batch would send, across the line configs it produced. */
 const emitted = (batch: { configs: { shots?: unknown[] }[] }) =>
   batch.configs.flatMap((c) => c.shots ?? []);
 
@@ -131,7 +131,7 @@ describe('buildBatchImport with a blank new row', () => {
   it('refuses a partly filled row rather than dropping it or sending NaN', () => {
     // Half-filled is NOT blank - dropping it would throw away data the user
     // typed. The UI gates ask them to finish it; this last check makes sure no
-    // route reaches IPC with the NaN, and says which section and row.
+    // route reaches IPC with the NaN, and says which line and row.
     const partial = { ...blank(2), length: 7 } as EditableShot;
     expect(() => build([measured(0), partial])).toThrow(NonFiniteShotError);
     expect(() => build([measured(0), partial])).toThrow(/Section "S" row 2/);

@@ -16,7 +16,7 @@ import { padProbeBox } from '../hitProbe';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { encodeFeatureId } from '../../../../utils/ids';
-import type { Section } from '../../../../types/ipc/Section';
+import type { Line } from '../../../../types/ipc/Line';
 import type { Station } from '../../../../types/ipc/Station';
 
 /** #27: both virtual kinds drawn (the default) / neither drawn. */
@@ -32,7 +32,7 @@ const project = (lngLat: [number, number]) => ({
 const fakeMap = { project: (c: [number, number]) => project(c) } as unknown as MaplibreMap;
 const eventAt = (x: number, y: number) => ({ point: { x, y } }) as MapMouseEvent;
 
-function fixture(): { sections: Section[]; stations: Station[] } {
+function fixture(): { lines: Line[]; stations: Station[] } {
   const shot = (id: number, isVirtual = false) => ({
     id,
     azimuth_in: 0,
@@ -51,9 +51,9 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     marker_index: null,
     temperature: null,
   });
-  // Two sections crossing near the origin plus a reference spur, so probe
-  // points have competing candidates from different sections.
-  const sections: Section[] = [
+  // Two lines crossing near the origin plus a reference spur, so probe
+  // points have competing candidates from different lines.
+  const lines: Line[] = [
     {
       id: 1, name: 'A', color: '#ff0000',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
@@ -65,8 +65,8 @@ function fixture(): { sections: Section[]; stations: Station[] } {
       shots: [shot(201), shot(202)],
     },
   ];
-  const st = (section_id: number, station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id, station_index },
+  const st = (line_id: number, station_index: number, x: number, y: number): Station => ({
+    station_ref: { line_id, station_index },
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
@@ -82,7 +82,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     st(2, 1, 25, -10),
     st(2, 2, 55, -10),
   ];
-  return { sections, stations };
+  return { lines, stations };
 }
 
 /**
@@ -90,18 +90,18 @@ function fixture(): { sections: Section[]; stations: Station[] } {
  * compares against, directly from the SoA. This mirrors the (deleted) stock
  * non-merged feature builder for exactly the fields these tests read: geometry
  * (via the same `metersToMapCoords` transform `SurveyGeometryIndex` uses) plus
- * `sectionId` / `stationIndex` / `shotId`, in the same emit order (stations in
- * global-index order; shots in section -> shot-offset order; reference shots
+ * `lineId` / `stationIndex` / `shotId`, in the same emit order (stations in
+ * global-index order; shots in line -> shot-offset order; reference shots
  * included). It is an INDEPENDENT oracle - it does not call the index under test.
  */
 function buildRefFeatures(data: ReturnType<typeof surveyDataFromLegacy>): {
   stationFeatures: GeoJSON.Feature[];
   shotFeatures: GeoJSON.Feature[];
 } {
-  // (sectionId, stationIndex) -> global station index.
+  // (lineId, stationIndex) -> global station index.
   const stationLookup = new Map<number, Map<number, number>>();
   for (let g = 0; g < data.stationCount; g++) {
-    const sid = data.stationSectionIds[g]!;
+    const sid = data.stationLineIds[g]!;
     const stIdx = data.stationIndices[g]!;
     let inner = stationLookup.get(sid);
     if (!inner) {
@@ -119,18 +119,18 @@ function buildRefFeatures(data: ReturnType<typeof surveyDataFromLegacy>): {
         type: 'Point',
         coordinates: metersToMapCoords(data.stationCoords[base]!, data.stationCoords[base + 1]!, null),
       },
-      properties: { sectionId: data.stationSectionIds[g], stationIndex: data.stationIndices[g] },
+      properties: { lineId: data.stationLineIds[g], stationIndex: data.stationIndices[g] },
     });
   }
   const shotFeatures: GeoJSON.Feature[] = [];
-  for (const section of data.sections) {
-    const inner = stationLookup.get(section.id);
+  for (const line of data.lines) {
+    const inner = stationLookup.get(line.id);
     if (!inner) continue;
-    for (let i = 0; i < section.shotCount; i++) {
+    for (let i = 0; i < line.shotCount; i++) {
       const fromGlobal = inner.get(i);
       const toGlobal = inner.get(i + 1);
       if (fromGlobal === undefined || toGlobal === undefined) continue;
-      const shotId = data.shotIds[section.shotOffset + i]!;
+      const shotId = data.shotIds[line.shotOffset + i]!;
       const f = fromGlobal * 3;
       const t = toGlobal * 3;
       shotFeatures.push({
@@ -142,7 +142,7 @@ function buildRefFeatures(data: ReturnType<typeof surveyDataFromLegacy>): {
             metersToMapCoords(data.stationCoords[t]!, data.stationCoords[t + 1]!, null),
           ],
         },
-        properties: { sectionId: section.id, shotId },
+        properties: { lineId: line.id, shotId },
       });
     }
   }
@@ -150,8 +150,8 @@ function buildRefFeatures(data: ReturnType<typeof surveyDataFromLegacy>): {
 }
 
 function buildPerFeature() {
-  const { sections, stations } = fixture();
-  const data = surveyDataFromLegacy(sections, stations);
+  const { lines, stations } = fixture();
+  const data = surveyDataFromLegacy(lines, stations);
   return { data, sets: buildRefFeatures(data) };
 }
 
@@ -177,7 +177,7 @@ function probeGrid(): Array<{ x: number; y: number }> {
 describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
   const { data, sets } = buildPerFeature();
   const index = new SurveyGeometryIndex(data, null);
-  const allSectionIds = [1, 2];
+  const allLineIds = [1, 2];
   const stationHitArea = 10;
   const shotHitArea = 8;
 
@@ -196,12 +196,12 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
       });
       const oldPick = resolveNearestStation(fakeMap, eventAt(p.x, p.y), oldCandidates, stationHitArea);
       const newPick = index.nearestStation(
-        (c) => project(c), p.x, p.y, allSectionIds, stationHitArea, { visibleKinds: { jump: true, reference: true } },
+        (c) => project(c), p.x, p.y, allLineIds, stationHitArea, { visibleKinds: { jump: true, reference: true } },
       );
       if (oldPick) {
         hits++;
         expect(newPick).not.toBeNull();
-        expect(newPick!.ref.section_id).toBe(oldPick.properties!.sectionId);
+        expect(newPick!.ref.line_id).toBe(oldPick.properties!.lineId);
         expect(newPick!.ref.station_index).toBe(oldPick.properties!.stationIndex);
       } else {
         expect(newPick).toBeNull();
@@ -228,12 +228,12 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
       });
       const oldPick = resolveNearestShot(fakeMap, eventAt(p.x, p.y), oldCandidates, shotHitArea);
       const newPick = index.nearestShot(
-        (c) => project(c), p.x, p.y, allSectionIds, shotHitArea, { visibleKinds: { jump: true, reference: true } },
+        (c) => project(c), p.x, p.y, allLineIds, shotHitArea, { visibleKinds: { jump: true, reference: true } },
       );
       if (oldPick) {
         hits++;
         expect(newPick).not.toBeNull();
-        expect(newPick!.sectionId).toBe(oldPick.properties!.sectionId);
+        expect(newPick!.lineId).toBe(oldPick.properties!.lineId);
         expect(newPick!.shotId).toBe(oldPick.properties!.shotId);
       } else if (newPick) {
         // The rendered gate (half line width) is narrower than the resolver
@@ -246,20 +246,20 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
   });
 
   it('reference filtering hides reference shots and all-reference stations', () => {
-    // Probe directly on the reference shot (section 1, shot 103: (30,25)-(60,25)).
+    // Probe directly on the reference shot (line 1, shot 103: (30,25)-(60,25)).
     const px = (45 / 111320) * SCALE;
     const py = -(25 / 111320) * SCALE;
-    const withRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { visibleKinds: { jump: true, reference: true } });
+    const withRef = index.nearestShot((c) => project(c), px, py, allLineIds, 8, { visibleKinds: { jump: true, reference: true } });
     expect(withRef?.shotId).toBe(103);
-    const withoutRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { visibleKinds: { jump: false, reference: false } });
+    const withoutRef = index.nearestShot((c) => project(c), px, py, allLineIds, 8, { visibleKinds: { jump: false, reference: false } });
     expect(withoutRef?.shotId).not.toBe(103);
     // Station (1,3) only touches the reference shot -> hidden when refs are.
     const stPx = (60 / 111320) * SCALE;
     const stPy = -(25 / 111320) * SCALE;
-    const stWith = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds: { jump: true, reference: true } });
-    expect(stWith?.ref).toEqual({ section_id: 1, station_index: 3 });
-    const stWithout = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds: { jump: false, reference: false } });
-    expect(stWithout?.ref).not.toEqual({ section_id: 1, station_index: 3 });
+    const stWith = index.nearestStation((c) => project(c), stPx, stPy, allLineIds, 10, { visibleKinds: { jump: true, reference: true } });
+    expect(stWith?.ref).toEqual({ line_id: 1, station_index: 3 });
+    const stWithout = index.nearestStation((c) => project(c), stPx, stPy, allLineIds, 10, { visibleKinds: { jump: false, reference: false } });
+    expect(stWithout?.ref).not.toEqual({ line_id: 1, station_index: 3 });
   });
 
   it('a reference-only station goes non-interactive when only References are hidden (#27)', () => {
@@ -271,17 +271,17 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     const stPx = (60 / 111320) * SCALE;
     const stPy = -(25 / 111320) * SCALE;
     const at = (visibleKinds: { jump: boolean; reference: boolean }) =>
-      index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds });
+      index.nearestStation((c) => project(c), stPx, stPy, allLineIds, 10, { visibleKinds });
 
-    expect(at({ jump: true, reference: true })?.ref).toEqual({ section_id: 1, station_index: 3 });
+    expect(at({ jump: true, reference: true })?.ref).toEqual({ line_id: 1, station_index: 3 });
     // Jumps still on - irrelevant to a station no jump touches.
     expect(at({ jump: true, reference: false })?.ref).not.toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 3,
     });
     // And hiding jumps alone must NOT hide it: its own leg is still drawn.
     expect(at({ jump: false, reference: true })?.ref).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 3,
     });
   });
@@ -302,36 +302,36 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     expect(g.from[0]).toBeCloseTo(30 / 111320, 9);
     expect(g.to[1]).toBeCloseTo(25 / 111320, 9);
     expect(g.isReference).toBe(false);
-    const ref = index.stationCoords({ section_id: 2, station_index: 2 })!;
+    const ref = index.stationCoords({ line_id: 2, station_index: 2 })!;
     expect(ref[0]).toBeCloseTo(55 / 111320, 9);
-    expect(index.stationCoords({ section_id: 9, station_index: 0 })).toBeNull();
-    expect(index.isZeroDatum({ section_id: 1, station_index: 0 })).toBe(false);
+    expect(index.stationCoords({ line_id: 9, station_index: 0 })).toBeNull();
+    expect(index.isZeroDatum({ line_id: 1, station_index: 0 })).toBe(false);
   });
 });
 
 /**
- * Per-section geometry, used by the drag-preview capture. It must agree with the
- * per-item accessors and expose each shot's TRUE section position (`index`), since
+ * Per-line geometry, used by the drag-preview capture. It must agree with the
+ * per-item accessors and expose each shot's TRUE line position (`index`), since
  * the capture maps shot i to stations i / i+1. Reading this from the SoA replaces
- * filtering the lazy `Station[]` proxy per section, which was quadratic and froze
- * segment drags on a 14k-section project.
+ * filtering the lazy `Station[]` proxy per line, which was quadratic and froze
+ * segment drags on a 14k-line project.
  */
 describe('SurveyGeometryIndex.sectionGeometry', () => {
   const { data } = buildPerFeature();
   const index = new SurveyGeometryIndex(data, null);
 
-  it('returns a section\'s stations in station_index order with matching coords', () => {
-    const { stations } = index.sectionGeometry(1);
+  it('returns a line\'s stations in station_index order with matching coords', () => {
+    const { stations } = index.lineGeometry(1);
     expect(stations.map((s) => s.stationIndex)).toEqual([0, 1, 2, 3]);
     for (const s of stations) {
       expect(s.lngLat).toEqual(
-        index.stationCoords({ section_id: 1, station_index: s.stationIndex })!,
+        index.stationCoords({ line_id: 1, station_index: s.stationIndex })!,
       );
     }
   });
 
-  it('returns shots with their section position and endpoints matching shotGeometry', () => {
-    const { shots } = index.sectionGeometry(1);
+  it('returns shots with their line position and endpoints matching shotGeometry', () => {
+    const { shots } = index.lineGeometry(1);
     expect(shots.map((s) => s.index)).toEqual([0, 1, 2]);
     for (const sh of shots) {
       const geo = index.shotGeometry(1, sh.shotId)!;
@@ -342,20 +342,20 @@ describe('SurveyGeometryIndex.sectionGeometry', () => {
     }
     // Shot `index` joins station index -> index+1, which the drag capture relies on.
     for (const sh of shots) {
-      expect(sh.from).toEqual(index.stationCoords({ section_id: 1, station_index: sh.index })!);
-      expect(sh.to).toEqual(index.stationCoords({ section_id: 1, station_index: sh.index + 1 })!);
+      expect(sh.from).toEqual(index.stationCoords({ line_id: 1, station_index: sh.index })!);
+      expect(sh.to).toEqual(index.stationCoords({ line_id: 1, station_index: sh.index + 1 })!);
     }
   });
 
   it('includes reference shots (the drag capture moves them too)', () => {
-    // Fixture shot 103 in section 1 is a reference shot.
-    const { shots } = index.sectionGeometry(1);
+    // Fixture shot 103 in line 1 is a reference shot.
+    const { shots } = index.lineGeometry(1);
     const ref = shots.find((s) => s.shotId === 103);
     expect(ref?.isReference).toBe(true);
   });
 
-  it('returns empty for an unknown section', () => {
-    expect(index.sectionGeometry(999)).toEqual({ stations: [], shots: [] });
+  it('returns empty for an unknown line', () => {
+    expect(index.lineGeometry(999)).toEqual({ stations: [], shots: [] });
   });
 });
 
@@ -371,18 +371,18 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
 
   it('enumerates every station and shot with identities matching the per-item accessors', () => {
     const { stations, shots } = index.enumerateGeometry(ALL_KINDS);
-    // Fixture: section 1 has 3 shots (4 stations), section 2 has 2 shots (3 stations).
+    // Fixture: line 1 has 3 shots (4 stations), line 2 has 2 shots (3 stations).
     expect(stations).toHaveLength(7);
     expect(shots).toHaveLength(5);
     for (const s of stations) {
       const viaAccessor = index.stationCoords({
-        section_id: s.sectionId,
+        line_id: s.lineId,
         station_index: s.stationIndex,
       })!;
       expect(s.lngLat).toEqual(viaAccessor);
     }
     for (const sh of shots) {
-      const geo = index.shotGeometry(sh.sectionId, sh.shotId)!;
+      const geo = index.shotGeometry(sh.lineId, sh.shotId)!;
       expect(sh.from).toEqual(geo.from);
       expect(sh.to).toEqual(geo.to);
     }
@@ -404,21 +404,21 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
  * Measured-path shot resolver (#26). The measured along-line tint feeds the
  * custom measure-path layer through `measuredShotSegments`, which must resolve
  * a shot from its canonical feature id WITHOUT decoding it. Shot ids are
- * globally encoded (`sectionId * FEATURE_ID_STRIDE + local`), so a
+ * globally encoded (`lineId * FEATURE_ID_STRIDE + local`), so a
  * `floor(fid / STRIDE)` split (the old code) mis-attributes every shot in
- * section >= 1 and drops its tint (stations, whose scoped id is a small local
+ * line >= 1 and drops its tint (stations, whose scoped id is a small local
  * index, decoded fine - the reported "stations tint, shots don't" bug). This
  * fixture reproduces the production id scheme so the regression is pinned.
  */
 describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
-  const mkShot = (id: number, isVirtual = false): Section['shots'][number] => ({
+  const mkShot = (id: number, isVirtual = false): Line['shots'][number] => ({
     id, azimuth_in: 0, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 0,
     pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
     comment: null, kind: isVirtual ? ('Reference' as const) : ('Normal' as const), marker_index: null, temperature: null,
   });
-  // Section 0 shot ids are local-sized (< STRIDE); section 1 shot ids are the
+  // Line 0 shot ids are local-sized (< STRIDE); line 1 shot ids are the
   // production global form (100000, 100001), which is where the old decode broke.
-  const sections: Section[] = [
+  const lines: Line[] = [
     {
       id: 0, name: 'A', color: '#f00',
       direction: 'in', quality: 1, next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null, shots: [mkShot(0), mkShot(1)],
@@ -429,8 +429,8 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
       shots: [mkShot(100000), mkShot(100001, true)],
     },
   ];
-  const st = (section_id: number, station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id, station_index },
+  const st = (line_id: number, station_index: number, x: number, y: number): Station => ({
+    station_ref: { line_id, station_index },
     coordinates: { x, y, z: 0 },
     is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
   });
@@ -438,19 +438,19 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
     st(0, 0, 0, 0), st(0, 1, 10, 0), st(0, 2, 10, 10),
     st(1, 0, 100, 0), st(1, 1, 110, 0), st(1, 2, 110, 10),
   ];
-  const index = new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+  const index = new SurveyGeometryIndex(surveyDataFromLegacy(lines, stations), null);
   const mc = (m: number) => m / 111320;
 
-  it('resolves a section >= 1 shot by its globally-encoded feature id', () => {
+  it('resolves a line >= 1 shot by its globally-encoded feature id', () => {
     // encodeFeatureId(1, 100000) = 200000; the old floor(200000/STRIDE)=2 split
-    // looked up a nonexistent section 2 and returned nothing.
+    // looked up a nonexistent line 2 and returned nothing.
     const segs = index.measuredShotSegments(new Set([encodeFeatureId(1, 100000)]), ALL_KINDS);
     expect(segs).toHaveLength(1);
     expect(segs[0]!.from[0]).toBeCloseTo(mc(100), 9);
     expect(segs[0]!.to[0]).toBeCloseTo(mc(110), 9);
   });
 
-  it('resolves shots across sections in one pass', () => {
+  it('resolves shots across lines in one pass', () => {
     const segs = index.measuredShotSegments(
       new Set([encodeFeatureId(0, 0), encodeFeatureId(1, 100000)]),
       ALL_KINDS,
@@ -470,13 +470,13 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
 });
 
 /**
- * Candidate-section gate (#customRender): `sectionsIntersectingBox` replaces the
+ * Candidate-line gate (#customRender): `linesIntersectingBox` replaces the
  * old `queryRenderedFeatures` prefilter, so candidate discovery no longer needs
  * the stock layers to be rendered. The gate must return a SUPERSET of the
- * sections the per-item SoA resolvers then pick - never dropping an in-tolerance
+ * lines the per-item SoA resolvers then pick - never dropping an in-tolerance
  * hit - and honor the padded-box reach semantics (`padProbeBox`).
  */
-describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
+describe('SurveyGeometryIndex.linesIntersectingBox candidate gate', () => {
   const { data } = buildPerFeature();
   const index = new SurveyGeometryIndex(data, null);
   const proj = (c: [number, number]) => project(c);
@@ -487,58 +487,58 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
     x: (mx / 111320) * SCALE,
     y: -(my / 111320) * SCALE,
   });
-  const sectionsAt = (box: ReturnType<typeof padProbeBox>) =>
-    index.sectionsIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1]);
+  const linesAt = (box: ReturnType<typeof padProbeBox>) =>
+    index.linesIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1]);
 
-  it('returns empty for a probe far from every section', () => {
+  it('returns empty for a probe far from every line', () => {
     const p = screen(500, 500);
-    expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).size).toBe(0);
+    expect(linesAt(padProbeBox([p.x, p.y], stationReach)).size).toBe(0);
   });
 
-  it('includes a section whose geometry sits under the probe box', () => {
-    // Station (1,3) at (60,25) m: section 1 owns the geometry near there.
+  it('includes a line whose geometry sits under the probe box', () => {
+    // Station (1,3) at (60,25) m: line 1 owns the geometry near there.
     const p = screen(60, 25);
-    expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).has(1)).toBe(true);
+    expect(linesAt(padProbeBox([p.x, p.y], stationReach)).has(1)).toBe(true);
   });
 
-  it('is a SUPERSET of the sections the SoA resolver picks (station + shot)', () => {
+  it('is a SUPERSET of the lines the SoA resolver picks (station + shot)', () => {
     for (const p of probeGrid()) {
       const st = index.nearestStation(proj, p.x, p.y, [1, 2], stationReach, {
         visibleKinds: { jump: true, reference: true },
       });
       if (st) {
-        expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).has(st.ref.section_id)).toBe(true);
+        expect(linesAt(padProbeBox([p.x, p.y], stationReach)).has(st.ref.line_id)).toBe(true);
       }
       const sh = index.nearestShot(proj, p.x, p.y, [1, 2], shotReach, { visibleKinds: { jump: true, reference: true } });
       if (sh) {
-        expect(sectionsAt(padProbeBox([p.x, p.y], shotReach)).has(sh.sectionId)).toBe(true);
+        expect(linesAt(padProbeBox([p.x, p.y], shotReach)).has(sh.lineId)).toBe(true);
       }
     }
   });
 
-  it('reach padding captures a section just beyond its bounds (missed unpadded)', () => {
-    // Probe 8 px to the RIGHT of station (1,3) at (60,25) m - section 1's max x.
+  it('reach padding captures a line just beyond its bounds (missed unpadded)', () => {
+    // Probe 8 px to the RIGHT of station (1,3) at (60,25) m - line 1's max x.
     // The station is within the 10 px reach, but an UNPADDED point box lands past
-    // the section's AABB and misses it; padding by the reach restores it.
+    // the line's AABB and misses it; padding by the reach restores it.
     const at = screen(60, 25);
     const p = { x: at.x + 8, y: at.y };
-    expect(sectionsAt(padProbeBox([p.x, p.y], 0)).has(1)).toBe(false);
-    const cand = sectionsAt(padProbeBox([p.x, p.y], stationReach));
+    expect(linesAt(padProbeBox([p.x, p.y], 0)).has(1)).toBe(false);
+    const cand = linesAt(padProbeBox([p.x, p.y], stationReach));
     expect(cand.has(1)).toBe(true);
     // The resolver, fed that candidate set, confirms the real in-reach hit.
     const hit = index.nearestStation(proj, p.x, p.y, cand, stationReach, { visibleKinds: { jump: true, reference: true } });
-    expect(hit?.ref).toEqual({ section_id: 1, station_index: 3 });
+    expect(hit?.ref).toEqual({ line_id: 1, station_index: 3 });
   });
 });
 
 /**
  * Camera-keyed projected-AABB cache (#customRender). The gate now reuses each
- * section's projected screen AABB across probes of the SAME camera. The cached
+ * line's projected screen AABB across probes of the SAME camera. The cached
  * path (and its axis-aligned 2-corner fast path) must return EXACTLY the sets
  * the legacy per-call 4-corner reprojection did, and must reproject only when
  * the caller's camera key changes.
  */
-describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
+describe('SurveyGeometryIndex.linesIntersectingBox camera cache', () => {
   const { data } = buildPerFeature();
   const proj = (c: [number, number]) => project(c);
   const stationReach = 10;
@@ -547,7 +547,7 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
     idx: SurveyGeometryIndex,
     box: ReturnType<typeof padProbeBox>,
     cam?: { key: string; axisAligned: boolean },
-  ) => idx.sectionsIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1], cam);
+  ) => idx.linesIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1], cam);
 
   it('cached (2-corner + 4-corner) matches the uncached path across the probe grid', () => {
     const naive = new SurveyGeometryIndex(data, null);
@@ -564,16 +564,16 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
     const index = new SurveyGeometryIndex(data, null);
     const spy = vi.fn(proj);
     const box = boxes[0]!;
-    // First probe with key A -> projects (2 sections * 2 corners under axisAligned).
-    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'A', axisAligned: true });
+    // First probe with key A -> projects (2 lines * 2 corners under axisAligned).
+    index.linesIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'A', axisAligned: true });
     const afterFirst = spy.mock.calls.length;
     expect(afterFirst).toBe(4);
     // Same key -> cache hit, no further project() calls even for a different box.
     const box2 = boxes[boxes.length - 1]!;
-    index.sectionsIntersectingBox(spy, box2[0][0], box2[0][1], box2[1][0], box2[1][1], { key: 'A', axisAligned: true });
+    index.linesIntersectingBox(spy, box2[0][0], box2[0][1], box2[1][0], box2[1][1], { key: 'A', axisAligned: true });
     expect(spy.mock.calls.length).toBe(afterFirst);
     // New key -> reproject once more.
-    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'B', axisAligned: true });
+    index.linesIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'B', axisAligned: true });
     expect(spy.mock.calls.length).toBe(afterFirst * 2);
   });
 
@@ -581,10 +581,10 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
     const index = new SurveyGeometryIndex(data, null);
     const spy = vi.fn(proj);
     const box = boxes[0]!;
-    // No camera -> 4-corner reprojection each call (2 sections * 4 corners = 8).
-    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
+    // No camera -> 4-corner reprojection each call (2 lines * 4 corners = 8).
+    index.linesIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
     expect(spy.mock.calls.length).toBe(8);
-    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
+    index.linesIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
     expect(spy.mock.calls.length).toBe(16);
   });
 });
@@ -592,7 +592,7 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
 /**
  * Overlapping markers of different ranks. The circles draw real-line stations
  * on top (`writeCircleDrawOrder`), and the pick must agree: a jump or reference
- * section tied in at a real station must not take the real station's click.
+ * line tied in at a real station must not take the real station's click.
  */
 describe('SurveyGeometryIndex.nearestStation rank priority', () => {
   /** px -> meters under the test projection (1 degree = SCALE px). */
@@ -602,25 +602,25 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
     comment: null, kind, marker_index: null, temperature: null,
   });
-  const sec = (id: number, kind: 'Normal' | 'Jump' | 'Reference'): Section => ({
+  const sec = (id: number, kind: 'Normal' | 'Jump' | 'Reference'): Line => ({
     id, name: `S${id}`, color: '#ffffff', direction: 'in', quality: 1,
     next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
     shots: [kindShot(id * 10, kind)],
   });
-  const st = (section_id: number, station_index: number, xPx: number, yPx: number): Station => ({
-    station_ref: { section_id, station_index },
+  const st = (line_id: number, station_index: number, xPx: number, yPx: number): Station => ({
+    station_ref: { line_id, station_index },
     coordinates: { x: m(xPx), y: m(yPx), z: 0 },
     is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
   });
-  /** Each section: station 0 at `at`, station 1 30 px further along its own
+  /** Each line: station 0 at `at`, station 1 30 px further along its own
    *  direction, out of reach of every probe below. */
   function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; at: [number, number]; dir: [number, number] }>) {
-    const sections = specs.map((s) => sec(s.id, s.kind));
+    const lines = specs.map((s) => sec(s.id, s.kind));
     const stations = specs.flatMap((s) => [
       st(s.id, 0, s.at[0], s.at[1]),
       st(s.id, 1, s.at[0] + 30 * s.dir[0], s.at[1] + 30 * s.dir[1]),
     ]);
-    return new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+    return new SurveyGeometryIndex(surveyDataFromLegacy(lines, stations), null);
   }
   const DISC = 5; // radius 4 + stroke 1, the app default
   const pick = (
@@ -628,9 +628,9 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     visibleKinds: { jump: boolean; reference: boolean } = ALL_KINDS, disc: number | null = DISC,
   ) =>
     index.nearestStation(project, xPx, -yPx, ids, 10, disc === null ? { visibleKinds } : { visibleKinds, stationDiscPx: disc })
-      ?.ref.section_id ?? null;
+      ?.ref.line_id ?? null;
 
-  // A tie-in: a reference and a jump section start ON the real station, listed
+  // A tie-in: a reference and a jump line start ON the real station, listed
   // (and so iterated) before it.
   const tieIn = build([
     { id: 1, kind: 'Reference', at: [0, 0], dir: [0, -1] },
@@ -638,7 +638,7 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
     { id: 3, kind: 'Normal', at: [0, 0], dir: [1, 0] },
   ]);
 
-  it('coincident markers: the real station wins, whatever the section order', () => {
+  it('coincident markers: the real station wins, whatever the line order', () => {
     expect(pick(tieIn, 0, 0, [1, 2, 3])).toBe(3);
     expect(pick(tieIn, 0, 0, [3, 2, 1])).toBe(3);
     // Off the discs but within reach: equal distances, rank still decides.
@@ -679,39 +679,39 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
   it('sizes the drawn disc like the shader: zero datum 2x, highlight size', () => {
     // Real zero-datum station at 0, reference 6 px right: the real disc is
     // 10 px there (2 x 5), so 7 px out is still on it.
-    const sections = [sec(1, 'Reference'), sec(3, 'Normal')];
+    const lines = [sec(1, 'Reference'), sec(3, 'Normal')];
     const stations = [
       st(1, 0, 6, 0), st(1, 1, 6, -30),
       { ...st(3, 0, 0, 0), is_zero_datum: true }, st(3, 1, -30, 0),
     ];
-    const zd = new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+    const zd = new SurveyGeometryIndex(surveyDataFromLegacy(lines, stations), null);
     expect(pick(zd, 7, 0, [1, 3])).toBe(3);
-    // A hovered real section draws at the hover size (1.5x = 7.5 px), which
+    // A hovered real line draws at the hover size (1.5x = 7.5 px), which
     // wins over the zero-datum 2x: 7 px is on its disc, 8 px is off.
     const hover = (sid: number, zero: boolean) => (sid === 3 ? 1.5 : zero ? 2 : 1);
     const pickSized = (x: number) =>
       zd.nearestStation(project, x, 0, [1, 3], 10, {
         visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: hover,
-      })?.ref.section_id;
+      })?.ref.line_id;
     expect(pickSized(7)).toBe(3);
     expect(pickSized(8)).toBe(1);
-    // Plain offset fixture, real section selected (1.25x = 6.25 px disc): 6 px
+    // Plain offset fixture, real line selected (1.25x = 6.25 px disc): 6 px
     // out is now on the real disc, though nearer the reference centre.
     const sel = (sid: number) => (sid === 3 ? 1.25 : 1);
     expect(
       offset.nearestStation(project, 6, 0, [1, 3], 10, {
         visibleKinds: ALL_KINDS, stationDiscPx: DISC, stationSizeMul: sel,
-      })?.ref.section_id,
+      })?.ref.line_id,
     ).toBe(3);
   });
 
-  // The selection's section is drawn above every rank (#700 review), so it
+  // The selection's line is drawn above every rank (#700 review), so it
   // takes the pick where its marker is drawn, and only there.
-  it('the raised section outranks every rank, where its marker is drawn', () => {
+  it('the raised line outranks every rank, where its marker is drawn', () => {
     const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
       index.nearestStation(project, xPx, -yPx, ids, 10, {
-        visibleKinds: ALL_KINDS, stationDiscPx: DISC, raisedSectionId: raised,
-      })?.ref.section_id ?? null;
+        visibleKinds: ALL_KINDS, stationDiscPx: DISC, raisedLineId: raised,
+      })?.ref.line_id ?? null;
     // Coincident tie-in: the raised jump or reference station beats the real one.
     expect(raisedPick(tieIn, 0, 0, [1, 2, 3], 2)).toBe(2);
     expect(raisedPick(tieIn, 0, 0, [3, 2, 1], 1)).toBe(1);
@@ -729,7 +729,7 @@ describe('SurveyGeometryIndex.nearestStation rank priority', () => {
       { id: 1, kind: 'Normal', at: [3, 0], dir: [0, -1] },
       { id: 3, kind: 'Normal', at: [0, 0], dir: [-1, 0] },
     ]);
-    // Inside section 3's disc but nearer section 1's centre: nearest wins.
+    // Inside line 3's disc but nearer line 1's centre: nearest wins.
     expect(pick(same, 2.5, 0, [1, 3])).toBe(1);
     expect(pick(same, 2.5, 0, [3, 1])).toBe(1);
   });
@@ -747,20 +747,20 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
     pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
     comment: null, kind, marker_index: null, temperature: null,
   });
-  const st = (section_id: number, station_index: number, xPx: number, yPx: number): Station => ({
-    station_ref: { section_id, station_index },
+  const st = (line_id: number, station_index: number, xPx: number, yPx: number): Station => ({
+    station_ref: { line_id, station_index },
     coordinates: { x: m(xPx), y: m(yPx), z: 0 },
     is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
   });
-  /** Each section: one horizontal shot from x 0 to 40 px at height `y`. */
+  /** Each line: one horizontal shot from x 0 to 40 px at height `y`. */
   function build(specs: Array<{ id: number; kind: 'Normal' | 'Jump' | 'Reference'; y: number }>) {
-    const sections: Section[] = specs.map((s) => ({
+    const lines: Line[] = specs.map((s) => ({
       id: s.id, name: `S${s.id}`, surveyor: null, date: null, color: '#ffffff', direction: 'in', quality: 1,
       next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [kindShot(s.id * 10, s.kind)],
     }));
     const stations = specs.flatMap((s) => [st(s.id, 0, 0, s.y), st(s.id, 1, 40, s.y)]);
-    return new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+    return new SurveyGeometryIndex(surveyDataFromLegacy(lines, stations), null);
   }
   const HALF = 1; // shot width 2, the app default
   const pick = (
@@ -772,7 +772,7 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
       visibleKinds: extra.kinds ?? ALL_KINDS,
       ...(half === null ? {} : { shotHalfWidthPx: half }),
       ...(extra.mul ? { shotWidthMul: extra.mul } : {}),
-    })?.sectionId ?? null;
+    })?.lineId ?? null;
   };
 
   // A reference and a jump line run exactly over the real line, listed first.
@@ -802,15 +802,15 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
     expect(pick(near, 20, -1, [1, 3], { half: null })).toBe(1); // plain nearest
     // Off the real line's width: the reference.
     expect(pick(near, 20, -1.4, [1, 3])).toBe(1);
-    // A selected real section draws wider (1.5x): 1.4 px is on it now.
+    // A selected real line draws wider (1.5x): 1.4 px is on it now.
     expect(pick(near, 20, -1.4, [1, 3], { mul: (sid) => (sid === 3 ? 1.5 : 1) })).toBe(3);
   });
 
-  it('the raised section outranks every kind, where its line is drawn', () => {
+  it('the raised line outranks every kind, where its line is drawn', () => {
     const raisedPick = (index: SurveyGeometryIndex, xPx: number, yPx: number, ids: number[], raised: number | null) =>
       index.nearestShot(project, xPx, -yPx, ids, 4, {
-        visibleKinds: ALL_KINDS, shotHalfWidthPx: HALF, raisedSectionId: raised,
-      })?.sectionId ?? null;
+        visibleKinds: ALL_KINDS, shotHalfWidthPx: HALF, raisedLineId: raised,
+      })?.lineId ?? null;
     expect(raisedPick(over, 20, 0, [1, 2, 3], 1)).toBe(1);
     expect(raisedPick(over, 20, 0, [3, 2, 1], 2)).toBe(2);
     expect(raisedPick(over, 20, 0, [1, 2, 3], null)).toBe(3);
@@ -820,19 +820,19 @@ describe('SurveyGeometryIndex.nearestShot rank priority', () => {
     expect(raisedPick(near, 20, -0.2, [1, 3], 1)).toBe(3);
   });
 
-  // Inside the raised section its own kinds keep their order, as drawn: here a
+  // Inside the raised line its own kinds keep their order, as drawn: here a
   // Reference shot out and a Normal shot straight back over it, so station 0
   // (reference-only) and station 2 (real) coincide, both listed reference first.
-  it('inside the raised section, its real line still beats its own virtual one', () => {
-    const section: Section = {
+  it('inside the raised line, its real line still beats its own virtual one', () => {
+    const line: Line = {
       id: 5, name: 'S5', color: '#ffffff', direction: 'in', quality: 1,
       next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [kindShot(50, 'Reference'), kindShot(51, 'Normal')],
     };
     const loop = new SurveyGeometryIndex(
-      surveyDataFromLegacy([section], [st(5, 0, 0, 0), st(5, 1, 40, 0), st(5, 2, 0, 0)]), null,
+      surveyDataFromLegacy([line], [st(5, 0, 0, 0), st(5, 1, 40, 0), st(5, 2, 0, 0)]), null,
     );
-    const opts = { visibleKinds: ALL_KINDS, raisedSectionId: 5, shotHalfWidthPx: HALF, stationDiscPx: 5 };
+    const opts = { visibleKinds: ALL_KINDS, raisedLineId: 5, shotHalfWidthPx: HALF, stationDiscPx: 5 };
     expect(loop.nearestShot(project, 20, 0, [5], 4, opts)?.shotId).toBe(51); // the Normal shot
     expect(loop.nearestStation(project, 0, 0, [5], 10, opts)?.ref.station_index).toBe(2);
   });

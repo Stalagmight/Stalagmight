@@ -114,7 +114,7 @@ export function SyntacticHighlightingSettings({
         {t('settings.syntactic.title')}
       </h3>
 
-      <SettingsSection title={t('settings.syntactic.sections.level')} data-testid="section-syntactic-level">
+      <SettingsSection title={t('settings.syntactic.sections.level')} data-testid="line-syntactic-level">
         <SettingRow
           label={t('settings.syntactic.level.label')}
           helpText={t('settings.syntactic.level.help')}
@@ -132,7 +132,7 @@ export function SyntacticHighlightingSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.syntactic.sections.preset')} data-testid="section-syntactic-preset">
+      <SettingsSection title={t('settings.syntactic.sections.preset')} data-testid="line-syntactic-preset">
         <SettingRow
           label={t('settings.syntactic.preset.label')}
           helpText={t('settings.syntactic.preset.help')}
@@ -156,7 +156,7 @@ export function SyntacticHighlightingSettings({
           <SettingsSection
             key={group.id}
             title={t(group.titleKey)}
-            data-testid={`section-syntactic-colors-${group.id}`}
+            data-testid={`line-syntactic-colors-${group.id}`}
           >
             {roles.map((role) => {
               const overridden = presetOverrides[role.id] !== undefined;

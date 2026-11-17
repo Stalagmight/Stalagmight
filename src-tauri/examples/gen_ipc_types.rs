@@ -15,7 +15,7 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::mnemo::{MnemoError, MnemoPort, MnemoPullProgress, MnemoPullResult};
 use stalagmight_lib::commands::project::ProjectState;
-use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
+use stalagmight_lib::commands::line::{SegmentGeometry, SegmentLineGeometry};
 use stalagmight_lib::commands::survey_geometry::{
     GeometryShot, SurveyGeometry, SurveyGeometryError,
 };
@@ -26,13 +26,13 @@ use stalagmight_lib::config::{
     LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
     MapPaletteConfig, MapSnapConfig, OverlapMode, PaletteChoiceConfig, PanelsConfig, PeopleConfig,
     PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    LineColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
     ThemeMode, UnitsConfig, UpdateTrack, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    LockReleaseOutcome, ReversedSection, ValidationWarning, WarningSeverity,
+    LockReleaseOutcome, ReversedLine, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
@@ -47,31 +47,31 @@ use stalagmight_lib::export::color_scale::{
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
-    CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection, OrphanPlacementSuggestion,
+    CrossLineSuggestion, ImportLineForSuggestion, MatchDirection, OrphanPlacementSuggestion,
     PlacementSuggestion, SuggestionConfidence, TargetType,
 };
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombinePick, CombinePlan, CombineRemovedClosure,
-    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, CombineSectionsOptions,
+    CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, CombineLinesOptions,
     ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
     CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
     DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
-    GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportLineConfig,
     KeptMovesReason, LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot,
     Person, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata, ProjectStats,
-    ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Section,
-    SectionCreditSummary, SectionData, SectionEnd, SectionRelationships, SectionStats,
-    SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
-    SplitPreview, SplitSectionOptions, SplitSide, Station, StationMergeWire, StationPair,
+    ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint, Line,
+    LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats,
+    LineUpdates, Shot, ShotData, ShotKind, ShotUpdates, SkippedClosure, SpeleoLink, SplitAt,
+    SplitPreview, SplitLineOptions, SplitSide, Station, StationMergeWire, StationPair,
     StationRef, SurveyCredit, SurveyDirection, TankMaterial, Team, TornTie, TornTieKind,
     TornTieReason, UnrecognisedShotKind, ZeroDatumPreview, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
-    GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
+    GpxFile, GpxRoute, GpxRoutePoint, GpxLinePlacement, GpxTrack, GpxTrackPoint,
     GpxTrackSegment, GpxWaypoint,
 };
 use stalagmight_lib::parsers::tml::{
@@ -113,30 +113,30 @@ fn flatten_import_paths(file: &Path) {
     let mut changed = false;
     let flattened: Vec<String> = content
         .split('\n')
-        .map(|line| {
+        .map(|ts_line| {
             let from = " from \"";
-            let Some(open) = line
+            let Some(open) = ts_line
                 .starts_with("import type ")
-                .then(|| line.find(from))
+                .then(|| ts_line.find(from))
                 .flatten()
             else {
-                return line.to_owned();
+                return ts_line.to_owned();
             };
             let path_start = open + from.len();
-            let Some(close) = line[path_start..].find('"') else {
-                return line.to_owned();
+            let Some(close) = ts_line[path_start..].find('"') else {
+                return ts_line.to_owned();
             };
-            let spec = &line[path_start..path_start + close];
+            let spec = &ts_line[path_start..path_start + close];
             let stem = spec.rsplit('/').next().unwrap_or(spec);
             let flat = format!("./{stem}");
             if spec == flat {
-                return line.to_owned();
+                return ts_line.to_owned();
             }
             changed = true;
             format!(
                 "{}{flat}{}",
-                &line[..path_start],
-                &line[path_start + close..]
+                &ts_line[..path_start],
+                &ts_line[path_start + close..]
             )
         })
         .collect();
@@ -184,7 +184,7 @@ fn main() {
     // Core command/result types
     export::<CommandResult>(&out_dir);
     export::<LockReleaseOutcome>(&out_dir);
-    export::<ReversedSection>(&out_dir);
+    export::<ReversedLine>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
     export::<IntegrityRepairResult>(&out_dir);
@@ -233,25 +233,25 @@ fn main() {
     export::<AzimuthReference>(&out_dir);
     export::<CorrectionSource>(&out_dir);
     export::<NorthReference>(&out_dir);
-    export::<Section>(&out_dir);
+    export::<Line>(&out_dir);
     // Per-shot survey credit (surveyors, explorers, date as people)
     export::<Person>(&out_dir);
     export::<SurveyCredit>(&out_dir);
     export::<CreditTargets>(&out_dir);
     export::<CreditEdit>(&out_dir);
     export::<CreditedPerson>(&out_dir);
-    export::<SectionCreditSummary>(&out_dir);
-    export::<SectionData>(&out_dir);
-    export::<SectionUpdates>(&out_dir);
-    export::<SectionStats>(&out_dir);
+    export::<LineCreditSummary>(&out_dir);
+    export::<LineData>(&out_dir);
+    export::<LineUpdates>(&out_dir);
+    export::<LineStats>(&out_dir);
     export::<SurveyDirection>(&out_dir);
-    export::<ImportSectionConfig>(&out_dir);
+    export::<ImportLineConfig>(&out_dir);
     export::<ImportPlacement>(&out_dir);
     export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
     export::<CombineCandidate>(&out_dir);
     export::<CombinePick>(&out_dir);
-    export::<CombineSectionsOptions>(&out_dir);
+    export::<CombineLinesOptions>(&out_dir);
     export::<CombineJoinEnds>(&out_dir);
     export::<CombineJoinKind>(&out_dir);
     export::<CombinePlan>(&out_dir);
@@ -264,10 +264,10 @@ fn main() {
     export::<TornTieKind>(&out_dir);
     export::<TornTieReason>(&out_dir);
     export::<KeptMovesReason>(&out_dir);
-    export::<SectionEnd>(&out_dir);
+    export::<LineEnd>(&out_dir);
     export::<SplitAt>(&out_dir);
     export::<SplitPreview>(&out_dir);
-    export::<SplitSectionOptions>(&out_dir);
+    export::<SplitLineOptions>(&out_dir);
     export::<SplitSide>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
@@ -288,7 +288,7 @@ fn main() {
     export::<Coordinates>(&out_dir);
     export::<GpsCoordinates>(&out_dir);
     export::<GpsBounds>(&out_dir);
-    export::<SectionRelationships>(&out_dir);
+    export::<LineRelationships>(&out_dir);
     export::<StationPair>(&out_dir);
     export::<ClosurePair>(&out_dir);
     export::<ClosureUpdate>(&out_dir);
@@ -310,8 +310,8 @@ fn main() {
     export::<SuggestionConfidence>(&out_dir);
     export::<PlacementSuggestion>(&out_dir);
     export::<TargetType>(&out_dir);
-    export::<CrossSectionSuggestion>(&out_dir);
-    export::<ImportSectionForSuggestion>(&out_dir);
+    export::<CrossLineSuggestion>(&out_dir);
+    export::<ImportLineForSuggestion>(&out_dir);
     export::<OrphanPlacementSuggestion>(&out_dir);
 
     // Undo history
@@ -334,7 +334,7 @@ fn main() {
     export::<GpxTrackPoint>(&out_dir);
     export::<GpxRoute>(&out_dir);
     export::<GpxRoutePoint>(&out_dir);
-    export::<GpxSectionPlacement>(&out_dir);
+    export::<GpxLinePlacement>(&out_dir);
 
     // TML/TMLU import
     export::<TmlFile>(&out_dir);
@@ -374,7 +374,7 @@ fn main() {
 
     // Segment geometry (for import preview)
     export::<SegmentGeometry>(&out_dir);
-    export::<SegmentSectionGeometry>(&out_dir);
+    export::<SegmentLineGeometry>(&out_dir);
 
     // Survey geometry
     export::<GeometryShot>(&out_dir);
@@ -412,7 +412,7 @@ fn main() {
     export::<DpvUnit>(&out_dir);
     export::<DpvRig>(&out_dir);
     export::<DisplayConfig>(&out_dir);
-    export::<SectionColorsConfig>(&out_dir);
+    export::<LineColorsConfig>(&out_dir);
     export::<GpsOrigin>(&out_dir);
     export::<StationConfig>(&out_dir);
     export::<ShotConfig>(&out_dir);
@@ -513,7 +513,7 @@ fn main() {
     let export_list = [
         "CommandResult",
         "LockReleaseOutcome",
-        "ReversedSection",
+        "ReversedLine",
         "ImportReceipt",
         "CommentHolder",
         "IntegrityRepairResult",
@@ -553,18 +553,18 @@ fn main() {
         "AzimuthReference",
         "CorrectionSource",
         "NorthReference",
-        "Section",
+        "Line",
         "Person",
         "SurveyCredit",
         "CreditTargets",
         "CreditEdit",
         "CreditedPerson",
-        "SectionCreditSummary",
-        "SectionData",
-        "SectionUpdates",
-        "SectionStats",
+        "LineCreditSummary",
+        "LineData",
+        "LineUpdates",
+        "LineStats",
         "SurveyDirection",
-        "ImportSectionConfig",
+        "ImportLineConfig",
         "ImportPlacement",
         "Shot",
         "ShotData",
@@ -574,11 +574,11 @@ fn main() {
         "ShotUpdates",
         "SplitAt",
         "SplitPreview",
-        "SplitSectionOptions",
+        "SplitLineOptions",
         "SplitSide",
         "CombineCandidate",
         "CombinePick",
-        "CombineSectionsOptions",
+        "CombineLinesOptions",
         "CombineJoinEnds",
         "CombineJoinKind",
         "CombinePlan",
@@ -591,7 +591,7 @@ fn main() {
         "TornTieKind",
         "TornTieReason",
         "KeptMovesReason",
-        "SectionEnd",
+        "LineEnd",
         "Station",
         "StationRef",
         "StationMerge",
@@ -606,7 +606,7 @@ fn main() {
         "Coordinates",
         "GpsCoordinates",
         "GpsBounds",
-        "SectionRelationships",
+        "LineRelationships",
         "StationPair",
         "ClosurePair",
         "ClosureUpdate",
@@ -626,8 +626,8 @@ fn main() {
         "SuggestionConfidence",
         "PlacementSuggestion",
         "TargetType",
-        "CrossSectionSuggestion",
-        "ImportSectionForSuggestion",
+        "CrossLineSuggestion",
+        "ImportLineForSuggestion",
         "OrphanPlacementSuggestion",
         "UndoHistoryItem",
         "PreviewData",
@@ -644,7 +644,7 @@ fn main() {
         "GpxTrackPoint",
         "GpxRoute",
         "GpxRoutePoint",
-        "GpxSectionPlacement",
+        "GpxLinePlacement",
         "TmlFile",
         "TmlSection",
         "TmlShot",
@@ -672,7 +672,7 @@ fn main() {
         "TileProviderInfo",
         "TileAttribution",
         "SegmentGeometry",
-        "SegmentSectionGeometry",
+        "SegmentLineGeometry",
         "GeometryShot",
         "SurveyGeometry",
         "SurveyGeometryError",
@@ -688,7 +688,7 @@ fn main() {
         "GeneralConfig",
         "UnitsConfig",
         "DisplayConfig",
-        "SectionColorsConfig",
+        "LineColorsConfig",
         "GpsOrigin",
         "StationConfig",
         "ShotConfig",
@@ -826,19 +826,19 @@ fn write_default_config(out_dir: &Path) {
 /// imports ts-rs emitted vs. which we injected).
 fn ensure_imports(file: &Path, imports: &[(&str, &str)]) {
     let content = fs::read_to_string(file).expect("Project.ts should exist after export");
-    let lines: Vec<&str> = content.split('\n').collect();
+    let ts_lines: Vec<&str> = content.split('\n').collect();
 
-    let header: Vec<String> = lines
+    let header: Vec<String> = ts_lines
         .iter()
         .take_while(|l| l.starts_with("//"))
         .map(|s| s.to_string())
         .collect();
-    let mut import_lines: Vec<String> = lines
+    let mut import_lines: Vec<String> = ts_lines
         .iter()
         .filter(|l| l.starts_with("import type "))
         .map(|s| s.to_string())
         .collect();
-    let body: Vec<String> = lines
+    let body: Vec<String> = ts_lines
         .iter()
         .skip_while(|l| l.starts_with("//"))
         .filter(|l| !l.starts_with("import type "))
@@ -846,12 +846,12 @@ fn ensure_imports(file: &Path, imports: &[(&str, &str)]) {
         .collect();
 
     for (name, path) in imports {
-        let line = format!("import type {{ {name} }} from \"{path}\";");
+        let import_line = format!("import type {{ {name} }} from \"{path}\";");
         if !import_lines
             .iter()
             .any(|l| l.contains(&format!("{{ {name} }}")))
         {
-            import_lines.push(line);
+            import_lines.push(import_line);
         }
     }
     import_lines.sort();

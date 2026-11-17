@@ -51,7 +51,7 @@ export default function UnrecognisedShotKindDialog() {
         .filter((shot) => choiceFor(shot) !== 'Reference')
         .map((shot) => ({
           type: 'update_shot' as const,
-          section_id: shot.section_id,
+          line_id: shot.line_id,
           shot_id: shot.shot_id,
           updates: { kind: choiceFor(shot) },
         }));
@@ -111,7 +111,7 @@ export default function UnrecognisedShotKindDialog() {
               {shots.map((shot) => (
                 <tr key={shot.shot_id} className="border-t border-border">
                   <td className="p-2">
-                    {shot.section_name ?? t('dialogs.unrecognisedShotKind.unnamedSection')}
+                    {shot.line_name ?? t('dialogs.unrecognisedShotKind.unnamedSection')}
                     {` · #${shot.shot_number}`}
                   </td>
                   <td className="p-2 font-mono text-text-secondary">{shot.raw_value}</td>

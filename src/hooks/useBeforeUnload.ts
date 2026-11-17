@@ -45,7 +45,7 @@ function isInstallRefusedForTransfer(error: unknown): boolean {
  *
  * @param shouldBlock - Whether to block the close action and show confirmation
  * @param message - The message to show in the confirmation dialog
- * @param onConfirm - Optional callback to run cleanup before closing (e.g., delete placed sections)
+ * @param onConfirm - Optional callback to run cleanup before closing (e.g., delete placed lines)
  * @param guard - Optional in-app guard run after any `shouldBlock` confirmation.
  *   Returns true when it opened a dialog and the close must be abandoned.
  */
@@ -253,7 +253,7 @@ export function useBeforeUnload(
 
           // Past every guard: the window IS going away, so the tier-1 cleanup is
           // finally safe to perform. It is destructive by contract ("e.g. delete
-          // placed sections"), so it may only run once the close is actually going
+          // placed lines"), so it may only run once the close is actually going
           // ahead - running it inside the tier-1 confirmation performed the deletions
           // for a close that tier 2 then aborted. Keyed on `shouldBlock` rather than
           // on "we prompted this pass", so it still runs on the pre-confirmed pass

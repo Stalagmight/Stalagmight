@@ -161,27 +161,27 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         return;
       }
 
-      // `section_ids` used to be `skip_serializing_if = "Vec::is_empty"`, so an
-      // import that created NO section omitted the key entirely while the
+      // `line_ids` used to be `skip_serializing_if = "Vec::is_empty"`, so an
+      // import that created NO line omitted the key entirely while the
       // generated type said `Array<number>`. A bare `.length` here threw, the
       // catch below reported it as a transport failure, and the receipt
       // explaining the empty import was thrown away (#411). #441 removed the
       // skip, so the key is always on the wire: this `?? []` is defensive only
       // and unreachable in the shipped pairing (one binary, one frontend).
       // Same shape as WallsImportDialog.
-      const sectionIds = result.section_ids ?? [];
+      const lineIds = result.line_ids ?? [];
 
       // Check for orphan placement opportunities. The suggest call is the
       // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
       // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
       // sits outside it and completes the import exactly once, so a throw
       // partway through IT can never fall through to a duplicate completion.
-      if (sectionIds.length > 0) {
+      if (lineIds.length > 0) {
         let suggestions: OrphanPlacementSuggestion[] = [];
         try {
           suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
             'suggest_orphan_placements',
-            { newlyImportedSectionIds: sectionIds },
+            { newlyImportedLineIds: lineIds },
             { purpose: 'suggest orphan placements after Compass import' }
           );
         } catch {
@@ -192,7 +192,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
           return;
         }
-        await finishImportWithoutOrphanSuggestions('compass-import', importUi, sectionIds, result.import_receipt);
+        await finishImportWithoutOrphanSuggestions('compass-import', importUi, lineIds, result.import_receipt);
         return;
       }
 

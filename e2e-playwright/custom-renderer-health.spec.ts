@@ -2,14 +2,14 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForDrawnStations,
   getDrawnGeometry,
   readCanvasPixel,
   countCanvasInk,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -45,7 +45,7 @@ import {
  * Stability-validated (10x, 4 workers, 0 flaky) before being placed at smoke.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Renderer Health Main',
     direction: 'in',
@@ -72,7 +72,7 @@ test.describe('Custom renderer health', () => {
 
     await setupMockedPage(page);
     await createProject(page, 'Renderer Health');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
 

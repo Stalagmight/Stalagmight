@@ -4,9 +4,9 @@
  * survive the parser it was aimed at, and a corruption must be the one its id
  * claims. Those three are what these pin.
  *
- * The section-count check is the load-bearing one. `split_into_sections` cuts on
+ * The line-count check is the load-bearing one. `split_into_lines` cuts on
  * a `3` byte followed by a run of zeros, so a shot record that happens to be
- * mostly zeros silently splits a section in half - a file that still "parses",
+ * mostly zeros silently splits a line in half - a file that still "parses",
  * with a different survey in it. The invariant documented at the top of
  * `surveyFileSpecs.ts` (never draw `length` or `markerIndex` as zero) is what
  * prevents it, and this checks the consequence over enough seeds that the
@@ -29,7 +29,7 @@ import {
   renderSurveyFile,
   suggestiveDmpSpec,
 } from './surveyFileSpecs';
-import { dmpFileBytes, endOfSectionBytes, escapeXmlText, writeTmluXml } from './surveyFileWriters';
+import { dmpFileBytes, endOfLineBytes, escapeXmlText, writeTmluXml } from './surveyFileWriters';
 
 /**
  * A local copy of `scenarios/framework.ts`'s `mulberry32`.
@@ -50,10 +50,10 @@ function mulberry32(seed: number): Rng {
   };
 }
 
-/** `split_into_sections`, reduced to the count. */
-function countSections(bytes: readonly number[], version: number): number {
-  const patterns = [endOfSectionBytes(version, 'normal')];
-  if (version === 5) patterns.push(endOfSectionBytes(version, 'buggy'));
+/** `split_into_lines`, reduced to the count. */
+function countLines(bytes: readonly number[], version: number): number {
+  const patterns = [endOfLineBytes(version, 'normal')];
+  if (version === 5) patterns.push(endOfLineBytes(version, 'buggy'));
   const length = patterns[0].length;
   if (length === 0 || bytes.length < length) return 0;
   let found = 0;
@@ -70,31 +70,31 @@ function countSections(bytes: readonly number[], version: number): number {
 const SEEDS = Array.from({ length: 120 }, (_unused, index) => index + 1);
 
 describe('randomDmpSpec (valid)', () => {
-  it('never lets a shot record terminate its own section', () => {
+  it('never lets a shot record terminate its own line', () => {
     for (const seed of SEEDS) {
       const spec = randomDmpSpec(mulberry32(seed), 'valid');
-      expect(countSections(dmpFileBytes(spec), spec.version)).toBe(spec.sections.length);
+      expect(countLines(dmpFileBytes(spec), spec.version)).toBe(spec.lines.length);
     }
   });
 
-  it('stays inside every range parse_section validates', () => {
+  it('stays inside every range parse_line validates', () => {
     for (const seed of SEEDS) {
       const spec = randomDmpSpec(mulberry32(seed), 'valid');
       expect([2, 3, 4, 5]).toContain(spec.version);
-      for (const section of spec.sections) {
-        expect(section.year).toBeGreaterThanOrEqual(0);
-        expect(section.year).toBeLessThanOrEqual(99);
-        expect(section.month).toBeGreaterThanOrEqual(1);
-        expect(section.month).toBeLessThanOrEqual(12);
+      for (const line of spec.lines) {
+        expect(line.year).toBeGreaterThanOrEqual(0);
+        expect(line.year).toBeLessThanOrEqual(99);
+        expect(line.month).toBeGreaterThanOrEqual(1);
+        expect(line.month).toBeLessThanOrEqual(12);
         // Never 29..31: those exist in some months and not others, and a spec
         // that parses in March but not February is not a `valid` spec.
-        expect(section.day).toBeGreaterThanOrEqual(1);
-        expect(section.day).toBeLessThanOrEqual(28);
-        expect(section.hour).toBeLessThanOrEqual(23);
-        expect(section.minute).toBeLessThanOrEqual(59);
-        expect([0, 1]).toContain(section.direction);
-        expect(section.shots.length).toBeGreaterThan(0);
-        for (const shot of section.shots) {
+        expect(line.day).toBeGreaterThanOrEqual(1);
+        expect(line.day).toBeLessThanOrEqual(28);
+        expect(line.hour).toBeLessThanOrEqual(23);
+        expect(line.minute).toBeLessThanOrEqual(59);
+        expect([0, 1]).toContain(line.direction);
+        expect(line.shots.length).toBeGreaterThan(0);
+        for (const shot of line.shots) {
           expect([0, 1, 2]).toContain(shot.shotType);
           expect(shot.length).not.toBe(0);
           expect(shot.markerIndex).not.toBe(0);
@@ -105,7 +105,7 @@ describe('randomDmpSpec (valid)', () => {
 
   it('reaches the duplicate-content shape a re-import has to notice', () => {
     const clones = SEEDS.map((seed) => randomDmpSpec(mulberry32(seed), 'valid')).filter((spec) =>
-      spec.sections.some((section) => section.sameContentAs !== undefined),
+      spec.lines.some((line) => line.sameContentAs !== undefined),
     );
     expect(clones.length).toBeGreaterThan(0);
   });
@@ -250,29 +250,29 @@ function bestRun(leaf: readonly MatchShot[], target: readonly MatchShot[]): { ma
 }
 
 describe('suggestiveDmpSpec', () => {
-  it('never lets a shot record terminate its own section', () => {
+  it('never lets a shot record terminate its own line', () => {
     for (const seed of SEEDS) {
       const spec = suggestiveDmpSpec(mulberry32(seed));
-      expect(countSections(dmpFileBytes(spec), spec.version)).toBe(spec.sections.length);
+      expect(countLines(dmpFileBytes(spec), spec.version)).toBe(spec.lines.length);
     }
   });
 
-  it('stays inside every range parse_section validates', () => {
+  it('stays inside every range parse_line validates', () => {
     for (const seed of SEEDS) {
       const spec = suggestiveDmpSpec(mulberry32(seed));
       expect([3, 4, 5]).toContain(spec.version);
-      expect(spec.sections.length).toBeGreaterThanOrEqual(2);
-      for (const section of spec.sections) {
-        expect(section.year).toBeGreaterThanOrEqual(0);
-        expect(section.year).toBeLessThanOrEqual(99);
-        expect(section.month).toBeGreaterThanOrEqual(1);
-        expect(section.month).toBeLessThanOrEqual(12);
-        expect(section.day).toBeGreaterThanOrEqual(1);
-        expect(section.day).toBeLessThanOrEqual(28);
-        expect(section.hour).toBeLessThanOrEqual(23);
-        expect(section.minute).toBeLessThanOrEqual(59);
-        expect(section.direction).toBe(0);
-        for (const shot of section.shots) {
+      expect(spec.lines.length).toBeGreaterThanOrEqual(2);
+      for (const line of spec.lines) {
+        expect(line.year).toBeGreaterThanOrEqual(0);
+        expect(line.year).toBeLessThanOrEqual(99);
+        expect(line.month).toBeGreaterThanOrEqual(1);
+        expect(line.month).toBeLessThanOrEqual(12);
+        expect(line.day).toBeGreaterThanOrEqual(1);
+        expect(line.day).toBeLessThanOrEqual(28);
+        expect(line.hour).toBeLessThanOrEqual(23);
+        expect(line.minute).toBeLessThanOrEqual(59);
+        expect(line.direction).toBe(0);
+        for (const shot of line.shots) {
           // Standard only: it is the one type the wizard counts when it sizes
           // the merge-offset list.
           expect(shot.shotType).toBe(2);
@@ -288,12 +288,12 @@ describe('suggestiveDmpSpec', () => {
     }
   });
 
-  it('gives every replay section a run the suggester would accept', () => {
+  it('gives every replay line a run the suggester would accept', () => {
     for (const seed of SEEDS) {
       const spec = suggestiveDmpSpec(mulberry32(seed));
-      const anchor = spec.sections[0]!.shots.map(toMatchShot);
-      for (let index = 1; index < spec.sections.length; index++) {
-        const shots = spec.sections[index]!.shots.map(toMatchShot);
+      const anchor = spec.lines[0]!.shots.map(toMatchShot);
+      for (let index = 1; index < spec.lines.length; index++) {
+        const shots = spec.lines[index]!.shots.map(toMatchShot);
         const maxRef = Math.min(PS.maxReferenceShots, shots.length);
         // The two leaves `suggest_placements` builds: the first N in natural
         // order (station 0) and the last N reversed (station N).
@@ -302,20 +302,20 @@ describe('suggestiveDmpSpec', () => {
         const best = [bestRun(fromZero, anchor), bestRun(fromN, anchor)].sort(
           (a, b) => b.matched - a.matched || b.score - a.score,
         )[0]!;
-        expect(best.matched, `seed ${seed} section ${index}: matched shots`).toBeGreaterThanOrEqual(2);
-        expect(best.score, `seed ${seed} section ${index}: aggregate`).toBeGreaterThan(PS.minAggregateScore);
+        expect(best.matched, `seed ${seed} line ${index}: matched shots`).toBeGreaterThanOrEqual(2);
+        expect(best.score, `seed ${seed} line ${index}: aggregate`).toBeGreaterThan(PS.minAggregateScore);
       }
     }
   });
 
   it('repeats the motif inside the anchor, so a replay has more than one home', () => {
     // The alternatives list is filtered to suggestions sharing
-    // `importSectionIndex`, so a replay section has to match its anchor in TWO
+    // `importLineIndex`, so a replay line has to match its anchor in TWO
     // places or the list is always empty and its tie-break never runs.
     for (const seed of SEEDS) {
       const spec = suggestiveDmpSpec(mulberry32(seed));
-      const anchor = spec.sections[0]!.shots.map(toMatchShot);
-      const replay = spec.sections[1]!.shots.map(toMatchShot);
+      const anchor = spec.lines[0]!.shots.map(toMatchShot);
+      const replay = spec.lines[1]!.shots.map(toMatchShot);
       const leaf = replay.slice(0, Math.min(PS.maxReferenceShots, replay.length));
       let homes = 0;
       for (let start = 0; start < anchor.length; start++) {
@@ -341,7 +341,7 @@ describe('suggestiveDmpSpec', () => {
 
   it('lets two DIFFERENT files match each other often enough to matter', () => {
     // The orphan surface needs it. An orphan component is a set of EXISTING
-    // sections with no datum and no newly-imported member, so this fuzzer can
+    // lines with no datum and no newly-imported member, so this fuzzer can
     // only make one by placing a segment manually in one flow and importing
     // something that MATCHES it in a later flow. With every file drawing a
     // fresh random motif that later import never matched, and
@@ -352,8 +352,8 @@ describe('suggestiveDmpSpec', () => {
     for (let i = 0; i < specs.length; i += 1) {
       for (let j = i + 1; j < specs.length; j += 1) {
         pairs += 1;
-        const anchor = specs[i]!.sections[0]!.shots.map(toMatchShot);
-        const leaf = specs[j]!.sections[1]!.shots.map(toMatchShot).slice(0, PS.maxReferenceShots);
+        const anchor = specs[i]!.lines[0]!.shots.map(toMatchShot);
+        const leaf = specs[j]!.lines[1]!.shots.map(toMatchShot).slice(0, PS.maxReferenceShots);
         const best = bestRun(leaf, anchor);
         if (best.matched >= 2 && best.score > PS.minAggregateScore) matched += 1;
       }
@@ -450,7 +450,7 @@ describe('corruptSpec', () => {
         expect(ids).not.toContain('dmp:bad-shot-start-magic');
         expect(ids).not.toContain('dmp:buggy-eos');
       }
-      if (spec.dmp.version === 2) expect(ids).not.toContain('dmp:bad-section-magic');
+      if (spec.dmp.version === 2) expect(ids).not.toContain('dmp:bad-line-magic');
       // Whatever the version, the id drawn is one the catalog offered.
       expect(ids).toContain(corruptSpec(mulberry32(seed + 7), spec).corruption);
     }

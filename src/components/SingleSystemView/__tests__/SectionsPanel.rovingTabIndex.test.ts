@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { rovingDefaultTabIndex } from '../SectionsPanel';
 
 /**
- * Roving-tabindex owner for the virtualized sections list. The default keyboard
+ * Roving-tabindex owner for the virtualized lines list. The default keyboard
  * Tab stop must sit on a MOUNTED row, or a list scrolled past index 0 (its row
  * unmounted) leaves every mounted row `tabIndex={-1}` and unreachable by Tab.
  */

@@ -94,50 +94,50 @@ describe('buildGhostHighlights selected-branch anchored/immovable guard', () => 
   });
 });
 
-// #301: isAnchored is keyed by the feature's "sectionId:scopedId" id, NOT by its
-// numeric fid. A shot's scoped id is shot.id, which is itself section-encoded
-// (sectionId * FEATURE_ID_STRIDE + seq), so the fid of a section-1 shot is
-// 2 * FEATURE_ID_STRIDE and the old floor(fid / STRIDE) decode called it section 2.
-// These pin the id-string contract, so a host that gates on the real section id
+// #301: isAnchored is keyed by the feature's "lineId:scopedId" id, NOT by its
+// numeric fid. A shot's scoped id is shot.id, which is itself line-encoded
+// (lineId * FEATURE_ID_STRIDE + seq), so the fid of a line-1 shot is
+// 2 * FEATURE_ID_STRIDE and the old floor(fid / STRIDE) decode called it line 2.
+// These pin the id-string contract, so a host that gates on the real line id
 // filters the highlight instead of leaking it through.
-describe('buildGhostHighlights anchored gating uses the section id, not a decoded fid', () => {
-  // Section 1, shot.id already 1 * FEATURE_ID_STRIDE; parseFid returns the
+describe('buildGhostHighlights anchored gating uses the line id, not a decoded fid', () => {
+  // Line 1, shot.id already 1 * FEATURE_ID_STRIDE; parseFid returns the
   // double-encoded fid SurveyLayer would build (1 * STRIDE + 100000).
-  const SECTION_1_SHOT = '1:100000';
-  const SECTION_1_STATION = '1:0';
-  const anchoredSection1 = (id: string): boolean => Number(id.split(':')[0]) === 1;
+  const LINE_1_SHOT = '1:100000';
+  const LINE_1_STATION = '1:0';
+  const anchoredLine1 = (id: string): boolean => Number(id.split(':')[0]) === 1;
 
-  it('excludes a moving shot in an anchored section >= 1', () => {
+  it('excludes a moving shot in an anchored line >= 1', () => {
     const { shots } = buildGhostHighlights(
       makeHost({
-        selectedShotId: SECTION_1_SHOT,
+        selectedShotId: LINE_1_SHOT,
         movingEndForShot: () => 'to',
         parseFid: () => 200000,
-        isAnchored: anchoredSection1,
+        isAnchored: anchoredLine1,
       }),
     );
     expect(shots).toHaveLength(0);
   });
 
-  it('excludes a moving station in an anchored section >= 1', () => {
+  it('excludes a moving station in an anchored line >= 1', () => {
     const { stations } = buildGhostHighlights(
       makeHost({
-        selectedStationId: SECTION_1_STATION,
+        selectedStationId: LINE_1_STATION,
         isMovingStation: () => true,
         parseFid: () => 100000,
-        isAnchored: anchoredSection1,
+        isAnchored: anchoredLine1,
       }),
     );
     expect(stations).toHaveLength(0);
   });
 
-  it('keeps a moving shot whose section is not anchored', () => {
+  it('keeps a moving shot whose line is not anchored', () => {
     const { shots } = buildGhostHighlights(
       makeHost({
         selectedShotId: '2:200000',
         movingEndForShot: () => 'to',
         parseFid: () => 400000,
-        isAnchored: anchoredSection1,
+        isAnchored: anchoredLine1,
       }),
     );
     expect(shots).toHaveLength(1);
@@ -147,8 +147,8 @@ describe('buildGhostHighlights anchored gating uses the section id, not a decode
     const seen: string[] = [];
     buildGhostHighlights(
       makeHost({
-        hoveredShotId: SECTION_1_SHOT,
-        hoveredStationId: SECTION_1_STATION,
+        hoveredShotId: LINE_1_SHOT,
+        hoveredStationId: LINE_1_STATION,
         movingEndForShot: () => 'to',
         isMovingStation: () => true,
         isAnchored: (id) => {
@@ -157,6 +157,6 @@ describe('buildGhostHighlights anchored gating uses the section id, not a decode
         },
       }),
     );
-    expect(seen).toEqual([SECTION_1_SHOT, SECTION_1_STATION]);
+    expect(seen).toEqual([LINE_1_SHOT, LINE_1_STATION]);
   });
 });

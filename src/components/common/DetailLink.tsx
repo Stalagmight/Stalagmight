@@ -19,31 +19,31 @@ import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { EntitySymbol } from './toolIcons';
 
-export type DetailLinkType = 'station' | 'shot' | 'section';
+export type DetailLinkType = 'station' | 'shot' | 'line';
 
 /**
  * Target identifier for station or shot links.
- * Both sectionId and position are required.
+ * Both lineId and position are required.
  */
 export interface StationOrShotTarget {
-  sectionId: number;
-  /** Position within section: 0-indexed for stations, 1-indexed for shots */
+  lineId: number;
+  /** Position within line: 0-indexed for stations, 1-indexed for shots */
   position: number;
 }
 
 /**
- * Target identifier for section links.
- * Only sectionId is required.
+ * Target identifier for line links.
+ * Only lineId is required.
  */
-export interface SectionTarget {
-  sectionId: number;
+export interface LineTarget {
+  lineId: number;
 }
 
 /**
  * Union type for all target types.
- * Use StationOrShotTarget for stations/shots, SectionTarget for sections.
+ * Use StationOrShotTarget for stations/shots, LineTarget for lines.
  */
-export type DetailLinkTarget = StationOrShotTarget | SectionTarget;
+export type DetailLinkTarget = StationOrShotTarget | LineTarget;
 
 /**
  * Type guard to check if target has position (station or shot target).
@@ -55,7 +55,7 @@ export function hasPosition(target: DetailLinkTarget): target is StationOrShotTa
 export interface DetailLinkProps {
   /** Type of element this link navigates to */
   type: DetailLinkType;
-  /** Target identifier (sectionId required, position required for stations/shots) */
+  /** Target identifier (lineId required, position required for stations/shots) */
   target: DetailLinkTarget;
   /** Text to display in the link */
   displayText: string;
@@ -75,7 +75,7 @@ export interface DetailLinkProps {
   onHoverEnd?: () => void;
   /**
    * Short primary label for the Full-mode entity pill, shown before the dim id
-   * suffix. Used for sections (the bare name, e.g. "Main Line"); station/shot
+   * suffix. Used for lines (the bare name, e.g. "Main Line"); station/shot
    * links derive their primary from the target position automatically.
    */
   pillLabel?: string;
@@ -85,21 +85,21 @@ export interface DetailLinkProps {
  * Generate a stable test ID based on element type and target.
  *
  * Formats:
- * - Station: "station-{sectionId}-{position}-link"
- * - Shot: "shot-{sectionId}-{position}-link"
- * - Section: "section-{sectionId}-link"
+ * - Station: "station-{lineId}-{position}-link"
+ * - Shot: "shot-{lineId}-{position}-link"
+ * - Line: "line-{lineId}-link"
  *
  * @throws Error if station/shot type is used without position
  */
 export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): string {
-  if (type === 'section') {
-    return `section-${target.sectionId}-link`;
+  if (type === 'line') {
+    return `line-${target.lineId}-link`;
   }
   // Station and shot require position
   if (!hasPosition(target)) {
     throw new Error(`${type} links require a position in target, got: ${JSON.stringify(target)}`);
   }
-  return `${type}-${target.sectionId}-${target.position}-link`;
+  return `${type}-${target.lineId}-${target.position}-link`;
 }
 
 /**
@@ -138,7 +138,7 @@ export function DetailLink({
   const ariaLabel = generateAriaLabel(type, displayText);
 
   // Full highlighting: a leading entity symbol signals what the link points to
-  // (station ring, shot line, section zigzag), colored by entity. Hidden for
+  // (station ring, shot line, line zigzag), colored by entity. Hidden for
   // missing targets (the warning glyph already conveys state).
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   const showSymbol = syntacticLevelAtLeast(syntacticLevel, 'full') && !isMissing;
@@ -207,16 +207,16 @@ export function DetailLink({
     : undefined;
 
   // Pill content: a short primary label + the fully-qualified id after a divider,
-  // both at the same text size (shot "55 | 110:55", section "Main Line | 110").
+  // both at the same text size (shot "55 | 110:55", line "Main Line | 110").
   let pillPrimary = displayText;
   let pillId: string | null = null;
   if (showSymbol) {
     if (hasPosition(target)) {
       pillPrimary = String(target.position);
-      pillId = displayText; // already the formatted "sectionId:position"
+      pillId = displayText; // already the formatted "lineId:position"
     } else {
       pillPrimary = pillLabel ?? displayText;
-      pillId = String(target.sectionId);
+      pillId = String(target.lineId);
     }
   }
 
@@ -245,7 +245,7 @@ export function DetailLink({
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
               {/* The id suffix is always cap-height digits, so it gets the same
                   downward nudge whether the primary is a digit (shot/station) or
-                  a lowercase name (section). */}
+                  a lowercase name (line). */}
               <span className="sh-pill-nudge sh-pill-nudge--num">
                 {pillId}
               </span>

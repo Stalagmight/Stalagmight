@@ -2,13 +2,13 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Passage',
     direction: 'in',
@@ -27,14 +27,14 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 /**
- * Helper to create a project with sections for panel testing.
- * Returns when the project is loaded with sections containing shots.
+ * Helper to create a project with lines for panel testing.
+ * Returns when the project is loaded with lines containing shots.
  *
  * Uses store seeding to avoid dialog overlays during tests.
  */
-async function createProjectWithSections(page: Page): Promise<void> {
+async function createProjectWithLines(page: Page): Promise<void> {
   await createProject(page, 'Panel Test Project');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
 }
@@ -49,10 +49,10 @@ test.describe('Panel Interactions', () => {
 
   test('should toggle sections panel with Ctrl+1', async ({ page }) => {
     // Create a project to access the SingleSystemView with panels
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // The sections panel should be visible by default (sectionsPanelOpen: true in uiStore)
-    // Look for the "Sections" header or panel content
+    // Look for the "Lines" header or panel content
     const sectionsPanel = page.getByTestId('sections-panel');
     await expect(sectionsPanel).toBeVisible({ timeout: 3000 });
 
@@ -76,7 +76,7 @@ test.describe('Panel Interactions', () => {
 
   test('should toggle detail panel with Ctrl+2', async ({ page }) => {
     // Create a project to access the SingleSystemView with panels
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // The detail panel should be visible by default (detailPanelOpen: true in uiStore)
     // Look for the "Details" tab button
@@ -103,7 +103,7 @@ test.describe('Panel Interactions', () => {
 
   test('should toggle data table panel with Ctrl+3', async ({ page }) => {
     // Create a project to access the SingleSystemView with panels
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Closed here because the IPC mock's config says `data_table_open: false`,
     // which is what applyPanelsConfig loads. A fresh install defaults to OPEN;
@@ -117,13 +117,13 @@ test.describe('Panel Interactions', () => {
     await waitForMapIdle(page);
 
     // Data table should now be visible
-    // Look for the condensed header: section pill + view toggle
+    // Look for the condensed header: line pill + view toggle
     await expect(dataTable).toBeVisible({ timeout: 3000 });
 
-    // Header section pill should show the auto-selected first section
-    const sectionPill = page.getByTestId('data-table-section-pill');
-    await expect(sectionPill).toBeVisible({ timeout: 2000 });
-    await expect(sectionPill).toContainText('Main Passage');
+    // Header line pill should show the auto-selected first line
+    const linePill = page.getByTestId('data-table-line-pill');
+    await expect(linePill).toBeVisible({ timeout: 2000 });
+    await expect(linePill).toContainText('Main Passage');
 
     // View toggle (shots/stations radio group) should be visible
     await expect(page.getByTestId('data-table-view-select')).toBeVisible({ timeout: 2000 });
@@ -146,7 +146,7 @@ test.describe('Panel Interactions', () => {
 
   test('should resize panels by dragging', async ({ page }) => {
     // Create a project to access the SingleSystemView with panels
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Get the sections panel (left side)
     // The ResizablePanel has a resize handle on the right edge
@@ -210,76 +210,76 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
-  test('should expand/collapse section in sections panel', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+  test('should expand/collapse line in sections panel', async ({ page }) => {
+    // Create a project with lines
+    await createProjectWithLines(page);
 
-    // The sections panel shows a list of sections
-    // Each section item has a name and stats (e.g., "3 shots - 33.7m")
+    // The sections panel shows a list of lines
+    // Each line item has a name and stats (e.g., "3 shots - 33.7m")
     const sectionsPanel = page.getByTestId('sections-panel');
     await expect(sectionsPanel).toBeVisible({ timeout: 3000 });
 
-    // Find a section item to select/expand
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
-    await expect(sectionRow).toBeVisible({ timeout: 2000 });
+    // Find a line item to select/expand
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Main Passage' });
+    await expect(lineRow).toBeVisible({ timeout: 2000 });
 
-    // Initially the section shows basic info (name and stats)
-    const sectionStats = sectionRow.locator('text=/Shots:\\s*\\d+/');
-    await expect(sectionStats).toBeVisible();
+    // Initially the line shows basic info (name and stats)
+    const lineStats = lineRow.locator('text=/Shots:\\s*\\d+/');
+    await expect(lineStats).toBeVisible();
 
-    // Click on the section to select it
-    await sectionRow.click();
+    // Click on the line to select it
+    await lineRow.click();
     await waitForMapIdle(page);
 
-    // When a section is selected, aria-selected should reflect it
-    await expect(sectionRow).toHaveAttribute('aria-selected', 'true');
+    // When a line is selected, aria-selected should reflect it
+    await expect(lineRow).toHaveAttribute('aria-selected', 'true');
 
-    // The detail panel should now show section details
+    // The detail panel should now show line details
     const detailPanel = page.getByTestId('detail-panel');
     if (await detailPanel.isVisible()) {
-      const sectionDetail = page.getByTestId('section-detail');
-      await expect(sectionDetail).toBeVisible({ timeout: 2000 });
-      await expect(sectionDetail.locator('text=Section stats')).toBeVisible({ timeout: 2000 });
+      const lineDetail = page.getByTestId('line-detail');
+      await expect(lineDetail).toBeVisible({ timeout: 2000 });
+      await expect(lineDetail.locator('text=Line stats')).toBeVisible({ timeout: 2000 });
     }
 
-    // Click on a different section to verify selection changes
-    const anotherSection = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Side Tunnel' });
-    if (await anotherSection.isVisible()) {
-      await anotherSection.click();
+    // Click on a different line to verify selection changes
+    const anotherLine = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Side Tunnel' });
+    if (await anotherLine.isVisible()) {
+      await anotherLine.click();
       await waitForMapIdle(page);
 
-      // The new section should be selected
-      await expect(anotherSection).toHaveAttribute('aria-selected', 'true');
+      // The new line should be selected
+      await expect(anotherLine).toHaveAttribute('aria-selected', 'true');
 
-      // The previous section should no longer be selected
-      await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+      // The previous line should no longer be selected
+      await expect(lineRow).toHaveAttribute('aria-selected', 'false');
     }
 
     // App should remain functional
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
-  test('clicking a section color dot recolors the section without selecting it (#654)', async ({ page }) => {
-    await createProjectWithSections(page);
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
-    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
-    const dot = page.getByTestId(`section-color-${sectionId}`);
+  test('clicking a line color dot recolors the line without selecting it (#654)', async ({ page }) => {
+    await createProjectWithLines(page);
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Main Passage' });
+    const lineId = Number((await lineRow.getAttribute('data-testid'))!.replace('line-row-', ''));
+    const dot = page.getByTestId(`line-color-${lineId}`);
     const readColor = () =>
       page.evaluate((id) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project.sections.find((s: any) => s.id === id).color as string;
-      }, sectionId);
-    // The picker opens at the section's current color.
+        return state.project.lines.find((s: any) => s.id === id).color as string;
+      }, lineId);
+    // The picker opens at the line's current color.
     await expect(dot).toHaveValue((await readColor()).toLowerCase());
 
     let updateCalls = 0;
     page.on('console', (msg) => {
-      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+      if (msg.text().startsWith('[Mock IPC] update_line called')) updateCalls += 1;
     });
 
     // The dot is a control of its own: clicking it does not select the row.
     await dot.click();
-    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await expect(lineRow).toHaveAttribute('aria-selected', 'false');
 
     // Steps through the open picker (`input`) commit nothing; only the
     // confirmed pick (`change`) does, so one pick is one command (one undo step).
@@ -294,18 +294,18 @@ test.describe('Panel Interactions', () => {
     await expect.poll(readColor).toBe('#ff0000');
     expect(updateCalls).toBe(1);
 
-    // A color changed elsewhere (undo, Edit Section) resyncs the dot.
+    // A color changed elsewhere (undo, Edit Line) resyncs the dot.
     await page.evaluate(
-      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: '#336699' }),
-      sectionId,
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateLine(id, { color: '#336699' }),
+      lineId,
     );
     await expect(dot).toHaveValue('#336699');
 
-    // The visible dot draws any CSS color the section carries (the free-text
-    // field in Edit Section accepts one), not the input's #rrggbb-only value.
+    // The visible dot draws any CSS color the line carries (the free-text
+    // field in Edit Line accepts one), not the input's #rrggbb-only value.
     await page.evaluate(
-      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
-      sectionId,
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateLine(id, { color: 'red' }),
+      lineId,
     );
     await expect
       .poll(() => dot.evaluate((el) => getComputedStyle(el.parentElement!).backgroundColor))
@@ -315,20 +315,20 @@ test.describe('Panel Interactions', () => {
     await expect(dot).toHaveValue('#ff0000');
   });
 
-  test('section color dot is inert while editing is blocked (#654)', async ({ page }) => {
-    await createProjectWithSections(page);
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
-    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
-    const dot = page.getByTestId(`section-color-${sectionId}`);
+  test('line color dot is inert while editing is blocked (#654)', async ({ page }) => {
+    await createProjectWithLines(page);
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Main Passage' });
+    const lineId = Number((await lineRow.getAttribute('data-testid'))!.replace('line-row-', ''));
+    const dot = page.getByTestId(`line-color-${lineId}`);
     await expect(dot).toBeEnabled();
 
     const before = await page.evaluate((id) => {
       const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project.sections.find((s: any) => s.id === id).color as string;
-    }, sectionId);
+      return state.project.lines.find((s: any) => s.id === id).color as string;
+    }, lineId);
 
     const readOnlyToast = page.locator('[data-testid="toast"][data-toast-key="edit-disabled"]');
-    const colorDot = page.getByTestId(`section-color-dot-${sectionId}`);
+    const colorDot = page.getByTestId(`line-color-dot-${lineId}`);
     const clearToasts = () => page.evaluate(() => (window as any).__E2E_TEST__.uiStore.setState({ toasts: [] }));
 
     // The closure-adjusted view is read-only (Plan/Export would also block, but
@@ -344,8 +344,8 @@ test.describe('Panel Interactions', () => {
             ...project.loop_closures,
             {
               id: 1,
-              station_a: { section_id: secId, station_index: 0 },
-              station_b: { section_id: secId, station_index: 2 },
+              station_a: { line_id: secId, station_index: 0 },
+              station_b: { line_id: secId, station_index: 2 },
               path_length: 25.7,
               misclosure_distance: 0.3,
               error_percentage: 1.2,
@@ -357,7 +357,7 @@ test.describe('Panel Interactions', () => {
           ],
         },
       });
-    }, sectionId);
+    }, lineId);
     await page.evaluate(() =>
       (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('closureAdjusted', 'e2e'),
     );
@@ -369,10 +369,10 @@ test.describe('Panel Interactions', () => {
     // swatch over the drawn dot.
     await expect(dot).toHaveCSS('opacity', '0');
     // Clicking the dot says why nothing opens, and does not select the row.
-    await expect(colorDot).toHaveAttribute('title', 'This view is read-only, so the section color cannot be changed.');
+    await expect(colorDot).toHaveAttribute('title', 'This view is read-only, so the line color cannot be changed.');
     await colorDot.click();
     await expect(readOnlyToast).toContainText('This view is read-only');
-    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await expect(lineRow).toHaveAttribute('aria-selected', 'false');
     await clearToasts();
     await page.evaluate(() =>
       (window as any).__E2E_TEST__.uiStore.getState().setGeometryMode('measured', 'e2e'),
@@ -385,10 +385,10 @@ test.describe('Panel Interactions', () => {
       (window as any).__E2E_TEST__.speleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' }),
     );
     await expect(dot).toBeDisabled();
-    await expect(colorDot).toHaveAttribute('title', 'This project is open read-only, so the section color cannot be changed.');
+    await expect(colorDot).toHaveAttribute('title', 'This project is open read-only, so the line color cannot be changed.');
     await colorDot.click();
     await expect(readOnlyToast).toContainText('This project is open read-only');
-    await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
+    await expect(lineRow).toHaveAttribute('aria-selected', 'false');
     await clearToasts();
 
     // A pick confirmed after editing became blocked (the system picker was
@@ -402,26 +402,26 @@ test.describe('Panel Interactions', () => {
     expect(
       await page.evaluate((id) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project.sections.find((s: any) => s.id === id).color as string;
-      }, sectionId),
+        return state.project.lines.find((s: any) => s.id === id).color as string;
+      }, lineId),
     ).toBe(before);
   });
 
-  test('section color dot commits once, when a WebKit picker closes (#654)', async ({ page }) => {
-    await createProjectWithSections(page);
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
-    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
-    const dot = page.getByTestId(`section-color-${sectionId}`);
+  test('line color dot commits once, when a WebKit picker closes (#654)', async ({ page }) => {
+    await createProjectWithLines(page);
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Main Passage' });
+    const lineId = Number((await lineRow.getAttribute('data-testid'))!.replace('line-row-', ''));
+    const dot = page.getByTestId(`line-color-${lineId}`);
     const readColor = () =>
       page.evaluate((id) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project.sections.find((s: any) => s.id === id).color as string;
-      }, sectionId);
+        return state.project.lines.find((s: any) => s.id === id).color as string;
+      }, lineId);
     const before = await readColor();
 
     let updateCalls = 0;
     page.on('console', (msg) => {
-      if (msg.text().startsWith('[Mock IPC] update_section called')) updateCalls += 1;
+      if (msg.text().startsWith('[Mock IPC] update_line called')) updateCalls += 1;
     });
 
     // WebKit (the Linux and macOS webviews) fires `input` + `change` for every
@@ -464,12 +464,12 @@ test.describe('Panel Interactions', () => {
     await expect.poll(readColor).toBe('#336699');
     expect(updateCalls).toBe(2);
 
-    // The same Cancel on a section whose color is not #rrggbb (Edit Section's
+    // The same Cancel on a line whose color is not #rrggbb (Edit Line's
     // free-text field takes any CSS color) puts back whatever the picker opened
-    // at. That must not be sent as a pick, or Cancel recolors the section.
+    // at. That must not be sent as a pick, or Cancel recolors the line.
     await page.evaluate(
-      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateSection(id, { color: 'red' }),
-      sectionId,
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().updateLine(id, { color: 'red' }),
+      lineId,
     );
     await expect.poll(readColor).toBe('red');
     const opened = await dot.inputValue();
@@ -482,18 +482,18 @@ test.describe('Panel Interactions', () => {
     expect(updateCalls).toBe(4);
   });
 
-  test('section color dot reports a failed update and reverts (#654)', async ({ page }) => {
-    await createProjectWithSections(page);
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
-    const sectionId = Number((await sectionRow.getAttribute('data-testid'))!.replace('section-row-', ''));
-    const dot = page.getByTestId(`section-color-${sectionId}`);
+  test('line color dot reports a failed update and reverts (#654)', async ({ page }) => {
+    await createProjectWithLines(page);
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Main Passage' });
+    const lineId = Number((await lineRow.getAttribute('data-testid'))!.replace('line-row-', ''));
+    const dot = page.getByTestId(`line-color-${lineId}`);
     const before = await dot.inputValue();
 
     // A transport rejection: executeCommand refreshes and re-throws without a
     // toast, so the dot's caller has to surface it (docs/notifications.md).
     await page.evaluate(() =>
       (window as any).__E2E_TEST__.projectStore.setState({
-        updateSection: () => Promise.reject(new Error('transport closed')),
+        updateLine: () => Promise.reject(new Error('transport closed')),
       }),
     );
     await dot.evaluate((el) => {
@@ -506,45 +506,45 @@ test.describe('Panel Interactions', () => {
     await expect(dot).toHaveValue(before);
   });
 
-  test('section picker in the data-table sub-header switches sections', async ({ page }) => {
-    await createProjectWithSections(page);
+  test('line picker in the data-table sub-header switches lines', async ({ page }) => {
+    await createProjectWithLines(page);
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+    await expect(page.getByTestId('data-table-line-pill')).toContainText('Main Passage');
 
-    await page.getByTestId('data-table-section-menu').click();
-    const list = page.getByTestId('data-table-section-menu-list');
+    await page.getByTestId('data-table-line-menu').click();
+    const list = page.getByTestId('data-table-line-menu-list');
     await expect(list.getByRole('button')).toHaveText(['Main Passage', 'Side Tunnel']);
     await list.getByRole('button', { name: 'Side Tunnel' }).click();
     await expect(list).not.toBeVisible();
 
-    await expect(page.getByTestId('data-table-section-pill')).toContainText('Side Tunnel');
-    // The pick selects the section app-wide, like the old dropdown did.
+    await expect(page.getByTestId('data-table-line-pill')).toContainText('Side Tunnel');
+    // The pick selects the line app-wide, like the old dropdown did.
     const selection = await page.evaluate(
       () => (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { selection: unknown } } } })
         .__E2E_TEST__.uiStore.getState().selection
     );
-    expect(selection).toMatchObject({ type: 'section' });
+    expect(selection).toMatchObject({ type: 'line' });
   });
 
   test('should handle panel overflow with scrolling', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // The sections panel has overflow-auto set for scrolling
-    const sectionsList = page.getByTestId('sections-panel').locator('.overflow-auto').first();
+    const linesList = page.getByTestId('sections-panel').locator('.overflow-auto').first();
 
     // Check that the overflow container is present
-    await expect(sectionsList).toBeVisible({ timeout: 3000 });
+    await expect(linesList).toBeVisible({ timeout: 3000 });
 
-    // The mock data provides 6 sections:
-    // - Main Passage, Side Tunnel, Mixed LRUD Section, Undefined LRUD Section, Empty Section, Validation Test Section
-    // With normal viewport, all sections should be visible without scrolling
-    // Let's check that all imported sections are in the list
+    // The mock data provides 6 lines:
+    // - Main Passage, Side Tunnel, Mixed LRUD Line, Undefined LRUD Line, Empty Line, Validation Test Line
+    // With normal viewport, all lines should be visible without scrolling
+    // Let's check that all imported lines are in the list
 
-    const mainPassage = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Main Passage' });
-    const sideTunnel = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
+    const mainPassage = page.locator('[data-testid^="line-item-"]').filter({ hasText: 'Main Passage' });
+    const sideTunnel = page.locator('[data-testid^="line-item-"]').filter({ hasText: 'Side Tunnel' });
 
     await expect(mainPassage).toBeVisible({ timeout: 2000 });
     await expect(sideTunnel).toBeVisible({ timeout: 2000 });
@@ -554,18 +554,18 @@ test.describe('Panel Interactions', () => {
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
 
-    // Drive the table to a section with shots via the app-wide selection
-    // (the table follows external selection; its header no longer has a section dropdown)
+    // Drive the table to a line with shots via the app-wide selection
+    // (the table follows external selection; its header no longer has a line dropdown)
     await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
-      const section = e2e.projectStore
+      const line = e2e.projectStore
         .getState()
-        .project?.sections?.find((s: any) => s.name === 'Main Passage');
-      if (!section) throw new Error('Main Passage section not found');
-      e2e.uiStore.getState().setSelection({ type: 'section', sectionId: section.id });
+        .project?.lines?.find((s: any) => s.name === 'Main Passage');
+      if (!line) throw new Error('Main Passage line not found');
+      e2e.uiStore.getState().setSelection({ type: 'line', lineId: line.id });
     });
-    // Header pill reflects the externally-selected section
-    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+    // Header pill reflects the externally-selected line
+    await expect(page.getByTestId('data-table-line-pill')).toContainText('Main Passage');
     await waitForMapIdle(page);
 
     // The data table should show shots with scrollable content if there are many
@@ -610,13 +610,13 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
-  // A Reference shot repeats passage already surveyed, so a section's length
+  // A Reference shot repeats passage already surveyed, so a line's length
   // leaves it out (#689): 10 m Normal + 3 m Jump = 13 m, not the 17 m of tape.
   // Both readouts compute client-side from the shots, so this drives the real
   // components, not the mock's stats.
-  test('section length leaves out Reference shots (#689)', async ({ page }) => {
+  test('line length leaves out Reference shots (#689)', async ({ page }) => {
     await createProject(page, 'Reference Length Project');
-    await seedProjectWithSections(page, [
+    await seedProjectWithLines(page, [
       {
         name: 'Tie Run',
         direction: 'in',
@@ -637,29 +637,29 @@ test.describe('Panel Interactions', () => {
     ]);
     await waitForNoDialogs(page);
 
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Tie Run' });
-    await expect(sectionRow).toContainText(/Shots: 3 \| 13(\.0+)?m/);
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Tie Run' });
+    await expect(lineRow).toContainText(/Shots: 3 \| 13(\.0+)?m/);
 
-    await sectionRow.click();
-    const sectionDetail = page.getByTestId('section-detail');
-    await expect(sectionDetail).toBeVisible();
+    await lineRow.click();
+    const lineDetail = page.getByTestId('line-detail');
+    await expect(lineDetail).toBeVisible();
     const statValue = (label: string) =>
-      sectionDetail.getByText(label, { exact: true }).locator('xpath=following-sibling::div[1]');
+      lineDetail.getByText(label, { exact: true }).locator('xpath=following-sibling::div[1]');
     await expect(statValue('Total length')).toHaveText(/^13(\.0+)? m$/);
     // Averaged over the two shots that count toward the length.
     await expect(statValue('Average shot')).toHaveText(/^6\.50* m$/);
     // The card says how much Reference length it leaves out.
-    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+    await expect(lineDetail.getByTestId('line-reference-length-note')).toHaveText(
       /^Reference shots \(4(\.0+)? m\) are not counted in the length\.$/
     );
 
-    // A section of Reference shots only: 0 m long, and no shot to average, so
+    // A line of Reference shots only: 0 m long, and no shot to average, so
     // the average reads "-" rather than a 0 m shot.
-    await page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Repeat Only' }).click();
-    await expect(sectionDetail).toContainText('Repeat Only');
+    await page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Repeat Only' }).click();
+    await expect(lineDetail).toContainText('Repeat Only');
     await expect(statValue('Total length')).toHaveText(/^0(\.0+)? m$/);
     await expect(statValue('Average shot')).toHaveText('-');
-    await expect(sectionDetail.getByTestId('section-reference-length-note')).toHaveText(
+    await expect(lineDetail.getByTestId('line-reference-length-note')).toHaveText(
       /^Reference shots \(20(\.0+)? m\) are not counted in the length\.$/
     );
   });

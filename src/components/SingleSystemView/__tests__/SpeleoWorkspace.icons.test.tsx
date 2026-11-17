@@ -30,7 +30,7 @@ beforeEach(() => {
   ipc.mockImplementation(async (cmd: string) => cmd === 'speleodb_get_revisions'
     ? [revision('aaaaaaaa1111'), revision('bbbbbbbb2222')] : null);
   useProjectStore.setState({ project: { name: 'Synthetic cave', file_path: '/synthetic.stalx', zero_datums: [] } as never, canUndo: false, canRedo: false });
-  useUIStore.setState({ appMode: 'survey', speleoWorkspaceSection: 'history' });
+  useUIStore.setState({ appMode: 'survey', speleoWorkspaceLine: 'history' });
   useSpeleoStore.setState({ link: LINK, remoteProjectId: 'synthetic', busy: false,
     session: { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://synthetic.example' } });
 });

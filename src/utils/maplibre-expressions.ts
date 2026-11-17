@@ -26,8 +26,8 @@ export interface PriorityLevel {
  *
  * @example
  * const strokeWidth = buildPriorityExpression([
- *   { condition: compositeIdEquals(['sectionId', 'stationIndex'], '1:5'), value: 4 },
- *   { condition: inSection('1'), value: 3 },
+ *   { condition: compositeIdEquals(['lineId', 'stationIndex'], '1:5'), value: 4 },
+ *   { condition: inLine('1'), value: 3 },
  * ], 1);
  * // Returns: ['case', ['==', ...], 4, ['==', ...], 3, 1]
  */
@@ -51,20 +51,20 @@ export function buildPriorityExpression(
 
 /**
  * Creates an equality condition for composite ID matching.
- * Used for station/shot IDs in format "sectionId:index".
+ * Used for station/shot IDs in format "lineId:index".
  *
- * CRITICAL: Feature properties store sectionId as NUMBER.
+ * CRITICAL: Feature properties store lineId as NUMBER.
  * This function converts both parts to strings before concatenating
  * to ensure reliable comparison.
  *
- * @param parts - Tuple of [sectionIdProp, indexProp] property names
+ * @param parts - Tuple of [lineIdProp, indexProp] property names
  * @param value - The composite ID to match (e.g., "1:5") or null for "no match"
  *
  * @example
- * compositeIdEquals(['sectionId', 'stationIndex'], '1:5')
- * // Returns: ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], '1:5']
+ * compositeIdEquals(['lineId', 'stationIndex'], '1:5')
+ * // Returns: ['==', ['concat', ['to-string', ['get', 'lineId']], ':', ['to-string', ['get', 'stationIndex']]], '1:5']
  *
- * compositeIdEquals(['sectionId', 'stationIndex'], null)
+ * compositeIdEquals(['lineId', 'stationIndex'], null)
  * // Returns: false (constant false expression)
  */
 export function compositeIdEquals(
@@ -86,27 +86,27 @@ export function compositeIdEquals(
 }
 
 /**
- * Creates a section membership condition.
+ * Creates a line membership condition.
  *
- * CRITICAL: sectionId is stored as NUMBER in feature properties.
+ * CRITICAL: lineId is stored as NUMBER in feature properties.
  * This function converts it to string for comparison to avoid
  * type mismatch issues in MapLibre expressions.
  *
- * @param sectionId - Section ID as string (will be compared to stringified feature property), or null for "no match"
+ * @param lineId - Line ID as string (will be compared to stringified feature property), or null for "no match"
  *
  * @example
- * inSection('1')
- * // Returns: ['==', ['to-string', ['get', 'sectionId']], '1']
+ * inLine('1')
+ * // Returns: ['==', ['to-string', ['get', 'lineId']], '1']
  *
- * inSection(null)
+ * inLine(null)
  * // Returns: false (constant false expression)
  */
-export function inSection(sectionId: string | null): ExpressionSpecification {
-  // Return constant false when sectionId is null to guarantee "no match"
-  if (sectionId === null) {
+export function inLine(lineId: string | null): ExpressionSpecification {
+  // Return constant false when lineId is null to guarantee "no match"
+  if (lineId === null) {
     return false as unknown as ExpressionSpecification;
   }
 
-  // Features store sectionId as number - convert to string for comparison
-  return ['==', ['to-string', ['get', 'sectionId']], sectionId] as unknown as ExpressionSpecification;
+  // Features store lineId as number - convert to string for comparison
+  return ['==', ['to-string', ['get', 'lineId']], lineId] as unknown as ExpressionSpecification;
 }

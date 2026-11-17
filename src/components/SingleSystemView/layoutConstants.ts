@@ -2,7 +2,7 @@
  * Shared layout bounds for the SingleSystemView panels.
  *
  * The bottom data-table ResizablePanel enforces these min/max heights, and the
- * section-focus height clamp (#50) reuses them so the focus height can never
+ * line-focus height clamp (#50) reuses them so the focus height can never
  * drift out of the panel's own resize bounds if either is changed.
  */
 export const DATA_TABLE_MIN_HEIGHT = 100;
@@ -35,7 +35,7 @@ export const WIZARD_MAP_PANEL_MAX_WIDTH = 900;
  * remainder, so without a floor the remainder absorbs every shortfall.
  *
  * Sized from the widest row those columns hold: the MNemo wizard's paired
- * "Section" + "Station" selects with their labels (~300px before the selects
+ * "Line" + "Station" selects with their labels (~300px before the selects
  * start truncating their option text), plus the card padding they sit in.
  * It bites only when the window is narrower than
  * `stored width + this` - at the 480px default that is a window under ~800px.
@@ -56,24 +56,24 @@ export const WIZARD_SETTINGS_MIN_WIDTH = 320;
  * calls and compares against these constants - change both sides together.
  */
 export const PANEL_SIZE_BOUNDS = {
-  sections: { min: 150, max: 400 },
+  lines: { min: 150, max: 400 },
   detail: { min: 200, max: 500 },
   'data-table': { min: DATA_TABLE_MIN_HEIGHT, max: DATA_TABLE_MAX_HEIGHT },
   'wizard-map': { min: WIZARD_MAP_PANEL_MIN_WIDTH, max: WIZARD_MAP_PANEL_MAX_WIDTH },
 } as const satisfies Record<
-  'sections' | 'detail' | 'data-table' | 'wizard-map',
+  'lines' | 'detail' | 'data-table' | 'wizard-map',
   { min: number; max: number }
 >;
 
 /**
  * Minimum width (px, CSS pixels) of the left panel, whichever of its tabs
- * (Sections, SpeleoDB) is showing. One floor for both tabs, so switching tabs
+ * (Lines, SpeleoDB) is showing. One floor for both tabs, so switching tabs
  * never resizes the panel.
  *
  * Sized from the tab strip, which is what binds first. Measured in Playwright
  * (Chromium, 14px labels, Arial-metric fonts, the widest UI fallback measured):
  * the SpeleoDB tab needs 109px (padding, 16px icon, gap, "SpeleoDB" at medium
- * weight) and Sections 100px; the tabs split the width equally, so 218px is the
+ * weight) and Lines 100px; the tabs split the width equally, so 218px is the
  * floor where neither clips. The SpeleoDB tab's content (wrapped header lines,
  * stacked full-width buttons with wrapping labels, revision rows) stays inside
  * the panel without horizontal overflow from 170px up, in every link state.
@@ -81,9 +81,9 @@ export const PANEL_SIZE_BOUNDS = {
  * the ones measurable here (macOS and Windows fonts were not measured). Under the UI scale (webview zoom) all of this scales
  * together, so the floor holds in CSS px at any zoom, and a lower floor leaves
  * the squeezed map more room at high zoom. It was 320 while the SpeleoDB tab
- * was showing and 150 on Sections.
+ * was showing and 150 on Lines.
  *
- * Display-only: `PANEL_SIZE_BOUNDS.sections` (the persisted range, mirrored in
+ * Display-only: `PANEL_SIZE_BOUNDS.lines` (the persisted range, mirrored in
  * Rust) is unchanged, so a stored width below this floor still loads and is
  * simply shown at the floor.
  */

@@ -11,13 +11,13 @@ export default function EditShotDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { updateShot, project, isShotFrozen } = useProjectStore();
 
-  const sectionId = dialogData.sectionId as number | undefined;
+  const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
 
-  const section = project?.sections.find((s) => s.id === sectionId);
-  const shot = section?.shots.find((s) => s.id === shotId);
-  const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
-  const frozen = sectionId !== undefined && shotIndex >= 0 && isShotFrozen(sectionId, shotIndex);
+  const line = project?.lines.find((s) => s.id === lineId);
+  const shot = line?.shots.find((s) => s.id === shotId);
+  const shotIndex = line?.shots.findIndex((s) => s.id === shotId) ?? -1;
+  const frozen = lineId !== undefined && shotIndex >= 0 && isShotFrozen(lineId, shotIndex);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +77,7 @@ export default function EditShotDialog() {
   };
 
   const handleSave = async () => {
-    if (sectionId === undefined || shotId === undefined) return;
+    if (lineId === undefined || shotId === undefined) return;
 
     if (!validateForm()) return;
 
@@ -85,7 +85,7 @@ export default function EditShotDialog() {
     setError(null);
 
     try {
-      const result = await updateShot(sectionId, shotId, {
+      const result = await updateShot(lineId, shotId, {
         azimuth_in: normalizeAzimuth(parseFloat(azimuthIn)),
         azimuth_out: normalizeAzimuth(parseFloat(azimuthOut)),
         length: parseFloat(length),
@@ -158,7 +158,7 @@ export default function EditShotDialog() {
         )}
 
         <div className="text-sm text-text-secondary">
-          Section: {section?.name ?? `Section ${sectionId}`} | Shot ID: {shotId}
+          Line: {line?.name ?? `Line ${lineId}`} | Shot ID: {shotId}
         </div>
 
         {frozen && (

@@ -51,12 +51,12 @@ describe('an import resolves the deferred first save (#394)', () => {
     expect(useProjectStore.getState().databaseOpen).toBe(true);
   });
 
-  it('does the same for Compass, Walls, GPX and DMP sections', async () => {
+  it('does the same for Compass, Walls, GPX and DMP lines', async () => {
     const runs: Array<() => Promise<unknown>> = [
       () => useProjectStore.getState().executeCompassImport('/caves/x.mak'),
       () => useProjectStore.getState().executeWallsImport('/caves/x.wpj'),
       () => useProjectStore.getState().executeGpxImport('/caves/x.gpx', null, true, true, true, [], false),
-      () => useProjectStore.getState().importSections([]),
+      () => useProjectStore.getState().importLines([]),
     ];
     for (const run of runs) {
       deferred();

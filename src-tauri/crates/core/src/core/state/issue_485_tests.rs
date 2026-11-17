@@ -14,7 +14,7 @@
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::models::{Project, SectionData, ShotData};
+use crate::models::{Project, LineData, ShotData};
 use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
@@ -24,7 +24,7 @@ const IGNORED_CODE: &str = "SHORT_SHOT";
 ///
 /// `migrate_pitch_to_down_convention` only reads shots with a non-NULL
 /// `pitch_in`/`pitch_out`, and only tallies those whose depth change exceeds
-/// 0.05 m; a flipped section then has `invalidate_pre_pitch_flip_state` clear
+/// 0.05 m; a flipped line then has `invalidate_pre_pitch_flip_state` clear
 /// `INCLINATION_DEPTH_MISMATCH` dismissals on it. The stamped control below runs
 /// with `current = 7`, which reaches that arm, so the fixture must be provably
 /// unflippable or the assertion could be measuring the flip instead of the save.
@@ -39,7 +39,7 @@ fn synthetic_project() -> Project {
         ..Default::default()
     };
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         color: "#abcdef".to_string(),
         shots: vec![unflippable(5.0), unflippable(7.0)],
         ..Default::default()
@@ -56,8 +56,8 @@ fn build_unstamped_pre_v8_file(path: &std::path::Path) {
     let mut db = Database::open(path).unwrap();
     db.save_project(&synthetic_project()).unwrap();
     let saved = db.load_project().unwrap();
-    let section_id = saved.sections[0].id;
-    let shot_id = saved.sections[0].shots[0].id;
+    let line_id = saved.lines[0].id;
+    let shot_id = saved.lines[0].shots[0].id;
     drop(db);
 
     let conn = rusqlite::Connection::open(path).unwrap();
@@ -74,7 +74,7 @@ fn build_unstamped_pre_v8_file(path: &std::path::Path) {
             FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
          );
          INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
-            VALUES ({section_id}, {shot_id}, '{IGNORED_CODE}', '2026-01-01T00:00:00+00:00');
+            VALUES ({line_id}, {shot_id}, '{IGNORED_CODE}', '2026-01-01T00:00:00+00:00');
          PRAGMA user_version = 0;"
     ))
     .unwrap();

@@ -15,9 +15,9 @@ impl Database {
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
         tracing::debug!(
-            "Saving project: name={}, sections={}",
+            "Saving project: name={}, lines={}",
             project.name,
-            project.sections.len()
+            project.lines.len()
         );
 
         let tx = match self.conn.transaction() {
@@ -84,29 +84,29 @@ impl Database {
             ],
         )?;
 
-        // Credit rows are keyed by (section, shot uuid): see `shot_credits`. A
-        // uuid repeated INSIDE one section (a corrupt file the save heals
+        // Credit rows are keyed by (line, shot uuid): see `shot_credits`. A
+        // uuid repeated INSIDE one line (a corrupt file the save heals
         // elsewhere) keeps its first shot's row.
         let mut credit_rows: Vec<((u32, String), crate::models::SurveyCredit)> = Vec::new();
         let mut credit_keys: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
 
-        // Save sections and shots
-        for section in &project.sections {
+        // Save lines and shots
+        for line in &project.lines {
             // The legacy columns keep their meaning for every older reader: the
             // distinct NAMES (two people sharing a name appear once), as the
-            // surveyors joined with ", " or, when anyone explored the section,
+            // surveyors joined with ", " or, when anyone explored the line,
             // "explorers / surveyors" - all an older build keeps after it saves
-            // (#718) - and the earliest date. A shot-less section writes back
+            // (#718) - and the earliest date. A shot-less line writes back
             // the legacy pair it keeps.
-            let (legacy_surveyor, first_date) = if section.shots.is_empty() {
-                (section.legacy_surveyor.clone(), section.legacy_date)
+            let (legacy_surveyor, first_date) = if line.shots.is_empty() {
+                (line.legacy_surveyor.clone(), line.legacy_date)
             } else {
-                // The text the section was read with while its people are
+                // The text the line was read with while its people are
                 // unchanged, so a save does not cut or respell it.
                 (
-                    section.legacy_surveyor_to_write(),
-                    section.first_survey_date(),
+                    line.legacy_surveyor_to_write(),
+                    line.first_survey_date(),
                 )
             };
             let legacy_date = first_date.map(|d| d.to_string());
@@ -119,27 +119,27 @@ impl Database {
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
-                    section.id,
-                    section.name,
+                    line.id,
+                    line.name,
                     legacy_surveyor,
                     legacy_date,
-                    section.color,
-                    section.direction.to_string(),
-                    section.quality,
-                    i64::from(section.reverse_parity),
-                    section.gauge_shot_uuid.as_deref(),
-                    section.gauge_neighbour_uuid.as_deref(),
+                    line.color,
+                    line.direction.to_string(),
+                    line.quality,
+                    i64::from(line.reverse_parity),
+                    line.gauge_shot_uuid.as_deref(),
+                    line.gauge_neighbour_uuid.as_deref(),
                     // All four NULL together mean "no reference recorded" (#438),
                     // which reads back as `None` - inherit the project default.
-                    section.azimuth_reference.map(|r| r.north.as_str()),
+                    line.azimuth_reference.map(|r| r.north.as_str()),
                     // `applied_correction`, not the raw field: what is stored has
                     // to be the rotation geometry APPLIED, or a project saved
                     // with a non-finite correction (which applies as 0) reloads
                     // as a NaN column and the read path's repair is the only
                     // thing between it and the walk.
-                    section.azimuth_reference.map(|r| r.applied_correction()),
-                    section.azimuth_reference.map(|r| r.source.as_str()),
-                    section
+                    line.azimuth_reference.map(|r| r.applied_correction()),
+                    line.azimuth_reference.map(|r| r.source.as_str()),
+                    line
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
                     Utc::now().to_rfc3339()
@@ -149,11 +149,11 @@ impl Database {
             // by something else from ours (`shot_credits`).
             write_recorded_legacy(
                 &tx,
-                section.id,
+                line.id,
                 (legacy_surveyor.as_deref(), legacy_date.as_deref()),
             )?;
 
-            for (seq, shot) in section.shots.iter().enumerate() {
+            for (seq, shot) in line.shots.iter().enumerate() {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
                 // The database uses auto-increment for the id column.
                 // `shot.uuid` IS persisted - it's the only stable identity
@@ -168,9 +168,9 @@ impl Database {
                     recorded.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
                 // A row only where the legacy fallback would read back something
                 // else - so an uncredited shot, or one that agrees with its
-                // section's columns, costs nothing.
-                if shot.credit() != &fallback && credit_keys.insert((section.id, uuid.clone())) {
-                    credit_rows.push(((section.id, uuid.clone()), shot.credit().clone()));
+                // line's columns, costs nothing.
+                if shot.credit() != &fallback && credit_keys.insert((line.id, uuid.clone())) {
+                    credit_rows.push(((line.id, uuid.clone()), shot.credit().clone()));
                 }
                 tx.execute(
                     r"INSERT INTO shots (
@@ -180,7 +180,7 @@ impl Database {
                         comment, kind, marker_index, temperature, uuid
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                     params![
-                        section.id,
+                        line.id,
                         seq as i64,
                         shot.azimuth_in,
                         shot.azimuth_out,
@@ -209,7 +209,7 @@ impl Database {
         // `StationKey` anchors in memory but persisted positionally (resolved
         // against the current shots) - the on-disk format stays positional, like
         // the binary IPC wire; load reconstructs anchors and re-anchors them.
-        // A dangling endpoint is SKIPPED, never collapsed to (section, 0): the
+        // A dangling endpoint is SKIPPED, never collapsed to (line, 0): the
         // app-layer save gate already blocks this, but the persistence layer must
         // not crash (PK collision) or write a phantom for any path that reaches
         // it directly (salvage).
@@ -227,9 +227,9 @@ impl Database {
             tx.execute(
                 "INSERT INTO station_merges (station_a_section, station_a_index, station_b_section, station_b_index, merged_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
-                    a.section_id,
+                    a.line_id,
                     a.station_index,
-                    b.section_id,
+                    b.line_id,
                     b.station_index,
                     merge.merged_at.to_rfc3339()
                 ],
@@ -241,11 +241,11 @@ impl Database {
         // whose written uuids the extras record.
         write_zero_datums(&tx, project)?;
 
-        // Save section offsets
-        for (section_id, (offset_x, offset_y)) in &project.section_offsets {
+        // Save line offsets
+        for (line_id, (offset_x, offset_y)) in &project.line_offsets {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
-                params![section_id, offset_x, offset_y],
+                params![line_id, offset_x, offset_y],
             )?;
         }
 
@@ -260,7 +260,7 @@ impl Database {
             };
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![sr.section_id, sr.station_index, offset_x, offset_y, offset_z],
+                params![sr.line_id, sr.station_index, offset_x, offset_y, offset_z],
             )?;
         }
 
@@ -279,7 +279,7 @@ impl Database {
                     );
                     continue;
                 };
-                insert.execute(params![sr.section_id, sr.station_index, text])?;
+                insert.execute(params![sr.line_id, sr.station_index, text])?;
             }
         }
 
@@ -348,9 +348,9 @@ impl Database {
             tx.execute(
                 "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy, is_aligned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
-                    a.section_id,
+                    a.line_id,
                     a.station_index,
-                    b.section_id,
+                    b.line_id,
                     b.station_index,
                     lc.path_length,
                     lc.misclosure_distance,
@@ -372,8 +372,8 @@ impl Database {
             )?;
         }
 
-        // Save imported section hashes
-        for hash in &project.imported_section_hashes {
+        // Save imported line hashes
+        for hash in &project.imported_line_hashes {
             tx.execute(
                 "INSERT INTO imported_section_hashes (hash) VALUES (?1)",
                 params![hash],
@@ -423,12 +423,12 @@ impl Database {
             }
         }
 
-        // Shots whose record parity runs against their section's (dive-plan
+        // Shots whose record parity runs against their line's (dive-plan
         // pins only), same table. Only shots the project still holds are
         // written; absent when none, so a project that never combined is
         // unchanged.
         let held: std::collections::HashSet<&str> = project
-            .sections
+            .lines
             .iter()
             .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
             .collect();
@@ -462,7 +462,9 @@ impl Database {
         } else {
             tx.execute(
                 "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('held_gauges', ?1)",
-                params![serde_json::to_string(&held_gauges)?],
+                // Pre-rename names, so an older build keeps the gauges (and
+                // with them the adjusted geometry); see `disk_names`.
+                params![crate::models::disk_names::to_disk_string(&held_gauges)?],
             )?;
         }
 

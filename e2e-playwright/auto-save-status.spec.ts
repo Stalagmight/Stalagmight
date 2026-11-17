@@ -2,10 +2,10 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -20,8 +20,8 @@ import {
  * - error: "Save error" (red)
  */
 
-const sectionSeed: SectionSeed = {
-  name: 'Status Test Section',
+const lineSeed: LineSeed = {
+  name: 'Status Test Line',
   shots: [
     {
       azimuth_in: 45,
@@ -33,9 +33,9 @@ const sectionSeed: SectionSeed = {
   ],
 };
 
-async function createProjectWithSection(page: Page): Promise<void> {
+async function createProjectWithLine(page: Page): Promise<void> {
   await createProject(page, 'Auto-Save Status Test');
-  await seedProjectWithSections(page, [sectionSeed]);
+  await seedProjectWithLines(page, [lineSeed]);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
 }
@@ -62,7 +62,7 @@ test.describe('Auto-Save Status Bar', () => {
   });
 
   test('shows unsaved changes indicator after modification', async ({ page }) => {
-    await createProjectWithSection(page);
+    await createProjectWithLine(page);
 
     const saveStatus = page.getByTestId('save-status');
     await expect(saveStatus).toBeVisible();
@@ -72,11 +72,11 @@ test.describe('Auto-Save Status Bar', () => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
-      if (!section || !section.shots?.[0]) return;
+      const line = state.project?.lines?.[0];
+      if (!line || !line.shots?.[0]) return;
 
       // Update a shot to make the project dirty
-      state.updateShot(section.id, section.shots[0].id, { length: 15.5 });
+      state.updateShot(line.id, line.shots[0].id, { length: 15.5 });
     });
 
     // Status should change to indicate unsaved changes or pending auto-save
@@ -85,7 +85,7 @@ test.describe('Auto-Save Status Bar', () => {
   });
 
   test('status shows saving state during Ctrl+S', async ({ page }) => {
-    await createProjectWithSection(page);
+    await createProjectWithLine(page);
 
     const saveStatus = page.getByTestId('save-status');
     await expect(saveStatus).toBeVisible();
@@ -98,7 +98,7 @@ test.describe('Auto-Save Status Bar', () => {
   });
 
   test('status has yellow styling when dirty', async ({ page }) => {
-    await createProjectWithSection(page);
+    await createProjectWithLine(page);
 
     const saveStatus = page.getByTestId('save-status');
     await expect(saveStatus).toBeVisible();
@@ -108,9 +108,9 @@ test.describe('Auto-Save Status Bar', () => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
-      if (!section || !section.shots?.[0]) return;
-      state.updateShot(section.id, section.shots[0].id, { length: 20 });
+      const line = state.project?.lines?.[0];
+      if (!line || !line.shots?.[0]) return;
+      state.updateShot(line.id, line.shots[0].id, { length: 20 });
     });
 
     // Status should have yellow color class when dirty (idle + dirty state)
@@ -123,7 +123,7 @@ test.describe('Auto-Save Status Bar', () => {
   });
 
   test('status shows error styling on save failure', async ({ page }) => {
-    await createProjectWithSection(page);
+    await createProjectWithLine(page);
 
     const saveStatus = page.getByTestId('save-status');
     await expect(saveStatus).toBeVisible();
@@ -140,9 +140,9 @@ test.describe('Auto-Save Status Bar', () => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return;
       const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
-      if (!section || !section.shots?.[0]) return;
-      state.updateShot(section.id, section.shots[0].id, { length: 25 });
+      const line = state.project?.lines?.[0];
+      if (!line || !line.shots?.[0]) return;
+      state.updateShot(line.id, line.shots[0].id, { length: 25 });
     });
 
     await page.keyboard.press('Control+s');
@@ -159,10 +159,10 @@ test.describe('Auto-Save Status Bar', () => {
     });
   });
 
-  test('footer shows section/shot summary statistics', async ({ page }) => {
-    await createProjectWithSection(page);
+  test('footer shows line/shot summary statistics', async ({ page }) => {
+    await createProjectWithLine(page);
 
-    // The footer should show summary stats like "1 section, 1 shot, 10.0 m"
+    // The footer should show summary stats like "1 line, 1 shot, 10.0 m"
     const footer = page.locator('footer');
     await expect(footer).toBeVisible();
     await expect(footer).toContainText(/section/i);

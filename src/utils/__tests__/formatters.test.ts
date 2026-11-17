@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../formatters';
 
 describe('formatShotId', () => {
-  it('formats section and shot position', () => {
+  it('formats line and shot position', () => {
     expect(formatShotId(5, 3)).toBe('5:3');
   });
 
-  it('formats first shot in first section', () => {
+  it('formats first shot in first line', () => {
     expect(formatShotId(1, 1)).toBe('1:1');
   });
 
@@ -25,11 +25,11 @@ describe('formatShotId', () => {
 });
 
 describe('formatStationId', () => {
-  it('formats section and station index', () => {
+  it('formats line and station index', () => {
     expect(formatStationId(5, 3)).toBe('5:3');
   });
 
-  it('formats first station in first section (0-indexed)', () => {
+  it('formats first station in first line (0-indexed)', () => {
     expect(formatStationId(1, 0)).toBe('1:0');
   });
 
@@ -58,7 +58,7 @@ describe('formatStationIdWithName', () => {
     expect(formatStationIdWithName(5, 3, '')).toBe('5:3');
   });
 
-  it('keeps a name of 0 (an MNemo section start)', () => {
+  it('keeps a name of 0 (an MNemo line start)', () => {
     expect(formatStationIdWithName(2, 0, '0')).toBe('2:0 · 0');
   });
 

@@ -10,7 +10,7 @@ import type { SystemGeometry } from '../../systemColor';
 import { GlobalHitIndex, type ProjectFn } from '../globalHitIndex';
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
-  return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), section_id: 0 };
+  return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), line_id: 0 };
 }
 
 function makeSystem(filePath: string, shots: GeometryShot[]): SystemGeometry {
@@ -19,7 +19,7 @@ function makeSystem(filePath: string, shots: GeometryShot[]): SystemGeometry {
     location: null,
     file_path: filePath,
     modified_at: '2026-01-01T00:00:00Z',
-    section_count: 1,
+    line_count: 1,
     total_length: 100,
     station_count: 3,
     gps_center: [0, 0],

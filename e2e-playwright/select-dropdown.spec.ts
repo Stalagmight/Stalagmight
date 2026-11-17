@@ -2,9 +2,9 @@
  * E2E tests for the generic Select component (portaled dropdown).
  *
  * Subject: the Number Format select in Settings > General
- * (`select-number-format`, 4 options). The DataTable section dropdown that
+ * (`select-number-format`, 4 options). The DataTable line dropdown that
  * these tests previously used no longer exists - the table header was
- * condensed and sections are now selected app-wide.
+ * condensed and lines are now selected app-wide.
  *
  * Behaviors under test are the Select component's own: open/close, portal
  * z-order, keyboard navigation, and the various close paths.

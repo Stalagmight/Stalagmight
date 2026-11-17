@@ -2,7 +2,7 @@
  * #681: the repeated shots the orphan-placement dialog resolves. The "Merge at"
  * station sets how long the repeat is: shots on the dangling side of it are the
  * repeat, shots past it are new survey and must never be resolved (made
- * Reference), or the rest of the section is cut off in Plan mode.
+ * Reference), or the rest of the line is cut off in Plan mode.
  *
  * INJECTION (tried):
  * - pairing the whole overlap whatever the merge station (the previous rule,
@@ -28,17 +28,17 @@ describe('computeOverlapPairs - merged at the end of the repeat, the whole repea
       .toEqual([[0, 5], [1, 6]]);
   });
 
-  it('Front + reverse: new shots run back down the existing section', () => {
+  it('Front + reverse: new shots run back down the existing line', () => {
     expect(pairs({ importStationIndex: 0, matchedShots: 2, existingStationIndex: 7, direction: 'reverse' }, 2))
       .toEqual([[0, 6], [1, 5]]);
   });
 
-  it('Back + forward: the last n new shots, in new-section order', () => {
+  it('Back + forward: the last n new shots, in new-line order', () => {
     expect(pairs({ importStationIndex: 6, matchedShots: 2, existingStationIndex: 3, direction: 'forward' }, 4))
       .toEqual([[4, 4], [5, 3]]);
   });
 
-  it('Back + reverse: the last n new shots, in new-section order', () => {
+  it('Back + reverse: the last n new shots, in new-line order', () => {
     expect(pairs({ importStationIndex: 6, matchedShots: 2, existingStationIndex: 5, direction: 'reverse' }, 4))
       .toEqual([[4, 3], [5, 4]]);
   });
@@ -66,7 +66,7 @@ describe('computeOverlapPairs - the merge station sets how long the repeat is (#
       .toEqual([[7, 2]]);
   });
 
-  // [label, params, new-section shot count]
+  // [label, params, new-line shot count]
   const CASES: Array<[string, OverlapParams, number]> = [
     ['Front + forward', { importStationIndex: 0, matchedShots: 3, existingStationIndex: 4, direction: 'forward' }, 8],
     ['Front + reverse', { importStationIndex: 0, matchedShots: 3, existingStationIndex: 7, direction: 'reverse' }, 8],
@@ -82,8 +82,8 @@ describe('computeOverlapPairs - the merge station sets how long the repeat is (#
       expect(options.length).toBe(params.matchedShots + 1);
       for (const option of options) {
         const resolved = computeOverlapPairs(params, option.importStation).map((p) => p.orphanShotIndex);
-        // The shots from the merge station on to the new section's far end
-        // (Front: station N; Back: station 0) carry the section on.
+        // The shots from the merge station on to the new line's far end
+        // (Front: station N; Back: station 0) carry the line on.
         const pastMerge = (shot: number) => (front ? shot >= option.importStation : shot < option.importStation);
         expect(resolved.filter(pastMerge)).toEqual([]);
         // And everything on the dangling side IS resolved: one shot per offset.

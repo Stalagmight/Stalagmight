@@ -27,13 +27,13 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
 }
 
 /**
- * Re-render a DMP section from the shot table's current rows.
+ * Re-render a DMP line from the shot table's current rows.
  *
  * The wizard previews are fed `DmpSection`s but the user edits `EditableShot`s,
  * so every preview that must reflect pending edits converts back. Doing that in
- * one place matters for more than duplication: `SectionPreview` draws
+ * one place matters for more than duplication: `LinePreview` draws
  * `shots.filter(s => s.shot_type === 'Standard')` and numbers the stations it
- * draws from 0, so a preview built off the RAW section addresses a different
+ * draws from 0, so a preview built off the RAW line addresses a different
  * station space than the shot table does. `convertToEditableShots` drops
  * non-Standard shots AND length-1 Standard ones (`isImportableDmpShot`), and the
  * table then drops whatever the user deleted. Emitting every surviving row as
@@ -74,7 +74,7 @@ export function editableShotsToDmpSection(raw: DmpSection, shots: EditableShot[]
 }
 
 /**
- * Calculate station positions for a section based on shots.
+ * Calculate station positions for a line based on shots.
  * Returns positions in local coordinates (station 0 at origin).
  */
 export function calculateStationPositions(shots: EditableShot[]): Array<{ x: number; y: number }> {

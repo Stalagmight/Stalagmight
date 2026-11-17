@@ -54,7 +54,7 @@ export function GasSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.gas.title')}</h2>
 
-      <SettingsSection title={t('settings.gas.sections.planning')} data-testid="section-gas-planning">
+      <SettingsSection title={t('settings.gas.sections.planning')} data-testid="line-gas-planning">
         <SettingRow
           label={t('settings.gas.swimSpeed.label')}
           helpText={t('settings.gas.swimSpeed.help')}

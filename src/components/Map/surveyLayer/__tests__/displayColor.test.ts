@@ -4,7 +4,7 @@
  * These helpers (moved here from the deleted stock `features.ts`) are the single
  * source of per-feature colors for the custom color resolvers (colorResolvers.ts)
  * and the interact-overlay highlights. The tests pin the exact color each mode
- * (section / depth / severity / zero-datum) produces so the custom path can never
+ * (line / depth / severity / zero-datum) produces so the custom path can never
  * drift from what the resolvers return.
  */
 import { describe, expect, it } from 'vitest';
@@ -29,14 +29,14 @@ import { makeColorResolvers } from '../customRender/colorResolvers';
 import { packCssColor } from '../customRender/colorPack';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { getDepthColor } from '../../../../utils/colors';
-import type { Section } from '../../../../types/ipc/Section';
+import type { Line } from '../../../../types/ipc/Line';
 import type { Station } from '../../../../types/ipc/Station';
 
 const theme = getMapThemeColors();
 const depthRange = { min: -10, max: 0 };
 
-/** 2 sections (distinct colors) + stations, with depths for gradient tests. */
-function fixture(): { sections: Section[]; stations: Station[] } {
+/** 2 lines (distinct colors) + stations, with depths for gradient tests. */
+function fixture(): { lines: Line[]; stations: Station[] } {
   const shot = (id: number, depth_in: number, depth_out: number, len: number) => ({
     id,
     azimuth_in: 0,
@@ -55,7 +55,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     marker_index: null,
     temperature: null,
   });
-  const sections: Section[] = [
+  const lines: Line[] = [
     {
       id: 1, name: 'A', color: '#ff0000',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
@@ -68,10 +68,10 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     },
   ];
   const st = (
-    section_id: number, station_index: number, x: number, y: number, z: number,
+    line_id: number, station_index: number, x: number, y: number, z: number,
     is_zero_datum = false,
   ): Station => ({
-    station_ref: { section_id, station_index },
+    station_ref: { line_id, station_index },
     coordinates: { x, y, z },
     is_zero_datum,
     gps_coordinates: null,
@@ -85,33 +85,33 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     st(2, 0, 20, 0, -2),
     st(2, 1, 26, 0, -2),
   ];
-  return { sections, stations };
+  return { lines, stations };
 }
 
-function sectionColorOf(sections: Section[], id: number): string {
-  return sections.find((s) => s.id === id)!.color;
+function lineColorOf(lines: Line[], id: number): string {
+  return lines.find((s) => s.id === id)!.color;
 }
 
 function findShotGlobal(
   data: ReturnType<typeof surveyDataFromLegacy>,
-  sectionId: number,
+  lineId: number,
   shotId: number,
 ): number {
   for (let i = 0; i < data.shotCount; i++) {
-    if (data.shotSectionIds[i] === sectionId && data.shotIds[i] === shotId) return i;
+    if (data.shotLineIds[i] === lineId && data.shotIds[i] === shotId) return i;
   }
-  throw new Error(`shot ${sectionId}:${shotId} not found`);
+  throw new Error(`shot ${lineId}:${shotId} not found`);
 }
 
 function findStationGlobal(
   data: ReturnType<typeof surveyDataFromLegacy>,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
 ): number {
   for (let g = 0; g < data.stationCount; g++) {
-    if (data.stationSectionIds[g] === sectionId && data.stationIndices[g] === stationIndex) return g;
+    if (data.stationLineIds[g] === lineId && data.stationIndices[g] === stationIndex) return g;
   }
-  throw new Error(`station ${sectionId}:${stationIndex} not found`);
+  throw new Error(`station ${lineId}:${stationIndex} not found`);
 }
 
 describe('normalizeDepthRange', () => {
@@ -135,12 +135,12 @@ describe('resolveShotEndpointColors (custom-render depth gradient)', () => {
   });
 
   it('depth mode: endpoints are the in/out depth-ramp colors (stock gradient endpoints)', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     const ctx = ctxFor(true);
     // shot 101: depth_in 0, depth_out -4.
     const gIdx = findShotGlobal(data, 1, 101);
-    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 1), gIdx, ctx);
+    const [from, to] = resolveShotEndpointColors(data, lineColorOf(lines, 1), gIdx, ctx);
     expect(from).toBe(
       getDepthColor(0, theme.depthShallow, theme.depthDeep, depthRange.min, depthRange.max),
     );
@@ -152,24 +152,24 @@ describe('resolveShotEndpointColors (custom-render depth gradient)', () => {
   });
 
   it('depth mode: a flat shot has equal endpoints', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     // shot 201: depth_in -2, depth_out -2 (flat).
     const gIdx = findShotGlobal(data, 2, 201);
-    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 2), gIdx, ctxFor(true));
+    const [from, to] = resolveShotEndpointColors(data, lineColorOf(lines, 2), gIdx, ctxFor(true));
     expect(from).toBe(to);
   });
 
-  it('section-color mode: both endpoints equal the flat display color', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+  it('line-color mode: both endpoints equal the flat display color', () => {
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     const ctx = ctxFor(false);
     const gIdx = findShotGlobal(data, 1, 101);
-    const base = resolveShotDisplayColor(data, sectionColorOf(sections, 1), gIdx, ctx);
-    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 1), gIdx, ctx);
+    const base = resolveShotDisplayColor(data, lineColorOf(lines, 1), gIdx, ctx);
+    const [from, to] = resolveShotEndpointColors(data, lineColorOf(lines, 1), gIdx, ctx);
     expect(from).toBe(base);
     expect(to).toBe(base);
-    expect(base).toBe(sectionColorOf(sections, 1));
+    expect(base).toBe(lineColorOf(lines, 1));
   });
 });
 
@@ -181,24 +181,24 @@ describe('resolveStationDisplayColor / resolveStationStrokeColor', () => {
     showIssueSeverity: false,
   });
 
-  it('flat mode: non-zero-datum station takes its section color; zero-datum takes the zero-datum color', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+  it('flat mode: non-zero-datum station takes its line color; zero-datum takes the zero-datum color', () => {
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     const ctx = ctxFor(false);
     const plain = findStationGlobal(data, 1, 1);
-    expect(resolveStationDisplayColor(data, sectionColorOf(sections, 1), plain, ctx)).toBe(
-      sectionColorOf(sections, 1),
+    expect(resolveStationDisplayColor(data, lineColorOf(lines, 1), plain, ctx)).toBe(
+      lineColorOf(lines, 1),
     );
     const zero = findStationGlobal(data, 1, 0); // marked zero-datum in the fixture
-    expect(resolveStationDisplayColor(data, sectionColorOf(sections, 1), zero, ctx)).toBe(theme.zeroDatum);
+    expect(resolveStationDisplayColor(data, lineColorOf(lines, 1), zero, ctx)).toBe(theme.zeroDatum);
   });
 
   it('depth mode: station fill is the ramp color at its z', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     const ctx = ctxFor(true);
     const gIdx = findStationGlobal(data, 1, 2); // z = -10
-    expect(resolveStationDisplayColor(data, sectionColorOf(sections, 1), gIdx, ctx)).toBe(
+    expect(resolveStationDisplayColor(data, lineColorOf(lines, 1), gIdx, ctx)).toBe(
       getDepthColor(-10, theme.depthShallow, theme.depthDeep, depthRange.min, depthRange.max),
     );
   });
@@ -220,11 +220,11 @@ describe('GPS fix marker (#741)', () => {
   });
   /** Two placed datums, 1:0 and 2:0; the backend's role for 2:0 is `role`. */
   const dataWith = (role: DatumRole) => {
-    const { sections, stations } = fixture();
+    const { lines, stations } = fixture();
     stations[3] = { ...stations[3]!, is_zero_datum: true };
-    return withGpsFixFlags(surveyDataFromLegacy(sections, stations), [
-      { station_ref: { section_id: 1, station_index: 0 }, role: 'Placement' },
-      { station_ref: { section_id: 2, station_index: 0 }, role },
+    return withGpsFixFlags(surveyDataFromLegacy(lines, stations), [
+      { station_ref: { line_id: 1, station_index: 0 }, role: 'Placement' },
+      { station_ref: { line_id: 2, station_index: 0 }, role },
     ]);
   };
 
@@ -237,9 +237,9 @@ describe('GPS fix marker (#741)', () => {
   });
 
   it('leaves the data untouched when nothing is a fix', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
-    expect(withGpsFixFlags(data, [{ station_ref: { section_id: 1, station_index: 0 }, role: 'Placement' }])).toBe(data);
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
+    expect(withGpsFixFlags(data, [{ station_ref: { line_id: 1, station_index: 0 }, role: 'Placement' }])).toBe(data);
   });
 
   for (const depth of [false, true]) {
@@ -287,8 +287,8 @@ describe('Survey Issues gradient (issue scores)', () => {
   });
 
   it('colours a shot and a station by their scores, flat along the shot', () => {
-    const { sections, stations } = fixture();
-    const data = surveyDataFromLegacy(sections, stations);
+    const { lines, stations } = fixture();
+    const data = surveyDataFromLegacy(lines, stations);
     const gShot = findShotGlobal(data, 1, 102);
     const shotScore = new Float32Array(data.shotCount);
     const stationScore = new Float32Array(data.stationCount);

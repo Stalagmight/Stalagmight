@@ -27,15 +27,15 @@ describe('projectStore.createProject', () => {
             location: args?.projectLocation ?? null,
             created_at: new Date().toISOString(),
             modified_at: new Date().toISOString(),
-            sections: [],
+            lines: [],
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
             file_path: args?.savePath ?? '/mock/Documents/stalagmight/Untitled_Project.stalx',
-            next_section_id: 1,
-            section_offsets: {},
+            next_line_id: 1,
+            line_offsets: {},
             imported_file_hashes: [],
-            imported_section_hashes: [],
+            imported_line_hashes: [],
             next_closure_id: 1n,
           },
           // Complete payload (satisfies pins it): applyDisplaySettings merges
@@ -44,7 +44,7 @@ describe('projectStore.createProject', () => {
           displaySettings: {
             showStations: true,
             showShots: true,
-            showSectionNames: true,
+            showLineNames: true,
             showStationLabels: false,
             showStationNames: false,
             showShotData: false,
@@ -118,7 +118,7 @@ describe('projectStore.createProject', () => {
   // #54: opening a project must reset the Details panel to the project-level view,
   // i.e. drop any selection carried over from a previous project/session.
   it('clears a stale selection on open', async () => {
-    useUIStore.setState({ selection: { type: 'section', sectionId: 1 } });
+    useUIStore.setState({ selection: { type: 'line', lineId: 1 } });
     expect(useUIStore.getState().selection).not.toBeNull();
 
     await useProjectStore.getState().createProject('Fresh Cave');
@@ -134,11 +134,11 @@ describe('projectStore.createProject', () => {
       activeTool: 'move_comment',
       moveCommentSource: {
         type: 'shot',
-        sectionId: 2,
+        lineId: 2,
         shotId: 7,
         comment: 'stale comment from the previous project',
       },
-      mergeStationA: { section_id: 1, station_index: 3 },
+      mergeStationA: { line_id: 1, station_index: 3 },
     });
 
     await useProjectStore.getState().createProject('Fresh Cave');

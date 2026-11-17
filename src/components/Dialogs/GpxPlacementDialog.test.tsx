@@ -41,8 +41,8 @@ const emptyGpx: GpxFile = { name: 'cave.gpx', waypoints: [], tracks: [], routes:
 const RECEIPT: ImportReceipt = {
   source_format: 'GPX',
   file_name: 'cave.gpx',
-  sections_found: 2,
-  sections_imported: 2,
+  lines_found: 2,
+  lines_imported: 2,
   shot_count: 0,
   closures_requested: 0,
   closures_created: 0,
@@ -53,7 +53,7 @@ const RECEIPT: ImportReceipt = {
 };
 
 const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids: [], import_receipt } as CommandResult);
+  ({ success: true, error: null, warnings, line_ids: [], import_receipt } as CommandResult);
 
 let executeGpxImport: ReturnType<typeof vi.fn>;
 let openDialog: ReturnType<typeof vi.fn>;
@@ -147,7 +147,7 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
   });
 
   it('opens the modal for a zero-count receipt even with no warnings (#442)', async () => {
-    const empty: ImportReceipt = { ...RECEIPT, sections_imported: 0 };
+    const empty: ImportReceipt = { ...RECEIPT, lines_imported: 0 };
     executeGpxImport.mockResolvedValue(ok([], empty));
 
     render(<GpxPlacementDialog />);

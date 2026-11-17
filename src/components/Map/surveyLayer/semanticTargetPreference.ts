@@ -29,13 +29,13 @@ export class SemanticTargetPreference {
     const resolved = this.take(event, stationReach, shotReach, suppressStations, suppressShots);
     if (resolved?.type === 'station') {
       this.options.callbacks().onStationClick?.(
-        { section_id: resolved.sectionId, station_index: resolved.stationIndex },
+        { line_id: resolved.lineId, station_index: resolved.stationIndex },
         event,
       );
       return true;
     }
     if (resolved?.type === 'shot') {
-      this.options.callbacks().onShotClick?.(resolved.sectionId, resolved.shotId, event);
+      this.options.callbacks().onShotClick?.(resolved.lineId, resolved.shotId, event);
       return true;
     }
     return false;
@@ -45,14 +45,14 @@ export class SemanticTargetPreference {
     const resolved = this.take(event, stationReach, shotReach, false, false);
     if (resolved?.type === 'station') {
       this.options.callbacks().onContextMenu?.(
-        { type: 'station', ref: { section_id: resolved.sectionId, station_index: resolved.stationIndex } },
+        { type: 'station', ref: { line_id: resolved.lineId, station_index: resolved.stationIndex } },
         event,
       );
       return true;
     }
     if (resolved?.type === 'shot') {
       this.options.callbacks().onContextMenu?.(
-        { type: 'shot', sectionId: resolved.sectionId, shotId: resolved.shotId, alongT: resolved.alongT },
+        { type: 'shot', lineId: resolved.lineId, shotId: resolved.shotId, alongT: resolved.alongT },
         event,
       );
       return true;

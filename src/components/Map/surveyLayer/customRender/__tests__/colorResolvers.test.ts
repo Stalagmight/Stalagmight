@@ -13,19 +13,19 @@ import { GAS_FAR } from '../../../../../utils/gasReach';
  * from the survey's comment maps. These pure checks lock that equivalence.
  */
 
-/** One section: shots (shotId 0,1), stations idx 0,1,2. A comment on shot 0 and
+/** One line: shots (shotId 0,1), stations idx 0,1,2. A comment on shot 0 and
  *  on station idx 2 (global 2); everything else is comment-free. */
 function fixtureWithComments(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 3, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);
-  d.shotSectionIds = new Uint32Array([1, 1]);
+  d.shotLineIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, 0]);
   d.stationCount = 3;
-  d.stationSectionIds = new Uint32Array([1, 1, 1]);
+  d.stationLineIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);
@@ -60,11 +60,11 @@ function ctx(over: Partial<DisplayColorContext> = {}): DisplayColorContext {
 describe('move-comment tint in the custom color resolvers', () => {
   it('tints only commented features when commentTint is active; base otherwise', () => {
     const d = fixtureWithComments();
-    const base = packCssColor('#ff0000'); // section color, flat mode
+    const base = packCssColor('#ff0000'); // line color, flat mode
     const shotTint = packCssColor(commentColorForKey('1:s0'));
     const stationTint = packCssColor(commentColorForKey('1:st2'));
 
-    // Off: every feature keeps its base (section) color.
+    // Off: every feature keeps its base (line) color.
     const off = makeColorResolvers(d, ctx({ commentTint: false }));
     expect(off.colorForShot(0, 1)).toEqual(base);
     expect(off.fillForStation(2)).toEqual(base);
@@ -107,7 +107,7 @@ describe('move-comment tint in the custom color resolvers', () => {
 
 /**
  * Plan-mode idle tint (#395 revision): before a gas origin is chosen, every
- * feature paints the gas ramp's flat far color instead of section/depth color
+ * feature paints the gas ramp's flat far color instead of line/depth color
  * (dimming is a SEPARATE step, applied via the custom-render dim buffers - not
  * this resolver).
  */

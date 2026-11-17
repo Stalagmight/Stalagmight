@@ -40,14 +40,14 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
       created_at: string;
       modified_at: string;
       file_path: string | null;
-      sections: unknown[];
+      lines: unknown[];
       station_merges: unknown[];
       zero_datums: unknown[];
       loop_closures: unknown[];
-      section_offsets: Record<string, unknown>;
+      line_offsets: Record<string, unknown>;
     } | null = null;
     let projectPath: string | null = null;
-    let sectionCounter = 0;
+    let lineCounter = 0;
 
     const mockHandler = (cmd: string, args?: Record<string, unknown>): unknown => {
       // Skip logging for push_frontend_log to avoid infinite loop with console capture
@@ -101,7 +101,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         case 'create_project_full': {
           const name = (args?.name as string) ?? 'Untitled Project';
           const now = new Date().toISOString();
-          sectionCounter = 0;
+          lineCounter = 0;
           currentProject = {
             id: 1,
             name,
@@ -109,18 +109,18 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             created_at: now,
             modified_at: now,
             file_path: null,
-            sections: [],
+            lines: [],
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
-            section_offsets: {},
+            line_offsets: {},
           };
           return {
             loadingId: Date.now(),
             project: currentProject,
             displaySettings: {
               showStations: true,
-              showSectionNames: true,
+              showLineNames: true,
               showStationLabels: false,
               showStationNames: false,
               showShotData: false,
@@ -146,18 +146,18 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             created_at: now,
             modified_at: now,
             file_path: projectPath,
-            sections: [],
+            lines: [],
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
-            section_offsets: {},
+            line_offsets: {},
           };
           return {
             loadingId: Date.now(),
             project: currentProject,
             stations: [],
             stats: {
-              section_count: 0,
+              line_count: 0,
               shot_count: 0,
               total_length: 0,
               min_depth: 0,
@@ -169,7 +169,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             warnings: [],
             displaySettings: {
               showStations: true,
-              showSectionNames: true,
+              showLineNames: true,
               showStationLabels: false,
               showStationNames: false,
               showShotData: false,
@@ -202,20 +202,20 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         case 'get_project':
         case 'get_project_state': {
           const mockStations: Array<{
-            station_ref: { section_id: number; station_index: number };
+            station_ref: { line_id: number; station_index: number };
             coordinates: { x: number; y: number; z: number };
             is_zero_datum: boolean;
             gps_coordinates: null;
             merged_with: never[];
           }> = [];
 
-          if (currentProject?.sections) {
-            for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
-              const shotCount = section.shots?.length ?? 0;
+          if (currentProject?.lines) {
+            for (const line of currentProject.lines as Array<{ id: number; shots: unknown[] }>) {
+              const shotCount = line.shots?.length ?? 0;
               for (let i = 0; i <= shotCount; i++) {
                 mockStations.push({
                   station_ref: {
-                    section_id: section.id,
+                    line_id: line.id,
                     station_index: i,
                   },
                   coordinates: { x: i * 10, y: 0, z: 0 },
@@ -231,7 +231,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             project: currentProject,
             stations: mockStations,
             stats: {
-              section_count: currentProject?.sections.length ?? 0,
+              line_count: currentProject?.lines.length ?? 0,
               shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
               total_length: 0,
               min_depth: 0,
@@ -243,27 +243,27 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
           };
         }
 
-        case 'create_section': {
-          sectionCounter++;
-          const section = {
-            id: sectionCounter,
-            name: (args?.name as string) ?? `Section ${sectionCounter}`,
+        case 'create_line': {
+          lineCounter++;
+          const line = {
+            id: lineCounter,
+            name: (args?.name as string) ?? `Line ${lineCounter}`,
             surveyor: 'Test Surveyor',
             date: new Date().toISOString().split('T')[0],
             color: '#3b82f6',
             shots: args?.shots ?? [],
           };
-          currentProject?.sections.push(section);
-          return { success: true, section };
+          currentProject?.lines.push(line);
+          return { success: true, line };
         }
 
         case 'import_dmp':
         case 'parse_dmp': {
           return {
             version: 5,
-            sections: [
+            lines: [
               {
-                name: 'Test Section',
+                name: 'Test Line',
                 direction: 'in',
                 date: new Date().toISOString().split('T')[0],
                 shots: [
@@ -327,7 +327,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               font_size: 12,
               font_color: '#f5f5f5',
             },
-            section_colors: {
+            line_colors: {
               palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
             },
             map: {
@@ -402,7 +402,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               toggle_satellite: ['B'],
               toggle_station_labels: ['L'],
               toggle_shot_labels: ['Shift+L'],
-              toggle_section_labels: ['Ctrl+L'],
+              toggle_line_labels: ['Ctrl+L'],
               fit_to_bounds: ['F'],
               zoom_in: ['Equal', 'Plus'],
               zoom_out: ['Minus'],
@@ -475,8 +475,8 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
 
         case 'update_shot':
         case 'delete_shot':
-        case 'update_section':
-        case 'delete_section':
+        case 'update_line':
+        case 'delete_line':
         case 'create_shot':
         case 'set_shot_kind':
           return { success: true };

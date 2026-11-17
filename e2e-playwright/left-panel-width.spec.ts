@@ -1,5 +1,5 @@
 /**
- * E2E: the left panel's width with its two tabs (Sections, SpeleoDB).
+ * E2E: the left panel's width with its two tabs (Lines, SpeleoDB).
  *
  * - Both tabs share one width: switching tabs never resizes the panel, at a normal
  *   width and at the minimum (#576 UI polish, item 6).
@@ -37,7 +37,7 @@ async function openRemoteProject(page: Page): Promise<void> {
     };
     await (w.__E2E_TEST__.speleoStore.getState().refreshSession as () => Promise<void>)();
     await (w.__E2E_TEST__.projectStore.getState().loadProject as (p: string) => Promise<unknown>)('/projects/cave-alpha.stalx');
-    w.__E2E_TEST__.uiStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: true, speleoWorkspaceSection: 'history' });
+    w.__E2E_TEST__.uiStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: true, speleoWorkspaceLine: 'history' });
   });
   await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('data-state', 'unuploaded');
 }
@@ -59,10 +59,10 @@ async function settledPanelWidth(page: Page): Promise<number> {
   return last;
 }
 
-/** Switch Sections -> SpeleoDB -> Sections and return the panel width at each step. */
+/** Switch Lines -> SpeleoDB -> Lines and return the panel width at each step. */
 async function widthsAcrossSwitches(page: Page): Promise<number[]> {
   const widths: number[] = [];
-  for (const tab of ['sections', 'speleodb', 'sections', 'speleodb'] as const) {
+  for (const tab of ['lines', 'speleodb', 'lines', 'speleodb'] as const) {
     await page.getByTestId(`workspace-tab-${tab}`).click();
     await expect(page.getByTestId(`workspace-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator(`#workspace-panel-${tab}`)).toBeVisible();
@@ -83,8 +83,8 @@ test.describe('left panel width', () => {
   });
 
   test('switching tabs keeps the width, starting from the minimum reached by dragging', async ({ page }) => {
-    await page.getByTestId('workspace-tab-sections').click();
-    const handle = page.getByTestId('sections-resize-handle');
+    await page.getByTestId('workspace-tab-lines').click();
+    const handle = page.getByTestId('lines-resize-handle');
     const box = (await handle.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -137,12 +137,12 @@ test.describe('left panel width', () => {
   });
 
   test('the un-uploaded SpeleoDB tab differs only by its text colour: dimmed idle, full selected', async ({ page }) => {
-    const tabStyle = (id: 'sections' | 'speleodb') => page.getByTestId(`workspace-tab-${id}`).evaluate((tab) => {
+    const tabStyle = (id: 'lines' | 'speleodb') => page.getByTestId(`workspace-tab-${id}`).evaluate((tab) => {
       const cs = getComputedStyle(tab);
       return { background: cs.backgroundColor, shadow: cs.boxShadow, weight: cs.fontWeight, color: cs.color, borderBottom: cs.borderBottomStyle };
     });
     /** A colour expression resolved the way the browser paints it, under the tab list. */
-    const resolve = (expr: string) => page.getByTestId('workspace-tab-sections').evaluate((tab, value) => {
+    const resolve = (expr: string) => page.getByTestId('workspace-tab-lines').evaluate((tab, value) => {
       const probe = document.createElement('span');
       probe.style.color = value;
       tab.parentElement!.appendChild(probe);
@@ -150,9 +150,9 @@ test.describe('left panel width', () => {
       probe.remove();
       return color;
     }, expr);
-    await page.getByTestId('workspace-tab-sections').click();
+    await page.getByTestId('workspace-tab-lines').click();
     await page.mouse.move(0, 0);
-    const sectionsSelected = await tabStyle('sections');
+    const linesSelected = await tabStyle('lines');
     const idle = await tabStyle('speleodb');
     // Idle: no wash, no rule, the idle weight - only the dimmed warning text.
     expect(idle.background).toBe('rgba(0, 0, 0, 0)');
@@ -165,13 +165,13 @@ test.describe('left panel width', () => {
     await page.getByTestId('workspace-tab-speleodb').click();
     await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('aria-selected', 'true');
     const selected = await tabStyle('speleodb');
-    // Selected: the very indicator Sections uses, with the full-strength warning text.
-    expect(selected.background).toBe(sectionsSelected.background);
-    expect(selected.weight).toBe(sectionsSelected.weight);
+    // Selected: the very indicator Lines uses, with the full-strength warning text.
+    expect(selected.background).toBe(linesSelected.background);
+    expect(selected.weight).toBe(linesSelected.weight);
     expect(selected.shadow).toBe('none');
     expect(selected.color).toBe(await resolve('var(--cc-warning-text)'));
-    // Sections, now idle, looks like any idle tab.
-    expect((await tabStyle('sections')).background).toBe('rgba(0, 0, 0, 0)');
+    // Lines, now idle, looks like any idle tab.
+    expect((await tabStyle('lines')).background).toBe('rgba(0, 0, 0, 0)');
   });
 });
 

@@ -81,7 +81,7 @@ test('workspace contains everyday controls and Revision History without history-
   await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-upload')).toHaveText('Save Changes');
   await expect(page.getByTestId('speleodb-workspace-latest')).toHaveText('Reload Project');
-  const history = page.getByTestId('speleodb-workspace-section-history');
+  const history = page.getByTestId('speleodb-workspace-line-history');
   await expect(history).toContainText('Revision History');
   await history.click();
   await expect(page.getByTestId('speleodb-revisions').getByRole('heading')).toHaveCount(0);
@@ -95,10 +95,10 @@ test('workspace contains everyday controls and Revision History without history-
   await expect(webHistory).toHaveCSS('font-size', await page.getByTestId('speleodb-workspace-latest').evaluate((b) => getComputedStyle(b).fontSize));
   await expect(webHistory).toHaveCSS('box-shadow', 'none');
   await expect(webHistory.locator('svg')).toBeVisible();
-  await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-line-projects')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
-  await expect(page.getByTestId('speleodb-workspace-section-settings')).toHaveCount(0);
-  await expect(page.getByTestId('speleodb-workspace-section-account')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-line-settings')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-line-account')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-settings-name')).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
 });
@@ -110,7 +110,7 @@ test('the SpeleoDB tab carries into Plan and Export, and the hamburger has no Sp
   await openSpeleoTab(page);
   await setMode('plan');
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
-  await expect(page.getByTestId('workspace-tab-sections')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-tab-lines')).toHaveCount(0);
   await setMode('export');
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
   await setMode('survey');
@@ -128,7 +128,7 @@ test('a narrow window reaches the SpeleoDB tab through the panel opener, and a n
   await expect(page.getByTestId('speleodb-status-button')).toHaveCount(0);
   await revealSpeleoTab(page);
   const panel = page.getByTestId('sections-panel-bar');
-  const handle = page.getByTestId('sections-resize-handle');
+  const handle = page.getByTestId('lines-resize-handle');
   await expect(panel).toBeVisible();
   await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(LEFT_WORKSPACE_MIN_WIDTH - 0.5);
   const initial = await panel.boundingBox();
@@ -435,8 +435,8 @@ async function traceMenuClose(page: Page, failFirst: false | 'release' | 'other'
         w.__menuCloseRequests.push(args);
         if (fail && w.__menuCloseRequests.length === 1) {
           return fail === 'release'
-            ? { success: false, error: 'The SpeleoDB lock could not be handed back: synthetic 503', warnings: [], section_ids: [], lock_release: 'failed' }
-            : { success: false, error: 'Synthetic close failure. The project is still open.', warnings: [], section_ids: [] };
+            ? { success: false, error: 'The SpeleoDB lock could not be handed back: synthetic 503', warnings: [], line_ids: [], lock_release: 'failed' }
+            : { success: false, error: 'Synthetic close failure. The project is still open.', warnings: [], line_ids: [] };
         }
       }
       return invoke(command, args);

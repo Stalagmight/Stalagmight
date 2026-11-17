@@ -23,7 +23,7 @@ describe('SYNTACTIC_PRESETS', () => {
 
   it('default preset matches the spec object colors', () => {
     expect(SYNTACTIC_PRESETS.default!.segment).toBe('#ff8000');
-    expect(SYNTACTIC_PRESETS.default!.section).toBe('#a335ee');
+    expect(SYNTACTIC_PRESETS.default!.line).toBe('#a335ee');
     expect(SYNTACTIC_PRESETS.default!.shot).toBe('#0070dd');
   });
 });

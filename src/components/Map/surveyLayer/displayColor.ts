@@ -32,23 +32,23 @@ function fnv1a32(str: string): number {
 /** Deterministic `COMMENT_PALETTE` color for a comment, keyed by its OWNER
  *  identity rather than build order (#52), so the color stays stable when
  *  other comments are added/removed/moved elsewhere in the survey. Exported
- *  for test assertions; callers should use the section-qualified key shapes
- *  below (`${sectionId}:s${shotId}` for shot comments, `${sectionId}:st${
- *  stationIndex}` for station comments) so two sections can't collide on a
+ *  for test assertions; callers should use the line-qualified key shapes
+ *  below (`${lineId}:s${shotId}` for shot comments, `${lineId}:st${
+ *  stationIndex}` for station comments) so two lines can't collide on a
  *  shared local index. */
 export function commentColorForKey(key: string): string {
   return COMMENT_PALETTE[fnv1a32(key) % COMMENT_PALETTE.length]!;
 }
 
 /**
- * Ghost section data for merge preview visualization.
+ * Ghost line data for merge preview visualization.
  */
-export interface GhostSectionData {
+export interface GhostLineData {
   /** Shot line coordinates (pairs of [from, to] positions in meters) */
   shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
   /** Station positions in meters */
   stations: Array<{ x: number; y: number }>;
-  /** Section color */
+  /** Line color */
   color: string;
   /** Merge station highlight position (the station being merged) */
   mergeStation?: { x: number; y: number };
@@ -78,7 +78,7 @@ export interface DisplayColorContext {
   issuePalette?: ResolvedPalette | null;
   /** An analytical overlay (distance gradient / gas reach) active in the CUSTOM
    *  renderer. Null / absent = off. See {@link OverlayColorInput}. The stock
-   *  feature builder ignores this - it colors by section/depth/severity and lets
+   *  feature builder ignores this - it colors by line/depth/severity and lets
    *  the feature-state paint ramp override on the bulk layers; only the custom
    *  color resolvers (which have no feature-state) read it. */
   overlay?: OverlayColorInput | null;
@@ -93,9 +93,9 @@ export interface DisplayColorContext {
   commentTint?: boolean;
   /** Plan-mode idle tint (#395 revision): true while Plan mode is active but no
    *  gas origin has been chosen yet - every shot/station paints the gas ramp's
-   *  far color (uniform "nothing computed yet" tint) instead of section/depth
+   *  far color (uniform "nothing computed yet" tint) instead of line/depth
    *  color, so the pre-origin map reads coherently with the gas scheme rather
-   *  than leaking section colors under it. Yields to an active `overlay` (a real
+   *  than leaking line colors under it. Yields to an active `overlay` (a real
    *  gas field wins the moment one exists) exactly like `commentTint`. Only the
    *  custom color resolvers read this - the stock feature builder has no
    *  equivalent path since the custom renderer is the sole survey renderer. */
@@ -135,7 +135,7 @@ export function normalizeDepthRange(depthRange: DepthRange): DepthRange {
   };
 }
 
-/** A depth value's ramp colour, or null (the caller falls back to section
+/** A depth value's ramp colour, or null (the caller falls back to line
  *  colour). The user's palette when one is set, else the original theme ramp. */
 export function depthColorFor(value: number, ctx: DisplayColorContext): string | null {
   if (ctx.depthScale) return scaleHex(value, ctx.depthScale, ctx.depthRange);
@@ -148,10 +148,10 @@ export function depthColorFor(value: number, ctx: DisplayColorContext): string |
   );
 }
 
-/** The shot's base display color: issue score > depth ramp > section color. */
+/** The shot's base display color: issue score > depth ramp > line color. */
 export function resolveShotDisplayColor(
   data: SurveyData,
-  sectionColor: string,
+  lineColor: string,
   shotGlobalIdx: number,
   ctx: DisplayColorContext,
 ): string {
@@ -160,9 +160,9 @@ export function resolveShotDisplayColor(
   }
   if (ctx.showDepthGradient) {
     const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
-    return depthColorFor(avgDepth, ctx) ?? sectionColor;
+    return depthColorFor(avgDepth, ctx) ?? lineColor;
   }
-  return sectionColor;
+  return lineColor;
 }
 
 /**
@@ -173,17 +173,17 @@ export function resolveShotDisplayColor(
  * the exact endpoints the stock gradient ramps between - so the two endpoints
  * are pixel-identical to the stock gradient (the interior differs only in that
  * the GPU lerps in RGB where the stock layer resamples the HSL ramp per
- * sub-segment). Outside depth mode (severity / section color) both endpoints
+ * sub-segment). Outside depth mode (severity / line color) both endpoints
  * are the flat `resolveShotDisplayColor`, so a caller can always request
  * endpoints without special-casing the mode.
  */
 export function resolveShotEndpointColors(
   data: SurveyData,
-  sectionColor: string,
+  lineColor: string,
   shotGlobalIdx: number,
   ctx: DisplayColorContext,
 ): [string, string] {
-  const base = resolveShotDisplayColor(data, sectionColor, shotGlobalIdx, ctx);
+  const base = resolveShotDisplayColor(data, lineColor, shotGlobalIdx, ctx);
   // An issue score is one flat color per shot; the gradient is depth-only.
   if (ctx.showIssueSeverity && ctx.issueScores) return [base, base];
   if (ctx.showDepthGradient) {
@@ -195,10 +195,10 @@ export function resolveShotEndpointColors(
 }
 
 /** The station's fill color: issue score > GPS fix (hollow) > depth ramp >
- *  zero-datum > section color. */
+ *  zero-datum > line color. */
 export function resolveStationDisplayColor(
   data: SurveyData,
-  sectionColor: string,
+  lineColor: string,
   stationGlobalIdx: number,
   ctx: DisplayColorContext,
 ): string {
@@ -212,9 +212,9 @@ export function resolveStationDisplayColor(
   const isZeroDatum = (flags & STATION_FLAG_IS_ZERO_DATUM) !== 0;
   if (ctx.showDepthGradient) {
     const z = data.stationCoords[stationGlobalIdx * 3 + 2]!;
-    return depthColorFor(z, ctx) ?? sectionColor;
+    return depthColorFor(z, ctx) ?? lineColor;
   }
-  return isZeroDatum ? ctx.themeColors.zeroDatum : sectionColor;
+  return isZeroDatum ? ctx.themeColors.zeroDatum : lineColor;
 }
 
 /** The station's stroke color from its `stationFlags`: the zero-datum ring for

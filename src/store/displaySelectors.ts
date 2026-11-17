@@ -19,7 +19,7 @@ import { colorModeOf, type ColorMode } from './colorMode';
 export const DISPLAY_DEFAULTS = {
   showStations: true,
   showShots: true,
-  showSectionNames: true,
+  showLineNames: true,
   showStationLabels: false,
   showStationNames: false,
   showShotData: false,

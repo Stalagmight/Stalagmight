@@ -103,7 +103,7 @@ test.describe('Project CRUD Operations', () => {
       await expect(page.getByTestId('tool-select')).toBeVisible();
     });
 
-    test('should have section panel', async ({ page }) => {
+    test('should have line panel', async ({ page }) => {
       await expect(page.getByTestId('sections-panel')).toBeVisible();
     });
   });

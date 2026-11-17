@@ -1,7 +1,7 @@
 /**
  * Anchor-backed live plan pins (#310).
  *
- * The hazard: a gas-plan pin is a positional `StationRef { section_id, station_index }`, and a
+ * The hazard: a gas-plan pin is a positional `StationRef { line_id, station_index }`, and a
  * survey edit made in Survey mode - a delete, an insert, a split, a reverse - renumbers stations
  * underneath it. The pin stays IN RANGE and starts naming a DIFFERENT REAL STATION, so the engine
  * happily prices a route the diver never asked for and a Save bakes the wrong stations into the
@@ -33,7 +33,7 @@ import { useProjectStore } from '../projectStore';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import type { StationRef } from '../../types/project';
 
-const SECTION = 4;
+const LINE = 4;
 
 /**
  * The toy backend's whole model: `order[i]` is the stable id of the station currently at index `i`.
@@ -52,12 +52,12 @@ function serveAnchors() {
   planRefsForAnchors.mockImplementation(async (anchors: unknown[]) =>
     anchors.map((a) => {
       const index = order.indexOf((a as { id: string }).id);
-      return index < 0 ? null : { section_id: SECTION, station_index: index };
+      return index < 0 ? null : { line_id: LINE, station_index: index };
     })
   );
 }
 
-const at = (station_index: number): StationRef => ({ section_id: SECTION, station_index });
+const at = (station_index: number): StationRef => ({ line_id: LINE, station_index });
 /** The index the station with id `id` currently sits at. */
 const indexOf = (id: string) => order.indexOf(id);
 
@@ -396,7 +396,7 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     project: {
       created_at: '2026-01-01T00:00:00Z',
       modified_at: '2026-01-01T00:00:01Z',
-      sections: [],
+      lines: [],
       zero_datums: [],
       loop_closures: [],
     },
@@ -421,7 +421,7 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return { messages: [], save_blocked: false };
         default:
           order = order.filter((id) => id !== 'b');
-          return { success: true, warnings: [], error: null, section_ids: [] };
+          return { success: true, warnings: [], error: null, line_ids: [] };
       }
     });
   }
@@ -431,7 +431,7 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     serveDeleteOfB(calls);
     useGasPlanStore.getState().setEndpoint(at(indexOf('d')));
 
-    await useProjectStore.getState().deleteShot(SECTION, 1);
+    await useProjectStore.getState().deleteShot(LINE, 1);
 
     // 'd' slid from index 3 to index 2. Leaving the pin at 3 would silently re-target 'e'.
     expect(useGasPlanStore.getState().endpoint).toEqual(at(2));
@@ -455,11 +455,11 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
       seen.push('resolve');
       return anchors.map((a) => {
         const index = order.indexOf((a as { id: string }).id);
-        return index < 0 ? null : { section_id: SECTION, station_index: index };
+        return index < 0 ? null : { line_id: LINE, station_index: index };
       });
     });
 
-    await useProjectStore.getState().deleteShot(SECTION, 1);
+    await useProjectStore.getState().deleteShot(LINE, 1);
 
     expect(seen).toEqual(['capture', 'resolve']);
     // And the refetch the reach-field effect keys on ran after the mutation, so the corrected
@@ -482,9 +482,9 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
           return { messages: [], save_blocked: false };
         case 'undo':
           order = ['a', 'b', 'c', 'd', 'e'];
-          return { success: true, warnings: [], error: null, section_ids: [] };
+          return { success: true, warnings: [], error: null, line_ids: [] };
         default:
-          return { success: true, warnings: [], error: null, section_ids: [] };
+          return { success: true, warnings: [], error: null, line_ids: [] };
       }
     });
     order = ['a', 'c', 'd', 'e'];
@@ -497,10 +497,10 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     expect(useGasPlanStore.getState().endpoint).toEqual(at(indexOf('d')));
   });
 
-  it('Split Section Here and Combine Sections go through the same round trip', async () => {
-    // Both move stations between sections, which no index arithmetic describes; the backend's
+  it('Split Line Here and Combine Lines go through the same round trip', async () => {
+    // Both move stations between lines, which no index arithmetic describes; the backend's
     // anchors (`dive_plan.rs`: anchors_survive_a_split_its_undo_and_its_redo,
-    // pins_on_both_sections_survive_a_combine) place them in whichever section holds them now.
+    // pins_on_both_lines_survive_a_combine) place them in whichever line holds them now.
     // Here: the store anchors before each of them and re-resolves after.
     const options = {
       name_a: 'A',
@@ -518,8 +518,8 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
       name_pick: 'kept' as const,
     };
     for (const [command, run] of [
-      ['split_section', () => useProjectStore.getState().splitSection(SECTION, { type: 'station', station_index: 1 }, options)],
-      ['combine_sections', () => useProjectStore.getState().combineSections(SECTION, SECTION + 1, combine)],
+      ['split_line', () => useProjectStore.getState().splitLine(LINE, { type: 'station', station_index: 1 }, options)],
+      ['combine_lines', () => useProjectStore.getState().combineLines(LINE, LINE + 1, combine)],
     ] as const) {
       order = ['a', 'b', 'c', 'd', 'e'];
       useGasPlanStore.getState().reset();
@@ -540,7 +540,7 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
   it('costs a plan with no pins nothing at all', async () => {
     const calls: string[] = [];
     serveDeleteOfB(calls);
-    await useProjectStore.getState().deleteShot(SECTION, 1);
+    await useProjectStore.getState().deleteShot(LINE, 1);
     expect(planAnchorsForRefs).not.toHaveBeenCalled();
     expect(planRefsForAnchors).not.toHaveBeenCalled();
   });

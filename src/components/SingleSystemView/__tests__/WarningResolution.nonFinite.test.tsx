@@ -9,13 +9,13 @@ import { render, screen } from '@testing-library/react';
 
 import { WarningResolution } from '../WarningResolution';
 import type { ProjectWarning } from '../../../types/commands';
-import type { Section, Shot } from '../../../types/project';
+import type { Line, Shot } from '../../../types/project';
 
-const section = {
+const line = {
   id: 3,
   name: 'A',
   shots: [],
-} as unknown as Section;
+} as unknown as Line;
 
 const nanLengthShot = {
   id: 9,
@@ -37,7 +37,7 @@ const warning: ProjectWarning = {
   code: 'NON_FINITE_VALUE',
   message: 'Shot 3:1 has non-finite value(s) in: length',
   severity: 'error',
-  sectionId: 3,
+  lineId: 3,
   shotId: 9,
   shotIndex: 0,
   isResolved: false,
@@ -48,7 +48,7 @@ describe('WarningResolution NON_FINITE_VALUE (#275)', () => {
     render(
       <WarningResolution
         warning={warning}
-        section={section}
+        line={line}
         shot={nanLengthShot}
         onExit={vi.fn()}
         onResolved={vi.fn()}

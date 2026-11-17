@@ -22,7 +22,7 @@ import { WizardMapPanel } from './WizardMapPanel';
 import { WizardScrollBody } from './WizardScrollBody';
 import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
 import { usePreviewSize } from './usePreviewSize';
-import SectionPreview from './SectionPreview';
+import LinePreview from './LinePreview';
 import { TmlSectionTable } from './TmlSectionTable';
 import {
   TmlPlacementStep,
@@ -68,7 +68,7 @@ type Residue = { kind: 'cancel' | 'failed'; message?: string; project: DiscardTa
 function isEmptyImportProject(): boolean {
   return (
     useUIStore.getState().importContext === 'new-project' &&
-    (useProjectStore.getState().project?.sections.length ?? 0) === 0
+    (useProjectStore.getState().project?.lines.length ?? 0) === 0
   );
 }
 
@@ -108,31 +108,31 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // Reference by default. A user who knows the file can override it here.
   const [virtualShotMode, setVirtualShotMode] = useState<VirtualShotMode>('Auto');
 
-  // Section indices (into `tmlFile.sections`) to import - same shape as the
+  // Line indices (into `tmlFile.lines`) to import - same shape as the
   // Walls dialog's `selectedSurveys`. Default: everything, so the import
   // matches prior behavior until the user unticks something.
   const allIndices = useMemo(
-    () => tmlFile.sections.map((_, i) => i),
-    [tmlFile.sections]
+    () => tmlFile.lines.map((_, i) => i),
+    [tmlFile.lines]
   );
-  const [selectedSections, setSelectedSections] = useState<Set<number>>(
+  const [selectedLines, setSelectedLines] = useState<Set<number>>(
     () => new Set(allIndices)
   );
   useEffect(() => {
-    setSelectedSections(new Set(allIndices));
+    setSelectedLines(new Set(allIndices));
   }, [allIndices]);
   const allSelected =
-    allIndices.length > 0 && allIndices.every((i) => selectedSections.has(i));
-  const toggleSection = useCallback((i: number) => {
-    setSelectedSections((prev) => {
+    allIndices.length > 0 && allIndices.every((i) => selectedLines.has(i));
+  const toggleLine = useCallback((i: number) => {
+    setSelectedLines((prev) => {
       const next = new Set(prev);
       if (next.has(i)) next.delete(i);
       else next.add(i);
       return next;
     });
   }, []);
-  const toggleAllSections = useCallback(() => {
-    setSelectedSections((prev) => {
+  const toggleAllLines = useCallback(() => {
+    setSelectedLines((prev) => {
       const on = allIndices.length > 0 && allIndices.every((i) => prev.has(i));
       return on ? new Set() : new Set(allIndices);
     });
@@ -140,7 +140,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
   const [placement, setPlacement] = useState<TmlPlacementState>(EMPTY_PLACEMENT);
   // Whether the user has answered the placement question themselves. Without
-  // it, the default-seeding effect below would re-run on every section toggle
+  // it, the default-seeding effect below would re-run on every line toggle
   // (the anchor is recomputed from the new root) and silently overwrite an
   // answer they had already given.
   const [placementTouched, setPlacementTouched] = useState(false);
@@ -157,33 +157,33 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   const [previewRef, previewSize] = usePreviewSize(WIZARD_MAP_PANEL_MAX_WIDTH);
 
   // What the import will build, in one frame, under the current toggles. The
-  // preview and the section rows' "moved to origin" flags both read this, so
+  // preview and the line rows' "moved to origin" flags both read this, so
   // the picture and the annotations cannot disagree.
   const layout = useMemo(
     () =>
       computeTmlPreviewLayout(tmlFile, {
         includeExcluded,
-        selected: selectedSections,
+        selected: selectedLines,
       }),
-    [tmlFile, includeExcluded, selectedSections]
+    [tmlFile, includeExcluded, selectedLines]
   );
-  const previewSections = useMemo(
+  const previewLines = useMemo(
     () =>
-      layout.sections.map((s) => ({
-        section: s.section,
+      layout.lines.map((s) => ({
+        line: s.line,
         color: s.color,
-        sectionIndex: s.index,
+        lineIndex: s.index,
         offsetX: s.offsetX,
         offsetY: s.offsetY,
       })),
     [layout]
   );
   const reanchoredIndices = useMemo(
-    () => new Set(layout.sections.filter((s) => s.reanchored).map((s) => s.index)),
+    () => new Set(layout.lines.filter((s) => s.reanchored).map((s) => s.index)),
     [layout]
   );
 
-  // The section the placement choice applies to: the first one the import will
+  // The line the placement choice applies to: the first one the import will
   // CREATE - selected AND still holding shots after the exclusion filter.
   //
   // That is now the ONE definition of root, shared verbatim with
@@ -191,23 +191,23 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // where the conversion loop reports it as `is_root: configs.is_empty()`. It
   // used to be three definitions: the backend and the preview layout each said
   // "lowest selected index", which disagrees with this one whenever the
-  // exclusion filter empties that section - and the placement collected here
-  // was then applied to a section that was never built, so it vanished.
-  const rootSection = layout.sections[0] ?? null;
+  // exclusion filter empties that line - and the placement collected here
+  // was then applied to a line that was never built, so it vanished.
+  const rootLine = layout.lines[0] ?? null;
 
   /**
    * The coordinates the file offers for the root, and where they came from.
    *
-   * `root`: the root section's own first shot carries them, which is exactly
+   * `root`: the root line's own first shot carries them, which is exactly
    * what the importer picks with no override - choosing this option changes
    * nothing but makes it visible.
-   * `elsewhere`: the file has a georeference, but on a section that is not the
+   * `elsewhere`: the file has a georeference, but on a line that is not the
    * root. The importer IGNORES that today (`determine_placement` only ever
-   * looks at the section's own first shot), so offering it is new reach, not a
+   * looks at the line's own first shot), so offering it is new reach, not a
    * restatement.
    */
   const fileAnchor: TmlFileAnchor | null = useMemo(() => {
-    const first = rootSection ? tmlFile.sections[rootSection.index]?.shots[0] : undefined;
+    const first = rootLine ? tmlFile.lines[rootLine.index]?.shots[0] : undefined;
     // Validity, not just non-zero: the backend runs both of these through
     // `GpsCoordinates::new`, so offering coordinates it will refuse would put
     // an option on screen that disables the Import button when chosen.
@@ -219,18 +219,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       return { latitude: geo.latitude, longitude: geo.longitude, source: 'elsewhere' };
     }
     return null;
-  }, [rootSection, tmlFile.sections, tmlFile.geo_coding]);
+  }, [rootLine, tmlFile.lines, tmlFile.geo_coding]);
 
   const hasFileAnchor = fileAnchor !== null;
   // Seed the default: the file's own answer when it has one, the origin
   // otherwise. Keyed on the BOOLEAN, not the anchor object, and skipped once
-  // the user has answered - both so that toggling sections cannot walk over
+  // the user has answered - both so that toggling lines cannot walk over
   // their choice.
   useEffect(() => {
     if (placementTouched) return;
     setPlacement((prev) => ({ ...prev, choice: hasFileAnchor ? 'file' : 'origin' }));
   }, [hasFileAnchor, placementTouched]);
-  // A CORRECTION, not a default: deselecting the section that carried the
+  // A CORRECTION, not a default: deselecting the line that carried the
   // coordinates withdraws the option the user picked, and leaving `choice` on
   // it would disable Import with no visible reason (the radio is gone too).
   useEffect(() => {
@@ -268,12 +268,12 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   }, [filePath]);
 
   // Every figure tracks the SELECTION, not the file: unticking the last
-  // shot-bearing section has to disable Import and say the import is empty,
+  // shot-bearing line has to disable Import and say the import is empty,
   // exactly as unticking "include excluded shots" would (same rule as the Walls
   // dialog's selected counts).
   const stats = useMemo(
-    () => computeTmlImportStats(tmlFile, includeExcluded, selectedSections, virtualShotMode),
-    [tmlFile, includeExcluded, selectedSections, virtualShotMode]
+    () => computeTmlImportStats(tmlFile, includeExcluded, selectedLines, virtualShotMode),
+    [tmlFile, includeExcluded, selectedLines, virtualShotMode]
   );
   const fileStats = useMemo(
     () => computeTmlImportStats(tmlFile, includeExcluded),
@@ -328,7 +328,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
      *
      * The router (`surfaceImportFailure`) still handles the failure directly
      * when either condition below is false:
-     *  - the project already holds sections - not this dialog's residue to ask
+     *  - the project already holds lines - not this dialog's residue to ask
      *    about.
      *  - this component is no longer mounted. A drop of another importable
      *    file replaces the dialog slot mid-import, and `setResidue` on an
@@ -356,18 +356,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       surfaceImportFailure('tml-import', importUi, failure);
     };
     try {
-      // Omit (null) the section list when everything is ticked, so a full
+      // Omit (null) the line list when everything is ticked, so a full
       // import stays unfiltered on the wire - same convention as Walls.
-      const sectionSelection = allSelected
+      const lineSelection = allSelected
         ? null
-        : [...selectedSections].sort((a, b) => a - b);
+        : [...selectedLines].sort((a, b) => a - b);
       const result = await executeTmlImport(
         filePath,
         fileHash,
         includeExcluded,
         commentsOnStations,
         virtualShotMode,
-        sectionSelection,
+        lineSelection,
         rootPlacement
       );
       resetLoading();
@@ -387,27 +387,27 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         return;
       }
 
-      // `section_ids` used to be `skip_serializing_if = "Vec::is_empty"`, so an
-      // import that created NO section omitted the key entirely while the
+      // `line_ids` used to be `skip_serializing_if = "Vec::is_empty"`, so an
+      // import that created NO line omitted the key entirely while the
       // generated type said `Array<number>`. A bare `.length` here threw, the
       // catch below reported it as a transport failure, and the receipt
       // explaining the empty import was thrown away (#411). #441 removed the
       // skip, so the key is always on the wire: this `?? []` is defensive only
       // and unreachable in the shipped pairing (one binary, one frontend).
       // Same shape as WallsImportDialog.
-      const sectionIds = result.section_ids ?? [];
+      const lineIds = result.line_ids ?? [];
 
       // Check for orphan placement opportunities. The suggest call is the
       // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
       // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
       // sits outside it and completes the import exactly once, so a throw
       // partway through IT can never fall through to a duplicate completion.
-      if (sectionIds.length > 0) {
+      if (lineIds.length > 0) {
         let suggestions: OrphanPlacementSuggestion[] = [];
         try {
           suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
             'suggest_orphan_placements',
-            { newlyImportedSectionIds: sectionIds },
+            { newlyImportedLineIds: lineIds },
             { purpose: 'suggest orphan placements after TML import' }
           );
         } catch {
@@ -418,7 +418,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
           return;
         }
-        await finishImportWithoutOrphanSuggestions('tml-import', importUi, sectionIds, result.import_receipt);
+        await finishImportWithoutOrphanSuggestions('tml-import', importUi, lineIds, result.import_receipt);
         return;
       }
 
@@ -427,7 +427,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
       reportFailure({ phase: 'transport', error: e, format: 'TML' });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedLines, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
@@ -560,7 +560,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         {(bandHeight) => (
       <div className="flex" style={{ minHeight: bandHeight }}>
         {/* Map column: the file laid out as the import will build it, so the
-            section toggles and the placement choice are answered by looking
+            line toggles and the placement choice are answered by looking
             rather than by imagining. Same panel (and now the same remembered
             width, #404) as the MNemo wizard's. */}
         <WizardMapPanel
@@ -570,8 +570,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           panelRef={previewRef}
           height={bandHeight}
         >
-          <SectionPreview
-            segmentSections={previewSections}
+          <LinePreview
+            segmentLines={previewLines}
             size={previewSize.width}
             height={previewSize.height}
           />
@@ -595,7 +595,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         <div className="grid grid-cols-4 gap-3 p-3 bg-surface-alt rounded">
           <div>
             <div className="text-xs text-text-tertiary">{t('dialogs.tmlImport.stats.sections')}</div>
-            <div className="text-sm font-medium" data-testid="tml-section-count">{stats.totalSections}</div>
+            <div className="text-sm font-medium" data-testid="tml-section-count">{stats.totalLines}</div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary">{t('dialogs.tmlImport.stats.shots')}</div>
@@ -623,18 +623,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Section list, with a checkbox per row (#425) */}
+        {/* Line list, with a checkbox per row (#425) */}
         <TmlSectionTable
           tmlFile={tmlFile}
           includeExcluded={includeExcluded}
-          selected={selectedSections}
-          onToggle={toggleSection}
-          onToggleAll={toggleAllSections}
+          selected={selectedLines}
+          onToggle={toggleLine}
+          onToggleAll={toggleAllLines}
           reanchored={reanchoredIndices}
           disabled={isImporting}
         />
 
-        {/* Sections whose parent is not being imported land at the origin
+        {/* Lines whose parent is not being imported land at the origin
             rather than where the file put them. Said once here as well as
             per-row, because it is a consequence of the selection the user just
             made, not a property of any one row. */}
@@ -652,7 +652,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           state={placement}
           onChange={choosePlacement}
           anchor={fileAnchor}
-          rootSectionName={rootSection?.name ?? null}
+          rootLineName={rootLine?.name ?? null}
           disabled={isImporting}
         />
 
@@ -664,7 +664,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         )}
 
         {/* Excluded shots toggle. Gated on the FILE's count, not the
-            selection's: a toggle that vanishes because the sections holding the
+            selection's: a toggle that vanishes because the lines holding the
             excluded shots are unticked would be unreachable exactly when the
             user goes looking for it. The LABEL still quotes the selection. */}
         {fileStats.excludedCount > 0 && (
@@ -747,7 +747,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       {/* Footer. The dialog now owns its own scroller (WizardScrollBody), so
           this is a flex SIBLING of it rather than the sticky-inside-the-body
           idiom the smaller import dialogs use - it is outside the scroll, which
-          is what keeps the primary action reachable however long the section
+          is what keeps the primary action reachable however long the line
           list gets. */}
         <div className="flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
           <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">

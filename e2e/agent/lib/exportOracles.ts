@@ -363,8 +363,8 @@ export function parseCsvRows(text: string): string[][] {
 
 /** The header `export/csv.rs:12-16` writes, in order. */
 export const CSV_HEADER: readonly string[] = [
-  'section_id',
-  'section_name',
+  'line_id',
+  'line_name',
   'shot_id',
   'length',
   'azimuth_in',
@@ -381,8 +381,8 @@ export const CSV_HEADER: readonly string[] = [
 
 /** Index of the `comment` column, which is the only hostile-text column. */
 export const CSV_COMMENT_INDEX = CSV_HEADER.length - 1;
-/** Index of the `section_name` column, the other `escape_csv`-processed field. */
-export const CSV_SECTION_NAME_INDEX = 1;
+/** Index of the `line_name` column, the other `escape_csv`-processed field. */
+export const CSV_LINE_NAME_INDEX = 1;
 
 export interface CsvViolation {
   row: number;
@@ -436,7 +436,7 @@ export function csvTextViolations(
       });
     }
     for (const [column, index] of [
-      ['section_name', CSV_SECTION_NAME_INDEX],
+      ['line_name', CSV_LINE_NAME_INDEX],
       ['comment', CSV_COMMENT_INDEX],
     ] as const) {
       const cell = row[index];
@@ -812,9 +812,9 @@ export interface UuidPrecondition {
  *    whose stored uuid is missing or empty, per export. Its own doc says so.
  *  - `remint_duplicate_uuids` (`:588-596`) mints a fresh v4 for every
  *    DOCUMENT-level repeat, per export. Its doc states the consequence: "a
- *    project holding a cross-section duplicate does not re-export byte-identical".
- *    Note `Project::ensure_unique_shot_uuids` is SECTION-scoped, so a
- *    cross-section duplicate survives a save and reaches this.
+ *    project holding a cross-line duplicate does not re-export byte-identical".
+ *    Note `Project::ensure_unique_shot_uuids` is LINE-scoped, so a
+ *    cross-line duplicate survives a save and reaches this.
  *
  * Neither is export-time healing of the PROJECT: `ensure_shot_uuids` runs on
  * save and on load (`core/state/project_io.rs:198`, `core/state/project_load.rs:138`),
@@ -890,10 +890,10 @@ export function checkByteIdentity(
  * so the trip introduces the difference exactly ONCE MORE and then stops.
  *
  * Measured with the files parsed rather than diffed: T2 and T3 hold the same 40
- * sections with the same names, the same membership (ZERO shots changed section,
+ * lines with the same names, the same membership (ZERO shots changed line,
  * matched by uuid), and - once the Ariane `<ID>`/`<FR>` node numbers, which
  * renumber with position, are set aside - an IDENTICAL block multiset. The only
- * thing that moved was the ORDER the sections are written in. The first import
+ * thing that moved was the ORDER the lines are written in. The first import
  * inherits that order from the source project rather than deriving it, so the
  * composition needs one more pass to reach its own fixed point. Nothing is lost,
  * gained or re-partitioned on the way. See finding 6 in `exportRoundtripFuzz.ts`.
@@ -938,7 +938,7 @@ export function checkConvergence(
       `    last pair first differs at offset ${firstDifference(c1, c2)}\n` +
       `${describeDifference(c1, c2)}\n` +
       `    T1 vs T2 may differ (documented lossiness, plus branch fragmentation #412), and so\n` +
-      `    may one pass after it - the first import inherits its section ORDER from the source\n` +
+      `    may one pass after it - the first import inherits its line ORDER from the source\n` +
       `    project rather than deriving it. What may not happen is a chain that keeps changing:\n` +
       `    a user who round-trips twice would then get a differently-shaped project every time.\n` +
       `  ${reproduce}`,
@@ -1012,7 +1012,7 @@ function lrudSentinel(value: number | null): string {
  *
  * LRUD goes through `lrudSentinel`, which reads Ariane's `0.0` as the absent
  * sentinel it is - see that function for why this is a documented format
- * semantic rather than a tolerance, and for the two doc sections that own the
+ * semantic rather than a tolerance, and for the two doc lines that own the
  * claim. Every other field is compared as measured.
  *
  * The key is also DIRECTION-AGNOSTIC: a leg and its reciprocal produce the same
@@ -1118,7 +1118,7 @@ function clampedDescent(shot: ShotIdentity): number {
  * WHY THE KEY IS DIRECTION-AGNOSTIC, and why that is a CORRECTNESS FIX rather
  * than a fold that buys a green. A `.tml` cannot say "this passage was surveyed
  * outward from here": Ariane carries one forward azimuth per shot and the chain
- * hangs off a single rooted start, so a section surveyed away from its zero
+ * hangs off a single rooted start, so a line surveyed away from its zero
  * datum has to be written walking BACK toward it. The shot that returns is the
  * same tape between the same two stations - it is one leg, recorded from the
  * other end. A direction-bearing key calls that a lost shot and a gained shot,
@@ -1219,9 +1219,9 @@ export function commentMultisetDelta(
 /**
  * X6 - the shots survive the trip.
  *
- * The multiset, not the structure. Section boundaries are NOT compared: a
- * `.tml` describes a shot graph and `parse_tml` reconstructs sections as
- * connected runs of it, so one exported section can come back as several and
+ * The multiset, not the structure. Line boundaries are NOT compared: a
+ * `.tml` describes a shot graph and `parse_tml` reconstructs lines as
+ * connected runs of it, so one exported line can come back as several and
  * several can collapse into one (#412, by design, and `surveyFileSpecs.ts`'s
  * self-check claim makes the same point from the other side).
  *
@@ -1293,61 +1293,61 @@ export function checkShotMultiset(
     lines.push(`      and the U+200B co-encoding is undone by splitting - with this scenario's`);
     lines.push(`      commentsOnStations: false import, a differing text really is GONE.`);
   }
-  lines.push(`    Section STRUCTURE is deliberately not compared (branch fragmentation, #412).`);
+  lines.push(`    Line STRUCTURE is deliberately not compared (branch fragmentation, #412).`);
   lines.push(`  ${reproduce}`);
   throw new ExportOracleError(lines.join('\n'));
 }
 
 /**
- * X6b - importing the same file twice must not put two shots in ONE SECTION on
+ * X6b - importing the same file twice must not put two shots in ONE LINE on
  * the same uuid.
  *
- * PER-SECTION, not project-wide, and the difference is the app's stated
+ * PER-LINE, not project-wide, and the difference is the app's stated
  * invariant rather than a relaxation. `Project::ensure_unique_shot_uuids`
  * (`models/project.rs:810-838`) re-mints "any shot that shares a UUID with an
- * earlier shot in the SAME section ... Restores the per-section uniqueness
+ * earlier shot in the SAME line ... Restores the per-line uniqueness
  * `resolve_key` relies on", and the lookup cache it feeds is keyed
- * `(section_id, shot_uuid)` (`rebuild_shot_uuid_index`). A cross-section
+ * `(line_id, shot_uuid)` (`rebuild_shot_uuid_index`). A cross-line
  * duplicate is therefore legal, and the exporter handles it where it becomes a
  * problem - `export/tml.rs::remint_duplicate_uuids` re-mints document-level
  * repeats, and its doc names the consequence (that project does not re-export
  * byte-identical, which is exactly what X4's precondition measures).
  *
- * Importing the same file twice lands the second copy in NEW sections, so the
- * foreign uuids repeat across sections by construction and that is fine. What
- * would not be fine is a second import appending into an existing section, or
- * an importer that re-used a section: then `resolve_key` would resolve two
+ * Importing the same file twice lands the second copy in NEW lines, so the
+ * foreign uuids repeat across lines by construction and that is fine. What
+ * would not be fine is a second import appending into an existing line, or
+ * an importer that re-used a line: then `resolve_key` would resolve two
  * different shots to the same first match.
  */
 export function checkNoDuplicateUuids(
-  uuidsBySection: readonly (readonly string[])[],
+  uuidsByLine: readonly (readonly string[])[],
   reproduce: string,
 ): void {
-  const offenders: { section: number; duplicates: string[] }[] = [];
-  uuidsBySection.forEach((uuids, index) => {
+  const offenders: { line: number; duplicates: string[] }[] = [];
+  uuidsByLine.forEach((uuids, index) => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
     for (const uuid of uuids) {
       if (seen.has(uuid)) duplicates.add(uuid);
       seen.add(uuid);
     }
-    if (duplicates.size > 0) offenders.push({ section: index, duplicates: [...duplicates] });
+    if (duplicates.size > 0) offenders.push({ line: index, duplicates: [...duplicates] });
   });
   if (offenders.length === 0) return;
   throw new ExportOracleError(
-    `X6b ${offenders.length} section(s) hold two shots on the same uuid after importing the ` +
+    `X6b ${offenders.length} line(s) hold two shots on the same uuid after importing the ` +
       `same file twice\n` +
       offenders
         .slice(0, 4)
         .map(
           (o) =>
-            `    section #${o.section}: ${o.duplicates.length} duplicate(s) ` +
+            `    line #${o.line}: ${o.duplicates.length} duplicate(s) ` +
             `${JSON.stringify(o.duplicates.slice(0, 4))}`,
         )
         .join('\n') +
-      `\n    Per-section uniqueness is what \`resolve_key\` and the (section_id, uuid) lookup\n` +
+      `\n    Per-line uniqueness is what \`resolve_key\` and the (line_id, uuid) lookup\n` +
       `    cache rely on, and \`ensure_unique_shot_uuids\` exists to restore it. A survivor\n` +
-      `    makes two shots in one section indistinguishable to every consumer that keys on\n` +
+      `    makes two shots in one line indistinguishable to every consumer that keys on\n` +
       `    uuid - undo anchors, warning backfill, and the import de-duplicator.\n  ${reproduce}`,
   );
 }

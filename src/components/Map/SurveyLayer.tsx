@@ -1,6 +1,6 @@
 import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
 import type * as maplibregl from 'maplibre-gl';
-import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
+import type { LoopClosure, Line, LineId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
@@ -19,7 +19,7 @@ import {
   type DepthRange,
   type OverlayColorInput,
   type DisplayColorContext,
-  type GhostSectionData,
+  type GhostLineData,
 } from './surveyLayer/displayColor';
 import {
   SurveyGeometryIndex,
@@ -74,24 +74,24 @@ import {
 } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { trackNav } from '../../utils/telemetry';
-import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
+import { FEATURE_ID_STRIDE, lineIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
-import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
-import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
-import { raisedSectionOf } from './surveyLayer/raisedSection';
+import { diffRemovedLineIds } from './surveyLayer/lineDiff';
+import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedLines } from './surveyLayer/interactOverlayHide';
+import { raisedLineOf } from './surveyLayer/raisedLine';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
-  onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
+  onShotClick?: (lineId: LineId, shotId: ShotId, event: MapMouseEvent) => void;
   onEmptyClick?: (event: MapMouseEvent) => void;
   onStationHover?: (ref: StationRef | null) => void;
-  onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
+  onShotHover?: (shot: { lineId: LineId; shotId: ShotId } | null) => void;
   onFeatureHover?: ((isHovering: boolean) => void) | undefined;
   /** `alongT` is where on the shot the click landed, 0..1 from the from-station.
    *  A shot is a straight 3D segment, so the fraction along its planimetric
@@ -99,7 +99,7 @@ export interface SurveyLayerCallbacks {
    *  straight through by `shot.length`. */
   onContextMenu?: (
     target: { type: 'station'; ref: StationRef }
-      | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT: number } | null,
+      | { type: 'shot'; lineId: LineId; shotId: ShotId; alongT: number } | null,
     event: MapMouseEvent
   ) => void;
   /** Called when user clicks near a hidden station (for toast feedback) */
@@ -119,7 +119,7 @@ export interface SurveyLayerCallbacks {
  * For better performance with large datasets, this could be
  * replaced with deck.gl layers.
  */
-export type { GhostSectionData } from './surveyLayer/displayColor';
+export type { GhostLineData } from './surveyLayer/displayColor';
 
 export default class SurveyLayer {
   private map: MaplibreMap;
@@ -144,9 +144,9 @@ export default class SurveyLayer {
   // NOTE: the former dedicated survey-shots-hitbox / survey-stations-hitbox
   // layers were removed (#mem budget). Each was a full unfiltered duplicate
   // vertex bucket of its bulk source (~75k line segments / ~90k points) built
-  // solely to gate hit-testing. The candidate-section gate now queries the
+  // solely to gate hit-testing. The candidate-line gate now queries the
   // VISIBLE shots/stations layers with a padded probe box that reproduces the
-  // old hit tolerance exactly - see hitCandidateSections().
+  // old hit tolerance exactly - see hitCandidateLines().
   // Gas route highlight (#233): the picked penetration route drawn over the survey - one line
   // layer, swum legs at full opacity and jump legs faded via a data-driven line-opacity (#243).
   private gasRouteLayerId = 'survey-gas-route';
@@ -172,12 +172,12 @@ export default class SurveyLayer {
   private hoveredStationId: string | null = null;
   private hoveredShotId: string | null = null;
   private snappedStationId: string | null = null;
-  private hoveredSectionId: string | null = null;
-  private selectedSectionId: string | null = null;
-  private previewSectionIds: readonly SectionId[] = [];
+  private hoveredLineId: string | null = null;
+  private selectedLineId: string | null = null;
+  private previewLineIds: readonly LineId[] = [];
   private highlightedStationIds: string[] = [];
-  // Multi-section hover for Move Segment tool (highlights all connected sections)
-  private hoveredSegmentSectionIds: string[] = [];
+  // Multi-line hover for Move Segment tool (highlights all connected lines)
+  private hoveredSegmentLineIds: string[] = [];
 
   // Cached reference-shots visibility (custom renderer + labels + measure path
   // read it to hide/show reference legs).
@@ -219,11 +219,11 @@ export default class SurveyLayer {
    */
   private baseCursorForced = false;
 
-  // Anchored section IDs (for fading when Move Segment tool is active)
-  private anchoredSectionIds: Set<number> = new Set();
+  // Anchored line IDs (for fading when Move Segment tool is active)
+  private anchoredLineIds: Set<number> = new Set();
 
   // Immovable feature IDs for Move Station / Move Shot tools
-  // (per-feature granularity, unlike anchoredSectionIds which is per-section)
+  // (per-feature granularity, unlike anchoredLineIds which is per-line)
   private immovableStationFeatureIds: Set<number> = new Set();
   private immovableShotFeatureIds: Set<number> = new Set();
 
@@ -251,7 +251,7 @@ export default class SurveyLayer {
    * guarantee documented on the useLayoutEffect site in MapCanvas.
    */
   private pendingUpdateArgs: {
-    sections: Section[];
+    lines: Line[];
     stations: Station[];
     loopClosures: LoopClosure[] | undefined;
     gpsOrigin: GpsOrigin | null;
@@ -361,7 +361,7 @@ export default class SurveyLayer {
   private gasReachState: GasReachFeatureState | null = null;
   // Plan-mode idle tint (#395 revision): true while Plan is active but no gas
   // origin has been chosen yet - the whole survey renders the gas ramp's dim far
-  // color instead of leaking section colors under the gas scheme. Driven by
+  // color instead of leaking line colors under the gas scheme. Driven by
   // MapCanvas (setPlanIdleTint); yields to a real gas field via isPlanIdleActive().
   private planIdleTint: boolean = false;
   // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
@@ -378,7 +378,7 @@ export default class SurveyLayer {
   private themeColors: MapThemeColors = getMapThemeColors();
 
   // Cached input data for the theme rebuild / drag-preview / hit-test paths.
-  private cachedSections: Section[] = [];
+  private cachedLines: Line[] = [];
   private cachedStations: Station[] = [];
   private cachedLoopClosures: LoopClosure[] | undefined;
   private cachedPrecision: DecimalPrecision | undefined;
@@ -545,11 +545,11 @@ export default class SurveyLayer {
     // Clear hover when in non-interactive tool AND there's stale hover state
     // This is self-healing: handles both transitions (interactive→non-interactive)
     // and missed initial syncs or future refactors
-    if (isNonInteractive && (this.hoveredStationId || this.hoveredShotId || this.hoveredSectionId)) {
+    if (isNonInteractive && (this.hoveredStationId || this.hoveredShotId || this.hoveredLineId)) {
       this.hoveredStationId = null;
       this.hoveredShotId = null;
-      this.hoveredSectionId = null;
-      this.customRender?.setSectionHover([]);
+      this.hoveredLineId = null;
+      this.customRender?.setLineHover([]);
       this.updateVisualState();
 
       // CRITICAL: Also notify callbacks to clear MapCanvas state
@@ -665,7 +665,7 @@ export default class SurveyLayer {
       },
     });
 
-    // Ghost section sources for merge preview
+    // Ghost line sources for merge preview
     this.map.addSource(this.sourceId + '-ghost-shots', {
       type: 'geojson',
       data: {
@@ -708,7 +708,7 @@ export default class SurveyLayer {
     // The dedicated survey-shots-hitbox / survey-stations-hitbox layers were
     // removed (#mem budget): each was a full unfiltered duplicate vertex bucket
     // of its bulk source. Hit-testing now queries the VISIBLE shots/stations
-    // layers with a padded probe box (see hitCandidateSections). The ghost
+    // layers with a padded probe box (see hitCandidateLines). The ghost
     // hitbox layers below stay - they live on the tiny ghost sources and drive
     // the merge-preview debug visualization only.
     //
@@ -747,7 +747,7 @@ export default class SurveyLayer {
 
     // === VISUAL LAYERS ===
 
-    // Ghost section shots layer (dashed, semi-transparent) - rendered first so it's behind everything
+    // Ghost line shots layer (dashed, semi-transparent) - rendered first so it's behind everything
     // Uses config-based line width, updated via updateGhostVisualLayers()
     this.map.addLayer({
       id: this.ghostShotsLayerId,
@@ -761,7 +761,7 @@ export default class SurveyLayer {
       },
     });
 
-    // Ghost section stations layer (semi-transparent)
+    // Ghost line stations layer (semi-transparent)
     // Uses config-based radius, updated via updateGhostVisualLayers()
     this.map.addLayer({
       id: this.ghostStationsLayerId,
@@ -917,17 +917,17 @@ export default class SurveyLayer {
 
     // Process hover update for a given mouse event
     const processHoverUpdate = (e: maplibregl.MapMouseEvent) => {
-      // Padded visible-layer query gates the candidate sections (the layers
+      // Padded visible-layer query gates the candidate lines (the layers
       // already apply visibility + reference filters); the SoA resolver picks
       // the exact shot/station with the same tolerances the old hitbox had (#mem).
-      const { stationSections, shotSections } = this.hitCandidateSections(e.point);
+      const { stationLines, shotLines } = this.hitCandidateLines(e.point);
 
       // Resolve nearest of each type within the hit reach the old hitbox
       // layers gave (station circle radius / shot half line width).
       const stationHitReach = this.getStationHitReach();
       const shotHitReach = this.getShotHitReach();
-      const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
-      const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach);
+      const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationLines, stationHitReach);
+      const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotLines, shotHitReach);
 
       // Determine what to highlight (stations take priority unless suppressed by tool)
       let newHoveredStationId: string | null = null;
@@ -940,11 +940,11 @@ export default class SurveyLayer {
       const suppressShotHover = this.activeTool === 'move_station';
 
       if (nearestStation && !suppressStationHover) {
-        newHoveredStationId = `${nearestStation.ref.section_id}:${nearestStation.ref.station_index}`;
+        newHoveredStationId = `${nearestStation.ref.line_id}:${nearestStation.ref.station_index}`;
       }
       // Show shot hover when no station is hovered (or station was suppressed) and shots not suppressed.
       if (!newHoveredStationId && nearestShot && !suppressShotHover) {
-        newHoveredShotId = `${nearestShot.sectionId}:${nearestShot.shotId}`;
+        newHoveredShotId = `${nearestShot.lineId}:${nearestShot.shotId}`;
       }
 
       // Update state only if changed
@@ -961,8 +961,8 @@ export default class SurveyLayer {
             suppressShotHover,
             stationHitReach,
             shotHitReach,
-            stationCandidateSections: stationSections.size,
-            shotCandidateSections: shotSections.size,
+            stationCandidateLines: stationLines.size,
+            shotCandidateLines: shotLines.size,
           });
         }
         this.hoveredStationId = newHoveredStationId;
@@ -980,7 +980,7 @@ export default class SurveyLayer {
           if (stationChanged) {
             if (newHoveredStationId) {
               const [secId, stIdx] = newHoveredStationId.split(':').map(Number);
-              this.callbacks.onStationHover?.({ section_id: secId!, station_index: stIdx! });
+              this.callbacks.onStationHover?.({ line_id: secId!, station_index: stIdx! });
             } else {
               this.callbacks.onStationHover?.(null);
             }
@@ -989,7 +989,7 @@ export default class SurveyLayer {
           if (shotChanged) {
             if (newHoveredShotId) {
               const [secId, shId] = newHoveredShotId.split(':').map(Number);
-              this.callbacks.onShotHover?.({ sectionId: secId!, shotId: shId! });
+              this.callbacks.onShotHover?.({ lineId: secId!, shotId: shId! });
             } else {
               this.callbacks.onShotHover?.(null);
             }
@@ -1100,7 +1100,7 @@ export default class SurveyLayer {
    * a placement CONFIRMED by this very touch has already cleared the store by the
    * time the press is armed; that is what {@link notePlacementConfirmed} bridges,
    * while the store read covers a hold that starts while placement is still armed
-   * (a confirm that bailed, or the next section of a multi-section placement).
+   * (a confirm that bailed, or the next line of a multi-line placement).
    */
   private modalInteractionActive(): boolean {
     return (
@@ -1187,9 +1187,9 @@ export default class SurveyLayer {
     const suppressStationClick = this.activeTool === 'move_shot';
     const suppressShotClick = this.activeTool === 'move_station';
 
-    // Padded visible-layer query gates candidate sections; SoA resolver picks
+    // Padded visible-layer query gates candidate lines; SoA resolver picks
     // the exact item (#mem) - same targets/tolerances as the per-feature path.
-    const { stationSections, shotSections } = this.hitCandidateSections(e.point);
+    const { stationLines, shotLines } = this.hitCandidateLines(e.point);
 
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
@@ -1198,7 +1198,7 @@ export default class SurveyLayer {
 
     // Stations take priority - resolve nearest station first
     const nearestStation = !suppressStationClick
-      ? this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach)
+      ? this.resolveStationAt(e.point.x, e.point.y, stationLines, stationHitReach)
       : null;
     if (nearestStation) {
       const ref: StationRef = nearestStation.ref;
@@ -1206,9 +1206,9 @@ export default class SurveyLayer {
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Station click', {
           layer: this.stationsLayerId,
-          featureId: `${ref.section_id}:${ref.station_index}`,
+          featureId: `${ref.line_id}:${ref.station_index}`,
           coordinates: e.lngLat,
-          candidateSections: stationSections.size,
+          candidateLines: stationLines.size,
         });
       }
       this.callbacks.onStationClick?.(ref, e);
@@ -1217,19 +1217,19 @@ export default class SurveyLayer {
 
     // Then shots - resolve nearest shot
     const nearestShot = !suppressShotClick
-      ? this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach)
+      ? this.resolveShotAt(e.point.x, e.point.y, shotLines, shotHitReach)
       : null;
     if (nearestShot) {
       // Debug logging - only on click, NOT hover (prevents console spam)
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Shot click', {
           layer: 'survey-shots',
-          featureId: `${nearestShot.sectionId}:${nearestShot.shotId}`,
+          featureId: `${nearestShot.lineId}:${nearestShot.shotId}`,
           coordinates: e.lngLat,
-          candidateSections: shotSections.size,
+          candidateLines: shotLines.size,
         });
       }
-      this.callbacks.onShotClick?.(nearestShot.sectionId, nearestShot.shotId, e);
+      this.callbacks.onShotClick?.(nearestShot.lineId, nearestShot.shotId, e);
       return;
     }
 
@@ -1242,8 +1242,8 @@ export default class SurveyLayer {
    * Same pattern as click handler: stations take priority, uses nearest resolution.
    */
   private handleContextMenu = (e: MapMouseEvent): void => {
-    // Same candidate-section gating + SoA resolution as the click handler.
-    const { stationSections, shotSections } = this.hitCandidateSections(e.point);
+    // Same candidate-line gating + SoA resolution as the click handler.
+    const { stationLines, shotLines } = this.hitCandidateLines(e.point);
 
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
@@ -1251,16 +1251,16 @@ export default class SurveyLayer {
     if (this.semanticTargetPreference.handleContextMenu(e, stationHitReach, shotHitReach)) return;
 
     // Stations take priority
-    const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
+    const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationLines, stationHitReach);
     if (nearestStation) {
       const ref: StationRef = nearestStation.ref;
       // Debug logging - only on contextmenu, NOT hover (prevents console spam)
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Station context menu', {
           layer: this.stationsLayerId,
-          featureId: `${ref.section_id}:${ref.station_index}`,
+          featureId: `${ref.line_id}:${ref.station_index}`,
           coordinates: e.lngLat,
-          candidateSections: stationSections.size,
+          candidateLines: stationLines.size,
         });
       }
       this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
@@ -1268,19 +1268,19 @@ export default class SurveyLayer {
     }
 
     // Then shots
-    const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach);
+    const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotLines, shotHitReach);
     if (nearestShot) {
       // Debug logging - only on contextmenu, NOT hover (prevents console spam)
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Shot context menu', {
           layer: 'survey-shots',
-          featureId: `${nearestShot.sectionId}:${nearestShot.shotId}`,
+          featureId: `${nearestShot.lineId}:${nearestShot.shotId}`,
           coordinates: e.lngLat,
-          candidateSections: shotSections.size,
+          candidateLines: shotLines.size,
         });
       }
-      const { sectionId, shotId, t: alongT } = nearestShot;
-      this.callbacks.onContextMenu?.({ type: 'shot', sectionId, shotId, alongT }, e);
+      const { lineId, shotId, t: alongT } = nearestShot;
+      this.callbacks.onContextMenu?.({ type: 'shot', lineId, shotId, alongT }, e);
       return;
     }
 
@@ -1289,20 +1289,20 @@ export default class SurveyLayer {
   };
 
   /**
-   * Candidate sections under a point/box, from the SoA geometry index
+   * Candidate lines under a point/box, from the SoA geometry index
    * (#customRender / #mem). Candidate discovery no longer depends on stock-layer
    * residency: the endgame renders the survey via the custom WebGL layer, which
    * hides the stock shots/stations layers (visibility:none), and MapLibre returns
    * nothing from hidden layers. So instead of `queryRenderedFeatures` we ask the
-   * geometry index for sections whose world-space bounds, projected to screen,
+   * geometry index for lines whose world-space bounds, projected to screen,
    * intersect the probe box padded by the type's hit reach. That padded-box query
-   * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
+   * is a SUPERSET of the lines whose geometry can be within tolerance; the SoA
    * resolver (`resolveStationAt` / `resolveShotAt`) then trims it to the exact
    * pick. Per-type padding preserves the two old queries' semantics (shot vs
    * station reach differ); the pad is the FULL reach
    * because we test the true geometry, not a thin rendered mark. See
    * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
-   * (`sectionsIntersectingBox`), both unit tested.
+   * (`linesIntersectingBox`), both unit tested.
    *
    * A type is gated by the USER visibility flags (`stationsVisible` /
    * `shotsVisible`, set by setStationsVisibility / setShotsVisibility): a
@@ -1313,32 +1313,32 @@ export default class SurveyLayer {
    * fully interactive, while a user "hide stations/shots" toggle still suppresses
    * hits.
    */
-  private hitCandidateSections(
+  private hitCandidateLines(
     geometry: maplibregl.PointLike | [maplibregl.PointLike, maplibregl.PointLike],
-  ): { stationSections: Set<number>; shotSections: Set<number> } {
-    let stationSections = new Set<number>();
-    let shotSections = new Set<number>();
-    if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationSections, shotSections };
+  ): { stationLines: Set<number>; shotLines: Set<number> } {
+    let stationLines = new Set<number>();
+    let shotLines = new Set<number>();
+    if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationLines, shotLines };
     const project = this.projector();
     // One camera snapshot for both probes: the geometry index reuses its
-    // projected per-section AABBs across probes of the same camera, so a static
-    // hover reprojects the 14k+ sections once, not once per probe (#customRender).
+    // projected per-line AABBs across probes of the same camera, so a static
+    // hover reprojects the 14k+ lines once, not once per probe (#customRender).
     const camera = this.cameraSnapshot();
     if (this.shotsVisible) {
       const [[minX, minY], [maxX, maxY]] = padProbeBox(
         geometry as ProbeGeometry,
         this.getShotHitReach(),
       );
-      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
+      shotLines = this.geoIndex.linesIntersectingBox(project, minX, minY, maxX, maxY, camera);
     }
     if (this.stationsVisible) {
       const [[minX, minY], [maxX, maxY]] = padProbeBox(
         geometry as ProbeGeometry,
         this.getStationHitReach(),
       );
-      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
+      stationLines = this.geoIndex.linesIntersectingBox(project, minX, minY, maxX, maxY, camera);
     }
-    return { stationSections, shotSections };
+    return { stationLines, shotLines };
   }
 
   /** Cheap camera snapshot keying the geometry index's projected-AABB cache.
@@ -1363,42 +1363,42 @@ export default class SurveyLayer {
     return (c) => this.map.project(c);
   }
 
-  /** Nearest visible station among candidate sections, within maxDistance px;
-   *  on overlapping markers, the one drawn on top - the raised section's, else
+  /** Nearest visible station among candidate lines, within maxDistance px;
+   *  on overlapping markers, the one drawn on top - the raised line's, else
    *  the real-line one (see
    *  `SurveyGeometryIndex.nearestStation`). Hover, click, context menu and the
    *  measure snap all resolve here, so they agree. */
   private resolveStationAt(
     x: number,
     y: number,
-    sections: Set<number>,
+    lines: Set<number>,
     maxDistance: number,
   ): ReturnType<SurveyGeometryIndex['nearestStation']> {
-    if (sections.size === 0 || !this.geoIndex) return null;
-    return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
+    if (lines.size === 0 || !this.geoIndex) return null;
+    return this.geoIndex.nearestStation(this.projector(), x, y, lines, maxDistance, {
       visibleKinds: this.visibleKinds(),
       stationDiscPx: this.getStationRadius() + SurveyLayer.STATION_STROKE_PX,
-      raisedSectionId: this.raisedSectionId(),
+      raisedLineId: this.raisedLineId(),
       ...(this.customRender
         ? { stationSizeMul: this.customRender.stationSizeMul.bind(this.customRender) }
         : {}),
     });
   }
 
-  /** Nearest visible shot among candidate sections, within maxDistance px; on
-   *  overlapping lines, the one drawn on top - the raised section's, else the
+  /** Nearest visible shot among candidate lines, within maxDistance px; on
+   *  overlapping lines, the one drawn on top - the raised line's, else the
    *  real-line one (see `SurveyGeometryIndex.nearestShot`). */
   private resolveShotAt(
     x: number,
     y: number,
-    sections: Set<number>,
+    lines: Set<number>,
     maxDistance: number,
   ): ReturnType<SurveyGeometryIndex['nearestShot']> {
-    if (sections.size === 0 || !this.geoIndex) return null;
-    return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
+    if (lines.size === 0 || !this.geoIndex) return null;
+    return this.geoIndex.nearestShot(this.projector(), x, y, lines, maxDistance, {
       visibleKinds: this.visibleKinds(),
       shotHalfWidthPx: this.getShotWidth() / 2,
-      raisedSectionId: this.raisedSectionId(),
+      raisedLineId: this.raisedLineId(),
       ...(this.customRender ? { shotWidthMul: this.customRender.shotWidthMul.bind(this.customRender) } : {}),
     });
   }
@@ -1419,17 +1419,17 @@ export default class SurveyLayer {
     // source query returns nothing and the "clicked near a hidden feature" toast
     // is silently lost. `geoIndex` holds every station/shot regardless of the
     // display toggle. Stations take priority over shots (matches prior behavior).
-    const allSections = this.geoIndex ? new Set(this.cachedSections.map((s) => s.id)) : null;
+    const allLines = this.geoIndex ? new Set(this.cachedLines.map((s) => s.id)) : null;
 
-    if (allSections && !this.stationsVisible && this.callbacks.onHiddenStationClick) {
-      if (this.resolveStationAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+    if (allLines && !this.stationsVisible && this.callbacks.onHiddenStationClick) {
+      if (this.resolveStationAt(e.point.x, e.point.y, allLines, HIDDEN_CLICK_THRESHOLD_PX)) {
         this.callbacks.onHiddenStationClick();
         return;
       }
     }
 
-    if (allSections && !this.shotsVisible && this.callbacks.onHiddenShotClick) {
-      if (this.resolveShotAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+    if (allLines && !this.shotsVisible && this.callbacks.onHiddenShotClick) {
+      if (this.resolveShotAt(e.point.x, e.point.y, allLines, HIDDEN_CLICK_THRESHOLD_PX)) {
         this.callbacks.onHiddenShotClick();
         return;
       }
@@ -1439,12 +1439,12 @@ export default class SurveyLayer {
     this.callbacks.onEmptyClick?.(e);
   }
 
-  // Convert "sectionId:index" string ID to the numeric featureId the renderer keys on
+  // Convert "lineId:index" string ID to the numeric featureId the renderer keys on
   private parseFeatureId(id: string | null): number | null {
     if (!id) return null;
-    const [sectionId, index] = id.split(':').map(Number);
-    if (isNaN(sectionId!) || isNaN(index!)) return null;
-    return sectionId! * FEATURE_ID_STRIDE + index!;
+    const [lineId, index] = id.split(':').map(Number);
+    if (isNaN(lineId!) || isNaN(index!)) return null;
+    return lineId! * FEATURE_ID_STRIDE + index!;
   }
 
   /** Point/arrow cursor for whatever is hovered RIGHT NOW, suppressed for anchored
@@ -1469,10 +1469,10 @@ export default class SurveyLayer {
     let suppressReason: string | null = null;
     const hoveredId = this.hoveredStationId || this.hoveredShotId;
     if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
-      // Check if hovered feature belongs to an anchored section
-      if (this.isSectionAnchored(sectionIdFromKey(hoveredId))) {
+      // Check if hovered feature belongs to an anchored line
+      if (this.isLineAnchored(lineIdFromKey(hoveredId))) {
         showPointer = false;
-        suppressReason = 'anchored_section';
+        suppressReason = 'anchored_line';
       }
     }
     // Suppress cursor for immovable features in Move Station / Move Shot tools
@@ -1509,12 +1509,12 @@ export default class SurveyLayer {
     }
   }
 
-  // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
-  // Takes the SECTION id, never a featureId: a shot's featureId is not decodable back
-  // to one (shot.id is itself section-encoded, so floor(fid / STRIDE) yields 2*sectionId
-  // for shots - #301). Every caller already holds the real section id.
-  private isSectionAnchored(sectionId: number): boolean {
-    return this.anchoredSectionIds.size > 0 && this.anchoredSectionIds.has(sectionId);
+  // Check if a line is anchored (suppresses hover/interaction, dims its geometry).
+  // Takes the LINE id, never a featureId: a shot's featureId is not decodable back
+  // to one (shot.id is itself line-encoded, so floor(fid / STRIDE) yields 2*lineId
+  // for shots - #301). Every caller already holds the real line id.
+  private isLineAnchored(lineId: number): boolean {
+    return this.anchoredLineIds.size > 0 && this.anchoredLineIds.has(lineId);
   }
 
   // Check if a station feature is individually immovable (zero-datum or transitively connected)
@@ -1531,19 +1531,19 @@ export default class SurveyLayer {
     return this.config?.debug?.map?.log_hit_detection ?? false;
   }
 
-  // Update visual state. Section-level hover/selection highlights are drawn by the
-  // custom renderer (setSectionHover / setSectionSelect / setHighlight, wired from
-  // the setHoveredSection / setSelectedSection / setHoveredSegment setters);
+  // Update visual state. Line-level hover/selection highlights are drawn by the
+  // custom renderer (setLineHover / setLineSelect / setHighlight, wired from
+  // the setHoveredLine / setSelectedLine / setHoveredSegment setters);
   // individual hover/selection/snap render via the interact overlay (#mem).
-  // The selection's whole section draws above every rank (no-op when unchanged).
+  // The selection's whole line draws above every rank (no-op when unchanged).
   private updateVisualState() {
-    this.customRender?.setRaisedSection(this.raisedSectionId());
+    this.customRender?.setRaisedLine(this.raisedLineId());
     this.refreshInteractOverlay();
   }
 
-  /** The section drawn on top and given the click (see `raisedSectionOf`). */
-  private raisedSectionId(): number | null {
-    return raisedSectionOf(this.selectedSectionId, this.selectedStationId, this.selectedShotId);
+  /** The line drawn on top and given the click (see `raisedLineOf`). */
+  private raisedLineId(): number | null {
+    return raisedLineOf(this.selectedLineId, this.selectedStationId, this.selectedShotId);
   }
 
   /**
@@ -1590,7 +1590,7 @@ export default class SurveyLayer {
     if (hoveredShot) {
       const fid = this.parseFeatureId(hoveredShot);
       // Old behavior: no hover feedback for anchored/immovable shots.
-      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredShot)) && !this.isShotImmovable(fid))) {
+      if (fid === null || (!this.isLineAnchored(lineIdFromKey(hoveredShot)) && !this.isShotImmovable(fid))) {
         const f = this.shotOverlayFeature(hoveredShot, this.getShotHoverWidth());
         if (f) features.push(f);
       }
@@ -1606,7 +1606,7 @@ export default class SurveyLayer {
       keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
     if (hoveredStation) {
       const fid = this.parseFeatureId(hoveredStation);
-      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredStation)) && !this.isStationImmovable(fid))) {
+      if (fid === null || (!this.isLineAnchored(lineIdFromKey(hoveredStation)) && !this.isStationImmovable(fid))) {
         const f = this.stationOverlayFeature(hoveredStation, 'hover');
         if (f) features.push(f);
       }
@@ -1622,7 +1622,7 @@ export default class SurveyLayer {
     for (const id of snapIds) {
       const [secStr, idxStr] = id.split(':');
       const coords = this.geoIndex?.stationCoords({
-        section_id: Number(secStr),
+        line_id: Number(secStr),
         station_index: Number(idxStr),
       });
       if (coords) {
@@ -1662,7 +1662,7 @@ export default class SurveyLayer {
       measuredPathIds: this.measuredPathIds,
       measuredPathStationIds: this.measuredPathStationIds,
       measureTintColor: this.measureTintColor,
-      isSectionAnchored: (sectionId) => this.isSectionAnchored(sectionId),
+      isLineAnchored: (lineId) => this.isLineAnchored(lineId),
       isPlanIdleActive: this.isPlanIdleActive(),
       displayColorContext: this.displayColorContext(),
       themeColors: this.themeColors,
@@ -1690,7 +1690,7 @@ export default class SurveyLayer {
 
   /**
    * Apply the distance-gradient overlay (#34). `enabled` swaps the shots/stations
-   * color paint to the distance ramp (or restores section/depth color); `state`
+   * color paint to the distance ramp (or restores line/depth color); `state`
    * carries per-feature `dist` (feature-id → distance, -1 = unreachable).
    * Re-rooting just calls this again - no feature rebuild.
    */
@@ -1837,18 +1837,18 @@ export default class SurveyLayer {
     const source = this.map.getSource(this.sourceId + '-gas-route');
     if (!source || source.type !== 'geojson') return;
     const geojsonSource = source as maplibregl.GeoJSONSource;
-    // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) -
+    // Index the stations once (keyed by line:index) so the per-leg endpoint lookups are O(1) -
     // the route can be long and this re-runs after every setData() rebuild, so a linear scan per
     // endpoint would be quadratic on large surveys.
     const coordByRef = new Map<string, [number, number]>();
     for (const s of this.cachedStations) {
       coordByRef.set(
-        `${s.station_ref.section_id}:${s.station_ref.station_index}`,
+        `${s.station_ref.line_id}:${s.station_ref.station_index}`,
         metersToMapCoords(s.coordinates.x, s.coordinates.y, this.gpsOrigin) as [number, number],
       );
     }
     const coordFor = (ref: StationRef): [number, number] | null =>
-      coordByRef.get(`${ref.section_id}:${ref.station_index}`) ?? null;
+      coordByRef.get(`${ref.line_id}:${ref.station_index}`) ?? null;
     const features = this.gasRouteLegs.flatMap((leg) => {
       const from = coordFor(leg.from);
       const to = coordFor(leg.to);
@@ -1937,7 +1937,7 @@ export default class SurveyLayer {
    * mid-measurement edit keeps the custom tint in sync with moved coords.
    *
    * The measured id sets are the encoded feature ids setMeasuredPath received
-   * (`sectionId * FEATURE_ID_STRIDE + scopedId`); they are decoded back and
+   * (`lineId * FEATURE_ID_STRIDE + scopedId`); they are decoded back and
    * projected via the SoA geometry index (`shotGeometry` / `stationCoords`), the
    * same source the interact overlay uses. Reference-hidden features are skipped
    * to match the stock `measurePathFilter` / interact-overlay guards.
@@ -1964,7 +1964,7 @@ export default class SurveyLayer {
     if (this.measuredPathIds && this.shotsVisible) {
       // Resolve by RE-DERIVING each shot's canonical feature id rather than
       // decoding the fid: the scoped id folded into a shot fid is the GLOBAL shot
-      // id (>= FEATURE_ID_STRIDE for section >= 1), so a floor(fid / STRIDE) split
+      // id (>= FEATURE_ID_STRIDE for line >= 1), so a floor(fid / STRIDE) split
       // mis-attributes every such shot and drops its tint (#26). Hidden reference
       // legs are excluded to match the interact overlay / stock filter.
       for (const { from, to } of this.geoIndex.measuredShotSegments(
@@ -1977,9 +1977,9 @@ export default class SurveyLayer {
     const points: MeasurePoint[] = [];
     if (this.measuredPathStationIds && this.stationsVisible) {
       for (const fid of this.measuredPathStationIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
-        const ref = { section_id: sectionId, station_index: stationIndex };
+        const lineId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const stationIndex = fid - lineId * FEATURE_ID_STRIDE;
+        const ref = { line_id: lineId, station_index: stationIndex };
         // Match the interact-overlay guard: a station hidden because every
         // kind touching it is hidden must not surface.
         if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
@@ -2028,7 +2028,7 @@ export default class SurveyLayer {
 
   // Update ghost hitbox layer sizes from config. The main shots/stations hit
   // areas are no longer layer paint (the dedicated hitbox layers were removed,
-  // #mem budget); they are read live per query in hitCandidateSections via
+  // #mem budget); they are read live per query in hitCandidateLines via
   // getShot/StationHitReach(), so config changes take effect with no layer edit.
   private updateHitboxLayers(): void {
     if (!this.map) return;
@@ -2103,7 +2103,7 @@ export default class SurveyLayer {
 
   // Set selected station (called from outside to sync with uiStore)
   setSelectedStation(ref: StationRef | null) {
-    const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    const newId = ref ? `${ref.line_id}:${ref.station_index}` : null;
     if (this.shouldLogInteraction() && newId !== this.selectedStationId) {
       console.debug('[Selection] Selected station changed', {
         previous: this.selectedStationId,
@@ -2115,8 +2115,8 @@ export default class SurveyLayer {
   }
 
   // Set selected shot (called from outside to sync with uiStore)
-  setSelectedShot(sectionId: SectionId | null, shotId: ShotId | null) {
-    const newId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+  setSelectedShot(lineId: LineId | null, shotId: ShotId | null) {
+    const newId = lineId !== null && shotId !== null ? `${lineId}:${shotId}` : null;
     if (this.shouldLogInteraction() && newId !== this.selectedShotId) {
       console.debug('[Selection] Selected shot changed', {
         previous: this.selectedShotId,
@@ -2130,7 +2130,7 @@ export default class SurveyLayer {
   // Set snapped station (called from outside for snap indicator)
   // Pushes a per-vertex attribute update for an instant GPU-side change (same mechanism as hover).
   setSnappedStation(ref: StationRef | null) {
-    const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    const newId = ref ? `${ref.line_id}:${ref.station_index}` : null;
     if (this.snappedStationId === newId) return;
     this.snappedStationId = newId;
 
@@ -2149,7 +2149,7 @@ export default class SurveyLayer {
 
   /**
    * Query the nearest station to a screen point. The padded visible-layer query
-   * (MapLibre's spatial index) gates the candidate sections; the SoA resolver
+   * (MapLibre's spatial index) gates the candidate lines; the SoA resolver
    * picks the exact station with a circular `threshold` (the old post-check
    * for corner candidates is inherent in the resolver's maxDistance) (#mem).
    */
@@ -2162,8 +2162,8 @@ export default class SurveyLayer {
       [screenX - threshold, screenY - threshold],
       [screenX + threshold, screenY + threshold],
     ];
-    const { stationSections } = this.hitCandidateSections(bbox);
-    const nearest = this.resolveStationAt(screenX, screenY, stationSections, threshold);
+    const { stationLines } = this.hitCandidateLines(bbox);
+    const nearest = this.resolveStationAt(screenX, screenY, stationLines, threshold);
     return nearest ? nearest.ref : null;
   }
 
@@ -2182,20 +2182,20 @@ export default class SurveyLayer {
     screenX: number,
     screenY: number,
     threshold: number
-  ): { section_id: number; shot_id: number; t: number; lng: number; lat: number } | null {
+  ): { line_id: number; shot_id: number; t: number; lng: number; lat: number } | null {
     const bbox: [[number, number], [number, number]] = [
       [screenX - threshold, screenY - threshold],
       [screenX + threshold, screenY + threshold],
     ];
-    const { shotSections } = this.hitCandidateSections(bbox);
-    const nearest = this.resolveShotAt(screenX, screenY, shotSections, threshold);
+    const { shotLines } = this.hitCandidateLines(bbox);
+    const nearest = this.resolveShotAt(screenX, screenY, shotLines, threshold);
     if (!nearest) return null;
 
     const lng = nearest.from[0] + nearest.t * (nearest.to[0] - nearest.from[0]);
     const lat = nearest.from[1] + nearest.t * (nearest.to[1] - nearest.from[1]);
 
     return {
-      section_id: nearest.sectionId,
+      line_id: nearest.lineId,
       shot_id: nearest.shotId,
       t: nearest.t,
       lng,
@@ -2204,61 +2204,61 @@ export default class SurveyLayer {
   }
 
   /**
-   * Set the hovered section for visual highlighting.
-   * Stores the section ID for use by updateVisualState() to apply hover styling
-   * to all shots and stations in this section.
-   * @param sectionId - The SectionId (number) to hover, or null to clear
+   * Set the hovered line for visual highlighting.
+   * Stores the line ID for use by updateVisualState() to apply hover styling
+   * to all shots and stations in this line.
+   * @param lineId - The LineId (number) to hover, or null to clear
    */
-  setHoveredSection(sectionId: SectionId | null): void {
-    // Convert numeric SectionId to string for consistent comparison
-    const stringId = sectionId !== null ? String(sectionId) : null;
-    if (this.hoveredSectionId === stringId) return;
+  setHoveredLine(lineId: LineId | null): void {
+    // Convert numeric LineId to string for consistent comparison
+    const stringId = lineId !== null ? String(lineId) : null;
+    if (this.hoveredLineId === stringId) return;
     if (this.shouldLogInteraction()) {
-      console.debug('[Highlight] Hovered section changed', {
-        previous: this.hoveredSectionId,
+      console.debug('[Highlight] Hovered line changed', {
+        previous: this.hoveredLineId,
         next: stringId,
       });
     }
-    this.hoveredSectionId = stringId;
+    this.hoveredLineId = stringId;
     // Custom renderer ignores feature-state; drive its per-vertex highlight flag
-    // at hover level (the stock section hover used the same `hover` state).
-    this.customRender?.setSectionHover(sectionId !== null ? [sectionId] : []);
+    // at hover level (the stock line hover used the same `hover` state).
+    this.customRender?.setLineHover(lineId !== null ? [lineId] : []);
     this.updateVisualState();
   }
 
   /**
-   * Set multi-section hover for Move Segment tool.
-   * Highlights all shots and stations in the given sections (the connected segment).
-   * Takes priority over single-section hover when non-empty.
-   * @param sectionIds - Array of section IDs in the connected segment, or empty to clear
+   * Set multi-line hover for Move Segment tool.
+   * Highlights all shots and stations in the given lines (the connected segment).
+   * Takes priority over single-line hover when non-empty.
+   * @param lineIds - Array of line IDs in the connected segment, or empty to clear
    */
-  setHoveredSegment(sectionIds: number[]): void {
-    const stringIds = sectionIds.map(String);
-    // Quick equality check (arrays are small, typically <10 sections)
-    if (stringIds.length === this.hoveredSegmentSectionIds.length &&
-        stringIds.every((id, i) => id === this.hoveredSegmentSectionIds[i])) return;
+  setHoveredSegment(lineIds: number[]): void {
+    const stringIds = lineIds.map(String);
+    // Quick equality check (arrays are small, typically <10 lines)
+    if (stringIds.length === this.hoveredSegmentLineIds.length &&
+        stringIds.every((id, i) => id === this.hoveredSegmentLineIds[i])) return;
     if (this.shouldLogInteraction()) {
       console.debug('[Highlight] Hovered segment changed', {
-        previous: this.hoveredSegmentSectionIds,
+        previous: this.hoveredSegmentLineIds,
         next: stringIds,
       });
     }
-    this.hoveredSegmentSectionIds = stringIds;
+    this.hoveredSegmentLineIds = stringIds;
     // Custom renderer ignores feature-state; drive its per-vertex highlight flag
     // so the whole connected segment is emphasized under the custom layer too.
-    this.customRender?.setHighlight(sectionIds);
+    this.customRender?.setHighlight(lineIds);
     this.updateVisualState();
   }
 
   /**
    * Set the hovered shot for visual highlighting (external hover, e.g. from DataTable).
    * This allows external components to trigger shot hover highlighting without mouse interaction.
-   * @param sectionId - The SectionId of the shot, or null to clear
+   * @param lineId - The LineId of the shot, or null to clear
    * @param shotId - The ShotId of the shot, or null to clear
    */
-  setHoveredShot(sectionId: SectionId | null, shotId: ShotId | null): void {
+  setHoveredShot(lineId: LineId | null, shotId: ShotId | null): void {
     // Convert to composite string ID format used internally
-    const stringId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    const stringId = lineId !== null && shotId !== null ? `${lineId}:${shotId}` : null;
     if (this.hoveredShotId === stringId) return;
     if (this.shouldLogInteraction()) {
       console.debug('[Highlight] Hovered shot changed', {
@@ -2277,7 +2277,7 @@ export default class SurveyLayer {
    */
   setHoveredStation(ref: StationRef | null): void {
     // Convert to composite string ID format used internally
-    const stringId = ref !== null ? `${ref.section_id}:${ref.station_index}` : null;
+    const stringId = ref !== null ? `${ref.line_id}:${ref.station_index}` : null;
     if (this.hoveredStationId === stringId) return;
     if (this.shouldLogInteraction()) {
       console.debug('[Highlight] Hovered station changed', {
@@ -2290,34 +2290,34 @@ export default class SurveyLayer {
   }
 
   /**
-   * Set the selected section for visual highlighting.
-   * Stores the section ID for use by updateVisualState() to apply selected styling
-   * to all shots and stations in this section.
-   * @param sectionId - The SectionId (number) to select, or null to clear
+   * Set the selected line for visual highlighting.
+   * Stores the line ID for use by updateVisualState() to apply selected styling
+   * to all shots and stations in this line.
+   * @param lineId - The LineId (number) to select, or null to clear
    */
-  setSelectedSection(sectionId: SectionId | null): void {
-    // Convert numeric SectionId to string for consistent comparison
-    const stringId = sectionId !== null ? String(sectionId) : null;
-    if (this.selectedSectionId === stringId) return;
-    if (this.shouldLogInteraction()) console.debug('[Selection] Selected section changed', { previous: this.selectedSectionId, next: stringId });
-    this.selectedSectionId = stringId;
-    this.syncSectionSelect();
+  setSelectedLine(lineId: LineId | null): void {
+    // Convert numeric LineId to string for consistent comparison
+    const stringId = lineId !== null ? String(lineId) : null;
+    if (this.selectedLineId === stringId) return;
+    if (this.shouldLogInteraction()) console.debug('[Selection] Selected line changed', { previous: this.selectedLineId, next: stringId });
+    this.selectedLineId = stringId;
+    this.syncLineSelect();
     this.updateVisualState();
   }
 
-  /** Sections an open dialog previews (Combine Sections), highlighted on top of the selection; `[]` clears. */
-  setPreviewSections(sectionIds: readonly SectionId[]): void {
-    if (sectionIds.length === 0 && (this.previewSectionIds ?? []).length === 0) return;
-    this.previewSectionIds = sectionIds;
-    this.syncSectionSelect();
+  /** Lines an open dialog previews (Combine Lines), highlighted on top of the selection; `[]` clears. */
+  setPreviewLines(lineIds: readonly LineId[]): void {
+    if (lineIds.length === 0 && (this.previewLineIds ?? []).length === 0) return;
+    this.previewLineIds = lineIds;
+    this.syncLineSelect();
   }
 
   // Custom renderer ignores feature-state; drive its per-vertex highlight flag
   // at selection level (smaller bump than hover, matching stock `selected`).
-  private syncSectionSelect(): void {
-    const selected = this.selectedSectionId !== null ? [Number(this.selectedSectionId)] : [];
+  private syncLineSelect(): void {
+    const selected = this.selectedLineId !== null ? [Number(this.selectedLineId)] : [];
     // `?? []`: a layer built without its constructor (the tests' Object.create) has no field yet.
-    this.customRender?.setSectionSelect([...selected, ...(this.previewSectionIds ?? [])]);
+    this.customRender?.setLineSelect([...selected, ...(this.previewLineIds ?? [])]);
   }
 
   // Depth gradient accessors - return current depth mode state
@@ -2335,9 +2335,9 @@ export default class SurveyLayer {
     this.customLabels?.setErrorLabelsVisible(shots, closures);
   }
 
-  // Control section name labels visibility (custom label layer uniform).
-  setShowSectionNames(show: boolean) {
-    this.customLabels?.setSectionNamesVisible(show);
+  // Control line name labels visibility (custom label layer uniform).
+  setShowLineNames(show: boolean) {
+    this.customLabels?.setLineNamesVisible(show);
   }
 
   // Station labels: off, IDs, or names (a text switch rebuilds the labels).
@@ -2440,7 +2440,7 @@ export default class SurveyLayer {
    * that one comment's label (LABEL_FLAG.COMMENT_HIDE) so only the cursor-following
    * tag shows - matching the deleted stock hidden-comment filter. `null` clears it.
    */
-  setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
+  setHiddenComment(hidden: { type: 'station' | 'shot'; lineId: number; id: number } | null): void {
     this.customLabels?.setHiddenComment(hidden);
   }
 
@@ -2463,7 +2463,7 @@ export default class SurveyLayer {
     this.customLabels?.setCommentOverlapExempt(false);
   }
 
-  // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
+  // Set highlighted stations by their string IDs (format: "lineId:stationIndex")
   setHighlightedStations(stationIds: string[]): void {
     if (!this.map) return;
     this.highlightedStationIds = stationIds;
@@ -2512,13 +2512,13 @@ export default class SurveyLayer {
   clearAllInteractionState(): void {
     this.hoveredStationId = null;
     this.hoveredShotId = null;
-    this.hoveredSectionId = null;
-    this.hoveredSegmentSectionIds = [];
+    this.hoveredLineId = null;
+    this.hoveredSegmentLineIds = [];
     this.snappedStationId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
-    this.selectedSectionId = null;
-    // Custom renderer: drop every section-emphasis source in one refresh.
+    this.selectedLineId = null;
+    // Custom renderer: drop every line-emphasis source in one refresh.
     this.customRender?.clearHighlights();
     this.setHighlightedStations([]);
     this.callbacks.onStationHover?.(null);
@@ -2528,15 +2528,15 @@ export default class SurveyLayer {
   }
 
   /**
-   * Set anchored section IDs for fading when Move Segment tool is active.
-   * Sections in this set get reduced opacity via feature-state.
+   * Set anchored line IDs for fading when Move Segment tool is active.
+   * Lines in this set get reduced opacity via feature-state.
    */
-  setAnchoredSections(sectionIds: Set<number>): void {
+  setAnchoredLines(lineIds: Set<number>): void {
     const before = this.lastOverlayDigest;
-    this.anchoredSectionIds = sectionIds;
+    this.anchoredLineIds = lineIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
-    this.updateClosureAnchoredOpacity(sectionIds);
-    // The custom renderer + label layer dim the anchored sections' geometry + labels.
+    this.updateClosureAnchoredOpacity(lineIds);
+    // The custom renderer + label layer dim the anchored lines' geometry + labels.
     this.syncCustomDimming();
     // The anchored set also gates the interact overlay (hover/selection highlight +
     // its 0.25 opacity), but it is NOT part of the overlay's id-only cache key, and
@@ -2550,23 +2550,23 @@ export default class SurveyLayer {
    *  layers so they dim the same features the stock paint expressions do
    *  (#customRender). Both geometry AND labels take the same {@link CustomDimState};
    *  the label controller reproduces the stock LABEL dim rules (anchored dims shot/
-   *  station/section labels, immovable + gas-dim dim individual shot/station labels;
-   *  comments and section-name immovable/gas-dim are left bright, matching stock). */
+   *  station/line labels, immovable + gas-dim dim individual shot/station labels;
+   *  comments and line-name immovable/gas-dim are left bright, matching stock). */
   private syncCustomDimming(): void {
-    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState, this.isPlanIdleActive());
+    const dim = buildCustomDimState(this.anchoredLineIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState, this.isPlanIdleActive());
     this.customRender?.setDimming(dim);
     this.customLabels?.setDimming(dim);
   }
 
-  // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
+  // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored lines
   private updateClosureAnchoredOpacity(anchoredIds: Set<number>): void {
     const idsArray = [...anchoredIds];
 
     if (idsArray.length > 0) {
       // Both endpoints must be anchored to gray out the closure line
       const bothAnchored: maplibregl.ExpressionSpecification = ['all',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+        ['in', ['get', 'lineIdA'], ['literal', idsArray]],
+        ['in', ['get', 'lineIdB'], ['literal', idsArray]],
       ] as maplibregl.ExpressionSpecification;
 
       this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
@@ -2580,7 +2580,7 @@ export default class SurveyLayer {
   /**
    * Set individual feature-level immovable state for move_station / move_shot tools.
    * Uses setPaintProperty with data-driven expressions to dim immovable features.
-   * Unlike setAnchoredSections (which re-tessellates dim flags), this approach is reliable
+   * Unlike setAnchoredLines (which re-tessellates dim flags), this approach is reliable
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
@@ -2591,7 +2591,7 @@ export default class SurveyLayer {
     this.updateImmovableClosureOpacity(stationIds);
     // The custom renderer + label layer dim the immovable geometry + labels.
     this.syncCustomDimming();
-    // Same overlay-cache hazard as setAnchoredSections: these sets gate the
+    // Same overlay-cache hazard as setAnchoredLines: these sets gate the
     // hover/selection highlight but are not in the overlay's cache key.
     this.applyDimChangeToOverlay(before);
   }
@@ -2613,12 +2613,12 @@ export default class SurveyLayer {
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
     if (immovableStationIds.size > 0) {
-      // Build station key strings matching closure feature "sectionId:stationIndex" format
+      // Build station key strings matching closure feature "lineId:stationIndex" format
       const immovableKeyStrings: string[] = [];
       for (const fid of immovableStationIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const lineId = Math.floor(fid / FEATURE_ID_STRIDE);
         const stationIndex = fid % FEATURE_ID_STRIDE;
-        immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
+        immovableKeyStrings.push(`${lineId}:${stationIndex}`);
       }
 
       // Dim closure if either endpoint is immovable
@@ -2721,7 +2721,7 @@ export default class SurveyLayer {
       movingEndForShot: (id) => this.dragMovingShots.get(id),
       isMovingStation: (id) => this.dragMovingStationKeys.has(id),
       parseFid: (id) => this.parseFeatureId(id),
-      isAnchored: (id) => this.isSectionAnchored(sectionIdFromKey(id)),
+      isAnchored: (id) => this.isLineAnchored(lineIdFromKey(id)),
       isShotImmovable: (fid) => this.isShotImmovable(fid),
       isStationImmovable: (fid) => this.isStationImmovable(fid),
       shotFeature: (id, w) => this.shotOverlayFeature(id, w),
@@ -2776,61 +2776,61 @@ export default class SurveyLayer {
   }
 
   /**
-   * Begin SEGMENT drag preview - hide the connected sections' real features from
-   * the bulk layers (excluded by sectionId), capture every moving station / shot
+   * Begin SEGMENT drag preview - hide the connected lines' real features from
+   * the bulk layers (excluded by lineId), capture every moving station / shot
    * / label / closure ONCE with its original coordinates, and render the moving
    * copy from the unified preview source. All geometry moves uniformly, so a
    * later per-frame offset is applied to every captured vertex.
    */
-  beginDragPreview(connectedSectionIds: Set<number>): void {
+  beginDragPreview(connectedLineIds: Set<number>): void {
     if (this.dragPreviewActive) this.endDragPreview();
-    if (connectedSectionIds.size === 0) return;
+    if (connectedLineIds.size === 0) return;
     if (!this.geoIndex || !this.cachedSurveyData) return;
 
-    const idsArray = [...connectedSectionIds];
+    const idsArray = [...connectedLineIds];
 
     // Hide closures with EITHER endpoint in the connected set. Closures with BOTH
     // endpoints inside move uniformly (captured below); closures bridging a
-    // dragged and a stationary section are hidden during the drag and reappear
+    // dragged and a stationary line are hidden during the drag and reappear
     // with correct geometry on commit. (The survey geometry + labels are hidden in
     // the custom layers via the drag exclusion in installDragPreview.)
     const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
     this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
     const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+      ['in', ['get', 'lineIdA'], ['literal', idsArray]],
+      ['in', ['get', 'lineIdB'], ['literal', idsArray]],
     ]] as unknown as maplibregl.FilterSpecification;
     this.map.setFilter(this.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
       ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
       : eitherEndpointExclusion);
 
     // Capture the moving geometry once. Everything in the segment moves uniformly.
-    // Attached text (labels / comments / section names) is not captured - it is
+    // Attached text (labels / comments / line names) is not captured - it is
     // hidden from the stock layers above, not previewed.
     const features: DragPreviewFeature[] = [];
     const ctx = this.displayColorContext();
     const stationDefault = this.themeColors.stationDefault;
 
-    // Read the moving geometry from the SoA (sectionGeometry), NOT from the lazy
-    // `Station[]` proxy or the lazy `section.shots` getter: filtering all ~89k
-    // stations per section (and a linear `shotGeometry` scan per shot) made this
-    // quadratic and froze a 14k-section project on drag start (#mem).
-    // Iterate cachedSections (not the Set) to keep the original emit order; reading
-    // `id`/`color` off a section does not trip its lazy `shots` getter.
-    for (const sectionMeta of this.cachedSections) {
-      const sectionId = sectionMeta.id;
-      if (!connectedSectionIds.has(sectionId)) continue;
-      const sectionColor = sectionMeta.color ?? stationDefault;
-      const { stations: sectionStations, shots: sectionShots } =
-        this.geoIndex.sectionGeometry(sectionId);
+    // Read the moving geometry from the SoA (lineGeometry), NOT from the lazy
+    // `Station[]` proxy or the lazy `line.shots` getter: filtering all ~89k
+    // stations per line (and a linear `shotGeometry` scan per shot) made this
+    // quadratic and froze a 14k-line project on drag start (#mem).
+    // Iterate cachedLines (not the Set) to keep the original emit order; reading
+    // `id`/`color` off a line does not trip its lazy `shots` getter.
+    for (const lineMeta of this.cachedLines) {
+      const lineId = lineMeta.id;
+      if (!connectedLineIds.has(lineId)) continue;
+      const lineColor = lineMeta.color ?? stationDefault;
+      const { stations: lineStations, shots: lineShots } =
+        this.geoIndex.lineGeometry(lineId);
 
       // Stations (points).
-      for (const st of sectionStations) {
-        const idStr = `${sectionId}:${st.stationIndex}`;
+      for (const st of lineStations) {
+        const idStr = `${lineId}:${st.stationIndex}`;
         this.dragMovingStationKeys.add(idStr);
         const color = resolveStationDisplayColor(
           this.cachedSurveyData,
-          sectionColor,
+          lineColor,
           st.globalIdx,
           ctx,
         );
@@ -2843,11 +2843,11 @@ export default class SurveyLayer {
       }
 
       // Shots (lines).
-      for (const shot of sectionShots) {
-        const shotKey = `${sectionId}:${shot.shotId}`;
+      for (const shot of lineShots) {
+        const shotKey = `${lineId}:${shot.shotId}`;
         const color = resolveShotDisplayColor(
           this.cachedSurveyData,
-          sectionColor,
+          lineColor,
           shot.globalIdx,
           ctx,
         );
@@ -2863,7 +2863,7 @@ export default class SurveyLayer {
 
     // Loop closures with BOTH endpoints in the moving set (move uniformly).
     for (const lc of this.cachedLoopClosures ?? []) {
-      if (!connectedSectionIds.has(lc.station_a.section_id) || !connectedSectionIds.has(lc.station_b.section_id)) continue;
+      if (!connectedLineIds.has(lc.station_a.line_id) || !connectedLineIds.has(lc.station_b.line_id)) continue;
       const a = this.geoIndex.stationCoords(lc.station_a);
       const b = this.geoIndex.stationCoords(lc.station_b);
       if (!a || !b) continue;
@@ -2875,9 +2875,9 @@ export default class SurveyLayer {
       });
     }
 
-    // Segment drag hides whole connected sections (shots + stations) in the
-    // custom layer, mirroring the sectionId exclusion applied to the stock layers.
-    this.installDragPreview(features, { sectionIds: new Set(idsArray) });
+    // Segment drag hides whole connected lines (shots + stations) in the
+    // custom layer, mirroring the lineId exclusion applied to the stock layers.
+    this.installDragPreview(features, { lineIds: new Set(idsArray) });
   }
 
   /**
@@ -2889,7 +2889,7 @@ export default class SurveyLayer {
    *
    * Returns the list of co-located StationRefs so MapCanvas can batch-move them.
    */
-  beginStationDragPreview(sectionId: number, stationIndex: number, additionalSeeds?: StationRef[]): StationRef[] {
+  beginStationDragPreview(lineId: number, stationIndex: number, additionalSeeds?: StationRef[]): StationRef[] {
     if (this.dragPreviewActive) this.endDragPreview();
 
     // 1. Find clicked station and all co-located stations via BFS:
@@ -2904,21 +2904,21 @@ export default class SurveyLayer {
     if (!data) return [];
     const globalByKey = new Map<string, number>();
     for (let g = 0; g < data.stationCount; g++) {
-      globalByKey.set(`${data.stationSectionIds[g]}:${data.stationIndices[g]}`, g);
+      globalByKey.set(`${data.stationLineIds[g]}:${data.stationIndices[g]}`, g);
     }
     const alignedClosureIds = new Set<bigint>(
       (this.cachedLoopClosures ?? [])
         .filter((closure) => closure.is_aligned)
         .map((closure) => closure.id)
     );
-    const clickedKey = `${sectionId}:${stationIndex}`;
+    const clickedKey = `${lineId}:${stationIndex}`;
     if (!globalByKey.has(clickedKey)) return [];
 
     // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
     const seedKeys = [clickedKey];
     if (additionalSeeds) {
       for (const seed of additionalSeeds) {
-        const key = `${seed.section_id}:${seed.station_index}`;
+        const key = `${seed.line_id}:${seed.station_index}`;
         if (globalByKey.has(key)) seedKeys.push(key);
       }
     }
@@ -2932,11 +2932,11 @@ export default class SurveyLayer {
       const g = globalByKey.get(key);
       if (g === undefined) continue;
       for (const ref of data.stationMergedWith.get(g) ?? []) {
-        queue.push(`${ref.section_id}:${ref.station_index}`);
+        queue.push(`${ref.line_id}:${ref.station_index}`);
       }
       for (const cr of data.stationClosuresWith.get(g) ?? []) {
         if (!alignedClosureIds.has(cr.closure_id)) continue;
-        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
+        queue.push(`${cr.station_ref.line_id}:${cr.station_ref.station_index}`);
       }
     }
     // The moving set is a merge/closure cluster (small); resolve each member's
@@ -2947,7 +2947,7 @@ export default class SurveyLayer {
       const base = g * 3;
       return [{
         station_ref: {
-          section_id: data.stationSectionIds[g]!,
+          line_id: data.stationLineIds[g]!,
           station_index: data.stationIndices[g]!,
         } as StationRef,
         lngLat: metersToMapCoords(
@@ -2971,23 +2971,23 @@ export default class SurveyLayer {
     // SoA index for O(1) skip in tessellate.
     const excludedStationGlobals = new Set<number>();
     const excludedShotGlobals = new Set<number>();
-    // Sections owning any moved station / shot: their NAME label drag-hides too
+    // Lines owning any moved station / shot: their NAME label drag-hides too
     // (custom label layer), so it does not sit pinned at the old anchor while the
-    // partial geometry moves. Whole-section segment drags carry the name via
-    // `sectionIds` instead (see beginDragPreview).
-    const affectedSectionIds = new Set<number>();
+    // partial geometry moves. Whole-line segment drags carry the name via
+    // `lineIds` instead (see beginDragPreview).
+    const affectedLineIds = new Set<number>();
 
     // Moving stations (points) - all uniform.
     for (const st of movingStations) {
       const ref = st.station_ref;
-      const idStr = `${ref.section_id}:${ref.station_index}`;
+      const idStr = `${ref.line_id}:${ref.station_index}`;
       this.dragMovingStationKeys.add(idStr);
-      const section = this.geoIndex.section(ref.section_id);
+      const line = this.geoIndex.line(ref.line_id);
       excludedStationGlobals.add(st.globalIdx);
-      affectedSectionIds.add(ref.section_id);
+      affectedLineIds.add(ref.line_id);
       const color = resolveStationDisplayColor(
         this.cachedSurveyData,
-        section?.color ?? stationDefault,
+        line?.color ?? stationDefault,
         st.globalIdx,
         ctx,
       );
@@ -2999,18 +2999,18 @@ export default class SurveyLayer {
       });
     }
 
-    // 4. Connected shots (lines) + shot labels. Walk each AFFECTED SECTION once
+    // 4. Connected shots (lines) + shot labels. Walk each AFFECTED LINE once
     // (from the SoA), not once per moving station: re-filtering the lazy
     // `Station[]` proxy per station materialized ~89k objects each time, and the
-    // per-shot `shotGeometry()` scan made it quadratic in section size (#mem).
+    // per-shot `shotGeometry()` scan made it quadratic in line size (#mem).
     const seenShotKeys = new Set<string>();
-    const movingSectionIds = new Set(movingStations.map((st) => st.station_ref.section_id));
-    for (const secId of movingSectionIds) {
-      const section = this.geoIndex.section(secId);
-      if (!section) continue;
-      const { shots: sectionShots } = this.geoIndex.sectionGeometry(secId);
+    const movingLineIds = new Set(movingStations.map((st) => st.station_ref.line_id));
+    for (const secId of movingLineIds) {
+      const line = this.geoIndex.line(secId);
+      if (!line) continue;
+      const { shots: lineShots } = this.geoIndex.lineGeometry(secId);
 
-      for (const shot of sectionShots) {
+      for (const shot of lineShots) {
         // Shot `index` joins station `index` to `index + 1`.
         const fromKey = `${secId}:${shot.index}`;
         const toKey = `${secId}:${shot.index + 1}`;
@@ -3027,10 +3027,10 @@ export default class SurveyLayer {
         const fromCoord = shot.from;
         const toCoord = shot.to;
         excludedShotGlobals.add(shot.globalIdx);
-        affectedSectionIds.add(secId);
+        affectedLineIds.add(secId);
         const color = resolveShotDisplayColor(
           this.cachedSurveyData,
-          section.color ?? stationDefault,
+          line.color ?? stationDefault,
           shot.globalIdx,
           ctx,
         );
@@ -3050,8 +3050,8 @@ export default class SurveyLayer {
     // from the bulk closures layer (they render in the preview, stretched).
     const closureExclusions: maplibregl.FilterSpecification[] = [];
     for (const lc of this.cachedLoopClosures ?? []) {
-      const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
-      const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
+      const keyA = `${lc.station_a.line_id}:${lc.station_a.station_index}`;
+      const keyB = `${lc.station_b.line_id}:${lc.station_b.station_index}`;
       const aMoving = movingRefKeys.has(keyA);
       const bMoving = movingRefKeys.has(keyB);
       if (!aMoving && !bMoving) continue;
@@ -3089,7 +3089,7 @@ export default class SurveyLayer {
     this.installDragPreview(features, {
       stationGlobalIndices: excludedStationGlobals,
       shotGlobalIndices: excludedShotGlobals,
-      affectedSectionIds,
+      affectedLineIds,
     });
     return movingStations.map(s => s.station_ref);
   }
@@ -3270,10 +3270,10 @@ export default class SurveyLayer {
   }
 
   /**
-   * Set ghost section data for merge preview visualization.
-   * Pass null to clear the ghost section.
+   * Set ghost line data for merge preview visualization.
+   * Pass null to clear the ghost line.
    */
-  setGhostSection(data: GhostSectionData | null) {
+  setGhostLine(data: GhostLineData | null) {
     const { shotFeatures, stationFeatures, mergeStationFeatures } = buildGhostFeatures(
       data,
       this.gpsOrigin
@@ -3315,7 +3315,7 @@ export default class SurveyLayer {
    * paint and before any rAF that the drag handler uses to finalize.
    */
   update(
-    sections: Section[],
+    lines: Line[],
     stations: Station[],
     loopClosures?: LoopClosure[],
     gpsOrigin?: GpsOrigin | null,
@@ -3328,7 +3328,7 @@ export default class SurveyLayer {
     // builder is deterministic in its inputs; coalescing equivalent calls
     // is the whole point.
     this.pendingUpdateArgs = {
-      sections,
+      lines,
       stations,
       loopClosures,
       gpsOrigin: gpsOrigin ?? null,
@@ -3344,7 +3344,7 @@ export default class SurveyLayer {
     // callback to land in the same frame - they're restoring filters
     // that hide the dragged preview while the real geometry catches
     // up.  The default async-worker path delays the callback by the
-    // worker round-trip (~100 ms on a 14 k-section project), leaving
+    // worker round-trip (~100 ms on a 14 k-line project), leaving
     // the user looking at the preview hanging on top of stale features.
     // When a one-shot callback is pending, flush synchronously instead.
     if (this.onNextUpdateCallback) {
@@ -3352,7 +3352,7 @@ export default class SurveyLayer {
       const args = this.pendingUpdateArgs;
       this.pendingUpdateArgs = null;
       this.flushUpdateSync(
-        args.sections,
+        args.lines,
         args.stations,
         args.loopClosures,
         args.gpsOrigin,
@@ -3374,7 +3374,7 @@ export default class SurveyLayer {
       // The custom renderer builds synchronously, so the coalesced flush is a
       // direct synchronous flushUpdate (no worker round-trip).
       this.flushUpdate(
-        args.sections,
+        args.lines,
         args.stations,
         args.loopClosures,
         args.gpsOrigin,
@@ -3464,7 +3464,7 @@ export default class SurveyLayer {
    * normal callers go through the coalescing public `update()` above.
    */
   flushUpdateSync(
-    sections: Section[],
+    lines: Line[],
     stations: Station[],
     loopClosures?: LoopClosure[],
     gpsOrigin?: GpsOrigin | null,
@@ -3477,7 +3477,7 @@ export default class SurveyLayer {
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
     this.flushUpdate(
-      sections,
+      lines,
       stations,
       loopClosures,
       gpsOrigin ?? null,
@@ -3489,7 +3489,7 @@ export default class SurveyLayer {
   }
 
   private flushUpdate(
-    sections: Section[],
+    lines: Line[],
     stations: Station[],
     loopClosures: LoopClosure[] | undefined,
     gpsOrigin: GpsOrigin | null,
@@ -3501,7 +3501,7 @@ export default class SurveyLayer {
     if (isStyleRestoring(this.map)) {
       this.deferredUpdate = () =>
         this.flushUpdate(
-          sections, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
+          lines, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
           precision, issueInput,
         );
       return;
@@ -3517,14 +3517,14 @@ export default class SurveyLayer {
     this.committedIssueInput = issueInput;
     this.issueInput = withIssueOverride(issueInput, this.issueOverride);
 
-    // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
+    // Lines this flush removes (delete / undo-of-add), read BEFORE the cache
     // overwrite: their custom geometry vanishes synchronously in syncCustomRender
     // below, so a removed feature's stale interact-overlay highlight is dropped in
     // the same frame rather than lingering (#customRender delete straggler).
-    const removedSectionIds = diffRemovedSectionIds(this.cachedSections, sections);
+    const removedLineIds = diffRemovedLineIds(this.cachedLines, lines);
 
     // Cache input data for the theme rebuild / drag-preview / hit-test paths.
-    this.cachedSections = sections;
+    this.cachedLines = lines;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
     if (precision !== undefined) this.cachedPrecision = precision;
@@ -3534,7 +3534,7 @@ export default class SurveyLayer {
     const surveyData = selectActiveSurveyData(
       useProjectStore.getState(),
       useUIStore.getState().geometryMode
-    ) ?? surveyDataFromLegacy(sections, stations);
+    ) ?? surveyDataFromLegacy(lines, stations);
 
     this.cachedSurveyData = surveyData;
     this.cachedIssueRender = resolveIssueRender(surveyData, this.issueInput, loopClosures);
@@ -3557,14 +3557,14 @@ export default class SurveyLayer {
     // re-tile so the stale highlight drops in the geometry frame.
     if (
       !this.dragPreviewActive &&
-      removedSectionIds.length > 0 &&
+      removedLineIds.length > 0 &&
       (this.selectedShotId || this.hoveredShotId || this.selectedStationId ||
         this.hoveredStationId || this.snappedStationId || this.highlightedStationIds.length > 0)
     ) {
-      const stale = overlayTouchesRemovedSections(
+      const stale = overlayTouchesRemovedLines(
         [this.selectedShotId, this.hoveredShotId, this.selectedStationId,
           this.hoveredStationId, this.snappedStationId, ...this.highlightedStationIds],
-        removedSectionIds,
+        removedLineIds,
       );
       this.lastInteractKey = null;
       this.refreshInteractOverlay();
@@ -3666,9 +3666,9 @@ export default class SurveyLayer {
 
     // Rebuild the survey from cache so the custom renderer + labels + measured-path
     // tint (which embed theme colors) repaint with the new theme.
-    if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
+    if (this.cachedLines.length > 0 || this.cachedStations.length > 0) {
       this.update(
-        this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
+        this.cachedLines, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
         this.showDepthGradient, this.depthRange, this.cachedPrecision, this.committedIssueInput,
       );
     }
@@ -3825,7 +3825,7 @@ export default class SurveyLayer {
       if (this.map.getLayer(this.loopClosuresLayerId)) {
         this.map.removeLayer(this.loopClosuresLayerId);
       }
-      // Remove ghost section layers
+      // Remove ghost line layers
       if (this.map.getLayer(this.ghostShotsLayerId)) {
         this.map.removeLayer(this.ghostShotsLayerId);
       }
@@ -3850,7 +3850,7 @@ export default class SurveyLayer {
       if (this.map.getSource(this.sourceId + '-gas-route')) {
         this.map.removeSource(this.sourceId + '-gas-route');
       }
-      // Remove ghost section sources
+      // Remove ghost line sources
       if (this.map.getSource(this.sourceId + '-ghost-shots')) {
         this.map.removeSource(this.sourceId + '-ghost-shots');
       }

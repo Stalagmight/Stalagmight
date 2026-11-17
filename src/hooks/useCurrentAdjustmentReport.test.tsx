@@ -21,9 +21,9 @@ const skippedOne: AdjustmentReport = {
   skipped_closures: [
     {
       closure_id: 9,
-      station_a: { section_id: 0, station_index: 1 },
-      station_b: { section_id: 0, station_index: 2 },
-      shot_section_id: 0,
+      station_a: { line_id: 0, station_index: 1 },
+      station_b: { line_id: 0, station_index: 2 },
+      shot_line_id: 0,
       shot_index: 1,
     },
   ],
@@ -32,7 +32,7 @@ const skippedOne: AdjustmentReport = {
 };
 const failedOne: AdjustmentReport = {
   skipped_closures: [],
-  failures: [{ anchor: { section_id: 2, station_index: 0 }, section_ids: [2, 3], reason: 'x' }],
+  failures: [{ anchor: { line_id: 2, station_index: 0 }, line_ids: [2, 3], reason: 'x' }],
   far_gps_fixes: [],
 };
 

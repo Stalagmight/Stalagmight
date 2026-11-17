@@ -13,22 +13,22 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 /**
  * Confirm + impact dialog for deleting a contiguous range of shots (#95).
  * Opened by the data table when >1 real shot is selected. Interior ranges offer
- * a choice - split the section in two (keeps both ends in place) or close the
+ * a choice - split the line in two (keeps both ends in place) or close the
  * gap (shift the downstream survey). Prefix/suffix ranges only shift. Splitting
  * drops any zero datum / comment on a dropped interior station (warned below);
  * a gap-close that would drop a datum is blocked instead.
- * (Whole-section selections route to the section-delete confirm instead.)
+ * (Whole-line selections route to the line-delete confirm instead.)
  */
 export default function BulkDeleteDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
 
-  const sectionId = dialogData.sectionId as number | undefined;
+  const lineId = dialogData.lineId as number | undefined;
   const startShotId = dialogData.startShotId as number | undefined;
   const endShotId = dialogData.endShotId as number | undefined;
   const shotCount = dialogData.shotCount as number | undefined;
   const kind = dialogData.kind as 'prefix' | 'suffix' | 'interior' | undefined;
-  const sectionName = dialogData.sectionName as string | undefined;
+  const lineName = dialogData.lineName as string | undefined;
   const startStationIndex = dialogData.startStationIndex as number | undefined;
   const endStationIndex = dialogData.endStationIndex as number | undefined;
 
@@ -59,7 +59,7 @@ export default function BulkDeleteDialog() {
     : isInterior
       ? removedComments.filter((c: StationRef) => c.station_index > endPos)
       : removedComments;
-  const fmt = (s: StationRef) => formatStationId(s.section_id, s.station_index);
+  const fmt = (s: StationRef) => formatStationId(s.line_id, s.station_index);
   // The preview is the only source of the datum/comment/shift-blocked warnings,
   // so keep the destructive actions disabled until it resolves (loaded or
   // errored) - otherwise a fast click could confirm before the warning renders.
@@ -67,17 +67,17 @@ export default function BulkDeleteDialog() {
 
   // Prefill split names for interior ranges (mirrors the single-shot dialog).
   useEffect(() => {
-    if (isInterior && sectionName) {
-      setSplitNameA(`${sectionName}-A`);
-      setSplitNameB(`${sectionName}-B`);
+    if (isInterior && lineName) {
+      setSplitNameA(`${lineName}-A`);
+      setSplitNameB(`${lineName}-B`);
     }
-  }, [isInterior, sectionName]);
+  }, [isInterior, lineName]);
 
   useEffect(() => {
-    if (sectionId !== undefined && startShotId !== undefined && endShotId !== undefined) {
+    if (lineId !== undefined && startShotId !== undefined && endShotId !== undefined) {
       invokeIpc<DeleteShotRangeImpact>(
         'preview_delete_shot_range',
-        { sectionId, startShotId, endShotId },
+        { lineId, startShotId, endShotId },
         { purpose: 'preview shot range deletion' }
       )
         .then((result) => {
@@ -92,20 +92,20 @@ export default function BulkDeleteDialog() {
       setImpact(null);
       setImpactError(null);
     }
-  }, [sectionId, startShotId, endShotId]);
+  }, [lineId, startShotId, endShotId]);
 
   const summary =
     shotCount !== undefined &&
     startStationIndex !== undefined &&
     endStationIndex !== undefined &&
-    sectionId !== undefined
-      ? `Delete ${shotCount} shots (stations ${formatStationId(sectionId, startStationIndex)}-${formatStationId(sectionId, endStationIndex)} in ${sectionName ?? `Section ${sectionId}`}).`
+    lineId !== undefined
+      ? `Delete ${shotCount} shots (stations ${formatStationId(lineId, startStationIndex)}-${formatStationId(lineId, endStationIndex)} in ${lineName ?? `Line ${lineId}`}).`
       : `Delete ${shotCount ?? 0} shots.`;
 
   const finish = (split: boolean) => {
-    // Split keeps the original section as "A" - re-select it; otherwise clear.
-    if (split && sectionId !== undefined) {
-      setSelection({ type: 'section', sectionId });
+    // Split keeps the original line as "A" - re-select it; otherwise clear.
+    if (split && lineId !== undefined) {
+      setSelection({ type: 'line', lineId });
     } else {
       clearSelection();
     }
@@ -114,37 +114,37 @@ export default function BulkDeleteDialog() {
   };
 
   const handleSplit = async () => {
-    if (sectionId === undefined || startShotId === undefined || endShotId === undefined) return;
+    if (lineId === undefined || startShotId === undefined || endShotId === undefined) return;
     setSource('dialog');
     setIsLoading(true);
     setError(null);
     try {
       const result = await deleteShotRangeSplit(
-        sectionId,
+        lineId,
         startShotId,
         endShotId,
-        splitNameA.trim() || 'Section A',
-        splitNameB.trim() || 'Section B'
+        splitNameA.trim() || 'Line A',
+        splitNameB.trim() || 'Line B'
       );
       if (result.success) {
         finish(true);
       } else {
-        setError(result.error ?? 'Failed to split section');
+        setError(result.error ?? 'Failed to split line');
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to split section'));
+      setError(getErrorMessage(e, 'Failed to split line'));
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleShift = async () => {
-    if (sectionId === undefined || startShotId === undefined || endShotId === undefined) return;
+    if (lineId === undefined || startShotId === undefined || endShotId === undefined) return;
     setSource('dialog');
     setIsLoading(true);
     setError(null);
     try {
-      const result = await deleteShotRangeShift(sectionId, startShotId, endShotId);
+      const result = await deleteShotRangeShift(lineId, startShotId, endShotId);
       if (result.success) {
         finish(false);
       } else {
@@ -168,7 +168,7 @@ export default function BulkDeleteDialog() {
         <p className="text-text-secondary">{summary}</p>
         {isInterior && (
           <p className="text-text-secondary text-sm">
-            These shots are in the middle of the section. Split keeps both ends in place; closing
+            These shots are in the middle of the line. Split keeps both ends in place; closing
             the gap shifts the downstream survey. The relationship changes below cover closing the
             gap - the split keeps the stations at each end and their connections.
           </p>
@@ -189,7 +189,7 @@ export default function BulkDeleteDialog() {
           <div className="space-y-3">
             <div>
               <label className="block text-sm text-text-secondary mb-1">
-                Section A name (before the range)
+                Line A name (before the range)
               </label>
               <input
                 type="text"
@@ -201,7 +201,7 @@ export default function BulkDeleteDialog() {
             </div>
             <div>
               <label className="block text-sm text-text-secondary mb-1">
-                Section B name (after the range)
+                Line B name (after the range)
               </label>
               <input
                 type="text"
@@ -253,7 +253,7 @@ export default function BulkDeleteDialog() {
               <p className="mt-1">
                 This range can only be removed by closing the gap, so it can&apos;t be deleted here.
                 Remove the blocking zero datum or loop closure first, delete the shots one at a
-                time, or delete the whole section.
+                time, or delete the whole line.
               </p>
             )}
           </div>
@@ -275,7 +275,7 @@ export default function BulkDeleteDialog() {
               disabled={isLoading || !previewReady}
               data-testid="bulk-delete-split"
             >
-              {isLoading ? 'Working…' : 'Split into Two Sections'}
+              {isLoading ? 'Working…' : 'Split into Two Lines'}
             </Button>
           )}
           <Button

@@ -42,39 +42,39 @@
 //!
 //! "Never re-runs" is enforced by [`ClassifyScope`], not just by call-site
 //! discipline. At import finalize the pass reads the whole graph but may only
-//! write to the sections that import created; without that the second import
+//! write to the lines that import created; without that the second import
 //! into a project re-kinds the first one's shots, undoing by hand-set choices
 //! with no undo entry. Only the post-migration backfill is project-wide.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{SectionId, ShotKind, StationRef};
+use crate::{LineId, ShotKind, StationRef};
 
 use super::union_find::UnionFind;
 use super::Project;
 
-/// Which sections a classification pass is allowed to *write* to.
+/// Which lines a classification pass is allowed to *write* to.
 ///
 /// The distinction matters because the two halves of a pass have different
 /// scopes. Deciding whether a virtual run is bounded is inherently
 /// project-wide - a freshly imported run typically reaches real survey only
-/// *through* a merge into a section that was already there - but applying the
+/// *through* a merge into a line that was already there - but applying the
 /// verdict must not reach outside the file being imported, or a per-file
 /// setting silently re-kinds shots the user hand-set in an earlier session.
 pub enum ClassifyScope<'a> {
     /// Rewrite any virtual shot in the project. Only correct for the one-shot
     /// post-migration backfill, which is deliberately project-wide.
     WholeProject,
-    /// Rewrite only shots in these sections - what an import uses. Everything
+    /// Rewrite only shots in these lines - what an import uses. Everything
     /// else still informs the graph, it just never gets written.
-    Sections(&'a HashSet<SectionId>),
+    Lines(&'a HashSet<LineId>),
 }
 
 impl ClassifyScope<'_> {
-    fn allows(&self, section_id: SectionId) -> bool {
+    fn allows(&self, line_id: LineId) -> bool {
         match self {
             ClassifyScope::WholeProject => true,
-            ClassifyScope::Sections(ids) => ids.contains(&section_id),
+            ClassifyScope::Lines(ids) => ids.contains(&line_id),
         }
     }
 }
@@ -85,17 +85,17 @@ impl Project {
     /// docs. Non-virtual shots are never touched.
     ///
     /// The graph is always read project-wide (boundedness usually depends on a
-    /// merge into a pre-existing section), but only shots the `scope` admits are
+    /// merge into a pre-existing line), but only shots the `scope` admits are
     /// rewritten - see [`ClassifyScope`].
     ///
     /// Returns the number of shots whose kind actually changed, so callers can
     /// skip a redundant save.
     pub fn classify_virtual_shots(&mut self, scope: &ClassifyScope<'_>) -> usize {
-        // Index every station slot: a section with N shots has N+1 stations.
+        // Index every station slot: a line with N shots has N+1 stations.
         let mut station_slot: HashMap<StationRef, usize> = HashMap::new();
-        for section in &self.sections {
-            for i in 0..=section.shots.len() {
-                let station = StationRef::new(section.id, i as u32);
+        for line in &self.lines {
+            for i in 0..=line.shots.len() {
+                let station = StationRef::new(line.id, i as u32);
                 let next = station_slot.len();
                 station_slot.entry(station).or_insert(next);
             }
@@ -127,13 +127,13 @@ impl Project {
         // virtual shots are connected to each other?
         let mut touches_real: HashSet<usize> = HashSet::new();
         let mut components = UnionFind::new(station_slot.len());
-        // (section index, shot index, canonical from-slot) for each virtual shot.
+        // (line index, shot index, canonical from-slot) for each virtual shot.
         let mut virtual_shots: Vec<(usize, usize, usize)> = Vec::new();
 
-        for (sec_idx, section) in self.sections.iter().enumerate() {
-            for (shot_idx, shot) in section.shots.iter().enumerate() {
-                let from = StationRef::new(section.id, shot_idx as u32);
-                let to = StationRef::new(section.id, (shot_idx + 1) as u32);
+        for (sec_idx, line) in self.lines.iter().enumerate() {
+            for (shot_idx, shot) in line.shots.iter().enumerate() {
+                let from = StationRef::new(line.id, shot_idx as u32);
+                let to = StationRef::new(line.id, (shot_idx + 1) as u32);
                 let (Some(&from_slot), Some(&to_slot)) =
                     (station_slot.get(&from), station_slot.get(&to))
                 else {
@@ -190,12 +190,12 @@ impl Project {
 
         let mut changed = 0;
         for (sec_idx, shot_idx, kind) in verdicts {
-            let Some(section) = self.sections.get_mut(sec_idx) else {
+            let Some(line) = self.lines.get_mut(sec_idx) else {
                 continue;
             };
-            let section_id = section.id;
-            if let Some(shot) = section.shots.get_mut(shot_idx) {
-                if scope.allows(section_id) && shot.kind != kind {
+            let line_id = line.id;
+            if let Some(shot) = line.shots.get_mut(shot_idx) {
+                if scope.allows(line_id) && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;
                 }
@@ -216,13 +216,13 @@ impl Project {
     pub fn set_all_virtual_shots(&mut self, kind: ShotKind, scope: &ClassifyScope<'_>) -> usize {
         debug_assert!(kind.is_virtual(), "only the virtual kinds make sense here");
         let mut changed = 0;
-        for section in &mut self.sections {
-            // Section-level predicate since `ClassifyScope` lost its per-shot
+        for line in &mut self.lines {
+            // Line-level predicate since `ClassifyScope` lost its per-shot
             // variant, so it belongs outside the shot loop.
-            if !scope.allows(section.id) {
+            if !scope.allows(line.id) {
                 continue;
             }
-            for shot in &mut section.shots {
+            for shot in &mut line.shots {
                 if shot.kind.is_virtual() && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;
@@ -244,7 +244,7 @@ mod tests {
 
     use super::ClassifyScope;
     use crate::{
-        ClosureStrategy, LoopClosure, Project, SectionData, ShotData, ShotKind, StationMerge,
+        ClosureStrategy, LoopClosure, Project, LineData, ShotData, ShotKind, StationMerge,
         StationRef,
     };
 
@@ -274,7 +274,7 @@ mod tests {
 
     fn project_with(shots: Vec<ShotData>) -> Project {
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots,
             ..Default::default()
         });
@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn kinds(project: &Project) -> Vec<ShotKind> {
-        project.sections[0].shots.iter().map(|s| s.kind).collect()
+        project.lines[0].shots.iter().map(|s| s.kind).collect()
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn one_sided_run_stays_reference() {
-        // R V V <end of section> -> only one real boundary.
+        // R V V <end of line> -> only one real boundary.
         let mut project = project_with(vec![
             shot(ShotKind::Normal),
             shot(ShotKind::Reference),
@@ -358,29 +358,29 @@ mod tests {
 
     #[test]
     fn bounded_only_through_a_merge_becomes_jump() {
-        // Section 0: R V   (virtual tail dangles off real survey)
-        // Section 1: R     (separate real survey)
-        // Merge section 0's far station to section 1's near station: the
+        // Line 0: R V   (virtual tail dangles off real survey)
+        // Line 1: R     (separate real survey)
+        // Merge line 0's far station to line 1's near station: the
         // virtual shot now reaches real survey on both sides, THROUGH a merge.
         // This is the "even if connected through merge/closure" half of the rule.
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Normal), shot(ShotKind::Reference)],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Normal)],
             ..Default::default()
         });
-        let sec0 = project.sections[0].id;
-        let sec1 = project.sections[1].id;
+        let sec0 = project.lines[0].id;
+        let sec1 = project.lines[1].id;
 
         // Without the merge it is one-sided.
         assert_eq!(
             project.classify_virtual_shots(&ClassifyScope::WholeProject),
             0
         );
-        assert_eq!(project.sections[0].shots[1].kind, ShotKind::Reference);
+        assert_eq!(project.lines[0].shots[1].kind, ShotKind::Reference);
 
         merge(
             &mut project,
@@ -392,7 +392,7 @@ mod tests {
             project.classify_virtual_shots(&ClassifyScope::WholeProject),
             1
         );
-        assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
+        assert_eq!(project.lines[0].shots[1].kind, ShotKind::Jump);
     }
 
     #[test]
@@ -400,16 +400,16 @@ mod tests {
         // All closures count, not just aligned ones (commit 88ccbaff): a closed
         // loop is a real physical connection whatever strategy reconciled it.
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Normal), shot(ShotKind::Reference)],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Normal)],
             ..Default::default()
         });
-        let sec0 = project.sections[0].id;
-        let sec1 = project.sections[1].id;
+        let sec0 = project.lines[0].id;
+        let sec1 = project.lines[1].id;
 
         project.loop_closures.push(LoopClosure {
             id: 1,
@@ -430,7 +430,7 @@ mod tests {
             project.classify_virtual_shots(&ClassifyScope::WholeProject),
             1
         );
-        assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
+        assert_eq!(project.lines[0].shots[1].kind, ShotKind::Jump);
     }
 
     #[test]
@@ -439,12 +439,12 @@ mod tests {
         // boundaries, comfortably >= 2, so the whole region is a jump.
         let mut project = new_project();
         for _ in 0..3 {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 shots: vec![shot(ShotKind::Normal), shot(ShotKind::Reference)],
                 ..Default::default()
             });
         }
-        let ids: Vec<_> = project.sections.iter().map(|s| s.id).collect();
+        let ids: Vec<_> = project.lines.iter().map(|s| s.id).collect();
 
         // Merge all three virtual tips together into one hub.
         for pair in ids.windows(2) {
@@ -459,8 +459,8 @@ mod tests {
             project.classify_virtual_shots(&ClassifyScope::WholeProject),
             3
         );
-        for section in &project.sections {
-            assert_eq!(section.shots[1].kind, ShotKind::Jump);
+        for line in &project.lines {
+            assert_eq!(line.shots[1].kind, ShotKind::Jump);
         }
     }
 
@@ -469,7 +469,7 @@ mod tests {
         // A virtual chain whose two ends merge back to the SAME real station
         // has one distinct boundary, not two, so it is not a jump.
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![
                 shot(ShotKind::Normal),
                 shot(ShotKind::Reference),
@@ -477,7 +477,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let sec = project.sections[0].id;
+        let sec = project.lines[0].id;
 
         // Close the virtual tail back onto the real survey's own station 1.
         merge(
@@ -523,7 +523,7 @@ mod tests {
             project.classify_virtual_shots(&ClassifyScope::WholeProject),
             0
         );
-        assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
+        assert_eq!(project.lines[0].shots[1].kind, ShotKind::Jump);
     }
 
     #[test]
@@ -551,24 +551,24 @@ mod tests {
     }
 
     #[test]
-    fn scoped_pass_reads_the_whole_graph_but_only_writes_its_own_sections() {
+    fn scoped_pass_reads_the_whole_graph_but_only_writes_its_own_lines() {
         // The regression this pins: importing a second file must not re-kind the
-        // first one's shots. Section 0 is "already in the project" with a
-        // hand-set Reference; section 1 is the import, and its virtual shot is
-        // only bounded *through* a merge into section 0 - so the read has to stay
+        // first one's shots. Line 0 is "already in the project" with a
+        // hand-set Reference; line 1 is the import, and its virtual shot is
+        // only bounded *through* a merge into line 0 - so the read has to stay
         // project-wide even though the write must not.
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Normal), shot(ShotKind::Reference)],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Reference), shot(ShotKind::Normal)],
             ..Default::default()
         });
-        let sec0 = project.sections[0].id;
-        let sec1 = project.sections[1].id;
-        // Section 0's virtual tip meets section 1's virtual head, so the two
+        let sec0 = project.lines[0].id;
+        let sec1 = project.lines[1].id;
+        // Line 0's virtual tip meets line 1's virtual head, so the two
         // virtual shots form one run bounded by real survey at both ends.
         merge(
             &mut project,
@@ -578,42 +578,42 @@ mod tests {
 
         let imported: HashSet<_> = [sec1].into_iter().collect();
         assert_eq!(
-            project.classify_virtual_shots(&ClassifyScope::Sections(&imported)),
+            project.classify_virtual_shots(&ClassifyScope::Lines(&imported)),
             1,
-            "only the imported section's shot may be rewritten"
+            "only the imported line's shot may be rewritten"
         );
         assert_eq!(
-            project.sections[0].shots[1].kind,
+            project.lines[0].shots[1].kind,
             ShotKind::Reference,
             "the pre-existing hand-set kind must survive a later import"
         );
         assert_eq!(
-            project.sections[1].shots[0].kind,
+            project.lines[1].shots[0].kind,
             ShotKind::Jump,
-            "boundedness still resolves through the pre-existing section"
+            "boundedness still resolves through the pre-existing line"
         );
     }
 
     #[test]
     fn the_all_x_override_is_scoped_too() {
         let mut project = new_project();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Reference)],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot(ShotKind::Reference)],
             ..Default::default()
         });
-        let sec1 = project.sections[1].id;
+        let sec1 = project.lines[1].id;
 
         let imported: HashSet<_> = [sec1].into_iter().collect();
         assert_eq!(
-            project.set_all_virtual_shots(ShotKind::Jump, &ClassifyScope::Sections(&imported)),
+            project.set_all_virtual_shots(ShotKind::Jump, &ClassifyScope::Lines(&imported)),
             1
         );
-        assert_eq!(project.sections[0].shots[0].kind, ShotKind::Reference);
-        assert_eq!(project.sections[1].shots[0].kind, ShotKind::Jump);
+        assert_eq!(project.lines[0].shots[0].kind, ShotKind::Reference);
+        assert_eq!(project.lines[1].shots[0].kind, ShotKind::Jump);
     }
 
     #[test]

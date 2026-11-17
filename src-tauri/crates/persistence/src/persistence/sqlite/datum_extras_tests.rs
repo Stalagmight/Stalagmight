@@ -7,22 +7,22 @@ use tempfile::TempDir;
 
 use super::station_names_tests::{dump, table_exists, READ_BY_STALAGMIGHT_LIB};
 use super::*;
-use crate::models::{DatumRole, SectionId, ShotData, StationRef, MAX_GPS_ACCURACY_M};
+use crate::models::{DatumRole, LineId, ShotData, StationRef, MAX_GPS_ACCURACY_M};
 
-/// Three sections: A (3 shots) merged at its end to B (2 shots), and C (1
+/// Three lines: A (3 shots) merged at its end to B (2 shots), and C (1
 /// shot) on its own. Datums, in list order: A0 places A+B (accuracy 2 m), B2
 /// is a fix (hard pin), C0 places C, A2 is a fix (default accuracy). The fix
 /// B2 sits BETWEEN the two placements, so order is observable.
 struct Fixture {
     project: Project,
-    a: SectionId,
-    b: SectionId,
-    c: SectionId,
+    a: LineId,
+    b: LineId,
+    c: LineId,
 }
 
 fn fixture() -> Fixture {
     let mut project = Project::new("Datums".to_string(), None);
-    let shots = |n: usize| SectionData {
+    let shots = |n: usize| LineData {
         shots: (0..n)
             .map(|i| ShotData {
                 length: 4.0 + i as f64,
@@ -33,17 +33,17 @@ fn fixture() -> Fixture {
             .collect(),
         ..Default::default()
     };
-    let a = project.add_section(shots(3)).id;
-    let b = project.add_section(shots(2)).id;
-    let c = project.add_section(shots(1)).id;
+    let a = project.add_line(shots(3)).id;
+    let b = project.add_line(shots(2)).id;
+    let c = project.add_line(shots(1)).id;
     project.ensure_shot_uuids();
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 3).into(),
         station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
-    let datum = |section, index, lat: f64, accuracy_m| ZeroDatum {
-        station_ref: StationRef::new(section, index).into(),
+    let datum = |line, index, lat: f64, accuracy_m| ZeroDatum {
+        station_ref: StationRef::new(line, index).into(),
         gps: GpsCoordinates::new(lat, -87.5, 1.5).unwrap(),
         accuracy_m,
         entrance: None,
@@ -173,11 +173,11 @@ fn zero_datums_never_holds_two_datums_of_one_component() {
         db.save_project(&ordered).unwrap();
 
         let rows = zero_datum_rows(&db);
-        let components: Vec<SectionId> = rows
+        let components: Vec<LineId> = rows
             .iter()
             .map(|r| {
                 *ordered
-                    .get_merged_section_ids(r.section_id)
+                    .get_merged_line_ids(r.line_id)
                     .iter()
                     .min()
                     .unwrap()
@@ -309,7 +309,7 @@ fn corrupt_rows_are_skipped_and_the_load_succeeds() {
     {
         let db = Database::open_existing(&path).unwrap();
         // Named, so a column added later needs no edit here.
-        const COLUMNS: &str = "(position, section_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)";
+        const COLUMNS: &str = "(position, line_id, station_index, shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m)";
         db.conn
             .execute_batch(&format!(
                 "
@@ -513,9 +513,9 @@ fn a_fix_whose_station_moved_is_skipped() {
 
 /// A: 2 shots, B: 2 shots, merged end to end (A2 = B2). A0 places both, and
 /// B0, the START of B, holds a fix: a station no shot ends at.
-fn start_fix_fixture() -> (Project, SectionId, SectionId) {
+fn start_fix_fixture() -> (Project, LineId, LineId) {
     let mut project = Project::new("Start fix".to_string(), None);
-    let shots = || SectionData {
+    let shots = || LineData {
         shots: (0..2)
             .map(|_| ShotData {
                 length: 5.0,
@@ -526,8 +526,8 @@ fn start_fix_fixture() -> (Project, SectionId, SectionId) {
             .collect(),
         ..Default::default()
     };
-    let a = project.add_section(shots()).id;
-    let b = project.add_section(shots()).id;
+    let a = project.add_line(shots()).id;
+    let b = project.add_line(shots()).id;
     project.ensure_shot_uuids();
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 2).into(),
@@ -547,9 +547,9 @@ fn start_fix_fixture() -> (Project, SectionId, SectionId) {
     (project, a, b)
 }
 
-/// A fix on a section's first station is anchored by the shot that starts
-/// there. When the file's first shot of that section is now another shot (a
-/// writer reversed the section in place, or put a shot before its start), the
+/// A fix on a line's first station is anchored by the shot that starts
+/// there. When the file's first shot of that line is now another shot (a
+/// writer reversed the line in place, or put a shot before its start), the
 /// row names a different physical station and is skipped.
 #[test]
 fn a_fix_on_station_zero_whose_first_shot_changed_is_skipped() {

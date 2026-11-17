@@ -13,8 +13,8 @@ use super::AppState;
 use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
     gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    Project, SectionData, SectionId, ShotData, ShotKind, SpeleoLink, StationMerge, StationRef,
-    SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    Project, LineData, LineId, ShotData, ShotKind, SpeleoLink, StationMerge, StationRef,
+    SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -33,8 +33,8 @@ fn shot(uuid: &str, azimuth: f64, length: f64, depth: f64) -> ShotData {
     }
 }
 
-fn section(name: &str, shots: Vec<ShotData>) -> SectionData {
-    SectionData {
+fn line(name: &str, shots: Vec<ShotData>) -> LineData {
+    LineData {
         name: Some(name.to_string()),
         surveyor: Some("user1".to_string()),
         date: None,
@@ -74,7 +74,7 @@ fn save_to(dir: &Path, file: &str, project: &Project) -> PathBuf {
 }
 
 /// Source A: a datum, an intra-project merge, a legacy id-0 closure, a project
-/// default north reference AND a section that declares its own, a station
+/// default north reference AND a line that declares its own, a station
 /// offset, comments, an entrance elevation and a location.
 fn source_alpha() -> Project {
     let mut p = Project::new("Alpha".to_string(), Some("Yucatan".to_string()));
@@ -84,7 +84,7 @@ fn source_alpha() -> Project {
         CorrectionSource::FileDeclared,
     ));
     let a0 = p
-        .add_section(section(
+        .add_line(line(
             "A0",
             vec![
                 shot("a0-0", 10.0, 5.0, 3.0),
@@ -94,15 +94,15 @@ fn source_alpha() -> Project {
         ))
         .id;
     let a1 = p
-        .add_section(section(
+        .add_line(line(
             "A1",
             vec![shot("a1-0", 200.0, 7.0, 4.5), shot("a1-1", 230.0, 3.0, 5.0)],
         ))
         .id;
     let a2 = p
-        .add_section(section("A2", vec![shot("a2-0", 300.0, 2.0, 6.0)]))
+        .add_line(line("A2", vec![shot("a2-0", 300.0, 2.0, 6.0)]))
         .id;
-    if let Some(s) = p.get_section_mut(a2) {
+    if let Some(s) = p.get_line_mut(a2) {
         s.azimuth_reference = Some(AzimuthReference::magnetic(10.0, CorrectionSource::Manual));
     }
     p.record_station_merge(StationMerge {
@@ -110,8 +110,8 @@ fn source_alpha() -> Project {
         station_b: StationRef::new(a1, 0).into(),
         merged_at: fixed_time(1),
     });
-    p.section_offsets.insert(a1, (5.0, -2.0));
-    p.section_offsets.insert(a2, (-30.0, 12.0));
+    p.line_offsets.insert(a1, (5.0, -2.0));
+    p.line_offsets.insert(a2, (-30.0, 12.0));
     p.station_offsets
         .insert(StationRef::new(a0, 1).into(), (0.5, -0.5, 1.0));
     p.station_comments
@@ -136,25 +136,25 @@ fn source_alpha() -> Project {
 /// merge parity digest above stays pinned to the pre-extraction loop's input.
 fn source_alpha_named() -> Project {
     let mut p = source_alpha();
-    let a0 = p.sections[0].id;
+    let a0 = p.lines[0].id;
     p.station_names
         .insert(StationRef::new(a0, 1).into(), "Gate".to_string());
     p
 }
 
-/// Source B: a second datum, a cross-section closure, a DISAGREEING entrance
+/// Source B: a second datum, a cross-line closure, a DISAGREEING entrance
 /// elevation (the first source's must win, with a warning) and a new location.
 fn source_bravo() -> Project {
     let mut p = Project::new("Bravo".to_string(), Some("Quintana Roo".to_string()));
     p.surface_elevation = Some(15.0);
     let b0 = p
-        .add_section(section(
+        .add_line(line(
             "B0",
             vec![shot("b0-0", 120.0, 8.0, 2.0), shot("b0-1", 150.0, 9.0, 2.5)],
         ))
         .id;
     let b1 = p
-        .add_section(section(
+        .add_line(line(
             "B1",
             vec![shot("b1-0", 60.0, 4.0, 3.0), shot("b1-1", 20.0, 5.5, 3.25)],
         ))
@@ -181,13 +181,13 @@ fn source_bravo() -> Project {
 }
 
 /// Source C: no datum (an unanchored island), a location the merge already
-/// holds (so it is NOT appended twice), and a displaced section.
+/// holds (so it is NOT appended twice), and a displaced line.
 fn source_charlie() -> Project {
     let mut p = Project::new("Charlie".to_string(), Some("Yucatan".to_string()));
     let c0 = p
-        .add_section(section("C0", vec![shot("c0-0", 270.0, 11.0, 7.0)]))
+        .add_line(line("C0", vec![shot("c0-0", 270.0, 11.0, 7.0)]))
         .id;
-    p.section_offsets.insert(c0, (100.0, 50.0));
+    p.line_offsets.insert(c0, (100.0, 50.0));
     p
 }
 
@@ -272,7 +272,7 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// the previous value `9_039_697_118_154_861_914`, so placement is the only
 /// change - the #680 source read (private copy, normalized like an open) moves
 /// nothing for these sources. Re-pinned for per-shot survey credit: each
-/// section's `surveyor` left the section and rides on every shot as `credit`
+/// line's `surveyor` left the line and rides on every shot as `credit`
 /// (the same person, `user1`, on each of the source's shots); nothing else in
 /// the canonical form moved.
 const MERGE_PARITY_DIGEST: u64 = 7_905_845_170_930_071_176;
@@ -304,7 +304,7 @@ fn merge_output_is_unchanged_by_the_append_extraction() {
         .unwrap()
         .load_project()
         .unwrap();
-    assert_eq!(merged.sections.len(), 6, "every source section is merged");
+    assert_eq!(merged.lines.len(), 6, "every source line is merged");
     let canonical = canonical_merge_output(&merged, &result);
     assert_eq!(
         fnv1a64(canonical.as_bytes()),
@@ -341,7 +341,7 @@ const TARGET_FRAME: (f64, f64) = (20.55, -87.35);
 fn open_target(dir: &Path, georeferenced: bool) -> (AppState, PathBuf) {
     let mut target = Project::new("Target".to_string(), Some("Mexico".to_string()));
     let t0 = target
-        .add_section(section(
+        .add_line(line(
             "T0",
             vec![shot("t0-0", 0.0, 10.0, 1.0), shot("t0-1", 90.0, 8.0, 1.5)],
         ))
@@ -358,7 +358,7 @@ fn open_target(dir: &Path, georeferenced: bool) -> (AppState, PathBuf) {
     let path = save_to(dir, "target.stalx", &target);
     let state = AppState::new().unwrap();
     assert!(state.open_project(path.clone()).success, "open the target");
-    let created = state.execute(Command::CreateSection {
+    let created = state.execute(Command::CreateLine {
         name: Some("T1".to_string()),
         surveyor: None,
         date: None,
@@ -407,7 +407,7 @@ fn receipt_warnings(result: &CommandResult) -> Vec<String> {
 /// `AddedContent::remove_from` fails the exactness assertion below on
 /// `location` ("Mexico, Yucatan" vs "Mexico"); dropping the `station_merges`
 /// retain fails it on the dangling merge; dropping the `station_names` retain
-/// fails it on the name left on a removed section.
+/// fails it on the name left on a removed line.
 #[test]
 fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
     let temp = TempDir::new().unwrap();
@@ -418,7 +418,7 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
 
     let result = add(&state, &alpha);
     assert!(result.success, "add failed: {:?}", result.error);
-    assert_eq!(result.section_ids.len(), 3, "exactly the added sections");
+    assert_eq!(result.line_ids.len(), 3, "exactly the added lines");
     assert_eq!(undo_depth(&state), depth + 1, "the add is ONE undo step");
     assert_ne!(canonical_snapshot(&state, false), before);
 
@@ -428,13 +428,13 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
         let Some(UndoData::AddedProjectContent(content)) = stack.peek_undo_data() else {
             panic!("the add must record AddedProjectContent");
         };
-        let mut recorded: Vec<SectionId> = content.sections.iter().map(|s| s.id).collect();
+        let mut recorded: Vec<LineId> = content.lines.iter().map(|s| s.id).collect();
         recorded.sort_unstable();
-        let mut created = result.section_ids;
+        let mut created = result.line_ids;
         created.sort_unstable();
         assert_eq!(
             recorded, created,
-            "only the add's own sections are recorded"
+            "only the add's own lines are recorded"
         );
         assert_eq!(content.zero_datums.len(), 1);
         assert_eq!(content.station_merges.len(), 1);
@@ -462,7 +462,7 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
 }
 
 /// INJECTION (tried): letting the redo fall through to the catch-all, which
-/// re-runs the add, mints fresh section and closure ids and fails below;
+/// re-runs the add, mints fresh line and closure ids and fails below;
 /// dropping the `station_names` reinstall in `install_into` fails it on the
 /// missing name.
 #[test]
@@ -484,7 +484,7 @@ fn redo_of_an_add_reproduces_the_same_ids() {
 
     assert!(state.undo().success);
     assert!(state.redo().success);
-    // Not id-agnostic: section ids, shot ids, uuids and closure ids all match.
+    // Not id-agnostic: line ids, shot ids, uuids and closure ids all match.
     assert_same_project(
         &state,
         &after,
@@ -492,8 +492,8 @@ fn redo_of_an_add_reproduces_the_same_ids() {
         "redo must reinstall the same content",
     );
     let project = state.get_project_state().unwrap();
-    for id in &result.section_ids {
-        assert!(project.get_section(*id).is_some(), "section {id} is back");
+    for id in &result.line_ids {
+        assert!(project.get_line(*id).is_some(), "line {id} is back");
     }
     let redone: Vec<u64> = project.loop_closures.iter().map(|c| c.id).collect();
     assert_eq!(redone, closure_ids);
@@ -560,7 +560,7 @@ fn read_only_gate_refuses_an_add_before_reading_the_file() {
 fn source_with_ignores(dir: &Path) -> PathBuf {
     let mut p = Project::new("Ignored".to_string(), None);
     let s = p
-        .add_section(section(
+        .add_line(line(
             "I0",
             vec![
                 shot("i0-0", 10.0, 4.0, 1.0),
@@ -573,7 +573,7 @@ fn source_with_ignores(dir: &Path) -> PathBuf {
     let db = Database::open_existing(&path).unwrap();
     for (seq, uuid) in [(1, Some("i0-1")), (2, None)] {
         db.save_resolved_warning(&ResolvedWarning {
-            section_id: s,
+            line_id: s,
             shot_id: s * FEATURE_ID_STRIDE + seq,
             warning_code: "LONG_SHOT".to_string(),
             resolved_at: fixed_time(3),
@@ -585,12 +585,12 @@ fn source_with_ignores(dir: &Path) -> PathBuf {
     path
 }
 
-fn long_shot_verdicts(state: &AppState, section_ids: &[SectionId]) -> Vec<bool> {
+fn long_shot_verdicts(state: &AppState, line_ids: &[LineId]) -> Vec<bool> {
     let project = state.get_project_state().unwrap();
     state
         .compute_project_warnings(&project, None)
         .into_iter()
-        .filter(|w| w.code == "LONG_SHOT" && section_ids.contains(&w.section_id))
+        .filter(|w| w.code == "LONG_SHOT" && line_ids.contains(&w.line_id))
         .map(|w| w.is_resolved)
         .collect()
 }
@@ -606,7 +606,7 @@ fn ignored_warnings_survive_the_add_a_save_and_a_reload() {
 
     let result = add(&state, &source);
     assert!(result.success, "{:?}", result.error);
-    let ids = result.section_ids;
+    let ids = result.line_ids;
     assert_eq!(
         long_shot_verdicts(&state, &ids),
         vec![true, true],
@@ -644,9 +644,9 @@ fn a_carried_ignore_follows_its_shot_when_the_add_renames_it() {
     assert!(second.success, "{:?}", second.error);
     let project = state.get_project_state().unwrap();
     let copy = project
-        .sections
+        .lines
         .iter()
-        .find(|s| second.section_ids.contains(&s.id))
+        .find(|s| second.line_ids.contains(&s.id))
         .unwrap();
     assert!(
         copy.shots.iter().all(|s| s.uuid.as_deref() != Some("i0-1")),
@@ -654,12 +654,12 @@ fn a_carried_ignore_follows_its_shot_when_the_add_renames_it() {
     );
 
     assert_eq!(
-        long_shot_verdicts(&state, &second.section_ids),
+        long_shot_verdicts(&state, &second.line_ids),
         vec![true, true],
         "the renamed copy's ignores are honored before any save"
     );
     assert_eq!(
-        long_shot_verdicts(&state, &first.section_ids),
+        long_shot_verdicts(&state, &first.line_ids),
         vec![true, true],
         "the first copy keeps its own"
     );
@@ -667,12 +667,12 @@ fn a_carried_ignore_follows_its_shot_when_the_add_renames_it() {
     save(&state);
     reopen(&state, &path);
     assert_eq!(
-        long_shot_verdicts(&state, &second.section_ids),
+        long_shot_verdicts(&state, &second.line_ids),
         vec![true, true],
         "and after a save and a reload"
     );
     assert_eq!(
-        long_shot_verdicts(&state, &first.section_ids),
+        long_shot_verdicts(&state, &first.line_ids),
         vec![true, true]
     );
 }
@@ -711,7 +711,7 @@ fn linked_source_copies_data_but_never_the_link() {
         "a linked source is not refused: {:?}",
         result.error
     );
-    assert_eq!(result.section_ids.len(), 1, "its survey data was copied");
+    assert_eq!(result.line_ids.len(), 1, "its survey data was copied");
     assert!(
         receipt_warnings(&result).iter().any(|w| w
             == "'charlie.stalx' is linked to SpeleoDB project 'Upstream Survey'; its data \
@@ -755,10 +755,10 @@ fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
     reopen(&state, &path);
     let second = add(&state, &alpha);
     assert!(second.success, "a duplicate is still added");
-    assert_eq!(second.section_ids.len(), 3);
+    assert_eq!(second.line_ids.len(), 3);
     assert!(
         receipt_warnings(&second).iter().any(|w| w
-            == "'alpha.stalx' was already added to this project; its sections were added again"),
+            == "'alpha.stalx' was already added to this project; its lines were added again"),
         "{:?}",
         receipt_warnings(&second)
     );
@@ -777,8 +777,8 @@ fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
     // still tell the copies apart.
     let project = state.get_project_state().unwrap();
     let mut seen = std::collections::HashSet::new();
-    for section in &project.sections {
-        for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+    for line in &project.lines {
+        for uuid in line.shots.iter().filter_map(|s| s.uuid.as_deref()) {
             assert!(seen.insert(uuid), "shot UUID {uuid} is held twice");
         }
     }
@@ -816,16 +816,16 @@ fn an_add_is_refused_with_nothing_changed() {
     }
 }
 
-/// The section-id budget (#555) is checked before a single section is copied.
-/// INJECTION (not tried): without the check, `Section::new`'s unchecked
-/// `id * FEATURE_ID_STRIDE` panics in debug on the second copied section.
+/// The line-id budget (#555) is checked before a single line is copied.
+/// INJECTION (not tried): without the check, `Line::new`'s unchecked
+/// `id * FEATURE_ID_STRIDE` panics in debug on the second copied line.
 #[test]
-fn an_add_past_the_section_id_budget_is_refused() {
+fn an_add_past_the_line_id_budget_is_refused() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
     if let Some(project) = state.project.lock().unwrap().as_mut() {
-        project.next_section_id = MAX_SECTION_ID;
+        project.next_line_id = MAX_LINE_ID;
     }
     let before = canonical_snapshot(&state, false);
 
@@ -838,10 +838,10 @@ fn an_add_past_the_section_id_budget_is_refused() {
     assert_same_project(&state, &before, false, "nothing was appended");
 }
 
-/// The orphan-placement signal is `CommandResult::section_ids` holding exactly
-/// the added sections; the dialog's own queries then find the unanchored ones.
+/// The orphan-placement signal is `CommandResult::line_ids` holding exactly
+/// the added lines; the dialog's own queries then find the unanchored ones.
 #[test]
-fn added_sections_are_reported_for_orphan_placement() {
+fn added_lines_are_reported_for_orphan_placement() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
     let charlie = save_to(temp.path(), "charlie.stalx", &source_charlie());
@@ -850,12 +850,12 @@ fn added_sections_are_reported_for_orphan_placement() {
     let island = add(&state, &charlie);
     assert!(island.success);
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.count_unanchored_sections(&island.section_ids), 1);
+    assert_eq!(project.count_unanchored_lines(&island.line_ids), 1);
 
     let anchored = add(&state, &alpha);
     let project = state.get_project_state().unwrap();
     // A0 + A1 hang off Alpha's datum; A2 is a free island inside Alpha.
-    assert_eq!(project.count_unanchored_sections(&anchored.section_ids), 1);
+    assert_eq!(project.count_unanchored_lines(&anchored.line_ids), 1);
 }
 
 /// The leg both sides of the overlap test below share: distinct bearings and
@@ -873,14 +873,14 @@ fn overlap_leg(prefix: &str) -> Vec<ShotData> {
 /// #674 end to end: a datum-less `.stalx` that re-surveys a passage of the
 /// open, anchored project is added through the real command, and the
 /// suggester - asked exactly as the frontend asks, with the add's returned ids
-/// and the live config - offers a placement of the added section onto the
+/// and the live config - offers a placement of the added line onto the
 /// host. Before the fix it returned nothing: its targets came from the add
-/// alone, and a datum-less add has no anchored section to offer.
+/// alone, and a datum-less add has no anchored line to offer.
 #[test]
 fn a_datum_less_add_overlapping_the_host_gets_a_placement_suggestion() {
     let temp = TempDir::new().unwrap();
     let mut host = Project::new("Host".to_string(), None);
-    let h0 = host.add_section(section("H0", overlap_leg("h0"))).id;
+    let h0 = host.add_line(line("H0", overlap_leg("h0"))).id;
     host.store_zero_datum_without_repositioning(
         StationRef::new(h0, 0),
         GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
@@ -891,25 +891,25 @@ fn a_datum_less_add_overlapping_the_host_gets_a_placement_suggestion() {
     let state = AppState::new().unwrap();
     assert!(state.open_project(host_path).success, "open the host");
     let mut source = Project::new("Resurvey".to_string(), None);
-    source.add_section(section("R0", overlap_leg("r0")));
+    source.add_line(line("R0", overlap_leg("r0")));
     let source_path = save_to(temp.path(), "resurvey.stalx", &source);
 
     let result = add(&state, &source_path);
     assert!(result.success, "add failed: {:?}", result.error);
-    assert_eq!(result.section_ids.len(), 1);
-    let added = result.section_ids[0];
+    assert_eq!(result.line_ids.len(), 1);
+    let added = result.line_ids[0];
     let project = state.get_project_state().unwrap();
-    let host_id = project.sections[0].id;
+    let host_id = project.lines[0].id;
     let suggestions = project.suggest_orphan_placements(
-        &result.section_ids,
+        &result.line_ids,
         &state.get_config().placement_suggestion,
     );
 
     assert!(
         suggestions
             .iter()
-            .any(|s| s.orphan_section_id == added && s.target_section_id == host_id),
-        "the added section must be offered a placement onto the host: {suggestions:?}"
+            .any(|s| s.orphan_line_id == added && s.target_line_id == host_id),
+        "the added line must be offered a placement onto the host: {suggestions:?}"
     );
 }
 
@@ -925,7 +925,7 @@ fn a_georeferenced_source_is_placed_by_its_datum() {
     let result = add(&state, &alpha);
     assert!(result.success);
     let project = state.get_project_state().unwrap();
-    let datum_station = StationRef::new(result.section_ids[0], 0);
+    let datum_station = StationRef::new(result.line_ids[0], 0);
     let at = project.compute_station_raw_coords(datum_station).unwrap();
     let expected = gps_to_local(
         &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
@@ -937,18 +937,18 @@ fn a_georeferenced_source_is_placed_by_its_datum() {
         at.x,
         at.y
     );
-    for section in &before.sections {
+    for line in &before.lines {
         assert_eq!(
-            project.section_offsets.get(&section.id),
-            before.section_offsets.get(&section.id),
-            "pre-existing section {} must not move",
-            section.id
+            project.line_offsets.get(&line.id),
+            before.line_offsets.get(&line.id),
+            "pre-existing line {} must not move",
+            line.id
         );
     }
 }
 
 /// Into a project with NO frame, the source's datum becomes the frame (its
-/// station on the origin) and the open project's free sections stay put.
+/// station on the origin) and the open project's free lines stay put.
 #[test]
 fn a_source_datum_frames_an_unreferenced_project_without_moving_it() {
     let temp = TempDir::new().unwrap();
@@ -960,7 +960,7 @@ fn a_source_datum_frames_an_unreferenced_project_without_moving_it() {
     assert!(result.success);
     let project = state.get_project_state().unwrap();
     let at = project
-        .compute_station_raw_coords(StationRef::new(result.section_ids[0], 0))
+        .compute_station_raw_coords(StationRef::new(result.line_ids[0], 0))
         .unwrap();
     assert!(
         at.x.abs() < 1e-6 && at.y.abs() < 1e-6,
@@ -968,10 +968,10 @@ fn a_source_datum_frames_an_unreferenced_project_without_moving_it() {
         at.x,
         at.y
     );
-    for section in &before.sections {
+    for line in &before.lines {
         assert_eq!(
-            project.section_offsets.get(&section.id),
-            before.section_offsets.get(&section.id)
+            project.line_offsets.get(&line.id),
+            before.line_offsets.get(&line.id)
         );
     }
 }
@@ -1013,14 +1013,14 @@ fn swap_in_during(window: AddWindow, bravo: PathBuf) -> String {
 /// project that is open now untouched and push no undo entry - an add landing
 /// in the successor, or a record measured on it, would be paired with the
 /// first project's baseline, and its undo would delete the successor's own
-/// sections.
+/// lines.
 /// INJECTION (tried): binding the forward step to the generation its first
 /// lock reads instead of the stub's (the code before this test) appends Alpha
 /// into Bravo in the `BeforeFirstLock` case - the push check then reports a
 /// failure, but Bravo is already changed; dropping the re-check under the
 /// second lock does the same in the `DuringRead` case; dropping the generation
 /// check in `push_add_undo` reports success in the `BeforePush` case, with an
-/// entry on Bravo's stack that records Bravo's own sections as added.
+/// entry on Bravo's stack that records Bravo's own lines as added.
 #[test]
 fn an_add_is_refused_when_another_project_is_opened_mid_command() {
     for window in [
@@ -1156,7 +1156,7 @@ fn a_source_with_non_finite_or_invalid_placement_is_refused() {
 /// The add's undo entry is persisted with the file, so redo reads it back like
 /// any other input: a record no add could have produced is refused with the
 /// project unchanged, and the id allocators saturate rather than overflow.
-/// INJECTION (tried): dropping the duplicate-id check, or the `MAX_SECTION_ID`
+/// INJECTION (tried): dropping the duplicate-id check, or the `MAX_LINE_ID`
 /// check, makes that install succeed and fails the refusal assertion;
 /// reverting to `max + 1` on the closure id panics on overflow in this debug
 /// build.
@@ -1164,22 +1164,22 @@ fn a_source_with_non_finite_or_invalid_placement_is_refused() {
 fn redo_refuses_a_record_no_add_could_have_produced() {
     let mut project = source_bravo();
     let unchanged = serde_json::to_value(&project).unwrap();
-    let mut one = project.sections[0].clone();
+    let mut one = project.lines[0].clone();
     one.id = 100;
 
     let mut duplicate = AddedContent::default();
-    duplicate.sections = vec![one.clone(), one.clone()];
+    duplicate.lines = vec![one.clone(), one.clone()];
     let mut past_id_space = AddedContent::default();
     let mut far = one.clone();
-    far.id = MAX_SECTION_ID + 1;
-    past_id_space.sections = vec![far];
+    far.id = MAX_LINE_ID + 1;
+    past_id_space.lines = vec![far];
 
     for (what, content, expected) in [
-        ("a duplicated section", &duplicate, "names a section twice"),
+        ("a duplicated line", &duplicate, "names a line twice"),
         (
-            "a section past the id space",
+            "a line past the id space",
             &past_id_space,
-            "past the largest section id",
+            "past the largest line id",
         ),
     ] {
         let refused = content.install_into(&mut project);
@@ -1197,17 +1197,17 @@ fn redo_refuses_a_record_no_add_could_have_produced() {
     // At the edges of both id spaces: installed, allocators pinned at the top.
     let mut edge = AddedContent::default();
     let mut last = one;
-    last.id = MAX_SECTION_ID;
-    edge.sections = vec![last];
+    last.id = MAX_LINE_ID;
+    edge.lines = vec![last];
     let mut top = closure(
-        StationRef::new(MAX_SECTION_ID, 0),
-        StationRef::new(MAX_SECTION_ID, 1),
+        StationRef::new(MAX_LINE_ID, 0),
+        StationRef::new(MAX_LINE_ID, 1),
         ClosureStrategy::Batch,
     );
     top.id = u64::MAX;
     edge.loop_closures = vec![top];
     edge.install_into(&mut project).unwrap();
-    assert_eq!(project.next_section_id, MAX_SECTION_ID + 1);
+    assert_eq!(project.next_line_id, MAX_LINE_ID + 1);
     assert_eq!(project.next_closure_id, u64::MAX);
 }
 
@@ -1221,7 +1221,7 @@ fn redo_refuses_a_record_no_add_could_have_produced() {
 /// `reanchor_station_refs` pass that run before the integrity check meet
 /// pre-existing state: on a settled project both are no-ops, and this pins it.
 /// INJECTION (tried): skipping `roll_back` on the append-error branch fails the
-/// file case's exactness assertion (the copied sections stay); skipping it on
+/// file case's exactness assertion (the copied lines stay); skipping it on
 /// the integrity branch fails the in-memory case's.
 #[test]
 fn a_source_refused_after_the_append_is_rolled_back_exactly() {
@@ -1236,10 +1236,10 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     let depth = undo_depth(&state);
 
     // A datum the copy cannot store: its accuracy is out of range. (A second
-    // datum in one section used to be the trigger; since #741 it is a GPS fix
+    // datum in one line used to be the trigger; since #741 it is a GPS fix
     // and copies fine.) In memory, because the accuracy is what makes it bad.
     let mut bad_datum = source_bravo();
-    let b0 = bad_datum.sections[0].id;
+    let b0 = bad_datum.lines[0].id;
     bad_datum.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
@@ -1260,7 +1260,7 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     assert_eq!(undo_depth(&state), depth, "the refused add pushed nothing");
 
     let mut infinite = Project::new("Infinite".to_string(), None);
-    infinite.add_section(section("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]));
+    infinite.add_line(line("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]));
     let blocked = {
         let mut guard = state.project.lock().unwrap();
         super::project_add::append_in_memory(guard.as_mut().unwrap(), infinite)
@@ -1274,32 +1274,32 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     assert_same_project(&state, &before, false, "the integrity block rolled back");
 }
 
-/// The section-id budget's boundary: an add that uses the id space up to its
-/// last id exactly is accepted, one more section is refused.
+/// The line-id budget's boundary: an add that uses the id space up to its
+/// last id exactly is accepted, one more line is refused.
 /// INJECTION (tried): `>=` for `>` in the budget check refuses the exact fit;
-/// `> MAX_SECTIONS_IN_ID_SPACE + 1` accepts the one-over case (a section id
-/// past `MAX_SECTION_ID`), and both fail the success assertion.
+/// `> MAX_LINES_IN_ID_SPACE + 1` accepts the one-over case (a line id
+/// past `MAX_LINE_ID`), and both fail the success assertion.
 #[test]
-fn the_section_id_budget_admits_an_exact_fit_and_refuses_one_more() {
+fn the_line_id_budget_admits_an_exact_fit_and_refuses_one_more() {
     let temp = TempDir::new().unwrap();
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
-    let incoming = source_alpha().sections.len() as u32;
+    let incoming = source_alpha().lines.len() as u32;
 
     for (spent, fits) in [
-        (MAX_SECTIONS_IN_ID_SPACE as u32 - incoming, true),
-        (MAX_SECTIONS_IN_ID_SPACE as u32 - incoming + 1, false),
+        (MAX_LINES_IN_ID_SPACE as u32 - incoming, true),
+        (MAX_LINES_IN_ID_SPACE as u32 - incoming + 1, false),
     ] {
         let dir = TempDir::new().unwrap();
         let (state, _) = open_target(dir.path(), true);
         if let Some(project) = state.project.lock().unwrap().as_mut() {
-            project.next_section_id = spent;
+            project.next_line_id = spent;
         }
         let before = canonical_snapshot(&state, false);
 
         let result = add(&state, &alpha);
         assert_eq!(result.success, fits, "spent {spent}: {:?}", result.error);
         if fits {
-            assert_eq!(result.section_ids.iter().max(), Some(&MAX_SECTION_ID));
+            assert_eq!(result.line_ids.iter().max(), Some(&MAX_LINE_ID));
         } else {
             assert!(result
                 .error
@@ -1326,12 +1326,12 @@ fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
     let mut legacy = Project::new("Legacy".to_string(), None);
-    let mut data = section(
+    let mut data = line(
         "L0",
         vec![shot("l0-0", 10.0, 5.0, 2.0), shot("l0-1", 40.0, 3.0, 2.5)],
     );
     data.shots[1].kind = ShotKind::Jump;
-    legacy.add_section(data);
+    legacy.add_line(data);
     let unflagged = save_to(temp.path(), "unflagged.stalx", &legacy);
     let flagged = save_to(temp.path(), "flagged.stalx", &legacy);
     rusqlite::Connection::open(&flagged)
@@ -1346,7 +1346,7 @@ fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
         let result = add(&state, path);
         assert!(result.success, "{:?}", result.error);
         let project = state.get_project_state().unwrap();
-        project.get_section(result.section_ids[0]).unwrap().shots[1].kind
+        project.get_line(result.line_ids[0]).unwrap().shots[1].kind
     };
     assert_eq!(
         kind_after_add(&unflagged),
@@ -1369,13 +1369,13 @@ fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
 /// A refused add leaves no trace at all: the removal the undo runs keeps the
 /// id allocators advanced on purpose (a redo may need those ids again), but a
 /// refused add has no redo, so it must give back the ids it spent - or an add
-/// that fits the section-id budget exactly is refused after a failed one - and
+/// that fits the line-id budget exactly is refused after a failed one - and
 /// the modification time it bumped. Through the append's error (a real file)
 /// and the post-append integrity guard (in memory, with a closure so the
 /// closure-id allocator moves too).
 /// INJECTION (tried): dropping each restore from `roll_back` in turn fails an
-/// allocator assertion - `next_section_id` on the append-error path (two
-/// section ids spent, which would also refuse the exact fit), `next_closure_id`
+/// allocator assertion - `next_line_id` on the append-error path (two
+/// line ids spent, which would also refuse the exact fit), `next_closure_id`
 /// on the integrity path (one closure id spent), `modified_at` on the
 /// append-error path (bumped by the removal).
 #[test]
@@ -1383,25 +1383,25 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
-    let incoming = source_alpha().sections.len() as u32;
+    let incoming = source_alpha().lines.len() as u32;
     let allocators = || {
         let guard = state.project.lock().unwrap();
         let project = guard.as_ref().unwrap();
         (
-            project.next_section_id,
+            project.next_line_id,
             project.next_closure_id,
             project.modified_at,
         )
     };
     if let Some(project) = state.project.lock().unwrap().as_mut() {
-        project.next_section_id = MAX_SECTIONS_IN_ID_SPACE as u32 - incoming;
+        project.next_line_id = MAX_LINES_IN_ID_SPACE as u32 - incoming;
         project.modified_at = fixed_time(0);
     }
     let before = allocators();
 
     // A datum the copy cannot store (accuracy out of range, #741).
     let mut bad_datum = source_bravo();
-    let b0 = bad_datum.sections[0].id;
+    let b0 = bad_datum.lines[0].id;
     bad_datum.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(b0, 2).into(),
         gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
@@ -1417,7 +1417,7 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
 
     let mut infinite = Project::new("Infinite".to_string(), None);
     let x0 = infinite
-        .add_section(section("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]))
+        .add_line(line("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]))
         .id;
     infinite.loop_closures.push(closure(
         StationRef::new(x0, 0),
@@ -1433,23 +1433,23 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
 
     let fits = add(&state, &alpha);
     assert!(fits.success, "the exact fit still fits: {:?}", fits.error);
-    assert_eq!(fits.section_ids.iter().max(), Some(&MAX_SECTION_ID));
+    assert_eq!(fits.line_ids.iter().max(), Some(&MAX_LINE_ID));
 }
 
-/// A datum-less source whose section was reversed and then extended: its
+/// A datum-less source whose line was reversed and then extended: its
 /// least-squares gauge is pinned by the reverse parity and the gauge anchor
-/// pair, none of which `SectionData` carries. Both the add and "Merge
+/// pair, none of which `LineData` carries. Both the add and "Merge
 /// projects" (the same append) must copy them, or the copied component is
 /// gauged on a different station and its adjusted geometry translates.
 /// INJECTION (tried): dropping the parity/anchor copy from `append_project`
 /// fails the add's assertion with parity false and both anchors `None`, and,
 /// with the add's assertion skipped, the merge's the same way.
 #[test]
-fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
+fn add_and_merge_keep_each_lines_gauge_parity_and_anchors() {
     let temp = TempDir::new().unwrap();
     let mut reversed = Project::new("Reversed".to_string(), None);
     let r0 = reversed
-        .add_section(section(
+        .add_line(line(
             "R0",
             vec![
                 shot("r0-0", 10.0, 5.0, 2.0),
@@ -1458,14 +1458,14 @@ fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
             ],
         ))
         .id;
-    if let Some(s) = reversed.get_section_mut(r0) {
+    if let Some(s) = reversed.get_line_mut(r0) {
         s.reverse_parity = true;
         s.gauge_shot_uuid = Some("r0-1".to_string());
         s.gauge_neighbour_uuid = Some("r0-0".to_string());
     }
     let source = save_to(temp.path(), "reversed.stalx", &reversed);
-    let gauge_of = |project: &Project, id: SectionId| {
-        let s = project.get_section(id).unwrap();
+    let gauge_of = |project: &Project, id: LineId| {
+        let s = project.get_line(id).unwrap();
         (
             s.reverse_parity,
             s.gauge_shot_uuid.clone(),
@@ -1478,7 +1478,7 @@ fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
     let added = add(&state, &source);
     assert!(added.success, "{:?}", added.error);
     let project = state.get_project_state().unwrap();
-    assert_eq!(gauge_of(&project, added.section_ids[0]), expected, "add");
+    assert_eq!(gauge_of(&project, added.line_ids[0]), expected, "add");
 
     let output = temp.path().join("merged.stalx");
     let merged = AppState::new().unwrap().execute(Command::MergeProjects {
@@ -1495,7 +1495,7 @@ fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
         .unwrap()
         .load_project()
         .unwrap();
-    assert_eq!(gauge_of(&merged, merged.sections[0].id), expected, "merge");
+    assert_eq!(gauge_of(&merged, merged.lines[0].id), expected, "merge");
 }
 
 // ===========================================================================
@@ -1518,11 +1518,11 @@ fn merge_files(dir: &Path, sources: Vec<PathBuf>) -> Project {
         .unwrap()
 }
 
-/// A one-section project with a datum on its first station.
+/// A one-line project with a datum on its first station.
 fn georeferenced(name: &str, prefix: &str, latitude: f64) -> Project {
     let mut p = Project::new(name.to_string(), None);
     let id = p
-        .add_section(section(
+        .add_line(line(
             name,
             vec![
                 shot(&format!("{prefix}-0"), 30.0, 12.0, 3.0),
@@ -1539,16 +1539,16 @@ fn georeferenced(name: &str, prefix: &str, latitude: f64) -> Project {
     p
 }
 
-fn section_named(project: &Project, name: &str) -> SectionId {
+fn line_named(project: &Project, name: &str) -> LineId {
     project
-        .sections
+        .lines
         .iter()
         .find(|s| s.name.as_deref() == Some(name))
         .unwrap()
         .id
 }
 
-fn station_xy(project: &Project, id: SectionId, station: u32) -> (f64, f64) {
+fn station_xy(project: &Project, id: LineId, station: u32) -> (f64, f64) {
     let at = project
         .compute_station_raw_coords(StationRef::new(id, station))
         .unwrap();
@@ -1567,12 +1567,12 @@ fn station_xy(project: &Project, id: SectionId, station: u32) -> (f64, f64) {
 fn merge_finishes_a_sources_pending_classification_and_leaves_the_file_alone() {
     let temp = TempDir::new().unwrap();
     let mut legacy = Project::new("Legacy".to_string(), None);
-    let mut data = section(
+    let mut data = line(
         "L0",
         vec![shot("l0-0", 10.0, 5.0, 2.0), shot("l0-1", 40.0, 3.0, 2.5)],
     );
     data.shots[1].kind = ShotKind::Jump;
-    legacy.add_section(data);
+    legacy.add_line(data);
     let unflagged = save_to(temp.path(), "unflagged.stalx", &legacy);
     let flagged = save_to(temp.path(), "flagged.stalx", &legacy);
     rusqlite::Connection::open(&flagged)
@@ -1586,12 +1586,12 @@ fn merge_finishes_a_sources_pending_classification_and_leaves_the_file_alone() {
 
     let merged = merge_files(temp.path(), vec![unflagged, flagged.clone()]);
     assert_eq!(
-        merged.sections[0].shots[1].kind,
+        merged.lines[0].shots[1].kind,
         ShotKind::Jump,
         "without the flag the stored kind is kept"
     );
     assert_eq!(
-        merged.sections[1].shots[1].kind,
+        merged.lines[1].shots[1].kind,
         ShotKind::Reference,
         "with the flag the merge classifies the source like an open"
     );
@@ -1618,8 +1618,8 @@ fn merging_two_georeferenced_projects_places_the_second_by_its_gps() {
     let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
 
     let merged = merge_files(temp.path(), vec![p1, p2]);
-    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
-    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    let first = station_xy(&merged, line_named(&merged, "P1"), 0);
+    let second = station_xy(&merged, line_named(&merged, "P2"), 0);
     assert!(
         first.0.abs() < 1e-6 && first.1.abs() < 1e-6,
         "the first datum station is the origin: {first:?}"
@@ -1649,8 +1649,8 @@ fn merge_and_add_place_a_georeferenced_source_identically() {
 
     let merged = merge_files(temp.path(), vec![p1.clone(), p2.clone()]);
     let relative = |project: &Project| {
-        let a = station_xy(project, section_named(project, "P1"), 0);
-        let b = station_xy(project, section_named(project, "P2"), 1);
+        let a = station_xy(project, line_named(project, "P1"), 0);
+        let b = station_xy(project, line_named(project, "P2"), 1);
         (b.0 - a.0, b.1 - a.1)
     };
     let by_merge = relative(&merged);
@@ -1672,8 +1672,8 @@ fn merge_and_add_place_a_georeferenced_source_identically() {
         &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
     );
     for project in [&merged, &added] {
-        let a = station_xy(project, section_named(project, "P1"), 0);
-        let b = station_xy(project, section_named(project, "P2"), 0);
+        let a = station_xy(project, line_named(project, "P1"), 0);
+        let b = station_xy(project, line_named(project, "P2"), 0);
         assert!(
             (b.0 - a.0 - expected.0).abs() < 1e-6 && (b.1 - a.1 - expected.1).abs() < 1e-6,
             "datum stations {a:?} -> {b:?}, expected {expected:?} apart"
@@ -1692,15 +1692,15 @@ fn a_datum_less_first_source_stays_put_and_the_next_datum_frames_the_merge() {
     let p2 = save_to(temp.path(), "p2.stalx", &georeferenced("P2", "p2", 20.5009));
 
     let merged = merge_files(temp.path(), vec![charlie, p1, p2]);
-    let c0 = section_named(&merged, "C0");
+    let c0 = line_named(&merged, "C0");
     assert_eq!(
-        merged.section_offsets.get(&c0),
+        merged.line_offsets.get(&c0),
         Some(&(100.0, 50.0)),
         "the datum-less source keeps its own layout"
     );
-    let first = station_xy(&merged, section_named(&merged, "P1"), 0);
+    let first = station_xy(&merged, line_named(&merged, "P1"), 0);
     assert!(first.0.abs() < 1e-6 && first.1.abs() < 1e-6, "{first:?}");
-    let second = station_xy(&merged, section_named(&merged, "P2"), 0);
+    let second = station_xy(&merged, line_named(&merged, "P2"), 0);
     assert!(
         (second.1 - first.1) > 99.0,
         "P2 is placed north of P1, not stacked on it: {second:?}"
@@ -1785,7 +1785,7 @@ fn a_sources_committed_wal_pages_are_read_by_add_and_merge() {
     );
     let first_length = |project: &Project| {
         project
-            .get_section(section_named(project, "W"))
+            .get_line(line_named(project, "W"))
             .unwrap()
             .shots[0]
             .length
@@ -1863,7 +1863,7 @@ fn a_sources_hot_journal_is_rolled_back_by_add_and_merge() {
     );
     let first_length = |project: &Project| {
         project
-            .get_section(section_named(project, "J"))
+            .get_line(line_named(project, "J"))
             .unwrap()
             .shots[0]
             .length
@@ -1940,7 +1940,7 @@ fn archiving_a_source_moves_its_wal_with_it() {
         .unwrap();
     assert_eq!(
         restored
-            .get_section(section_named(&restored, "W"))
+            .get_line(line_named(&restored, "W"))
             .unwrap()
             .shots[0]
             .length,
@@ -2006,13 +2006,13 @@ fn a_long_merge_source_path_keeps_its_file_name() {
 // Record parity (`counter_parity_shots`) rides with each copied shot
 // ===========================================================================
 
-/// Every shot's record parity in section `id`, in shot order.
-fn record_parities(project: &Project, id: SectionId) -> Vec<bool> {
-    let section = project.get_section(id).unwrap();
-    section
+/// Every shot's record parity in line `id`, in shot order.
+fn record_parities(project: &Project, id: LineId) -> Vec<bool> {
+    let line = project.get_line(id).unwrap();
+    line
         .shots
         .iter()
-        .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+        .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
         .collect()
 }
 
@@ -2024,7 +2024,7 @@ fn add_carries_each_shots_record_parity_from_its_source() {
     let temp = TempDir::new().unwrap();
     let mut target = Project::new("Target".to_string(), None);
     let t0 = target
-        .add_section(section(
+        .add_line(line(
             "T0",
             vec![shot("t0-0", 0.0, 10.0, 1.0), shot("t0-1", 90.0, 8.0, 1.5)],
         ))
@@ -2033,7 +2033,7 @@ fn add_carries_each_shots_record_parity_from_its_source() {
     let target_path = save_to(temp.path(), "target.stalx", &target);
 
     let mut source = Project::new("Source".to_string(), None);
-    source.add_section(section(
+    source.add_line(line(
         "S",
         vec![
             shot("t0-0", 0.0, 10.0, 1.0),
@@ -2049,7 +2049,7 @@ fn add_carries_each_shots_record_parity_from_its_source() {
     assert!(state.open_project(target_path.clone()).success);
     let added = add(&state, &source_path);
     assert!(added.success, "{:?}", added.error);
-    let copy = added.section_ids[0];
+    let copy = added.line_ids[0];
 
     let check = |project: &Project, what: &str| {
         assert_eq!(record_parities(project, t0), vec![true, false], "{what}");
@@ -2073,13 +2073,13 @@ fn add_carries_each_shots_record_parity_from_its_source() {
 /// loop onto K, combined keeping K: T anchors the component, the station O
 /// held is now in K, so it is held in `held_gauges`.
 fn held_gauge_source() -> Project {
-    use crate::models::{ClosureStrategy, CombinePick, CombineSectionsOptions};
+    use crate::models::{ClosureStrategy, CombinePick, CombineLinesOptions};
     let mut p = Project::new("Held".to_string(), None);
     let o = p
-        .add_section(section("O", vec![shot("o-0", 90.0, 10.0, 1.0)]))
+        .add_line(line("O", vec![shot("o-0", 90.0, 10.0, 1.0)]))
         .id;
     let t = p
-        .add_section(section(
+        .add_line(line(
             "T",
             vec![
                 shot("t-0", 0.0, 10.0, 1.0),
@@ -2089,7 +2089,7 @@ fn held_gauge_source() -> Project {
         ))
         .id;
     let k = p
-        .add_section(section(
+        .add_line(line(
             "K",
             vec![shot("k-0", 90.0, 10.0, 1.0), shot("k-1", 90.0, 10.0, 1.0)],
         ))
@@ -2103,7 +2103,7 @@ fn held_gauge_source() -> Project {
         ((StationRef::new(k, 2), StationRef::new(t, 0)), t),
     ] {
         let (to, now) = (raw(&p, a), raw(&p, b));
-        p.adjust_section_offset(moved, to.0 - now.0, to.1 - now.1);
+        p.adjust_line_offset(moved, to.0 - now.0, to.1 - now.1);
         p.merge_stations(a, b).unwrap();
     }
     let (a, b) = (
@@ -2123,10 +2123,10 @@ fn held_gauge_source() -> Project {
         is_aligned: false,
     });
     p.next_closure_id = 2;
-    p.combine_sections(
+    p.combine_lines(
         k,
         o,
-        &CombineSectionsOptions {
+        &CombineLinesOptions {
             name: "K".to_string(),
             color: "#123456".to_string(),
             swap_lr: false,
@@ -2144,14 +2144,14 @@ fn held_gauge_source() -> Project {
     p
 }
 
-/// Every station's closure-adjusted xy, section by section in id order.
-fn adjusted_by_section(project: &Project, sections: &[SectionId]) -> Vec<Vec<(f64, f64)>> {
+/// Every station's closure-adjusted xy, line by line in id order.
+fn adjusted_by_line(project: &Project, lines: &[LineId]) -> Vec<Vec<(f64, f64)>> {
     let adjusted = project
         .compute_adjusted_station_coordinates(&crate::config::ClosureAdjustmentConfig::default());
-    sections
+    lines
         .iter()
         .map(|id| {
-            let n = project.get_section(*id).unwrap().shots.len() as u32;
+            let n = project.get_line(*id).unwrap().shots.len() as u32;
             (0..=n)
                 .map(|i| {
                     let s = adjusted
@@ -2173,8 +2173,8 @@ fn adjusted_by_section(project: &Project, sections: &[SectionId]) -> Vec<Vec<(f6
 fn add_carries_a_held_component_gauge_through_renamed_uuids() {
     let temp = TempDir::new().unwrap();
     let source = held_gauge_source();
-    let source_ids: Vec<SectionId> = source.sections.iter().map(|s| s.id).collect();
-    let expected = adjusted_by_section(&source, &source_ids);
+    let source_ids: Vec<LineId> = source.lines.iter().map(|s| s.id).collect();
+    let expected = adjusted_by_line(&source, &source_ids);
     let source_path = save_to(temp.path(), "source.stalx", &source);
     let target_path = save_to(temp.path(), "target.stalx", &source);
 
@@ -2185,9 +2185,9 @@ fn add_carries_a_held_component_gauge_through_renamed_uuids() {
 
     let project = state.get_project_state().unwrap();
     let copy_shots: std::collections::HashSet<&str> = added
-        .section_ids
+        .line_ids
         .iter()
-        .flat_map(|id| project.get_section(*id).unwrap().shots.iter())
+        .flat_map(|id| project.get_line(*id).unwrap().shots.iter())
         .filter_map(|s| s.uuid.as_deref())
         .collect();
     assert!(
@@ -2197,7 +2197,7 @@ fn add_carries_a_held_component_gauge_through_renamed_uuids() {
             .any(|held| copy_shots.contains(held.shot.as_str())),
         "the copy's held gauge names its renamed shot"
     );
-    let got = adjusted_by_section(&project, &added.section_ids);
+    let got = adjusted_by_line(&project, &added.line_ids);
     for (want, got) in expected.iter().flatten().zip(got.iter().flatten()) {
         assert!(
             (want.0 - got.0).hypot(want.1 - got.1) < 1e-6,

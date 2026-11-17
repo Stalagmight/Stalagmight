@@ -170,7 +170,7 @@ pub(crate) fn update_data_table_view_impl(
         .map_err(|e| e.to_string())
 }
 
-/// Update the new-section dialog's grid view state (column order, visibility and
+/// Update the new-line dialog's grid view state (column order, visibility and
 /// widths) in configuration (efficient partial update).
 ///
 /// Deliberately its own command rather than three more parameters on
@@ -180,16 +180,16 @@ pub(crate) fn update_data_table_view_impl(
 /// doors separate also keeps one view's flush from rewriting the other's fields
 /// with whatever the caller happened to have in hand.
 #[tauri::command]
-pub fn update_new_section_view(
+pub fn update_new_line_view(
     state: State<AppState>,
     column_order: Option<Vec<String>>,
     hidden_columns: Option<Vec<String>>,
     column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
-    update_new_section_view_impl(state.inner(), column_order, hidden_columns, column_widths)
+    update_new_line_view_impl(state.inner(), column_order, hidden_columns, column_widths)
 }
 
-pub(crate) fn update_new_section_view_impl(
+pub(crate) fn update_new_line_view_impl(
     state: &AppState,
     column_order: Option<Vec<String>>,
     hidden_columns: Option<Vec<String>>,
@@ -201,16 +201,16 @@ pub(crate) fn update_new_section_view_impl(
     state
         .modify_config(|config| {
             if let Some(order) = column_order {
-                config.panels.new_section_column_order = order;
+                config.panels.new_line_column_order = order;
             }
             if let Some(hidden) = hidden_columns {
-                config.panels.new_section_hidden_columns = hidden;
+                config.panels.new_line_hidden_columns = hidden;
             }
             // Clamp on the way in as well as on load - see the same call in
             // `update_data_table_view_impl`.
             if let Some(mut widths) = column_widths {
                 normalize_column_widths(&mut widths);
-                config.panels.new_section_column_widths = widths;
+                config.panels.new_line_column_widths = widths;
             }
             Ok(())
         })
@@ -218,7 +218,7 @@ pub(crate) fn update_new_section_view_impl(
         .map_err(|e| e.to_string())
 }
 
-/// Update the edit-section dialog's shot-grid view state (column order,
+/// Update the edit-line dialog's shot-grid view state (column order,
 /// Update the IMPORT-time shot grids' view (the MNemo wizard and zero-datum
 /// config) in configuration.
 ///
@@ -258,23 +258,23 @@ pub(crate) fn update_import_shots_view_impl(
         .map_err(|e| e.to_string())
 }
 
-/// Update the edit-section dialog's shot-grid view (column order, visibility and
+/// Update the edit-line dialog's shot-grid view (column order, visibility and
 /// widths) in configuration (efficient partial update).
 ///
-/// Its own command for the same reason `update_new_section_view` is: three
+/// Its own command for the same reason `update_new_line_view` is: three
 /// separate grids, three disjoint `panels` field sets, and a partial write to
 /// one must never carry another's keys.
 #[tauri::command]
-pub fn update_edit_section_view(
+pub fn update_edit_line_view(
     state: State<AppState>,
     column_order: Option<Vec<String>>,
     hidden_columns: Option<Vec<String>>,
     column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
-    update_edit_section_view_impl(state.inner(), column_order, hidden_columns, column_widths)
+    update_edit_line_view_impl(state.inner(), column_order, hidden_columns, column_widths)
 }
 
-pub(crate) fn update_edit_section_view_impl(
+pub(crate) fn update_edit_line_view_impl(
     state: &AppState,
     column_order: Option<Vec<String>>,
     hidden_columns: Option<Vec<String>>,
@@ -283,14 +283,14 @@ pub(crate) fn update_edit_section_view_impl(
     state
         .modify_config(|config| {
             if let Some(order) = column_order {
-                config.panels.edit_section_column_order = order;
+                config.panels.edit_line_column_order = order;
             }
             if let Some(hidden) = hidden_columns {
-                config.panels.edit_section_hidden_columns = hidden;
+                config.panels.edit_line_hidden_columns = hidden;
             }
             if let Some(mut widths) = column_widths {
                 normalize_column_widths(&mut widths);
-                config.panels.edit_section_column_widths = widths;
+                config.panels.edit_line_column_widths = widths;
             }
             Ok(())
         })

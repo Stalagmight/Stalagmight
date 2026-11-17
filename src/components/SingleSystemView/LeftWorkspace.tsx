@@ -5,15 +5,15 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/speleoReadOnlyReason';
 import { SpeleoWorkspace } from './SpeleoWorkspace';
 import { SpeleoNetworkBusyIndicator } from './SpeleoNetworkBusyIndicator';
-import { SectionsTabIcon, SpeleoTabIcon, useSpeleoTabState } from './workspaceTabIcons';
+import { LinesTabIcon, SpeleoTabIcon, useSpeleoTabState } from './workspaceTabIcons';
 import type { ReactNode } from 'react';
 
-export function LeftWorkspace({ sections }: { sections: ReactNode }) {
+export function LeftWorkspace({ lines }: { lines: ReactNode }) {
   const { t } = useTranslation();
   const tab = useUIStore((s) => s.leftWorkspace);
   const mode = useUIStore((s) => s.appMode);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
-  const tabs = mode === 'survey' ? ['sections', 'speleodb'] as const : ['speleodb'] as const;
+  const tabs = mode === 'survey' ? ['lines', 'speleodb'] as const : ['speleodb'] as const;
   const choose = useUIStore((s) => s.selectLeftWorkspace);
   const speleoState = useSpeleoTabState();
   const link = useSpeleoStore((s) => s.link);
@@ -54,13 +54,13 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
             className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${look}`}>
             {id === 'speleodb'
               ? <SpeleoNetworkBusyIndicator><SpeleoTabIcon state={speleoState} /></SpeleoNetworkBusyIndicator>
-              : <SectionsTabIcon />}
+              : <LinesTabIcon />}
             <span>{t(id === 'speleodb' ? 'speleodb.workspaceTab.speleodb' : 'speleodb.workspaceTab.sections')}</span>
           </button>;
         })}
       </div>
       {speleoNote && <span id="workspace-tab-speleodb-note" className="sr-only" data-testid="workspace-tab-speleodb-note">{speleoNote}</span>}
-      <div role="tabpanel" id="workspace-panel-sections" aria-labelledby="workspace-tab-sections" hidden={mode !== 'survey' || tab !== 'sections'} className="flex-1 min-h-0">{sections}</div>
+      <div role="tabpanel" id="workspace-panel-lines" aria-labelledby="workspace-tab-lines" hidden={mode !== 'survey' || tab !== 'lines'} className="flex-1 min-h-0">{lines}</div>
       <div role="tabpanel" id="workspace-panel-speleodb" aria-labelledby="workspace-tab-speleodb" hidden={tab !== 'speleodb'} className="flex-1 min-h-0"><SpeleoWorkspace /></div>
     </div>
   );

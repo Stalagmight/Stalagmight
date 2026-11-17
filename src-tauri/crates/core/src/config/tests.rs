@@ -761,7 +761,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -829,7 +829,7 @@ log_hit_detection = true
 
     let config: Config = toml::from_str(toml_str).expect("Complete config should parse");
 
-    // Verify map section values
+    // Verify map line values
     assert_eq!(config.map.station.radius, 6.0);
     assert_eq!(config.map.station.hit_area, 12.0);
     assert_eq!(config.map.shot.width, 3.0);
@@ -847,7 +847,7 @@ log_hit_detection = true
 
 #[test]
 fn test_config_parsing_partial_uses_defaults() {
-    // Config with only required sections, missing optional nested configs
+    // Config with only required lines, missing optional nested configs
     let toml_str = r##"
 [general]
 auto_save = true
@@ -873,7 +873,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -921,7 +921,7 @@ save = "Ctrl+S"
 
     let config: Config = toml::from_str(toml_str).expect("Partial config should parse");
 
-    // Missing sections should use defaults
+    // Missing lines should use defaults
     assert_eq!(config.map.station.radius, 4.0); // default
     assert_eq!(config.map.station.hit_area, 10.0); // default
     assert_eq!(config.map.shot.width, 2.0); // default
@@ -935,7 +935,7 @@ save = "Ctrl+S"
     // it must still parse, with the tools hidden.
     assert!(!config.map.controls.show_navigation_tools); // default
 
-    // Debug section defaults
+    // Debug line defaults
     assert!(!config.debug.map.show_hitboxes);
     assert!(!config.debug.map.log_hit_detection);
 }
@@ -968,7 +968,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -1091,7 +1091,7 @@ fn test_config_serialization_preserves_custom_values() {
 }
 
 #[test]
-fn test_config_serialization_includes_map_section() {
+fn test_config_serialization_includes_map_line() {
     let config = Config::default();
     let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
 
@@ -1137,7 +1137,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -1241,7 +1241,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -1634,7 +1634,7 @@ fn test_shortcut_new_actions_defaults() {
     // Verify new actions have defaults
     assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
     assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
-    assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
+    assert_eq!(config.toggle_line_labels, vec!["Ctrl+L".to_string()]);
     assert_eq!(
         config.zoom_in,
         vec!["Equal".to_string(), "Plus".to_string()]
@@ -2044,7 +2044,7 @@ fn test_non_default_webkit_memory_survives_save_load_roundtrip() {
 }
 
 #[test]
-fn test_default_webkit_memory_emits_no_section() {
+fn test_default_webkit_memory_emits_no_line() {
     // A DEFAULT webkit_memory must NOT emit a `[webkit_memory]` table (it stays
     // backend-only, out of the frontend-typed serialization) and still round-trips
     // to the default.
@@ -2064,7 +2064,7 @@ fn test_default_webkit_memory_emits_no_section() {
     assert_eq!(
         reloaded.webkit_memory,
         WebkitMemoryConfig::default(),
-        "a config with no [webkit_memory] section loads the default"
+        "a config with no [webkit_memory] line loads the default"
     );
 }
 
@@ -2148,7 +2148,7 @@ fn test_appearance_normalize_valid_themes_unchanged() {
 }
 
 #[test]
-fn test_config_without_appearance_section_loads() {
+fn test_config_without_appearance_line_loads() {
     // Existing config without [appearance] should parse and default to dark
     let toml_str = r##"
 [general]
@@ -2175,7 +2175,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -2253,7 +2253,7 @@ deep_color = "#ff4444"
 shallow_depth = 0.0
 deep_depth = 50.0
 
-[section_colors]
+[line_colors]
 palette = ["#4ecdc4"]
 
 [map]
@@ -2821,62 +2821,62 @@ fn test_zoom_speed_write_path_clamps_rather_than_migrating() {
 }
 
 // ========================================================================
-// Config.next_section_color Tests
+// Config.next_line_color Tests
 // ========================================================================
 
 #[test]
-fn test_next_section_color_returns_first_unused() {
+fn test_next_line_color_returns_first_unused() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
+    config.line_colors.palette = vec![
         "#ff0000".to_string(),
         "#00ff00".to_string(),
         "#0000ff".to_string(),
     ];
     let used = vec!["#ff0000".to_string()];
-    assert_eq!(config.next_section_color(&used), "#00ff00");
+    assert_eq!(config.next_line_color(&used), "#00ff00");
 }
 
 #[test]
-fn test_next_section_color_skips_multiple_used() {
+fn test_next_line_color_skips_multiple_used() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
+    config.line_colors.palette = vec![
         "#ff0000".to_string(),
         "#00ff00".to_string(),
         "#0000ff".to_string(),
     ];
     let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
-    assert_eq!(config.next_section_color(&used), "#0000ff");
+    assert_eq!(config.next_line_color(&used), "#0000ff");
 }
 
 #[test]
-fn test_next_section_color_all_used_wraps_to_first() {
+fn test_next_line_color_all_used_wraps_to_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    config.line_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     // All used → returns first color
-    assert_eq!(config.next_section_color(&used), "#ff0000");
+    assert_eq!(config.next_line_color(&used), "#ff0000");
 }
 
 #[test]
-fn test_next_section_color_empty_palette_returns_hardcoded() {
+fn test_next_line_color_empty_palette_returns_hardcoded() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![];
-    assert_eq!(config.next_section_color(&[]), "#4ecdc4");
+    config.line_colors.palette = vec![];
+    assert_eq!(config.next_line_color(&[]), "#4ecdc4");
 }
 
 #[test]
-fn test_next_section_color_no_used_returns_first() {
+fn test_next_line_color_no_used_returns_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#aabbcc".to_string(), "#ddeeff".to_string()];
-    assert_eq!(config.next_section_color(&[]), "#aabbcc");
+    config.line_colors.palette = vec!["#aabbcc".to_string(), "#ddeeff".to_string()];
+    assert_eq!(config.next_line_color(&[]), "#aabbcc");
 }
 
 #[test]
-fn test_next_section_color_used_colors_not_in_palette_ignored() {
+fn test_next_line_color_used_colors_not_in_palette_ignored() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    config.line_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#999999".to_string()]; // not in palette
-    assert_eq!(config.next_section_color(&used), "#ff0000");
+    assert_eq!(config.next_line_color(&used), "#ff0000");
 }
 
 // ========================================================================
@@ -2897,19 +2897,19 @@ fn test_syntactic_highlighting_defaults_to_full() {
 }
 
 #[test]
-fn test_syntactic_highlighting_missing_section_loads_as_full() {
+fn test_syntactic_highlighting_missing_line_loads_as_full() {
     // A config written before this feature existed has no
-    // [syntactic_highlighting] section; it must load with the opt-out default.
-    // Simulate by serializing a default config and stripping the section.
+    // [syntactic_highlighting] line; it must load with the opt-out default.
+    // Simulate by serializing a default config and stripping the line.
     let mut value = toml::Value::try_from(Config::default()).expect("config to toml value");
     value
         .as_table_mut()
         .expect("config is a table")
         .remove("syntactic_highlighting");
-    let without_section = toml::to_string(&value).expect("re-serialize");
-    assert!(!without_section.contains("syntactic_highlighting"));
+    let without_line = toml::to_string(&value).expect("re-serialize");
+    assert!(!without_line.contains("syntactic_highlighting"));
 
-    let config: Config = toml::from_str(&without_section).expect("legacy config should parse");
+    let config: Config = toml::from_str(&without_line).expect("legacy config should parse");
     assert_eq!(
         config.syntactic_highlighting.level,
         SyntacticHighlightLevel::Full
@@ -2956,14 +2956,14 @@ fn test_syntactic_highlighting_normalize_drops_bad_hex() {
     roles.insert("station".to_string(), "#36b96a".to_string()); // valid
     roles.insert("shot".to_string(), "0070dd".to_string()); // missing '#'
     roles.insert("segment".to_string(), "#xyz123".to_string()); // non-hex
-    roles.insert("section".to_string(), "#A335EE".to_string()); // valid uppercase
+    roles.insert("line".to_string(), "#A335EE".to_string()); // valid uppercase
     config.overrides.insert("default".to_string(), roles);
 
     config.normalize();
 
     let default_roles = &config.overrides["default"];
     assert!(default_roles.contains_key("station"));
-    assert!(default_roles.contains_key("section"));
+    assert!(default_roles.contains_key("line"));
     assert!(!default_roles.contains_key("shot"));
     assert!(!default_roles.contains_key("segment"));
 }
@@ -3172,10 +3172,10 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
 // ========================================================================
 
 #[test]
-fn test_save_to_path_round_trips_settings_across_sections() {
+fn test_save_to_path_round_trips_settings_across_lines() {
     // A SERIALIZATION guard, not an atomicity one - restoring a plain
     // `fs::write` leaves this green, because all it asks is that a normal save
-    // survives a reload across several sections of the config. That is worth
+    // survives a reload across several lines of the config. That is worth
     // pinning on its own (the temp-file+rename rewrite had to not disturb it),
     // but the atomicity claim is carried by
     // `test_save_to_path_leaves_destination_untouched_when_write_cannot_complete`,

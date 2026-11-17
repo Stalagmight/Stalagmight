@@ -10,7 +10,7 @@
  * ## Progress forcing, and why it is not a timeout
  *
  * A random walk over a wizard does not terminate on its own: `toggle-alternatives`
- * and `section-name-input` are always there, always legal, and never advance
+ * and `line-name-input` are always there, always legal, and never advance
  * anything. Left alone, a flow spends its whole step budget on one screen and
  * the run reports coverage it never had.
  *
@@ -126,7 +126,7 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
  * `NewProjectForImportDialog.tsx`, `ImportReceiptDialog.tsx`,
  * `ImportBlockedDialog.tsx`, `ImportAsNewProjectDialog.tsx`,
  * `OrphanPlacementDialog.tsx`, `ErrorDialog.tsx`, `ExportDialog.tsx`,
- * `SectionMetadataForm.tsx`, `ShotTableEditor.tsx` + `SpreadsheetGrid/`,
+ * `LineMetadataForm.tsx`, `ShotTableEditor.tsx` + `SpreadsheetGrid/`,
  * `ModeCarousel.tsx` and `Toolbar.tsx`/`GlobalView.tsx`.
  * A testid that is not in a component is a control the fuzzer silently never
  * reaches, which is the failure mode this list exists to prevent.
@@ -165,7 +165,7 @@ export const TESTID_INVENTORY: readonly string[] = [
   'default-date-input',
   'continue-button',
   'cancel-button',
-  'section-checkbox-*',
+  'line-checkbox-*',
   // --- tml-config -----------------------------------------------------------
   'tml-import-dialog',
   'tml-include-excluded',
@@ -237,7 +237,7 @@ export const TESTID_INVENTORY: readonly string[] = [
   'zero-datum-selection-cancel',
   'zero-datum-selection-back',
   'zero-datum-selection-skip',
-  'zero-datum-section-card-*',
+  'zero-datum-line-card-*',
   // --- zero-datum-config ----------------------------------------------------
   'zero-datum-config-dialog',
   'zero-datum-station-select',
@@ -267,11 +267,11 @@ export const TESTID_INVENTORY: readonly string[] = [
   'segment-mode-from-existing-input',
   'segment-mode-manual-input',
   'segment-mode-discard-input',
-  'from-existing-import-section-select',
+  'from-existing-import-line-select',
   'from-existing-import-station-select',
-  'from-existing-section-select',
+  'from-existing-line-select',
   'from-existing-station-select',
-  'manual-import-section-select',
+  'manual-import-line-select',
   'manual-import-station-select',
   // --- wizard confirm overlays ---------------------------------------------
   // Three actions once the wizard has imported anything (#394): continue
@@ -286,14 +286,14 @@ export const TESTID_INVENTORY: readonly string[] = [
   'back-confirm-dialog',
   'back-confirm-continue',
   'confirm-back-button',
-  // --- shared section metadata (all three editing screens) ------------------
-  'section-name-input',
-  'section-surveyor-input',
-  'section-date-input',
-  'section-quality-input',
-  'section-reverse-checkbox',
-  'section-direction-select',
-  'section-color-hex-input',
+  // --- shared line metadata (all three editing screens) ------------------
+  'line-name-input',
+  'line-surveyor-input',
+  'line-date-input',
+  'line-quality-input',
+  'line-reverse-checkbox',
+  'line-direction-select',
+  'line-color-hex-input',
   // --- shot table -----------------------------------------------------------
   'shot-table-container',
   'shot-editor-expand',
@@ -350,12 +350,12 @@ export const SELECT_TESTIDS: readonly string[] = [
   'zero-datum-station-select',
   'merge-station-select',
   'overlap-mode-select',
-  'section-direction-select',
-  'from-existing-import-section-select',
+  'line-direction-select',
+  'from-existing-import-line-select',
   'from-existing-import-station-select',
-  'from-existing-section-select',
+  'from-existing-line-select',
   'from-existing-station-select',
-  'manual-import-section-select',
+  'manual-import-line-select',
   'manual-import-station-select',
 ];
 
@@ -444,7 +444,7 @@ export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllRe
  *
  * An entry ending in `*` is a PREFIX PATTERN, expanded against the live digest
  * exactly as `TESTID_INVENTORY`'s patterns are: `zero-datum-select` advances by
- * picking a section CARD, and the card ids carry an index this table cannot
+ * picking a line CARD, and the card ids carry an index this table cannot
  * know. The shell plays the lowest-indexed actionable member.
  */
 export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>> = {
@@ -457,7 +457,7 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   walls: ['walls-import-confirm', 'walls-import-cancel'],
   'gpx-select': ['gpx-continue-button', 'gpx-import-confirm', 'gpx-selection-cancel'],
   'gpx-place': ['gpx-import-confirm'],
-  // PICK A SECTION first, and only skip if there is none to pick.
+  // PICK A LINE first, and only skip if there is none to pick.
   //
   // Skipping is not advancing this screen, it is declining its whole purpose:
   // behind a picked card sits `zero-datum-config`, which owns a station select,
@@ -468,8 +468,8 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   // behind it almost never reached.
   //
   // The `*` is a PREFIX the shell expands against the digest - the cards are
-  // `zero-datum-section-card-N` and the model cannot know N.
-  'zero-datum-select': ['zero-datum-section-card-*', 'zero-datum-selection-skip'],
+  // `zero-datum-line-card-N` and the model cannot know N.
+  'zero-datum-select': ['zero-datum-line-card-*', 'zero-datum-selection-skip'],
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
   // No entry for `wiz-no-suggest`: the bridge's settle predicate waits through
@@ -552,7 +552,7 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   // rather than while trying to leave. Neither this overlay's buttons nor the
   // wizard's own Cancel/Back are actionable while an import is in flight (they
   // carry `disabled`, and the handlers refuse anyway, so a withdrawal can never
-  // snapshot a section list that is about to grow) - so an escape attempt
+  // snapshot a line list that is about to grow) - so an escape attempt
   // during an import falls through to `key:Escape` and retries on the next
   // loop, once the import has settled.
   'wiz-confirm': ['confirm-cancel-button', 'confirm-back-button', 'key:Escape'],

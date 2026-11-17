@@ -1,7 +1,7 @@
 /**
  * The eye (show/hide columns) menu, shared by every shot table in the app.
  *
- * There used to be three hand-rolled copies - the data table's, the new-section
+ * There used to be three hand-rolled copies - the data table's, the new-line
  * dialog's and the shared shot editor's - and they had drifted into three
  * different menus: only the data table's rows could go red for a missing value,
  * only two of them had the azimuth avg / in-out / off switch, and only one had
@@ -14,8 +14,8 @@
  * this component exists to enforce, so a host picks which rows apply, never how
  * they look.
  *
- * A host omits a row for a column its table does not have (the new-section
- * dialog has no warnings or id columns - the section does not exist yet), rather
+ * A host omits a row for a column its table does not have (the new-line
+ * dialog has no warnings or id columns - the line does not exist yet), rather
  * than rendering a toggle for nothing.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
@@ -49,7 +49,7 @@ export interface ShotColumnsMenuProps {
   /** Segmented avg / in-out / off controls, per family. */
   angleModes?: Partial<Record<'azimuth' | 'inclination', AngleModeControl>>;
   /** Rows for columns not every shot table has. */
-  extraRows?: { warnings?: boolean; sectionId?: boolean; shotId?: boolean; credit?: boolean };
+  extraRows?: { warnings?: boolean; lineId?: boolean; shotId?: boolean; credit?: boolean };
   /** Row identities whose label goes red and which tint the eye button: a
    *  required value is missing in a column that is currently HIDDEN, so there is
    *  no cell on screen to point at. Values are the row identities below
@@ -194,7 +194,7 @@ export function ShotColumnsMenu({
           ) : (
             <>
               {extraRows?.warnings && checkRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
-              {extraRows?.sectionId && checkRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
+              {extraRows?.lineId && checkRow(['line_id'], t('dataTable.columnsMenu.sectionId'))}
               {extraRows?.shotId && checkRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
               {checkRow(['length'], t('dataTable.columnsMenu.length'), '', has('length'))}
               {angleModes?.azimuth &&

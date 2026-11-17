@@ -1,14 +1,14 @@
 //! Binary IPC format for `load_project_full`.
 //!
 //! The default Tauri IPC serializes the response as JSON. For a project with
-//! 14k sections + 75k shots + 89k stations that produces ~25 MB of JSON, and
+//! 14k lines + 75k shots + 89k stations that produces ~25 MB of JSON, and
 //! both `serde_json::to_string` on the Rust side and `JSON.parse` on the JS
 //! side run synchronously on threads the UI needs. We measured a 5.6 s
 //! post-handler stall on the load path; ~5 s of it is the JSON
 //! serialize/transport/parse round-trip.
 //!
 //! This module defines an alternative shape that:
-//!   1. Keeps the small/sparse metadata (project header, section metadata,
+//!   1. Keeps the small/sparse metadata (project header, line metadata,
 //!      station_merges, zero_datums, loop_closures, …) as ordinary
 //!      `serde`-encoded fields. They're small; msgpack handles them fine.
 //!   2. Packs the bulk numeric data (shot fields, station coordinates) into
@@ -33,7 +33,7 @@ use serde_bytes::ByteBuf;
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
     AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, Person,
-    ProjectStats, ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyCredit,
+    ProjectStats, ProjectWarning, LineId, ShotId, StationMergeWire, StationRef, SurveyCredit,
     SurveyDirection, ZeroDatumWire,
 };
 
@@ -53,7 +53,7 @@ pub const SHOT_FLOAT_FIELDS: usize = 12;
 pub const SHOT_FLOAT_STRIDE: usize = SHOT_FLOAT_FIELDS * 4;
 
 /// Number of u32 fields per shot in `shots_uints`.
-/// Layout: section_id, shot_id, marker_index_or_u32_max.
+/// Layout: line_id, shot_id, marker_index_or_u32_max.
 pub const SHOT_UINT_FIELDS: usize = 3;
 pub const SHOT_UINT_STRIDE: usize = SHOT_UINT_FIELDS * 4;
 
@@ -61,7 +61,7 @@ pub const SHOT_UINT_STRIDE: usize = SHOT_UINT_FIELDS * 4;
 pub const STATION_FLOAT_FIELDS: usize = 3;
 pub const STATION_FLOAT_STRIDE: usize = STATION_FLOAT_FIELDS * 8;
 
-/// Layout of `stations_uints`: section_id, station_index. 2 u32 per station.
+/// Layout of `stations_uints`: line_id, station_index. 2 u32 per station.
 pub const STATION_UINT_FIELDS: usize = 2;
 pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 
@@ -82,11 +82,11 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// envelope from that field onwards.
 ///
 /// Bumped 4 → 5 for the #438 north references: the project header gained
-/// `default_azimuth_reference` and every section header gained
+/// `default_azimuth_reference` and every line header gained
 /// `azimuth_reference`. Both are APPENDED, so a stale frontend reading a
-/// msgpack map would simply ignore them - but the section field sits inside the
-/// per-section struct that the decoder walks positionally, and a frontend that
-/// does not know it exists would render every corrected section uncorrected
+/// msgpack map would simply ignore them - but the line field sits inside the
+/// per-line struct that the decoder walks positionally, and a frontend that
+/// does not know it exists would render every corrected line uncorrected
 /// while believing it had the whole project.
 ///
 /// Bumped 5 → 6 for station names: the envelope gained the sparse
@@ -94,11 +94,11 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// would then show every imported MNemo station number as missing - the same
 /// "believes it has the whole project" case as 4 → 5.
 ///
-/// Bumped 6 → 7 for per-shot survey credit: the section header lost its
-/// `surveyor`/`date` (a section keeps none - its shots do), the project header
-/// gained one `credit_people` table, every section header its distinct
+/// Bumped 6 → 7 for per-shot survey credit: the line header lost its
+/// `surveyor`/`date` (a line keeps none - its shots do), the project header
+/// gained one `credit_people` table, every line header its distinct
 /// `credits`, and the envelope a `shots_credit` index per shot. A stale
-/// frontend would read the section headers positionally wrong and show every
+/// frontend would read the line headers positionally wrong and show every
 /// shot uncredited.
 pub const BINARY_FORMAT_VERSION: u32 = 7;
 
@@ -118,7 +118,7 @@ pub struct LoadProjectFullBinaryResult {
     ///        pitch_in, pitch_out, left, right, up, down, temperature.
     /// NaN means `None` for the nullable fields.
     pub shots_floats: ByteBuf,
-    /// Per-shot u32 fields. Order: section_id, shot_id, marker_or_max
+    /// Per-shot u32 fields. Order: line_id, shot_id, marker_or_max
     /// where marker_or_max = u32::MAX when `marker_index` is None.
     pub shots_uints: ByteBuf,
     /// Per-shot flags: bits 0-1 = `ShotKind` discriminant (0 Normal, 1 Jump,
@@ -127,8 +127,8 @@ pub struct LoadProjectFullBinaryResult {
     /// Sparse map of (global_shot_index, comment). global_shot_index is the
     /// row index into the per-shot arrays above (NOT a Shot.id).
     pub shot_comments: Vec<(u32, String)>,
-    /// Per-shot u32: the index of the shot's credit in its SECTION's
-    /// [`SectionHeaderBinary::credits`], `u32::MAX` for a shot with none. EMPTY
+    /// Per-shot u32: the index of the shot's credit in its LINE's
+    /// [`LineHeaderBinary::credits`], `u32::MAX` for a shot with none. EMPTY
     /// (zero bytes, not `shot_count * 4`) when no shot of the project carries a
     /// credit, so an uncredited project pays nothing.
     pub shots_credit: ByteBuf,
@@ -136,7 +136,7 @@ pub struct LoadProjectFullBinaryResult {
     pub station_count: u32,
     /// Per-station f64 coordinates: x, y, z (24 bytes per station).
     pub stations_floats: ByteBuf,
-    /// Per-station u32 fields: section_id, station_index.
+    /// Per-station u32 fields: line_id, station_index.
     pub stations_uints: ByteBuf,
     /// Per-station flags: bit 0 = is_zero_datum. One byte per station.
     pub stations_flags: ByteBuf,
@@ -159,7 +159,7 @@ pub struct LoadProjectFullBinaryResult {
     pub frozen_shots: Vec<FrozenShotRef>,
 }
 
-/// Mirror of `Project` minus `sections[i].shots` and minus `station_offsets`/
+/// Mirror of `Project` minus `lines[i].shots` and minus `station_offsets`/
 /// `station_comments` HashMaps. The shots are in the binary blobs above;
 /// the HashMaps are converted to `Vec<(StationRef, ...)>` for msgpack.
 #[derive(Serialize)]
@@ -169,35 +169,35 @@ pub struct ProjectHeaderBinary {
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub file_path: Option<String>,
-    pub next_section_id: SectionId,
+    pub next_line_id: LineId,
     pub next_closure_id: u64,
-    /// Section metadata in declaration order. `shot_offset` and `shot_count`
+    /// Line metadata in declaration order. `shot_offset` and `shot_count`
     /// index into the per-shot binary arrays.
-    pub sections: Vec<SectionHeaderBinary>,
+    pub lines: Vec<LineHeaderBinary>,
     pub station_merges: Vec<StationMergeWire>,
     pub zero_datums: Vec<ZeroDatumWire>,
     pub loop_closures: Vec<LoopClosureWire>,
-    pub section_offsets: Vec<(SectionId, (f64, f64))>,
+    pub line_offsets: Vec<(LineId, (f64, f64))>,
     pub station_offsets: Vec<(StationRef, (f64, f64, f64))>,
     pub station_comments_map: Vec<(StationRef, String)>,
     pub imported_file_hashes: Vec<String>,
-    pub imported_section_hashes: Vec<String>,
+    pub imported_line_hashes: Vec<String>,
     /// Per-project validation thresholds (#57), so binary-loaded projects keep
     /// their own config instead of falling back to the global defaults.
     pub validation: crate::config::ValidationConfig,
     /// Entrance elevation (#431), so binary-loaded projects carry it too.
     pub surface_elevation: Option<f64>,
-    /// The project-level north reference a section inherits when it declares
-    /// none (#438). Without it a binary load resolved every inheriting section
+    /// The project-level north reference a line inherits when it declares
+    /// none (#438). Without it a binary load resolved every inheriting line
     /// to "nothing recorded" and drew the survey uncorrected - the JSON path
     /// has carried it since the field existed.
     pub default_azimuth_reference: Option<AzimuthReference>,
-    /// Every distinct person any shot credits, once: the table the sections'
+    /// Every distinct person any shot credits, once: the table the lines'
     /// [`CreditBinary`] lists index into.
     pub credit_people: Vec<Person>,
 }
 
-/// One distinct survey credit of a section, its people as indices into
+/// One distinct survey credit of a line, its people as indices into
 /// [`ProjectHeaderBinary::credit_people`].
 #[derive(Serialize)]
 pub struct CreditBinary {
@@ -207,8 +207,8 @@ pub struct CreditBinary {
 }
 
 #[derive(Serialize)]
-pub struct SectionHeaderBinary {
-    pub id: SectionId,
+pub struct LineHeaderBinary {
+    pub id: LineId,
     pub name: Option<String>,
     pub color: String,
     pub direction: SurveyDirection,
@@ -216,15 +216,15 @@ pub struct SectionHeaderBinary {
     pub shot_offset: u32,
     pub shot_count: u32,
     pub next_shot_id: ShotId,
-    /// This section's own north reference (#438); `None` inherits
+    /// This line's own north reference (#438); `None` inherits
     /// [`ProjectHeaderBinary::default_azimuth_reference`].
     pub azimuth_reference: Option<AzimuthReference>,
-    /// The section's distinct shot credits, indexed by
+    /// The line's distinct shot credits, indexed by
     /// [`LoadProjectFullBinaryResult::shots_credit`].
     pub credits: Vec<CreditBinary>,
 }
 
-/// Interns people project-wide and credits per section for the envelope.
+/// Interns people project-wide and credits per line for the envelope.
 #[derive(Default)]
 struct CreditTable {
     people: Vec<Person>,
@@ -273,24 +273,24 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let frozen_shots = project.compute_frozen_shots();
 
     // Sum shot count up front so we can pre-allocate exactly.
-    let shot_count: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+    let shot_count: usize = project.lines.iter().map(|s| s.shots.len()).sum();
     let mut shots_floats = Vec::with_capacity(shot_count * SHOT_FLOAT_STRIDE);
     let mut shots_uints = Vec::with_capacity(shot_count * SHOT_UINT_STRIDE);
     let mut shots_flags = Vec::with_capacity(shot_count);
     let mut shot_comments: Vec<(u32, String)> = Vec::new();
-    let mut sections_meta: Vec<SectionHeaderBinary> = Vec::with_capacity(project.sections.len());
+    let mut lines_meta: Vec<LineHeaderBinary> = Vec::with_capacity(project.lines.len());
     let mut credit_table = CreditTable::default();
     let mut shots_credit = Vec::with_capacity(shot_count * 4);
     let mut any_credit = false;
 
     let mut shot_cursor: u32 = 0;
-    for section in &project.sections {
+    for line in &project.lines {
         let shot_offset = shot_cursor;
-        let shot_count = section.shots.len() as u32;
+        let shot_count = line.shots.len() as u32;
         let mut credits: Vec<CreditBinary> = Vec::new();
         let mut credit_index: HashMap<&SurveyCredit, u32> = HashMap::new();
-        for shot in &section.shots {
-            // Credit: the section's distinct credits, one index per shot.
+        for shot in &line.shots {
+            // Credit: the line's distinct credits, one index per shot.
             let index = match shot.credit.as_ref().filter(|c| !c.is_empty()) {
                 Some(credit) => {
                     any_credit = true;
@@ -343,11 +343,11 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
                 float_bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
             }
             shots_floats.extend_from_slice(&float_bytes);
-            // Uints: section_id, shot_id, marker_or_max. Same batched
+            // Uints: line_id, shot_id, marker_or_max. Same batched
             // packing trick.
             let marker = shot.marker_index.unwrap_or(u32::MAX);
             let mut uint_bytes = [0u8; SHOT_UINT_STRIDE];
-            uint_bytes[0..4].copy_from_slice(&section.id.to_le_bytes());
+            uint_bytes[0..4].copy_from_slice(&line.id.to_le_bytes());
             uint_bytes[4..8].copy_from_slice(&shot.id.to_le_bytes());
             uint_bytes[8..12].copy_from_slice(&marker.to_le_bytes());
             shots_uints.extend_from_slice(&uint_bytes);
@@ -361,16 +361,16 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             }
             shot_cursor += 1;
         }
-        sections_meta.push(SectionHeaderBinary {
-            id: section.id,
-            name: section.name.clone(),
-            color: section.color.clone(),
-            direction: section.direction,
-            quality: section.quality,
+        lines_meta.push(LineHeaderBinary {
+            id: line.id,
+            name: line.name.clone(),
+            color: line.color.clone(),
+            direction: line.direction,
+            quality: line.quality,
             shot_offset,
             shot_count,
-            next_shot_id: section.next_shot_id,
-            azimuth_reference: section.azimuth_reference,
+            next_shot_id: line.next_shot_id,
+            azimuth_reference: line.azimuth_reference,
             credits,
         });
     }
@@ -398,7 +398,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         float_bytes[16..24].copy_from_slice(&station.coordinates.z.to_le_bytes());
         stations_floats.extend_from_slice(&float_bytes);
         let mut uint_bytes = [0u8; STATION_UINT_STRIDE];
-        uint_bytes[0..4].copy_from_slice(&station.station_ref.section_id.to_le_bytes());
+        uint_bytes[0..4].copy_from_slice(&station.station_ref.line_id.to_le_bytes());
         uint_bytes[4..8].copy_from_slice(&station.station_ref.station_index.to_le_bytes());
         stations_uints.extend_from_slice(&uint_bytes);
         stations_flags.push(u8::from(station.is_zero_datum));
@@ -459,17 +459,17 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             .file_path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        next_section_id: project.next_section_id,
+        next_line_id: project.next_line_id,
         next_closure_id: project.next_closure_id,
-        sections: sections_meta,
+        lines: lines_meta,
         station_merges,
         zero_datums,
         loop_closures,
-        section_offsets: hashmap_to_pairs(project.section_offsets),
+        line_offsets: hashmap_to_pairs(project.line_offsets),
         station_offsets,
         station_comments_map,
         imported_file_hashes: project.imported_file_hashes,
-        imported_section_hashes: project.imported_section_hashes,
+        imported_line_hashes: project.imported_line_hashes,
         validation: project.validation,
         surface_elevation: project.surface_elevation,
         default_azimuth_reference: project.default_azimuth_reference,
@@ -528,13 +528,13 @@ mod tests {
     use super::*;
     use crate::core::loading::DisplaySettings;
     use crate::models::ShotKind;
-    use crate::models::{Coordinates, Project, ProjectStats, Section, Shot, Station, StationRef};
+    use crate::models::{Coordinates, Project, ProjectStats, Line, Shot, Station, StationRef};
     use chrono::Utc;
     use serde::Deserialize;
 
     fn empty_stats() -> ProjectStats {
         ProjectStats {
-            section_count: 0,
+            line_count: 0,
             shot_count: 0,
             total_length: 0.0,
             min_depth: 0.0,
@@ -551,11 +551,11 @@ mod tests {
         Project::new(name.to_string(), None)
     }
 
-    fn new_section(id: u32, name: &str, color: &str) -> Section {
-        use crate::models::SectionData;
-        Section::new(
+    fn new_line(id: u32, name: &str, color: &str) -> Line {
+        use crate::models::LineData;
+        Line::new(
             id,
-            SectionData {
+            LineData {
                 name: Some(name.to_string()),
                 surveyor: None,
                 date: None,
@@ -592,14 +592,14 @@ mod tests {
     #[derive(Deserialize)]
     struct DecodedHeader {
         name: String,
-        sections: Vec<DecodedSection>,
+        lines: Vec<DecodedLine>,
         default_azimuth_reference: Option<AzimuthReference>,
         #[serde(default)]
         credit_people: Vec<Person>,
     }
     #[derive(Deserialize)]
-    struct DecodedSection {
-        id: SectionId,
+    struct DecodedLine {
+        id: LineId,
         shot_offset: u32,
         shot_count: u32,
         azimuth_reference: Option<AzimuthReference>,
@@ -637,18 +637,18 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_two_sections() {
+    fn round_trip_two_lines() {
         let mut project = new_project("test");
-        let mut sec_a = new_section(1, "A", "#ff0000");
+        let mut sec_a = new_line(1, "A", "#ff0000");
         sec_a.shots.push(shot(101, 0.0, 10.0, 0.0, -1.0));
         sec_a.shots.push(shot(102, 90.0, 5.0, -1.0, -2.0));
         sec_a.next_shot_id = 103;
-        let mut sec_b = new_section(2, "B", "#00ff00");
+        let mut sec_b = new_line(2, "B", "#00ff00");
         sec_b.shots.push(shot(201, 45.0, 7.0, 0.0, -0.5));
         sec_b.next_shot_id = 202;
-        project.sections.push(sec_a);
-        project.sections.push(sec_b);
-        project.next_section_id = 3;
+        project.lines.push(sec_a);
+        project.lines.push(sec_b);
+        project.next_line_id = 3;
 
         let stations = vec![
             Station::with_coordinates(StationRef::new(1, 0), Coordinates::new(0.0, 0.0, 0.0)),
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(decoded.version, BINARY_FORMAT_VERSION);
         assert_eq!(decoded.loading_id, 42);
         assert_eq!(decoded.project_header.name, "test");
-        assert_eq!(decoded.project_header.sections.len(), 2);
+        assert_eq!(decoded.project_header.lines.len(), 2);
         assert_eq!(decoded.shot_count, 3);
         assert_eq!(decoded.shots_floats.len(), 3 * SHOT_FLOAT_STRIDE);
         assert_eq!(decoded.shots_uints.len(), 3 * SHOT_UINT_STRIDE);
@@ -685,15 +685,15 @@ mod tests {
         assert_eq!(decoded.stations_flags.len(), 5);
         assert!(decoded.shot_comments.is_empty());
 
-        // Section offsets index into the flat shots array
-        assert_eq!(decoded.project_header.sections[0].id, 1);
-        assert_eq!(decoded.project_header.sections[0].shot_offset, 0);
-        assert_eq!(decoded.project_header.sections[0].shot_count, 2);
-        assert_eq!(decoded.project_header.sections[1].id, 2);
-        assert_eq!(decoded.project_header.sections[1].shot_offset, 2);
-        assert_eq!(decoded.project_header.sections[1].shot_count, 1);
+        // Line offsets index into the flat shots array
+        assert_eq!(decoded.project_header.lines[0].id, 1);
+        assert_eq!(decoded.project_header.lines[0].shot_offset, 0);
+        assert_eq!(decoded.project_header.lines[0].shot_count, 2);
+        assert_eq!(decoded.project_header.lines[1].id, 2);
+        assert_eq!(decoded.project_header.lines[1].shot_offset, 2);
+        assert_eq!(decoded.project_header.lines[1].shot_count, 1);
 
-        // Verify a known float at a known offset: section 1, shot index 1
+        // Verify a known float at a known offset: line 1, shot index 1
         // (the second shot, azimuth=90, length=5). Floats live at byte
         // offset (global_shot_index 1 * SHOT_FLOAT_STRIDE) of shots_floats.
         let base = SHOT_FLOAT_STRIDE;
@@ -717,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn credit_rides_as_one_people_table_and_per_section_indices() {
+    fn credit_rides_as_one_people_table_and_per_line_indices() {
         let person = |n: &str| Person::named(n).unwrap();
         let day = NaiveDate::from_ymd_opt(2024, 2, 3);
         let ann_bo = SurveyCredit {
@@ -731,7 +731,7 @@ mod tests {
             date: None,
         };
         let mut project = new_project("credit");
-        let mut a = new_section(1, "A", "#ff0000");
+        let mut a = new_line(1, "A", "#ff0000");
         for (i, credit) in [Some(&ann_bo), None, Some(&ann_bo), Some(&bo)]
             .into_iter()
             .enumerate()
@@ -740,12 +740,12 @@ mod tests {
             s.credit = credit.cloned().map(std::sync::Arc::new);
             a.shots.push(s);
         }
-        let mut b = new_section(2, "B", "#00ff00");
+        let mut b = new_line(2, "B", "#00ff00");
         let mut s = shot(200, 0.0, 1.0, 0.0, 0.0);
         s.set_credit(bo);
         b.shots.push(s);
-        project.sections.push(a);
-        project.sections.push(b);
+        project.lines.push(a);
+        project.lines.push(b);
 
         let decoded: DecodedResult =
             rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
@@ -762,9 +762,9 @@ mod tests {
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
-        // Section A: two distinct credits; section B its own list.
+        // Line A: two distinct credits; line B its own list.
         assert_eq!(index, [0, u32::MAX, 0, 1, 0]);
-        let a = &decoded.project_header.sections[0].credits;
+        let a = &decoded.project_header.lines[0].credits;
         assert_eq!(a.len(), 2);
         assert_eq!(
             (a[0].surveyors.as_slice(), a[0].explorers.as_slice()),
@@ -772,7 +772,7 @@ mod tests {
         );
         assert_eq!(a[0].date, day);
         assert_eq!(a[1].surveyors, [1]);
-        let b = &decoded.project_header.sections[1].credits;
+        let b = &decoded.project_header.lines[1].credits;
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].surveyors, [1]);
     }
@@ -780,21 +780,21 @@ mod tests {
     #[test]
     fn an_uncredited_project_sends_no_credit_bytes() {
         let mut project = new_project("bare");
-        let mut a = new_section(1, "A", "#ff0000");
+        let mut a = new_line(1, "A", "#ff0000");
         a.shots.push(shot(100, 0.0, 1.0, 0.0, 0.0));
         a.shots.push(shot(101, 0.0, 1.0, 0.0, 0.0));
-        project.sections.push(a);
+        project.lines.push(a);
         let decoded: DecodedResult =
             rmp_serde::from_slice(&encode(result_for(project)).unwrap()).unwrap();
         assert!(decoded.shots_credit.is_empty());
         assert!(decoded.project_header.credit_people.is_empty());
-        assert!(decoded.project_header.sections[0].credits.is_empty());
+        assert!(decoded.project_header.lines[0].credits.is_empty());
     }
 
     #[test]
     fn nan_round_trips_for_optional_fields() {
         let mut project = new_project("t");
-        let mut sec = new_section(1, "S", "#abcdef");
+        let mut sec = new_line(1, "S", "#abcdef");
         sec.shots.push(Shot {
             id: 1,
             uuid: None,
@@ -816,7 +816,7 @@ mod tests {
             credit: None,
         });
         sec.next_shot_id = 2;
-        project.sections.push(sec);
+        project.lines.push(sec);
 
         let result = LoadProjectFullResult {
             loading_id: 1,
@@ -861,7 +861,7 @@ mod tests {
     ///
     /// It used to stop at `surface_elevation`, so a binary load - the fast path
     /// every real open takes - silently dropped the project default and every
-    /// section's own, and the survey rendered uncorrected while the JSON path
+    /// line's own, and the survey rendered uncorrected while the JSON path
     /// showed it right. Nothing failed; the map was just rotated.
     #[test]
     fn azimuth_references_survive_the_binary_envelope() {
@@ -871,7 +871,7 @@ mod tests {
         project.default_azimuth_reference =
             Some(Ref::magnetic(-4.25, CorrectionSource::FileDeclared));
 
-        let mut declared = new_section(1, "Declared", "#ff0000");
+        let mut declared = new_line(1, "Declared", "#ff0000");
         declared.shots.push(shot(101, 0.0, 10.0, 0.0, 0.0));
         declared.azimuth_reference = Some(Ref::magnetic(
             10.5,
@@ -879,11 +879,11 @@ mod tests {
         ));
         // Declares nothing of its own: it inherits, and the INHERITANCE is what
         // the project-level field has to preserve.
-        let mut inheriting = new_section(2, "Inheriting", "#00ff00");
+        let mut inheriting = new_line(2, "Inheriting", "#00ff00");
         inheriting.shots.push(shot(201, 0.0, 10.0, 0.0, 0.0));
         assert!(inheriting.azimuth_reference.is_none(), "premise");
-        project.sections.push(declared);
-        project.sections.push(inheriting);
+        project.lines.push(declared);
+        project.lines.push(inheriting);
 
         let result = LoadProjectFullResult {
             loading_id: 1,
@@ -904,19 +904,19 @@ mod tests {
         assert_eq!(
             decoded.project_header.default_azimuth_reference,
             Some(Ref::magnetic(-4.25, CorrectionSource::FileDeclared)),
-            "the project default is what an inheriting section resolves to"
+            "the project default is what an inheriting line resolves to"
         );
         assert_eq!(
-            decoded.project_header.sections[0].azimuth_reference,
+            decoded.project_header.lines[0].azimuth_reference,
             Some(Ref::magnetic(
                 10.5,
                 CorrectionSource::IgrfAuto { epoch_year: 2024 }
             )),
-            "a section's own reference, provenance and all"
+            "a line's own reference, provenance and all"
         );
         assert_eq!(
-            decoded.project_header.sections[1].azimuth_reference, None,
-            "a section that declares nothing must not be given a value here"
+            decoded.project_header.lines[1].azimuth_reference, None,
+            "a line that declares nothing must not be given a value here"
         );
     }
 
@@ -938,6 +938,6 @@ mod tests {
         assert_eq!(decoded.station_count, 0);
         assert!(decoded.shots_floats.is_empty());
         assert!(decoded.stations_floats.is_empty());
-        assert!(decoded.project_header.sections.is_empty());
+        assert!(decoded.project_header.lines.is_empty());
     }
 }

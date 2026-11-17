@@ -55,11 +55,11 @@ function setupRecoveryMocks(page: Page): Promise<void> {
     overrides.restore_from_backup = 'File restored successfully from backup.';
 
     overrides.export_salvageable_data = {
-      sectionCount: 3,
+      lineCount: 3,
       shotCount: 42,
       mergeCount: 2,
-      fullProjectJson: '{"sections": []}',
-      sectionsJson: '[]',
+      fullProjectJson: '{"lines": []}',
+      linesJson: '[]',
       errors: [],
     };
 
@@ -282,7 +282,7 @@ test.describe('Corruption Recovery Dialog', () => {
   });
 
   test('custom error message is displayed in dialog', async ({ page }) => {
-    await openRecoveryDialog(page, 'UNIQUE constraint violated on table "sections"');
+    await openRecoveryDialog(page, 'UNIQUE constraint violated on table "lines"');
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
     await expect(dialog).toContainText('UNIQUE constraint violated');

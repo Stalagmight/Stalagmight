@@ -192,8 +192,8 @@ for (const { width, readOnly, name } of LAYOUTS) {
 
     for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeDisabled();
     // Navigation and the rest of the app stay usable.
-    await expect(page.getByTestId('speleodb-workspace-section-history')).toBeEnabled();
-    await expect(page.getByTestId('workspace-tab-sections')).toBeEnabled();
+    await expect(page.getByTestId('speleodb-workspace-line-history')).toBeEnabled();
+    await expect(page.getByTestId('workspace-tab-lines')).toBeEnabled();
 
     await answer(page, 'speleodb_update', { kind: 'up_to_date' });
     await expect(page.getByTestId('speleodb-network-busy')).toHaveCount(0);

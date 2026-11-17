@@ -9,7 +9,7 @@ import {
 
 /**
  * Highlight size-multiplier resolution (C2): the custom survey shader bumps a
- * hovered / selected section's shot width + station radius by a ratio derived
+ * hovered / selected line's shot width + station radius by a ratio derived
  * from the configured absolute px, falling back to the historical baked ratios.
  */
 describe('highlightSizeMul (configured shot/station highlight sizes)', () => {

@@ -1,13 +1,13 @@
-//! The project's station merges plus the merge-only section adjacency derived
+//! The project's station merges plus the merge-only line adjacency derived
 //! from them.
 //!
 //! The adjacency map turns the per-BFS-step scan over every merge (O(N) inner)
 //! into a HashMap lookup (O(1) inner), which is what keeps
-//! [`Project::get_merged_section_ids`](crate::Project::get_merged_section_ids)
+//! [`Project::get_merged_line_ids`](crate::Project::get_merged_line_ids)
 //! linear on a large import instead of quadratic. It used to live on `Project`
 //! as a plain field under an informal "rebuild it after you mutate
 //! `station_merges`" contract - and a path that rewrote merge endpoints in
-//! place (`Project::map_station_refs`, run by the delete-shot section split)
+//! place (`Project::map_station_refs`, run by the delete-shot line split)
 //! quietly broke that contract, leaving the double-anchor guard reading a
 //! pre-split merge graph.
 //!
@@ -23,26 +23,26 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{SectionId, StationMerge};
+use crate::{LineId, StationMerge};
 
-/// Station merges + a lazily-built, self-invalidating merge-only section
+/// Station merges + a lazily-built, self-invalidating merge-only line
 /// adjacency map. Reads like a `[StationMerge]` slice (via [`Deref`]); writes go
 /// through the explicit mutators below.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MergeTopology {
     merges: Vec<StationMerge>,
-    /// `section_id` -> neighbouring section ids reachable over one merge.
+    /// `line_id` -> neighbouring line ids reachable over one merge.
     /// Transient and NOT persisted: rebuilt on first [`Self::adjacency`] call
     /// after any invalidation (including deserialization).
     #[serde(skip)]
-    adjacency: OnceLock<HashMap<SectionId, Vec<SectionId>>>,
+    adjacency: OnceLock<HashMap<LineId, Vec<LineId>>>,
 }
 
 impl MergeTopology {
-    /// The merge-only section adjacency. THE only read path for the map; built
+    /// The merge-only line adjacency. THE only read path for the map; built
     /// on first use and reused until a mutator invalidates it.
-    pub fn adjacency(&self) -> &HashMap<SectionId, Vec<SectionId>> {
+    pub fn adjacency(&self) -> &HashMap<LineId, Vec<LineId>> {
         self.adjacency.get_or_init(|| Self::build(&self.merges))
     }
 
@@ -63,7 +63,7 @@ impl MergeTopology {
     }
 
     /// Mutable iteration over the merges. Invalidates the memo up front: the
-    /// caller can rewrite an endpoint's `section_id`, which is exactly the edit
+    /// caller can rewrite an endpoint's `line_id`, which is exactly the edit
     /// the memo describes.
     #[expect(
         clippy::iter_without_into_iter,
@@ -102,20 +102,20 @@ impl MergeTopology {
 
     /// The one place a merge becomes two adjacency entries, shared by [`Self::build`]
     /// and [`Self::push`]'s O(1) delta so the two cannot describe an edge differently.
-    fn insert_edge(adjacency: &mut HashMap<SectionId, Vec<SectionId>>, m: &StationMerge) {
+    fn insert_edge(adjacency: &mut HashMap<LineId, Vec<LineId>>, m: &StationMerge) {
         // Each merge contributes one entry in each direction.
         adjacency
-            .entry(m.station_a.section_id)
+            .entry(m.station_a.line_id)
             .or_default()
-            .push(m.station_b.section_id);
+            .push(m.station_b.line_id);
         adjacency
-            .entry(m.station_b.section_id)
+            .entry(m.station_b.line_id)
             .or_default()
-            .push(m.station_a.section_id);
+            .push(m.station_a.line_id);
     }
 
-    fn build(merges: &[StationMerge]) -> HashMap<SectionId, Vec<SectionId>> {
-        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+    fn build(merges: &[StationMerge]) -> HashMap<LineId, Vec<LineId>> {
+        let mut adjacency: HashMap<LineId, Vec<LineId>> = HashMap::new();
         for m in merges {
             Self::insert_edge(&mut adjacency, m);
         }
@@ -189,7 +189,7 @@ mod tests {
     use crate::{StationKey, StationRef};
     use chrono::Utc;
 
-    fn merge(a: SectionId, b: SectionId) -> StationMerge {
+    fn merge(a: LineId, b: LineId) -> StationMerge {
         StationMerge {
             station_a: StationKey::from(StationRef::new(a, 1)),
             station_b: StationKey::from(StationRef::new(b, 0)),
@@ -237,7 +237,7 @@ mod tests {
                 }),
             ),
             (
-                "iter_mut rewriting an endpoint's section",
+                "iter_mut rewriting an endpoint's line",
                 Box::new(|t: &mut MergeTopology| {
                     for m in t.iter_mut() {
                         m.station_b = StationKey::from(StationRef::new(9, 0));
@@ -247,7 +247,7 @@ mod tests {
             (
                 "retain",
                 Box::new(|t: &mut MergeTopology| {
-                    t.retain(|m| m.station_a.section_id != 0);
+                    t.retain(|m| m.station_a.line_id != 0);
                 }),
             ),
             (

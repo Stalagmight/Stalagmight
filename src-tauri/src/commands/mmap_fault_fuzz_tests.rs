@@ -73,7 +73,7 @@ use tempfile::TempDir;
 use super::{export, project, recovery};
 use crate::core::events::EventSink;
 use crate::core::{AppState, Command};
-use crate::models::{Project, SectionData, ShotData};
+use crate::models::{Project, LineData, ShotData};
 use crate::persistence::Database;
 
 /// The load needs a sink for its progress events; nothing listens here.
@@ -129,8 +129,8 @@ fn trace(line: &str) {
 
 fn synthetic_project(rng: &mut Rng, name: &str) -> Project {
     let mut project = Project::new(name.to_string(), None);
-    let sections = 1 + rng.below(4);
-    for s in 0..sections {
+    let lines = 1 + rng.below(4);
+    for s in 0..lines {
         let count = 5 + rng.below(80);
         let mut depth = 3.0;
         let shots = (0..count)
@@ -148,7 +148,7 @@ fn synthetic_project(rng: &mut Rng, name: &str) -> Project {
                 shot
             })
             .collect();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(format!("S{s}")),
             color: "#336699".to_string(),
             shots,
@@ -641,7 +641,7 @@ impl World {
         let b = words.nth(1).map(|n| self.path(n));
         let state = &self.state;
         match (verb, a, b) {
-            ("edit", _, _) => brief_result(&state.execute(Command::CreateSection {
+            ("edit", _, _) => brief_result(&state.execute(Command::CreateLine {
                 name: None,
                 surveyor: None,
                 date: None,

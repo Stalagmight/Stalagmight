@@ -101,7 +101,7 @@ export function releaseFailed(result: CommandResult | null | undefined): boolean
 export const RELEASE_CANCELLED = 'Cancelled';
 
 function failure(error: string): CommandResult {
-  return { success: false, warnings: [], error, section_ids: [] };
+  return { success: false, warnings: [], error, line_ids: [] };
 }
 
 /**

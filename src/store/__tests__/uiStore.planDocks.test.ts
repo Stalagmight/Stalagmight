@@ -111,19 +111,19 @@ describe('Plan/Export dock snapshot/restore (#241)', () => {
     expect(invokeIpcMock).not.toHaveBeenCalledWith('update_panel_layout', expect.anything(), expect.anything());
   });
 
-  // #241: pins the snapshot-after-exits ordering - entering Plan while section-focused
+  // #241: pins the snapshot-after-exits ordering - entering Plan while line-focused
   // must restore the PRE-FOCUS dock state on the way back to Survey, not the
-  // focus-forced (collapsed) one exitSectionFocus itself just restored.
+  // focus-forced (collapsed) one exitLineFocus itself just restored.
   it('restores the pre-focus dock state, not the focus-forced state, when Plan is entered while focused', () => {
     useUIStore.setState({ detailPanelOpen: true, detailPanelMode: 'pin', dataTableOpen: false, dataTableMode: 'pin' });
-    useUIStore.getState().enterSectionFocus(1, 300);
+    useUIStore.getState().enterLineFocus(1, 300);
     // Focus mode force-collapses the detail panel.
     expect(useUIStore.getState().detailPanelOpen).toBe(false);
     useUIStore.getState().setAppMode('plan');
     useUIStore.getState().setAppMode('survey');
     // Restored to the pre-focus (open) state, not the focus-forced (closed) one.
     expect(useUIStore.getState().detailPanelOpen).toBe(true);
-    expect(useUIStore.getState().focusedSectionId).toBeNull();
+    expect(useUIStore.getState().focusedLineId).toBeNull();
   });
 
   // #241: pins the appMode==='survey' snapshot guard - a Plan -> Export switch must

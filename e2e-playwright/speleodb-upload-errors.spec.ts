@@ -12,7 +12,7 @@
  * `get_project_warnings`, so a refresh keeps them).
  */
 import { test, expect, type Page } from './fixtures/coverage';
-import { createProject, seedProjectWithSections, setupMockedPage, waitForMapIdle, type SectionSeed } from './helpers/app';
+import { createProject, seedProjectWithLines, setupMockedPage, waitForMapIdle, type LineSeed } from './helpers/app';
 import { warningMessages } from './helpers/testIds';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
@@ -28,7 +28,7 @@ type TestWindow = Window & {
   __PUSHES__?: number;
 };
 
-const SECTIONS: SectionSeed[] = [{
+const LINES: LineSeed[] = [{
   name: 'Synthetic Sump',
   direction: 'in',
   shots: [
@@ -48,18 +48,18 @@ const LINK_STATUS = {
 async function editingProjectWithErrors(page: Page): Promise<void> {
   await setupMockedPage(page);
   await createProject(page, 'Synthetic errors');
-  await seedProjectWithSections(page, SECTIONS);
+  await seedProjectWithLines(page, LINES);
   await waitForMapIdle(page);
   await page.evaluate((linkStatus) => {
     const w = window as unknown as TestWindow;
-    const section = w.__E2E_TEST__.projectStore.getState().project!.sections[0]!;
+    const line = w.__E2E_TEST__.projectStore.getState().project!.lines[0]!;
     const issue = (index: number, code: string, message: string, severity: 'error' | 'warning') => ({
-      sectionId: section.id, shotId: section.shots[index]!.id, shotIndex: index, code, message, severity, isResolved: false,
+      lineId: line.id, shotId: line.shots[index]!.id, shotIndex: index, code, message, severity, isResolved: false,
     });
     const warnings = [
-      issue(0, 'NEGATIVE_LENGTH', `Shot ${section.id}:1 has negative length: -10.0m`, 'error'),
-      issue(1, 'ZERO_LENGTH', `Shot ${section.id}:2 has zero length`, 'error'),
-      issue(2, 'LONG_SHOT', `Shot ${section.id}:3 length 8.0m above maximum threshold 5.0m`, 'warning'),
+      issue(0, 'NEGATIVE_LENGTH', `Shot ${line.id}:1 has negative length: -10.0m`, 'error'),
+      issue(1, 'ZERO_LENGTH', `Shot ${line.id}:2 has zero length`, 'error'),
+      issue(2, 'LONG_SHOT', `Shot ${line.id}:3 length 8.0m above maximum threshold 5.0m`, 'warning'),
     ];
     w.__MOCK_SET_PROJECT_IS_REMOTE__(true);
     const overrides: Record<string, unknown> = { speleodb_link_status: linkStatus, get_project_warnings: warnings };

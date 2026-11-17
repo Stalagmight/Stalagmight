@@ -6,38 +6,38 @@ import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
 import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
-import type { SectionId, StationRef } from '../../types/project';
+import type { LineId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
 import {
   COMBINE_SIDE_BY_SIDE_M,
   combineMoveIsSmall,
   combineMoveShown,
   formatRotation,
-} from '../../utils/combineSections';
+} from '../../utils/combineLines';
 
 interface CombinePlanNotesProps {
   candidate: CombineCandidate;
   plan: CombinePlan;
-  keptId: SectionId;
+  keptId: LineId;
   keptName: string;
   otherName: string;
   keptQuality: number | undefined;
   otherQuality: number | undefined;
   lengthUnit: LengthUnit;
-  sectionName: (id: SectionId) => string;
+  lineName: (id: LineId) => string;
   stationLabel: (ref: StationRef) => string;
 }
 
 /**
  * Everything a combine changes besides joining the shots, for the kept
- * section the dialog currently shows (the backend's `CombinePlan`): the side
+ * line the dialog currently shows (the backend's `CombinePlan`): the side
  * that moves and how far (and what moves with the joined station instead,
  * #755), the ties that become loop closures, the ties
  * removed because as closures they would join the two ends of one shot
  * (#746), the closures replaced by a loop closure on the same two stations
  * that the Closures Computed View adjusts (#749), converted bearings, the
- * quality and manual offset the combined section keeps, shot identities that
- * are renewed, and sections that pass through the join. The user reads all of
+ * quality and manual offset the combined line keeps, shot identities that
+ * are renewed, and lines that pass through the join. The user reads all of
  * it before confirming; nothing here is a refusal.
  */
 export function CombinePlanNotes({
@@ -49,18 +49,18 @@ export function CombinePlanNotes({
   keptQuality,
   otherQuality,
   lengthUnit,
-  sectionName,
+  lineName,
   stationLabel,
 }: CombinePlanNotesProps) {
   const { t } = useTranslation();
   const distance = (m: number) => formatLength(m, lengthUnit, 2);
-  const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
+  const listNames = (ids: LineId[]) => ids.map(lineName).join(', ');
   const notes: Array<{ key: string; text: string }> = [];
 
   // A move within the side-by-side tolerance (#740) is planned exactly but
   // listed only when it changes a tie: see `combineMoveShown`.
-  if (plan.moving_section !== null && combineMoveShown(plan)) {
-    const moving = sectionName(plan.moving_section);
+  if (plan.moving_line !== null && combineMoveShown(plan)) {
+    const moving = lineName(plan.moving_line);
     const key = combineMoveIsSmall(plan)
       ? 'moveSideBySide'
       : candidate.join_kind === 'closure'
@@ -68,23 +68,23 @@ export function CombinePlanNotes({
         : 'moveGap';
     notes.push({
       key: 'move',
-      text: t(`dialogs.combineSections.${key}`, {
+      text: t(`dialogs.combineLines.${key}`, {
         moving,
         distance: formatLength(plan.shift_m, lengthUnit, combineMoveIsSmall(plan) ? 4 : 2),
       }),
     });
-    const attached = plan.moved_sections.filter((id) => id !== plan.moving_section);
+    const attached = plan.moved_lines.filter((id) => id !== plan.moving_line);
     if (attached.length > 0) {
       notes.push({
         key: 'move-with',
         text: t('dialogs.combineSections.movesWith', { names: listNames(attached), count: attached.length }),
       });
     }
-    if (plan.moving_section === keptId) {
+    if (plan.moving_line === keptId) {
       // Why the kept side moves: a zero datum holds the other side, or the
       // other side holds the point the Closures Computed View is held at.
       const key = plan.kept_moves_because === 'adjustment_anchor' ? 'keptMovesAnchor' : 'keptMoves';
-      notes.push({ key: 'kept-moves', text: t(`dialogs.combineSections.${key}`, { kept: keptName, other: otherName }) });
+      notes.push({ key: 'kept-moves', text: t(`dialogs.combineLines.${key}`, { kept: keptName, other: otherName }) });
     }
   }
   if (plan.azimuth_rotation_deg !== null) {
@@ -113,8 +113,8 @@ export function CombinePlanNotes({
     });
   }
   if (plan.join_offset_change_m !== null) {
-    const fixedName = plan.moving_section === keptId ? otherName : keptName;
-    const movedName = plan.moving_section === keptId ? keptName : otherName;
+    const fixedName = plan.moving_line === keptId ? otherName : keptName;
+    const movedName = plan.moving_line === keptId ? keptName : otherName;
     notes.push({
       key: 'offset',
       text: t('dialogs.combineSections.offset', {
@@ -132,8 +132,8 @@ export function CombinePlanNotes({
     notes.push({
       key: 'joined-moves',
       text: t('dialogs.combineSections.joinedMoves', {
-        names: listNames(joined.sections),
-        count: joined.sections.length,
+        names: listNames(joined.lines),
+        count: joined.lines.length,
         station: stationLabel(joined.station),
         distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
       }),
@@ -160,10 +160,10 @@ export function CombinePlanNotes({
   // And these (#749): exactly the closures it replaces.
   const replaced = plan.closures_replaced ?? [];
   const tieId = (a: StationRef, b: StationRef) =>
-    `${a.section_id}-${a.station_index}-${b.section_id}-${b.station_index}`;
+    `${a.line_id}-${a.station_index}-${b.line_id}-${b.station_index}`;
   const ends = (a: StationRef, b: StationRef) => ({
-    a: <TieEnd at={a} sectionName={sectionName} stationLabel={stationLabel} />,
-    b: <TieEnd at={b} sectionName={sectionName} stationLabel={stationLabel} />,
+    a: <TieEnd at={a} lineName={lineName} stationLabel={stationLabel} />,
+    b: <TieEnd at={b} lineName={lineName} stationLabel={stationLabel} />,
   });
 
   if (notes.length === 0 && plan.torn_ties.length === 0 && removed.length === 0 && replaced.length === 0) {
@@ -185,20 +185,20 @@ export function CombinePlanNotes({
               {plan.torn_ties.map((tie) => {
                 const id = tieId(tie.station_a, tie.station_b);
                 const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
-                // The datum side is the end that does not move with the moving section.
+                // The datum side is the end that does not move with the moving line.
                 const held = [tie.station_a, tie.station_b].find(
-                  (s) => !plan.moved_sections.includes(s.section_id)
+                  (s) => !plan.moved_lines.includes(s.line_id)
                 );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
+                    <Trans i18nKey={`dialogs.combineLines.${key}`} components={ends(tie.station_a, tie.station_b)} />
                     {tie.reason === 'zero_datum' && held && (
                       <>
-                        {/* The tie, then the held section as its own sentence. */}
+                        {/* The tie, then the held line as its own sentence. */}
                         {'. '}
                         <Trans
                           i18nKey="dialogs.combineSections.tornHeld"
-                          components={{ held: <SectionPill id={held.section_id} name={sectionName(held.section_id)} /> }}
+                          components={{ held: <LinePill id={held.line_id} name={lineName(held.line_id)} /> }}
                         />
                       </>
                     )}
@@ -226,7 +226,7 @@ export function CombinePlanNotes({
                 return (
                   <li key={id} data-testid={`combine-removed-tie-${id}`}>
                     <Trans
-                      i18nKey={`dialogs.combineSections.${REMOVED_KEY[tie.kind]}`}
+                      i18nKey={`dialogs.combineLines.${REMOVED_KEY[tie.kind]}`}
                       components={ends(tie.station_a, tie.station_b)}
                     />
                   </li>
@@ -247,11 +247,11 @@ export function CombinePlanNotes({
                 return (
                   <li key={`${id}-${index}`} data-testid={`combine-replaced-tie-${id}`}>
                     <Trans
-                      i18nKey={`dialogs.combineSections.${REPLACED_KEY[closure.kind]}`}
+                      i18nKey={`dialogs.combineLines.${REPLACED_KEY[closure.kind]}`}
                       components={ends(closure.station_a, closure.station_b)}
                     />{' '}
                     <Trans
-                      i18nKey={`dialogs.combineSections.${REPLACED_BY_KEY[closure.by_kind]}`}
+                      i18nKey={`dialogs.combineLines.${REPLACED_BY_KEY[closure.by_kind]}`}
                       components={ends(closure.by_station_a, closure.by_station_b)}
                     />
                   </li>
@@ -289,44 +289,44 @@ const REPLACED_BY_KEY: Record<CombineRemovedKind, string> = {
   loop_closure: 'replacedByClosure',
 };
 
-/** A section as a link pill (name and id), selecting it on click. */
-function SectionPill({ id, name }: { id: SectionId; name: string }) {
+/** A line as a link pill (name and id), selecting it on click. */
+function LinePill({ id, name }: { id: LineId; name: string }) {
   return (
     <DetailLink
-      type="section"
-      target={{ sectionId: id }}
+      type="line"
+      target={{ lineId: id }}
       displayText={name}
       pillLabel={name}
-      testId={`combine-tie-section-${id}`}
-      onSelect={() => useUIStore.getState().setSelection({ type: 'section', sectionId: id })}
-      onHoverStart={() => useUIStore.getState().setHoveredSectionId(id)}
-      onHoverEnd={() => useUIStore.getState().setHoveredSectionId(null)}
+      testId={`combine-tie-line-${id}`}
+      onSelect={() => useUIStore.getState().setSelection({ type: 'line', lineId: id })}
+      onHoverStart={() => useUIStore.getState().setHoveredLineId(id)}
+      onHoverEnd={() => useUIStore.getState().setHoveredLineId(null)}
     />
   );
 }
 
 /**
- * One end of a tie the combine turns into a loop closure: its section and its
+ * One end of a tie the combine turns into a loop closure: its line and its
  * station as the link pills the Details panel uses. Hovering the station
  * rings it on the map behind the dialog.
  */
 function TieEnd({
   at,
-  sectionName,
+  lineName,
   stationLabel,
 }: {
   at: StationRef;
-  sectionName: (id: SectionId) => string;
+  lineName: (id: LineId) => string;
   stationLabel: (ref: StationRef) => string;
 }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-1 align-middle">
-      <SectionPill id={at.section_id} name={sectionName(at.section_id)} />
+      <LinePill id={at.line_id} name={lineName(at.line_id)} />
       <DetailLink
         type="station"
-        target={{ sectionId: at.section_id, position: at.station_index }}
+        target={{ lineId: at.line_id, position: at.station_index }}
         displayText={stationLabel(at)}
-        testId={`combine-tie-station-${at.section_id}-${at.station_index}`}
+        testId={`combine-tie-station-${at.line_id}-${at.station_index}`}
         onSelect={() => useUIStore.getState().setSelection({ type: 'station', stationRef: at })}
         onHoverStart={() => useUIStore.getState().setHoveredStation(at)}
         onHoverEnd={() => useUIStore.getState().setHoveredStation(null)}

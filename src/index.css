@@ -1439,7 +1439,7 @@ tr[data-selected="true"]:hover {
    ============================================================ */
 :root {
   --sh-segment: #ff8000;
-  --sh-section: #a335ee;
+  --sh-line: #a335ee;
   --sh-shot: #0070dd;
   --sh-station: #5fcf83;
   --sh-comment: #eab946;
@@ -1715,14 +1715,14 @@ button.sh-apill {
 }
 /* Cap-height glyphs (the monospace id, and numeric shot/station primaries) sit
    high in their line box; nudge the text down a hair to optically center it.
-   Applied to the id text and to numeric primaries - not to lowercase section
+   Applied to the id text and to numeric primaries - not to lowercase line
    names. The divider (on .sh-pill-id) stays centered. */
 .sh-pill-nudge {
   position: relative;
   top: 1px;
 }
 /* Shot/station ids (next to a cap-height digit primary) read higher than the
-   section id (next to a lowercase name), so they need a touch more downward
+   line id (next to a lowercase name), so they need a touch more downward
    nudge to look centered. */
 .sh-pill-nudge--num {
   top: 2px;

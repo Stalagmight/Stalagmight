@@ -33,7 +33,7 @@ export interface WizardScrollBodyProps {
   /** The scroller, shared with the map divider's drag, which measures against
    *  it to clamp the column width. */
   bodyRef: MutableRefObject<HTMLDivElement | null>;
-  /** The full-width section under the band. Omit for a step that has no table. */
+  /** The full-width line under the band. Omit for a step that has no table. */
   table?: ReactNode;
   /** The band, given the measured height so it fills exactly one viewport. */
   children: (bandHeight: number) => ReactNode;
@@ -74,7 +74,7 @@ export function WizardScrollBody({ bodyRef, table, children }: WizardScrollBodyP
         <div
           className="flex flex-col p-5"
           style={{ height: bandHeight }}
-          data-testid="wizard-shot-table-section"
+          data-testid="wizard-shot-table-line"
         >
           {table}
         </div>

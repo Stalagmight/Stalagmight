@@ -10,20 +10,20 @@ impl AppState {
     ) -> CommandResult {
         self.with_project_mut(|project| {
             // Validate station exists
-            let section = match project.get_section(station_ref.section_id) {
+            let line = match project.get_line(station_ref.line_id) {
                 Some(s) => s,
                 None => {
                     return CommandResult::failure(format!(
-                        "Section {} not found",
-                        station_ref.section_id
+                        "Line {} not found",
+                        station_ref.line_id
                     ));
                 }
             };
 
-            let max_station_index = section.shots.len() as u32;
+            let max_station_index = line.shots.len() as u32;
             if station_ref.station_index > max_station_index {
                 return CommandResult::failure(format!(
-                    "Station index {} out of range (section has {} stations)",
+                    "Station index {} out of range (line has {} stations)",
                     station_ref.station_index,
                     max_station_index + 1
                 ));
@@ -143,10 +143,10 @@ impl AppState {
         match holder {
             CommentHolder::Station { station_ref } => {
                 // Validate station exists
-                let section = project
-                    .get_section(station_ref.section_id)
-                    .ok_or_else(|| format!("Section {} not found", station_ref.section_id))?;
-                let max_station_index = section.shots.len() as u32;
+                let line = project
+                    .get_line(station_ref.line_id)
+                    .ok_or_else(|| format!("Line {} not found", station_ref.line_id))?;
+                let max_station_index = line.shots.len() as u32;
                 if station_ref.station_index > max_station_index {
                     return Err(format!(
                         "Station index {} out of range",
@@ -158,15 +158,15 @@ impl AppState {
                     .and_then(|key| project.station_comments.get(&key).cloned()))
             }
             CommentHolder::Shot {
-                section_id,
+                line_id,
                 shot_id,
             } => {
-                let section = project
-                    .get_section(*section_id)
-                    .ok_or_else(|| format!("Section {section_id} not found"))?;
-                let shot = section
+                let line = project
+                    .get_line(*line_id)
+                    .ok_or_else(|| format!("Line {line_id} not found"))?;
+                let shot = line
                     .get_shot(*shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                    .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
                 Ok(shot.comment.clone())
             }
         }
@@ -195,17 +195,17 @@ impl AppState {
                 Ok(())
             }
             CommentHolder::Shot {
-                section_id,
+                line_id,
                 shot_id,
             } => {
-                let section = project
-                    .get_section_mut(*section_id)
-                    .ok_or_else(|| format!("Section {section_id} not found"))?;
-                let shot = section
+                let line = project
+                    .get_line_mut(*line_id)
+                    .ok_or_else(|| format!("Line {line_id} not found"))?;
+                let shot = line
                     .shots
                     .iter_mut()
                     .find(|s| s.id == *shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                    .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
                 match comment {
                     Some(text) if !text.is_empty() => {
                         shot.comment = Some(text);

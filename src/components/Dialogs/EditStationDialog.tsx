@@ -44,18 +44,18 @@ export default function EditStationDialog() {
 
   const station = stations.find(
     (s) =>
-      s.station_ref.section_id === stationRef?.section_id &&
+      s.station_ref.line_id === stationRef?.line_id &&
       s.station_ref.station_index === stationRef?.station_index
   );
 
-  const section = project?.sections.find(
-    (s) => s.id === stationRef?.section_id
+  const line = project?.lines.find(
+    (s) => s.id === stationRef?.line_id
   );
 
   // The datum already stored on this station, if any: its role and accuracy.
   const storedDatum = project?.zero_datums.find(
     (d) =>
-      d.station_ref.section_id === stationRef?.section_id &&
+      d.station_ref.line_id === stationRef?.line_id &&
       d.station_ref.station_index === stationRef?.station_index
   );
   const storedAccuracy = storedDatum?.accuracy_m ?? DEFAULT_DATUM_ACCURACY_M;
@@ -306,11 +306,11 @@ export default function EditStationDialog() {
         <div className="space-y-3 border-t border-border pt-3">
           <DetailRow
             label="ID"
-            value={`${stationRef.section_id}:${stationRef.station_index}`}
+            value={`${stationRef.line_id}:${stationRef.station_index}`}
           />
           <DetailRow
-            label="Section"
-            value={section?.name ?? `Section ${stationRef.section_id}`}
+            label="Line"
+            value={line?.name ?? `Line ${stationRef.line_id}`}
           />
           <DetailRow label="X" value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} m`} />
           <DetailRow label="Y" value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} m`} />
@@ -323,14 +323,14 @@ export default function EditStationDialog() {
             <ul className="mt-1">
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">
-                  {ref.section_id}:{ref.station_index}
+                  {ref.line_id}:{ref.station_index}
                 </li>
               ))}
             </ul>
           </div>
         )}
 
-        {/* Comment section */}
+        {/* Comment line */}
         <div className="border-t border-border pt-3 space-y-2">
           <label className="block text-sm font-medium" htmlFor="station-comment">
             Comment
@@ -346,7 +346,7 @@ export default function EditStationDialog() {
           />
         </div>
 
-        {/* Zero Datum section */}
+        {/* Zero Datum line */}
         <div className="border-t border-border pt-3 space-y-3">
           <div className="flex items-center gap-2">
             <input

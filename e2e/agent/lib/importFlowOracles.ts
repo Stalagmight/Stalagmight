@@ -5,7 +5,7 @@
  * once per FLOW - one file, from the picker to whatever ends it - and are where
  * the import's actual contract is checked:
  *
- *   F1 UNDO ROUNDTRIP  - an import that landed sections pushed at least one undo
+ *   F1 UNDO ROUNDTRIP  - an import that landed lines pushed at least one undo
  *                        entry; a CANCELLED one pushed none and changed nothing;
  *                        and undoing exactly what was pushed returns the project
  *                        to the state it had before the flow, byte for byte
@@ -13,7 +13,7 @@
  *                        with the redo taking it back.
  *   F2 RESIDUE         - no dialog, no placement, no import context, and
  *                        `isImportInProgress` false once the flow is over.
- *   F3 ACCOUNTING      - the section and shot deltas equal what the receipt
+ *   F3 ACCOUNTING      - the line and shot deltas equal what the receipt
  *                        claimed, measured WHERE THE RECEIPT WAS MADE. The
  *                        receipt is the user's only account of what happened, so
  *                        a receipt that disagrees with the project is a bug even
@@ -40,7 +40,7 @@ export interface FlowBounds {
   /** Canonical `get_project_state`, or null when no project was open. */
   snapshot: string | null;
   undoDepth: number;
-  sections: number;
+  lines: number;
   shots: number;
   /** Directory the project lives in, for the temp-file sweep. */
   projectDir: string | null;
@@ -51,7 +51,7 @@ export interface FlowBounds {
 /** What the receipt said, captured before it was dismissed. */
 export interface ReceiptClaim {
   summary: string;
-  sections: number | null;
+  lines: number | null;
   shots: number | null;
   shown: number;
   more: number;
@@ -76,8 +76,8 @@ export class ImportOracleError extends Error {}
 export const IPC_ARG_REJECTION_RE = /invalid args [`'"]?(\w+)[`'"]? for command [`'"]?(\w+)[`'"]?/;
 
 /** Log lines that are an argument-deserialization rejection. */
-export function ipcArgRejections(lines: readonly string[]): string[] {
-  return lines.filter((line) => IPC_ARG_REJECTION_RE.test(line));
+export function ipcArgRejections(logLines: readonly string[]): string[] {
+  return logLines.filter((logLine) => IPC_ARG_REJECTION_RE.test(logLine));
 }
 
 /**
@@ -88,17 +88,17 @@ export function ipcArgRejections(lines: readonly string[]): string[] {
  * `importDialogBridge.ts` cannot get in on a stock build. The log always
  * carries the failure; the spy, when it works, only adds the payload.
  */
-export function checkIpcContract(lines: readonly string[], what: string, detail: string[] = []): void {
-  const rejected = ipcArgRejections(lines);
+export function checkIpcContract(logLines: readonly string[], what: string, detail: string[] = []): void {
+  const rejected = ipcArgRejections(logLines);
   if (rejected.length === 0) return;
   fail(
-    `S6 IPC CONTRACT: the app sent arguments the backend could not deserialize (${rejected.length} line(s))`,
+    `S6 IPC CONTRACT: the app sent arguments the backend could not deserialize (${rejected.length} log line(s))`,
     [`after: ${what}`, ...rejected.slice(0, 4), ...detail],
   );
 }
 
 function fail(headline: string, detail: string[] = []): never {
-  throw new ImportOracleError([headline, ...detail.map((line) => `  ${line}`)].join('\n'));
+  throw new ImportOracleError([headline, ...detail.map((detailLine) => `  ${detailLine}`)].join('\n'));
 }
 
 /**
@@ -181,11 +181,11 @@ export function s4WorkStarted(input: {
  *
  * `importReceiptSummaryParts` joins i18n'd fragments with ' - ', so the numbers
  * are extracted positionally rather than by label: the FIRST integer is the
- * section count and the SECOND is the shot count (`sections`, `shots`, then an
+ * line count and the SECOND is the shot count (`lines`, `shots`, then an
  * optional `loops`). Returns nulls when the text does not look like that, and
  * F3 then reports that it could not check rather than inventing a comparison.
  */
-export function parseReceiptSummary(summary: string): { sections: number | null; shots: number | null } {
+export function parseReceiptSummary(summary: string): { lines: number | null; shots: number | null } {
   const parts = summary.split(' - ');
   const firstInt = (text: string | undefined): number | null => {
     if (text === undefined) return null;
@@ -194,7 +194,7 @@ export function parseReceiptSummary(summary: string): { sections: number | null;
     const digits = (match[1] as string).replace(/[^\d]/g, '');
     return digits === '' ? null : Number(digits);
   };
-  return { sections: firstInt(parts[0]), shots: firstInt(parts[1]) };
+  return { lines: firstInt(parts[0]), shots: firstInt(parts[1]) };
 }
 
 export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | null {
@@ -202,7 +202,7 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
   const parsed = parseReceiptSummary(digest.receipt.summary);
   return {
     summary: digest.receipt.summary,
-    sections: parsed.sections,
+    lines: parsed.lines,
     shots: parsed.shots,
     shown: digest.receipt.shown,
     more: digest.receipt.more,
@@ -214,7 +214,7 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
 export interface ReceiptCapture {
   /** The claim, taken from the FIRST receipt the flow showed. */
   claim: ReceiptClaim | null;
-  /** Section and shot counts read at the same moment as the claim. */
+  /** Line and shot counts read at the same moment as the claim. */
   atReceipt: CountedProject | null;
   /**
    * `project.file_path` at that same moment - the project the receipt is ABOUT.
@@ -266,7 +266,7 @@ export function captureReceipt(
   if (claim === null) return previous;
   return {
     claim,
-    atReceipt: { sections: digest.sections, shots: digest.shots },
+    atReceipt: { lines: digest.lines, shots: digest.shots },
     projectFileAtReceipt: digest.projectFile,
     historyTouchedBeforeReceipt: historyTouched,
   };
@@ -317,8 +317,8 @@ export function checkReceipt(claim: ReceiptClaim): void {
  * tell a completion from an abandonment:
  *
  *   - "the undo stack grew" does not mean completed. The DMP wizard commits
- *     EARLY and mid-flow (`transitionToPlacingOrManual` calls `import_sections`
- *     well before the end), so a user can land sections and then walk back and
+ *     EARLY and mid-flow (`transitionToPlacingOrManual` calls `import_lines`
+ *     well before the end), so a user can land lines and then walk back and
  *     cancel. Keying on that reported a leak for flows that ended on the cancel
  *     path, where retention is by design.
  *   - "a receipt was shown" does not fire often enough to be a gate. A clean
@@ -343,7 +343,7 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
 
 /** The two numbers F3 compares. `FlowBounds` satisfies it. */
 export interface CountedProject {
-  sections: number;
+  lines: number;
   shots: number;
 }
 
@@ -351,7 +351,7 @@ export interface CountedProject {
  * F3. The receipt is an account of the import; the project is what happened.
  *
  * Only checked when a receipt was actually seen AND its summary parsed. The DMP
- * wizard calls `import_sections` up to four times for one logical import and
+ * wizard calls `import_lines` up to four times for one logical import and
  * `aggregateImportReceipts` merges the results, so the claim is compared against
  * the WHOLE flow's delta, never against one command's.
  *
@@ -360,7 +360,7 @@ export interface CountedProject {
  * after a receipt appears - the interjection stream plays `undo`, a second file
  * gets imported, the receipt is dismissed onto another import - so a delta taken
  * at the end of the flow measures the WALK, not the receipt. Measured, on the
- * campaign's seed-8 cell: a Walls import whose receipt correctly said "1 section
+ * campaign's seed-8 cell: a Walls import whose receipt correctly said "1 line
  * - 7 shots" was reported as a 0/0 delta, because an `undo` interjection two
  * moves later had taken the import back. The receipt was right; the oracle was
  * subtracting numbers from two different moments.
@@ -369,22 +369,22 @@ export interface CountedProject {
  * nothing extra and cannot drift from the claim it is checking.
  */
 export function checkAccounting(claim: ReceiptClaim, before: CountedProject, atReceipt: CountedProject): void {
-  if (claim.sections === null || claim.shots === null) return;
+  if (claim.lines === null || claim.shots === null) return;
   // `-1` is the digest's "no project open" sentinel, not a count.
   //
   // A measurement taken with no project has nothing to compare against, so there
   // is no claim to check. A flow that STARTED with none created one, and a
-  // project that did not exist had zero sections: subtracting the sentinel would
+  // project that did not exist had zero lines: subtracting the sentinel would
   // make every count one too many. Measured, on the first five-format run: a
   // `.tml` imported into a project the flow itself created reported a 3/5 delta
   // against a receipt that correctly said 2/4.
-  if (atReceipt.sections < 0 || atReceipt.shots < 0) return;
-  const sectionDelta = atReceipt.sections - Math.max(0, before.sections);
+  if (atReceipt.lines < 0 || atReceipt.shots < 0) return;
+  const lineDelta = atReceipt.lines - Math.max(0, before.lines);
   const shotDelta = atReceipt.shots - Math.max(0, before.shots);
-  if (sectionDelta !== claim.sections || shotDelta !== claim.shots) {
+  if (lineDelta !== claim.lines || shotDelta !== claim.shots) {
     fail('F3 ACCOUNTING: the receipt does not describe what landed in the project', [
-      `receipt:  ${claim.sections} section(s), ${claim.shots} shot(s)`,
-      `project:  ${sectionDelta} section(s), ${shotDelta} shot(s)`,
+      `receipt:  ${claim.lines} line(s), ${claim.shots} shot(s)`,
+      `project:  ${lineDelta} line(s), ${shotDelta} shot(s)`,
       `summary:  ${claim.summary}`,
     ]);
   }
@@ -419,7 +419,7 @@ export type FlowShape = 'imported' | 'cancelled';
 /**
  * F1, first half: did the flow push the number of entries its shape implies?
  *
- * An import that landed at least one section MUST be undoable - a mutation with
+ * An import that landed at least one line MUST be undoable - a mutation with
  * no entry is a change the user cannot take back, which is the worst outcome
  * this scenario can find. A cancelled flow must have pushed nothing AND changed
  * nothing; "nothing was pushed" alone would pass a cancel that mutated silently.
@@ -437,8 +437,8 @@ export function checkPushed(
     ]);
   }
   if (shape === 'imported' && pushed < 1) {
-    fail(`F1 UNDO ROUNDTRIP: ${what} imported sections but pushed no undo entry`, [
-      `sections ${before.sections} -> ${after.sections}, shots ${before.shots} -> ${after.shots}`,
+    fail(`F1 UNDO ROUNDTRIP: ${what} imported lines but pushed no undo entry`, [
+      `lines ${before.lines} -> ${after.lines}, shots ${before.shots} -> ${after.shots}`,
     ]);
   }
   if (shape === 'cancelled') {

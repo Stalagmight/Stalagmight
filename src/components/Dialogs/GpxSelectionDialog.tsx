@@ -33,7 +33,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
   const [isDuplicate, setIsDuplicate] = useState(false);
   const [hashChecked, setHashChecked] = useState(false);
 
-  // Collapsible section state
+  // Collapsible line state
   const [showWaypoints, setShowWaypoints] = useState(false);
   const [showTracks, setShowTracks] = useState(false);
   const [showRoutes, setShowRoutes] = useState(false);

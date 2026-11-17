@@ -34,7 +34,7 @@ export const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
       'toggle_satellite',
       'toggle_station_labels',
       'toggle_shot_labels',
-      'toggle_section_labels',
+      'toggle_line_labels',
       'fit_to_bounds',
       'zoom_in',
       'zoom_out',

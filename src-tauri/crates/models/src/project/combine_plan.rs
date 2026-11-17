@@ -1,22 +1,22 @@
-//! Combine Sections, what has to give so two sections that meet can become
+//! Combine Lines, what has to give so two lines that meet can become
 //! one: which side moves to close the join, by how much, and which rigid ties
 //! become ordinary loop closures. Read-only; the candidate query reports it
-//! (one plan per choice of kept section) and `combine_sections` applies it.
+//! (one plan per choice of kept line) and `combine_lines` applies it.
 //!
 //! The rules, from the merge forest the app keeps (`merge_stations` refuses a
-//! merge between sections that are already rigidly connected, so merges never
+//! merge between lines that are already rigidly connected, so merges never
 //! close a loop; a loop is closed by a loop closure):
 //!
 //! - **Join ties** make the two join stations one point: the merges and
 //!   closures between the two join stations' merge groups (for a merged join,
 //!   every tie inside its one group). The combine folds them into the joined
 //!   station, so they are never torn. A tie that reaches a station of either
-//!   section OTHER than its join station is not one: that section passes
-//!   through the join point again, and the tie would tie the combined section
+//!   line OTHER than its join station is not one: that line passes
+//!   through the join point again, and the tie would tie the combined line
 //!   to itself.
-//! - **Loop ties.** A merge from the moving section M to a section that still
+//! - **Loop ties.** A merge from the moving line M to a line that still
 //!   reaches the fixed one F without M is the other end of a loop the combine
-//!   closes through the combined section: it becomes a loop closure (the one
+//!   closes through the combined line: it becomes a loop closure (the one
 //!   nearest M, so the least moves). Merges form a forest, so there is at most
 //!   one per path. A snapped (aligned, rigid) closure between M's side and
 //!   F's side becomes an ordinary one for the same reason.
@@ -24,12 +24,12 @@
 //!   misclosure; M's side (M and everything still merged to it) moves by it.
 //!   Two side-by-side ends (within the tolerance) or merged ends whose chain
 //!   positions differ are apart by a residual, which moves M's side the same
-//!   way (#740): the combined section hangs the other section's stations off
+//!   way (#740): the combined line hangs the other line's stations off
 //!   the kept join station, so one side moves by the residual whatever the
 //!   plan says, and what is merged to it must follow. Only float dust is
 //!   left in place.
-//!   M is the other section, unless its side is held by a zero datum and the
-//!   kept section's is not, or (no datum deciding) M's side holds the station
+//!   M is the other line, unless its side is held by a zero datum and the
+//!   kept line's is not, or (no datum deciding) M's side holds the station
 //!   the closure-adjusted view holds the survey at
 //!   (`Project::adjustment_anchor_of`) and the kept side does not: moving it
 //!   would shift the whole adjusted survey by the gap. That applies only where
@@ -38,8 +38,8 @@
 //!   the two ends of one shot is one the solve skips (#737), so it counts for
 //!   neither. When both sides are held, the merges from M to the
 //!   datum sides also become closures (a closure between two anchored groups
-//!   is legitimate; a merge is not). Only when BOTH sections carry a zero datum
-//!   on one of their own stations is the combine refused: the combined section
+//!   is legitimate; a merge is not). Only when BOTH lines carry a zero datum
+//!   on one of their own stations is the combine refused: the combined line
 //!   would hold two.
 //!   Moving M's side tears every snapped closure from it to anything that
 //!   stays, so those become ordinary closures too. One into a part a datum
@@ -48,10 +48,10 @@
 //! - **Hand moves at the join (#755).** A manual station offset moves one
 //!   station as shown and nothing beyond it, and the joined station keeps
 //!   only one: the fixed side's. When the two join stations' offsets differ,
-//!   the side that moves goes by the chain gap (the combined section hangs
-//!   the other section's stations off the kept join station's chain), but
+//!   the side that moves goes by the chain gap (the combined line hangs
+//!   the other line's stations off the kept join station's chain), but
 //!   the join station whose offset is dropped lands on the joined station as
-//!   shown, which is the gap between the two as shown away. The sections
+//!   shown, which is the gap between the two as shown away. The lines
 //!   merged at that station (on a join that is not merged) stay merged to
 //!   the joined station, so they move with it, by that gap, and not with the
 //!   side: otherwise the offset solve closed the merge later, the in-session
@@ -66,7 +66,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombineJoinedMove, CombinePlan, CombineRemovedClosure, CombineRemovedKind,
-    CombineReplacedClosure, KeptMovesReason, LoopClosure, SectionId, StationRef, TornTie,
+    CombineReplacedClosure, KeptMovesReason, LoopClosure, LineId, StationRef, TornTie,
     TornTieKind, TornTieReason,
 };
 
@@ -103,8 +103,8 @@ pub(crate) struct ResolvedClosure {
 }
 
 /// What the anchor rule reads about loop closures, worked out once per
-/// candidate query (the station menu and Combine Sections plan two choices of
-/// kept section for every partner) and only when a shifting plan needs it:
+/// candidate query (the station menu and Combine Lines plan two choices of
+/// kept line for every partner) and only when a shifting plan needs it:
 /// the closures the solve skips because they join the two ends of one shot
 /// (#737), and every closure resolved.
 #[derive(Debug, Default)]
@@ -129,11 +129,11 @@ impl ClosureFacts {
     }
 }
 
-/// The point two sections are joined at, from the kept section's side.
+/// The point two lines are joined at, from the kept line's side.
 #[derive(Debug, Clone)]
 pub(crate) struct JoinPoint {
-    pub kept: SectionId,
-    pub other: SectionId,
+    pub kept: LineId,
+    pub other: LineId,
     pub join_k: StationRef,
     pub join_o: StationRef,
     /// The merge group of each join station (one group when merged).
@@ -143,9 +143,9 @@ pub(crate) struct JoinPoint {
 }
 
 impl JoinPoint {
-    /// A station of one of the two sections other than its join station.
+    /// A station of one of the two lines other than its join station.
     fn is_loose(&self, at: StationRef) -> bool {
-        (at.section_id == self.kept || at.section_id == self.other)
+        (at.line_id == self.kept || at.line_id == self.other)
             && at != self.join_k
             && at != self.join_o
     }
@@ -167,29 +167,29 @@ impl JoinPoint {
     }
 }
 
-/// What `combine_sections` changes before it joins the shots.
+/// What `combine_lines` changes before it joins the shots.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TiePlan {
-    /// The section whose side moves, when the two join stations are apart at
+    /// The line whose side moves, when the two join stations are apart at
     /// all: past the tolerance, or side by side within it (#740). `None` only
     /// for a gap of float dust (`Project::OFFSET_DUST_M` in each axis).
-    pub moving: Option<SectionId>,
-    /// The sections that move, the moving section first.
-    pub moved: Vec<SectionId>,
-    /// The translation applied to every moved section.
+    pub moving: Option<LineId>,
+    /// The lines that move, the moving line first.
+    pub moved: Vec<LineId>,
+    /// The translation applied to every moved line.
     pub shift: (f64, f64),
     /// The ties that become ordinary loop closures.
     pub torn: Vec<Tie>,
-    /// Which of `torn` tear because a zero datum holds the section on their
-    /// far side (the rest close a loop through the combined section): the
-    /// moving section's merges to its datum sides, and the snaps the move
+    /// Which of `torn` tear because a zero datum holds the line on their
+    /// far side (the rest close a loop through the combined line): the
+    /// moving line's merges to its datum sides, and the snaps the move
     /// tears into those parts (#756). Only a shift tears them, so the far
     /// side is the one that does not move.
     pub held_by_datum: Vec<TieId>,
-    /// Why the kept section's side moves, when it does.
+    /// Why the kept line's side moves, when it does.
     pub kept_moves_because: Option<KeptMovesReason>,
-    /// Whether the joined station keeps the kept section's manual offset
-    /// (the fixed side's: false when the kept section is the one that moves).
+    /// Whether the joined station keeps the kept line's manual offset
+    /// (the fixed side's: false when the kept line is the one that moves).
     pub kept_offset_wins: bool,
     /// The ties the combine removes instead of keeping (#746): once combined,
     /// the loop closure each is or becomes would join the two ends of one
@@ -205,31 +205,31 @@ pub(crate) struct TiePlan {
     /// these, and the combine checks it replaced exactly these.
     pub replaced: Vec<CombineReplacedClosure>,
     /// The join station whose manual offset the joined station does not keep
-    /// (the moving side's; the other section's when nothing moves), and how
+    /// (the moving side's; the other line's when nothing moves), and how
     /// far it moves to land on the joined station as shown, when the two
     /// join stations' offsets differ on a join that is not merged (#755).
     pub dropped_hand_move: Option<(StationRef, (f64, f64))>,
-    /// The sections merged at that station, and what hangs off them: they
+    /// The lines merged at that station, and what hangs off them: they
     /// move with the joined station, by its move above, not by `shift`.
     /// Not in `moved`.
-    pub joined_moved: Vec<SectionId>,
+    pub joined_moved: Vec<LineId>,
 }
 
-type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
+type Adjacency = HashMap<LineId, Vec<(LineId, TieId)>>;
 
-/// The moving section, the fixed one, the ties to tear, which of those tear
+/// The moving line, the fixed one, the ties to tear, which of those tear
 /// for a zero datum, and why the kept side moves (when it does).
 type MovingSide = (
-    SectionId,
-    SectionId,
+    LineId,
+    LineId,
     HashSet<TieId>,
     Vec<TieId>,
     Option<KeptMovesReason>,
 );
 
-/// Every section reachable from `start` over `adjacency` without entering
+/// Every line reachable from `start` over `adjacency` without entering
 /// `blocked` (`start` included).
-fn reach(adjacency: &Adjacency, start: SectionId, blocked: SectionId) -> HashSet<SectionId> {
+fn reach(adjacency: &Adjacency, start: LineId, blocked: LineId) -> HashSet<LineId> {
     let mut seen = HashSet::new();
     let mut queue = vec![start];
     while let Some(current) = queue.pop() {
@@ -278,20 +278,20 @@ impl Project {
             .any(|datum| self.resolve_key(&datum.station_ref) == Some(at))
     }
 
-    /// Does a PLACEMENT zero datum sit on one of `section`'s own stations? A
-    /// GPS fix (#741) holds nothing in raw geometry, so a section carrying only
+    /// Does a PLACEMENT zero datum sit on one of `line`'s own stations? A
+    /// GPS fix (#741) holds nothing in raw geometry, so a line carrying only
     /// fixes may move like any other.
-    pub(crate) fn carries_zero_datum(&self, section: SectionId) -> bool {
+    pub(crate) fn carries_zero_datum(&self, line: LineId) -> bool {
         self.placement_datum_refs()
             .iter()
-            .any(|at| at.section_id == section)
+            .any(|at| at.line_id == line)
     }
 
     /// Plan the shift and the torn ties for joining `join`, whose join stations'
     /// chain positions are `gap` apart (the kept one minus the other one: the
-    /// translation that brings the other section's join station onto the kept
+    /// translation that brings the other line's join station onto the kept
     /// one's) and, as shown (with their manual offsets), `shown` apart, against
-    /// `ties` ([`Self::rigid_ties`]). `Err` is the refusal: both sections carry
+    /// `ties` ([`Self::rigid_ties`]). `Err` is the refusal: both lines carry
     /// a zero datum.
     pub(crate) fn plan_ties(
         &self,
@@ -303,19 +303,19 @@ impl Project {
         let merges: Vec<&Tie> = ties
             .iter()
             .filter(|t| matches!(t.id, TieId::Merge(_)))
-            .filter(|t| t.a.section_id != t.b.section_id && !join.is_join_tie(t.a, t.b))
+            .filter(|t| t.a.line_id != t.b.line_id && !join.is_join_tie(t.a, t.b))
             .collect();
         let adjacency_without = |torn: &HashSet<TieId>| -> Adjacency {
             let mut adjacency: Adjacency = HashMap::new();
             for tie in merges.iter().filter(|t| !torn.contains(&t.id)) {
-                let (x, y) = (tie.a.section_id, tie.b.section_id);
+                let (x, y) = (tie.a.line_id, tie.b.line_id);
                 adjacency.entry(x).or_default().push((y, tie.id));
                 adjacency.entry(y).or_default().push((x, tie.id));
             }
             adjacency
         };
-        // The merges from M into a section that still reaches F without M.
-        let loop_ties = |m: SectionId, f: SectionId| -> HashSet<TieId> {
+        // The merges from M into a line that still reaches F without M.
+        let loop_ties = |m: LineId, f: LineId| -> HashSet<TieId> {
             let adjacency = adjacency_without(&HashSet::new());
             let fixed = reach(&adjacency, f, m);
             adjacency
@@ -326,18 +326,18 @@ impl Project {
                 .map(|(_, id)| *id)
                 .collect()
         };
-        // The sections that carry a placement zero datum on a station of their
+        // The lines that carry a placement zero datum on a station of their
         // own, read once: every anchored-side question below is a lookup in it.
         // GPS fixes do not hold a side (#741).
-        let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
+        let datum_lines: HashSet<LineId> = self.placement_datum_lines();
         let anchored =
-            |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
+            |lines: &HashSet<LineId>| lines.iter().any(|s| datum_lines.contains(s));
         // The snapped closures a plan tears when `moving` moves off `fixed`
         // with `torn` merges torn: one across the two sides closes a loop
-        // through the combined section, and any from a side that moves stops
+        // through the combined line, and any from a side that moves stops
         // being snapped.
-        let snaps_torn = |moving: SectionId,
-                          fixed: SectionId,
+        let snaps_torn = |moving: LineId,
+                          fixed: LineId,
                           torn: &HashSet<TieId>,
                           shifting: bool|
          -> HashSet<TieId> {
@@ -349,11 +349,11 @@ impl Project {
                 .filter(|t| !join.is_join_tie(t.a, t.b))
                 .filter(|t| {
                     let (in_a, in_b) = (
-                        side.contains(&t.a.section_id),
-                        side.contains(&t.b.section_id),
+                        side.contains(&t.a.line_id),
+                        side.contains(&t.b.line_id),
                     );
-                    let crosses = (in_a && fixed_side.contains(&t.b.section_id))
-                        || (in_b && fixed_side.contains(&t.a.section_id));
+                    let crosses = (in_a && fixed_side.contains(&t.b.line_id))
+                        || (in_b && fixed_side.contains(&t.a.line_id));
                     crosses || (shifting && in_a != in_b)
                 })
                 .map(|t| t.id)
@@ -364,11 +364,11 @@ impl Project {
         // non-finite ends); checked again so a shift can never write one.
         //
         // Any gap moves a side, not only one past the tolerance (#740). The
-        // combined section hangs the other section's stations off the kept
+        // combined line hangs the other line's stations off the kept
         // join station, so a side-by-side residual left out of the plan moved
-        // the other section alone: a residual away from what is merged to it,
+        // the other line alone: a residual away from what is merged to it,
         // and a reopen (whose offset solve closes merges) then moved the
-        // combined section. The residual is carried exactly like a shift, so
+        // combined line. The residual is carried exactly like a shift, so
         // the anchor rule picks the side and what is merged to it moves along.
         // Float dust stays where it is: a gap within `OFFSET_DUST_M` in each
         // axis, the bound under which the offset solve corrects nothing, so
@@ -387,14 +387,14 @@ impl Project {
         // join's stations are one point already, and all that is merged there
         // are join ties, which never move.
         let carried = finite && !join.merged && shown != gap;
-        // What is merged at a join station (a third section) moves with the
+        // What is merged at a join station (a third line) moves with the
         // joined station when that station's hand move is dropped, so a side
         // moves when the gap as shown is past dust too, even with none in the
         // chain: the anchor rule picks which, as for a shift.
         let third = |group: &HashSet<StationRef>| {
             group
                 .iter()
-                .any(|at| at.section_id != join.kept && at.section_id != join.other)
+                .any(|at| at.line_id != join.kept && at.line_id != join.other)
         };
         let carries_branches =
             carried && beyond_dust(shown) && (third(&join.group_k) || third(&join.group_o));
@@ -407,7 +407,7 @@ impl Project {
             // closure there now (the join's own included), or the combine
             // turns a tie into one it will solve (a merge torn to close a
             // loop, a snapped closure made ordinary). A survey the view shows
-            // as measured keeps the plain rule, and the other section moves.
+            // as measured keeps the plain rule, and the other line moves.
             //
             // Both halves apply the across-one-shot skip (#737): a closure
             // that joins the two ends of one shot is skipped by the solve, so
@@ -416,7 +416,7 @@ impl Project {
             // own sweep on the plain plan's ties (`joined_survey_is_solved`),
             // because a torn tie can join the two ends of one shot only once
             // the two join stations are one.
-            let component = self.get_connected_section_ids(join.kept);
+            let component = self.get_connected_line_ids(join.kept);
             // A GPS fix is an observation the solve fits on its own (#741), so a
             // component holding one is adjusted with or without a closure.
             let solved_now = self.component_has_gps_fix(&component)
@@ -437,7 +437,7 @@ impl Project {
             };
             let anchor = if adjusted {
                 self.adjustment_anchor_of(&component)
-                    .map(|at| at.section_id)
+                    .map(|at| at.line_id)
             } else {
                 None
             };
@@ -446,13 +446,13 @@ impl Project {
                 &loop_ties,
                 &adjacency_without,
                 &anchored,
-                &datum_sections,
+                &datum_lines,
                 anchor,
             )?
         } else {
             // Nothing moves (the two join stations are one point already, to
             // float dust): only the loops the combine would close inside one
-            // section tear.
+            // line tear.
             (
                 join.other,
                 join.kept,
@@ -470,16 +470,16 @@ impl Project {
             join.join_o
         };
         // What is merged there moves with the joined station: each third
-        // section still merged at it once the plan's ties tear, and what hangs
-        // off it, never through the moving section. Merges form a forest
+        // line still merged at it once the plan's ties tear, and what hangs
+        // off it, never through the moving line. Merges form a forest
         // (`merge_stations` refuses a loop), so that is all of it; but nothing
         // breaks a merge loop an older or hand-edited file holds, and a part
         // merged at the dropped station that is also merged to the moving
-        // section at another station cannot follow both. It stays with its
+        // line at another station cannot follow both. It stays with its
         // side, and its merge at the join becomes a loop closure carrying the
         // two hand moves' difference as its misclosure, as a loop the combine
-        // closes through the combined section does.
-        let (joined, looped): (HashSet<SectionId>, HashSet<TieId>) = if carried && shifting {
+        // closes through the combined line does.
+        let (joined, looped): (HashSet<LineId>, HashSet<TieId>) = if carried && shifting {
             let adjacency = adjacency_without(&torn);
             let side = reach(&adjacency, moving, fixed);
             let kept_merges = || merges.iter().filter(|t| !torn.contains(&t.id));
@@ -493,16 +493,16 @@ impl Project {
                 } else {
                     continue;
                 };
-                if partner.section_id == moving || partner.section_id == fixed {
+                if partner.line_id == moving || partner.line_id == fixed {
                     continue;
                 }
-                let part = reach(&adjacency, partner.section_id, moving);
+                let part = reach(&adjacency, partner.line_id, moving);
                 let back = kept_merges().any(|t| {
-                    (part.contains(&t.a.section_id)
-                        && t.b.section_id == moving
+                    (part.contains(&t.a.line_id)
+                        && t.b.line_id == moving
                         && t.b != dropped_at)
-                        || (part.contains(&t.b.section_id)
-                            && t.a.section_id == moving
+                        || (part.contains(&t.b.line_id)
+                            && t.a.line_id == moving
                             && t.a != dropped_at)
                 });
                 if back {
@@ -516,7 +516,7 @@ impl Project {
         } else {
             (HashSet::new(), HashSet::new())
         };
-        // The other section's side, picked only to carry what is merged at its
+        // The other line's side, picked only to carry what is merged at its
         // join station, with nothing left there to carry (none there, its
         // merge torn to close a loop, or one of a merge loop): nothing moves
         // after all. (The kept side picked goes on moving, by the float dust
@@ -540,28 +540,28 @@ impl Project {
         let adjacency = adjacency_without(&torn);
         let side = reach(&adjacency, moving, fixed);
         // Snapped closures: one across the two sides closes a loop through the
-        // combined section, and any from a side that moves stops being snapped.
+        // combined line, and any from a side that moves stops being snapped.
         let snaps = snaps_torn(moving, fixed, &torn, shifting);
         // One the move tears into a part a datum merge is torn from tears
         // for that datum, like the merge (#756): the datum holds the part
-        // where it is, and no loop through the combined section closes there.
+        // where it is, and no loop through the combined line closes there.
         if !held_by_datum.is_empty() {
-            let mut held_parts: HashSet<SectionId> = HashSet::new();
+            let mut held_parts: HashSet<LineId> = HashSet::new();
             for tie in ties.iter().filter(|t| held_by_datum.contains(&t.id)) {
-                let far = if tie.a.section_id == moving {
+                let far = if tie.a.line_id == moving {
                     tie.b
                 } else {
                     tie.a
                 };
-                if !held_parts.contains(&far.section_id) {
-                    held_parts.extend(reach(&adjacency, far.section_id, moving));
+                if !held_parts.contains(&far.line_id) {
+                    held_parts.extend(reach(&adjacency, far.line_id, moving));
                 }
             }
             held_by_datum.extend(
                 ties.iter()
                     .filter(|t| snaps.contains(&t.id))
                     .filter(|t| {
-                        held_parts.contains(&t.a.section_id) || held_parts.contains(&t.b.section_id)
+                        held_parts.contains(&t.a.line_id) || held_parts.contains(&t.b.line_id)
                     })
                     .map(|t| t.id),
             );
@@ -574,7 +574,7 @@ impl Project {
                 .iter()
                 .filter(|t| matches!(t.id, TieId::Closure(_)) && !join.is_join_tie(t.a, t.b))
                 .filter(|t| {
-                    let (a, b) = (t.a.section_id, t.b.section_id);
+                    let (a, b) = (t.a.line_id, t.b.line_id);
                     (joined.contains(&a) && side.contains(&b) && !joined.contains(&b))
                         || (joined.contains(&b) && side.contains(&a) && !joined.contains(&a))
                 })
@@ -614,7 +614,7 @@ impl Project {
             Vec::new()
         };
         if !shifting {
-            // Nothing moves only with the other section picked (the plain
+            // Nothing moves only with the other line picked (the plain
             // rule, or idle above), so the joined station keeps the kept one's
             // hand move, as it always did.
             debug_assert_eq!(picked, join.other, "a still plan picked the kept side");
@@ -627,11 +627,11 @@ impl Project {
                 ..TiePlan::default()
             });
         }
-        let mut moved: Vec<SectionId> = side
+        let mut moved: Vec<LineId> = side
             .into_iter()
             .filter(|s| *s != moving && !joined.contains(s))
             .collect();
-        let mut joined_moved: Vec<SectionId> = joined.into_iter().collect();
+        let mut joined_moved: Vec<LineId> = joined.into_iter().collect();
         joined_moved.sort_unstable();
         moved.sort_unstable();
         moved.insert(0, moving);
@@ -729,7 +729,7 @@ impl Project {
 
     /// Would the closure-adjusted view solve the survey this combine joins,
     /// were `torn` merges torn and `snaps` snapped closures made ordinary
-    /// (the plain plan's, where the other section moves)? Solved when one
+    /// (the plain plan's, where the other line moves)? Solved when one
     /// closure in `component` takes part in the joined survey's sweep
     /// ([`Self::joined_sweep`]) without collapsing a shot - what
     /// `plan_adjustment_anchors` asks of the combined project. Reached only
@@ -737,7 +737,7 @@ impl Project {
     fn joined_survey_is_solved(
         &self,
         join: &JoinPoint,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
         ties: &[Tie],
         closures: &[ResolvedClosure],
         torn: &HashSet<TieId>,
@@ -746,8 +746,8 @@ impl Project {
         let mut solved = false;
         self.joined_sweep(join, ties, closures, torn, snaps, |tie, skipped| {
             solved = !skipped
-                && component.contains(&tie.a.section_id)
-                && component.contains(&tie.b.section_id);
+                && component.contains(&tie.a.line_id)
+                && component.contains(&tie.b.line_id);
             !solved
         });
         solved
@@ -812,24 +812,24 @@ impl Project {
     /// Which side moves when the join has to close by a shift, and the merges
     /// that tear for it:
     /// - a side a zero datum holds stays;
-    /// - between two free sides, the one holding `anchor` (the section the
+    /// - between two free sides, the one holding `anchor` (the line the
     ///   closure-adjusted view is held at, when no datum is in the survey)
     ///   stays, or Plan and Export would shift the whole cave by the gap;
-    /// - otherwise the other section's side moves.
+    /// - otherwise the other line's side moves.
     ///
-    /// With both sides held by datums, the moving section (one that carries
+    /// With both sides held by datums, the moving line (one that carries
     /// no datum itself) also tears its merges towards its datum sides.
     fn pick_moving_side(
         join: &JoinPoint,
-        loop_ties: &dyn Fn(SectionId, SectionId) -> HashSet<TieId>,
+        loop_ties: &dyn Fn(LineId, LineId) -> HashSet<TieId>,
         adjacency_without: &dyn Fn(&HashSet<TieId>) -> Adjacency,
-        anchored: &dyn Fn(&HashSet<SectionId>) -> bool,
-        datum_sections: &HashSet<SectionId>,
-        anchor: Option<SectionId>,
+        anchored: &dyn Fn(&HashSet<LineId>) -> bool,
+        datum_lines: &HashSet<LineId>,
+        anchor: Option<LineId>,
     ) -> Result<MovingSide, String> {
         let sides = [(join.other, join.kept), (join.kept, join.other)];
         // The sides no zero datum holds, in preference order.
-        let mut free: Vec<(SectionId, SectionId, HashSet<TieId>, bool)> = Vec::new();
+        let mut free: Vec<(LineId, LineId, HashSet<TieId>, bool)> = Vec::new();
         for (m, f) in sides {
             let torn = loop_ties(m, f);
             let side = reach(&adjacency_without(&torn), m, f);
@@ -853,14 +853,14 @@ impl Project {
             return Ok((m, f, torn, Vec::new(), because));
         }
         for (m, f) in sides {
-            if datum_sections.contains(&m) {
+            if datum_lines.contains(&m) {
                 continue;
             }
             let mut torn = loop_ties(m, f);
             let adjacency = adjacency_without(&torn);
             // Each part of the graph that hangs off M is walked once, however
             // many of M's merges lead into it.
-            let mut anchored_part: HashMap<SectionId, bool> = HashMap::new();
+            let mut anchored_part: HashMap<LineId, bool> = HashMap::new();
             let mut datum_ties: Vec<TieId> = Vec::new();
             for (n, id) in adjacency.get(&m).into_iter().flatten() {
                 let held = if let Some(held) = anchored_part.get(n) {
@@ -880,7 +880,7 @@ impl Project {
             return Ok((m, f, torn, datum_ties, because));
         }
         Err(
-            "Both sections are placed by a zero datum on one of their stations: merge them \
+            "Both lines are placed by a zero datum on one of their stations: merge them \
              first, so the later datum becomes a GPS fix"
                 .to_string(),
         )
@@ -889,15 +889,15 @@ impl Project {
     /// The plan as the dialog shows it.
     pub(crate) fn plan_for_display(
         plan: &TiePlan,
-        kept: SectionId,
+        kept: LineId,
         azimuth_rotation_deg: Option<f64>,
         join_offset_change_m: Option<f64>,
     ) -> CombinePlan {
         CombinePlan {
             kept,
-            moving_section: plan.moving,
+            moving_line: plan.moving,
             kept_moves_because: plan.kept_moves_because,
-            moved_sections: plan.moved.clone(),
+            moved_lines: plan.moved.clone(),
             shift_m: plan.shift.0.hypot(plan.shift.1),
             torn_ties: plan
                 .torn
@@ -933,7 +933,7 @@ impl Project {
                 Some((station, (dx, dy))) if !plan.joined_moved.is_empty() => {
                     Some(CombineJoinedMove {
                         station,
-                        sections: plan.joined_moved.clone(),
+                        lines: plan.joined_moved.clone(),
                         shift_m: dx.hypot(dy),
                     })
                 }

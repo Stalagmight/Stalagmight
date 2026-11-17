@@ -55,7 +55,7 @@ describe('getCategoryDefaults for the advanced category (#357 item 15)', () => {
     expect(out.panels?.data_table_inclination_mode).toBe('inout');
   });
 
-  it('still resets the other advanced sections', () => {
+  it('still resets the other advanced lines', () => {
     const current = customisedConfig();
     current.closure_adjustment.base_sigma_length_m = 99;
     const out = getCategoryDefaults('advanced', 'dark', current);

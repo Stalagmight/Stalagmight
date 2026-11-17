@@ -42,9 +42,9 @@ export default function CommentOverlay() {
     }
     if (commentTarget.type === 'station' && commentTarget.stationRef) {
       await updateStationComment(commentTarget.stationRef, trimmed || null);
-    } else if (commentTarget.type === 'shot' && commentTarget.sectionId !== undefined && commentTarget.shotId !== undefined) {
+    } else if (commentTarget.type === 'shot' && commentTarget.lineId !== undefined && commentTarget.shotId !== undefined) {
       // Use "" not null for clearing: JSON null for Option<Option<String>> deserializes as outer None (= no update)
-      await updateShot(commentTarget.sectionId, commentTarget.shotId, { comment: trimmed || "" });
+      await updateShot(commentTarget.lineId, commentTarget.shotId, { comment: trimmed || "" });
     }
     clearCommentTarget();
   }, [commentTarget, value, clearCommentTarget, updateStationComment, updateShot]);

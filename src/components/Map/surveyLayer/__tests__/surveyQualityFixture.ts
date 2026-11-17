@@ -20,8 +20,8 @@ export interface ShotReadings {
 }
 
 export function buildSurveyData(spec: {
-  sections: { id: number; shotIds: number[] }[];
-  stations: { sectionId: number; stationIndex: number; x?: number; y?: number }[];
+  lines: { id: number; shotIds: number[] }[];
+  stations: { lineId: number; stationIndex: number; x?: number; y?: number }[];
   /** Readings per GLOBAL shot index; missing entries are pristine. */
   shots?: Record<number, ShotReadings>;
   /** Groups of GLOBAL station indices that are merged (fully transitive). */
@@ -30,8 +30,8 @@ export function buildSurveyData(spec: {
   const data = emptySurveyData();
 
   let offset = 0;
-  for (const s of spec.sections) {
-    data.sections.push({
+  for (const s of spec.lines) {
+    data.lines.push({
       id: s.id,
       name: null,
       color: '#ffffff',
@@ -47,7 +47,7 @@ export function buildSurveyData(spec: {
   const n = offset;
   data.shotCount = n;
   data.shotIds = new Uint32Array(n);
-  data.shotSectionIds = new Uint32Array(n);
+  data.shotLineIds = new Uint32Array(n);
   data.shotAzimuthIn = new Float32Array(n);
   data.shotAzimuthOut = new Float32Array(n);
   data.shotLength = new Float32Array(n);
@@ -57,11 +57,11 @@ export function buildSurveyData(spec: {
   data.shotPitchOut = new Float32Array(n);
   data.shotFlags = new Uint8Array(n);
   let c = 0;
-  for (const s of spec.sections) {
+  for (const s of spec.lines) {
     for (const id of s.shotIds) {
       const r = spec.shots?.[c] ?? {};
       data.shotIds[c] = id;
-      data.shotSectionIds[c] = s.id;
+      data.shotLineIds[c] = s.id;
       data.shotAzimuthIn[c] = r.azimuthIn ?? 90;
       data.shotAzimuthOut[c] = r.azimuthOut ?? r.azimuthIn ?? 90;
       data.shotLength[c] = r.length ?? 10;
@@ -74,12 +74,12 @@ export function buildSurveyData(spec: {
   }
 
   data.stationCount = spec.stations.length;
-  data.stationSectionIds = new Uint32Array(spec.stations.length);
+  data.stationLineIds = new Uint32Array(spec.stations.length);
   data.stationIndices = new Uint32Array(spec.stations.length);
   data.stationCoords = new Float64Array(spec.stations.length * 3);
   data.stationFlags = new Uint8Array(spec.stations.length);
   spec.stations.forEach((st, i) => {
-    data.stationSectionIds[i] = st.sectionId;
+    data.stationLineIds[i] = st.lineId;
     data.stationIndices[i] = st.stationIndex;
     data.stationCoords[i * 3] = st.x ?? i * 10;
     data.stationCoords[i * 3 + 1] = st.y ?? 0;
@@ -90,7 +90,7 @@ export function buildSurveyData(spec: {
       // Mirror the backend: every member lists every OTHER member.
       const others = group
         .filter((x) => x !== g)
-        .map((x) => ({ section_id: spec.stations[x]!.sectionId, station_index: spec.stations[x]!.stationIndex }));
+        .map((x) => ({ line_id: spec.stations[x]!.lineId, station_index: spec.stations[x]!.stationIndex }));
       data.stationMergedWith.set(g, others);
     }
   }
@@ -98,26 +98,26 @@ export function buildSurveyData(spec: {
   return data;
 }
 
-/** One-shot survey with the given readings (shot 1 of section 1). */
+/** One-shot survey with the given readings (shot 1 of line 1). */
 export function oneShot(readings: ShotReadings): SurveyData {
   return buildSurveyData({
-    sections: [{ id: 1, shotIds: [101] }],
+    lines: [{ id: 1, shotIds: [101] }],
     stations: [
-      { sectionId: 1, stationIndex: 0 },
-      { sectionId: 1, stationIndex: 1 },
+      { lineId: 1, stationIndex: 0 },
+      { lineId: 1, stationIndex: 1 },
     ],
     shots: { 0: readings },
   });
 }
 
 export function warn(
-  sectionId: number,
+  lineId: number,
   shotId: number,
   severity: WarningSeverity,
   opts: { isResolved?: boolean; code?: string } = {},
 ): ProjectWarning {
   return {
-    sectionId,
+    lineId,
     shotId,
     shotIndex: 0,
     code: opts.code ?? 'TEST',

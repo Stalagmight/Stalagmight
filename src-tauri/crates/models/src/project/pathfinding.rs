@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use crate::{Coordinates, Section, SectionId, Shot, Station, StationRef};
+use crate::{Coordinates, Line, LineId, Shot, Station, StationRef};
 
 use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
 
@@ -39,10 +39,10 @@ impl Project {
             return 0.0;
         }
 
-        // Section access is O(1) via the cached `get_section` (no need to build a
-        // full section_lookup map per call); merge adjacency is the station-level
-        // map (identical to `build_merge_adjacency(&full_section_lookup)` since the
-        // lookup would contain every section).
+        // Line access is O(1) via the cached `get_line` (no need to build a
+        // full line_lookup map per call); merge adjacency is the station-level
+        // map (identical to `build_merge_adjacency(&full_line_lookup)` since the
+        // lookup would contain every line).
         let merge_adj = self.build_station_merge_adjacency();
 
         let closure_adj = if include_closures {
@@ -68,7 +68,7 @@ impl Project {
     /// length-weighted edges; merges (and closures, when `closure_adj` is `Some`)
     /// are zero-cost edges. Takes PREBUILT adjacency so a batch caller can build
     /// it once and reuse it across many closures instead of rebuilding per call.
-    /// Falls back to the reachable section lengths if no path is found (connected
+    /// Falls back to the reachable line lengths if no path is found (connected
     /// stations always find one). Dijkstra naturally stays within the endpoints'
     /// connected component, so disjoint components cost nothing.
     pub(crate) fn path_length_dijkstra(
@@ -97,19 +97,19 @@ impl Project {
                 return cost;
             }
 
-            let Some(section) = self.get_section(node.section_id) else {
+            let Some(line) = self.get_line(node.line_id) else {
                 continue;
             };
 
             // Previous station (shot index = station_index - 1)
             if node.station_index > 0 {
                 let prev_index = node.station_index - 1;
-                if (prev_index as usize) <= section.shots.len() {
-                    let shot_len = section
+                if (prev_index as usize) <= line.shots.len() {
+                    let shot_len = line
                         .shots
                         .get(prev_index as usize)
                         .map_or(0.0, |s| s.length.max(0.0));
-                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let neighbor = StationRef::new(node.line_id, prev_index);
                     let next_cost = cost + shot_len;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                         dist.insert(neighbor, next_cost);
@@ -122,13 +122,13 @@ impl Project {
             }
 
             // Next station (shot index = station_index)
-            if (node.station_index as usize) < section.shots.len() {
+            if (node.station_index as usize) < line.shots.len() {
                 let next_index = node.station_index + 1;
-                let shot_len = section
+                let shot_len = line
                     .shots
                     .get(node.station_index as usize)
                     .map_or(0.0, |s| s.length.max(0.0));
-                let neighbor = StationRef::new(node.section_id, next_index);
+                let neighbor = StationRef::new(node.line_id, next_index);
                 let next_cost = cost + shot_len;
                 if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                     dist.insert(neighbor, next_cost);
@@ -168,34 +168,34 @@ impl Project {
             }
         }
 
-        // No path found (shouldn't happen if sections are connected)
-        // Fall back to sum of all reachable section lengths.
-        let fallback_sections = if closure_adj.is_some() {
-            self.get_connected_section_ids(station_a.section_id)
+        // No path found (shouldn't happen if lines are connected)
+        // Fall back to sum of all reachable line lengths.
+        let fallback_lines = if closure_adj.is_some() {
+            self.get_connected_line_ids(station_a.line_id)
         } else {
-            self.get_merged_section_ids(station_a.section_id)
+            self.get_merged_line_ids(station_a.line_id)
         };
-        fallback_sections
+        fallback_lines
             .iter()
-            .filter_map(|sid| self.get_section(*sid))
+            .filter_map(|sid| self.get_line(*sid))
             .flat_map(|s| s.shots.iter())
             // Clamp negative lengths to 0, consistent with the main-loop edges (#176).
             .map(|shot| shot.length.max(0.0))
             .sum()
     }
 
-    pub(crate) fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
-        self.sections.iter().map(|s| (s.id, s)).collect()
+    pub(crate) fn build_line_lookup(&self) -> HashMap<LineId, &Line> {
+        self.lines.iter().map(|s| (s.id, s)).collect()
     }
 
     pub(crate) fn build_merge_adjacency(
         &self,
-        section_lookup: &HashMap<SectionId, &Section>,
+        line_lookup: &HashMap<LineId, &Line>,
     ) -> HashMap<StationRef, Vec<StationRef>> {
         let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         for merge in &self.station_merges {
-            if !section_lookup.contains_key(&merge.station_a.section_id)
-                || !section_lookup.contains_key(&merge.station_b.section_id)
+            if !line_lookup.contains_key(&merge.station_a.line_id)
+                || !line_lookup.contains_key(&merge.station_b.line_id)
             {
                 continue;
             }
@@ -218,12 +218,12 @@ impl Project {
     where
         F: Fn(StationRef) -> bool,
     {
-        let section_lookup = self.build_section_lookup();
-        let merge_adj = self.build_merge_adjacency(&section_lookup);
+        let line_lookup = self.build_line_lookup();
+        let merge_adj = self.build_merge_adjacency(&line_lookup);
 
         // Validate start station exists
-        let start_section = section_lookup.get(&start.section_id)?;
-        if start.station_index as usize > start_section.shots.len() {
+        let start_line = line_lookup.get(&start.line_id)?;
+        if start.station_index as usize > start_line.shots.len() {
             return None;
         }
 
@@ -248,15 +248,15 @@ impl Project {
                 return Some((node, prev));
             }
 
-            let Some(section) = section_lookup.get(&node.section_id) else {
+            let Some(line) = line_lookup.get(&node.line_id) else {
                 continue;
             };
 
             // Previous station
             if node.station_index > 0 {
                 let prev_index = node.station_index - 1;
-                if (prev_index as usize) <= section.shots.len() {
-                    let shot_len = section
+                if (prev_index as usize) <= line.shots.len() {
+                    let shot_len = line
                         .shots
                         .get(prev_index as usize)
                         // Clamp negative shot lengths to 0 - Dijkstra requires
@@ -264,7 +264,7 @@ impl Project {
                         // lengths, but a corrupt import/parse or a deserialized file
                         // can carry them; matches the other graph builders (#176).
                         .map_or(0.0, |s| s.length.max(0.0));
-                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let neighbor = StationRef::new(node.line_id, prev_index);
                     let next_cost = cost + shot_len;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                         dist.insert(neighbor, next_cost);
@@ -273,7 +273,7 @@ impl Project {
                             (
                                 node,
                                 PathEdge::Shot {
-                                    section_id: node.section_id,
+                                    line_id: node.line_id,
                                     shot_index: prev_index as usize,
                                     forward: false,
                                 },
@@ -288,14 +288,14 @@ impl Project {
             }
 
             // Next station
-            if (node.station_index as usize) < section.shots.len() {
+            if (node.station_index as usize) < line.shots.len() {
                 let next_index = node.station_index + 1;
-                let shot_len = section
+                let shot_len = line
                     .shots
                     .get(node.station_index as usize)
                     // Clamp negative shot lengths to 0 (see the previous-station edge).
                     .map_or(0.0, |s| s.length.max(0.0));
-                let neighbor = StationRef::new(node.section_id, next_index);
+                let neighbor = StationRef::new(node.line_id, next_index);
                 let next_cost = cost + shot_len;
                 if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                     dist.insert(neighbor, next_cost);
@@ -304,7 +304,7 @@ impl Project {
                         (
                             node,
                             PathEdge::Shot {
-                                section_id: node.section_id,
+                                line_id: node.line_id,
                                 shot_index: node.station_index as usize,
                                 forward: true,
                             },
@@ -386,9 +386,9 @@ impl Project {
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         let mut rank: HashMap<StationRef, usize> = HashMap::new();
 
-        for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+        for line in &self.lines {
+            for idx in 0..=line.shots.len() {
+                let sr = StationRef::new(line.id, idx as u32);
                 parent.insert(sr, sr);
                 rank.insert(sr, 0);
             }
@@ -462,9 +462,9 @@ impl Project {
         }
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-        for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+        for line in &self.lines {
+            for idx in 0..=line.shots.len() {
+                let sr = StationRef::new(line.id, idx as u32);
                 let root = find(&mut parent, sr);
                 groups.entry(root).or_default().push(sr);
             }
@@ -477,9 +477,9 @@ impl Project {
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         let mut rank: HashMap<StationRef, usize> = HashMap::new();
 
-        for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+        for line in &self.lines {
+            for idx in 0..=line.shots.len() {
+                let sr = StationRef::new(line.id, idx as u32);
                 parent.insert(sr, sr);
                 rank.insert(sr, 0);
             }
@@ -541,9 +541,9 @@ impl Project {
         }
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-        for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+        for line in &self.lines {
+            for idx in 0..=line.shots.len() {
+                let sr = StationRef::new(line.id, idx as u32);
                 let root = find(&mut parent, sr);
                 groups.entry(root).or_default().push(sr);
             }
@@ -622,7 +622,7 @@ impl Project {
     /// Generalisation of [`build_survey_graph`](Self::build_survey_graph): each shot edge's
     /// weight is supplied by `shot_weight(shot, from_idx, to_idx)`. Shot edges (permanent +
     /// jump/reference) take the closure's weight; station merges and loop closures stay
-    /// **zero-cost** (same physical point). The section/shot iteration order is byte-identical
+    /// **zero-cost** (same physical point). The line/shot iteration order is byte-identical
     /// to `build_survey_graph` - `along_line_between` keys a parallel shot-edge map on that
     /// edge-emission order, so it must not change here.
     pub(super) fn build_survey_graph_weighted<F>(
@@ -637,10 +637,10 @@ impl Project {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
         // Shots (permanent and jump/reference).
-        for section in &self.sections {
-            for (i, shot) in section.shots.iter().enumerate() {
-                let from = StationRef::new(section.id, i as u32);
-                let to = StationRef::new(section.id, (i + 1) as u32);
+        for line in &self.lines {
+            for (i, shot) in line.shots.iter().enumerate() {
+                let from = StationRef::new(line.id, i as u32);
+                let to = StationRef::new(line.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
                     let w = shot_weight(shot, fi, ti);
                     adj[fi].push((ti, w));
@@ -821,7 +821,7 @@ mod entrance_tests {
     use super::super::{CylRole, Cylinder, Diver, TankMaterial};
     use crate::config::GasConfig;
     use crate::station::DatumRole;
-    use crate::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
+    use crate::{GpsCoordinates, Project, LineData, ShotData, StationRef, ZeroDatum};
 
     fn shot(length: f64, azimuth_in: f64) -> ShotData {
         ShotData {
@@ -837,13 +837,13 @@ mod entrance_tests {
     fn two_entrance_cave() -> (Project, StationRef, StationRef) {
         let mut project = Project::new("Two entrances".to_string(), None);
         let a = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(100.0, 90.0); 4],
                 ..Default::default()
             })
             .id;
         let b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(50.0, 0.0); 2],
                 ..Default::default()
             })
@@ -880,7 +880,7 @@ mod entrance_tests {
         assert!(at(&refs, &pen, entrance).abs() < 1e-6);
         assert!(at(&refs, &pen, fix).abs() < 1e-6, "the fix is an entrance");
         // A4 is 400 m from A0 but only 100 m back from the fix.
-        let a4 = StationRef::new(entrance.section_id, 4);
+        let a4 = StationRef::new(entrance.line_id, 4);
         assert!((at(&refs, &pen, a4) - 100.0).abs() < 1e-6);
         // The deepest point is now mid-way, not the far end of B.
         assert!((project.calculate_penetration(&stations) - 200.0).abs() < 1e-6);
@@ -908,8 +908,8 @@ mod entrance_tests {
         let gas = |sr| at(&field.station_refs, &field.gas_to_reach, sr).unwrap();
         assert!(gas(entrance).abs() < 1e-9);
         assert!(gas(fix).abs() < 1e-9, "the fix costs no gas to reach");
-        let b1 = StationRef::new(fix.section_id, 1);
-        let a2 = StationRef::new(entrance.section_id, 2);
+        let b1 = StationRef::new(fix.line_id, 1);
+        let a2 = StationRef::new(entrance.line_id, 2);
         assert!(
             gas(b1) < gas(a2),
             "B1 is 50 m from the fix, A2 200 m from either"

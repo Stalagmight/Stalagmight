@@ -149,7 +149,7 @@ for (let i = 0; i < actions.length; i++) {
       break;
     }
     case 'map_feature_click': {
-      if (p.featureType && Number.isInteger(p.sectionId)) {
+      if (p.featureType && Number.isInteger(p.lineId)) {
         push(`    await mapFeatureClick(browser, ${q(p)});`);
       } else push(`    // map_feature_click had no recorded feature identity; skipped`);
       break;

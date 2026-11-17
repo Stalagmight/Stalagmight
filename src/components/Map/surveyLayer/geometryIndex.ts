@@ -2,11 +2,11 @@
  * Screen-space hit-test resolver over the SoA `SurveyData` (#mem).
  *
  * With merged shot/station features (see `features.ts` `mergeFeatures`), the
- * rendered hitbox layers can only tell us WHICH GROUPS (sections) are under
+ * rendered hitbox layers can only tell us WHICH GROUPS (lines) are under
  * the cursor - the per-item identity (`shotId` / `stationIndex`) is no longer
  * a feature property. This module resolves the exact item geometrically:
- * MapLibre's rendered query gates the candidate sections, then we search only
- * those sections' shots/stations in screen space with the same
+ * MapLibre's rendered query gates the candidate lines, then we search only
+ * those lines' shots/stations in screen space with the same
  * point-to-segment / point-distance math the old per-feature resolvers used
  * (`hitTest.ts`), so hover/click/snap targets and tolerances are identical.
  *
@@ -28,7 +28,7 @@ import type { GpsOrigin } from '../../../types/config';
 import type { StationRef } from '../../../types/project';
 import {
   type SurveyData,
-  type SectionMetadata,
+  type LineMetadata,
   isVirtualKind,
   shotKindFromFlags,
   stationKindRank,
@@ -50,7 +50,7 @@ export interface NearestStationHit {
 }
 
 export interface NearestShotHit {
-  sectionId: number;
+  lineId: number;
   shotId: number;
   /** Screen-space distance to the segment, px. */
   distance: number;
@@ -91,24 +91,24 @@ export interface ResolveOptions {
   /** The size multiplier a station's marker is drawn at (the circle shader's:
    *  hover / selection size, else 2 for a zero datum, else 1), scaling
    *  `stationDiscPx`. Omitted: 2 for a zero datum, else 1. */
-  stationSizeMul?: (sectionId: number, zeroDatum: boolean) => number;
+  stationSizeMul?: (lineId: number, zeroDatum: boolean) => number;
   /** Drawn half-width of a shot line at width 1, px. When set,
    *  {@link SurveyGeometryIndex.nearestShot} gives a line whose drawn width is
    *  under the cursor to the best-ranked shot, the one drawn on top. Omitted:
    *  plain nearest. */
   shotHalfWidthPx?: number;
-  /** The width multiplier a section's lines are drawn at (the line shader's:
+  /** The width multiplier a line's lines are drawn at (the line shader's:
    *  hover / selection width, else 1), scaling `shotHalfWidthPx`. Omitted: 1. */
-  shotWidthMul?: (sectionId: number) => number;
-  /** The section drawn above every rank (the selection's,
-   *  `SurveyCustomController.setRaisedSection`): its stations and shots outrank
+  shotWidthMul?: (lineId: number) => number;
+  /** The line drawn above every rank (the selection's,
+   *  `SurveyCustomController.setRaisedLine`): its stations and shots outrank
    *  all others in {@link SurveyGeometryIndex.nearestStation} /
    *  {@link SurveyGeometryIndex.nearestShot}, the way they are drawn. */
-  raisedSectionId?: number | null;
+  raisedLineId?: number | null;
 }
 
-/** Rank shift of a raised section's features: its real (0), jump (1) and
- *  reference (2) rank as -3, -2 and -1, above every other section's, its own
+/** Rank shift of a raised line's features: its real (0), jump (1) and
+ *  reference (2) rank as -3, -2 and -1, above every other line's, its own
  *  kinds kept in order, as `writeLineDrawOrder` / `writeCircleDrawOrder` draw them. */
 const RAISED_RANK_SHIFT = 3;
 
@@ -120,7 +120,7 @@ function shotKindRank(flags: number): number {
 }
 
 /**
- * Cheap snapshot of the map camera for {@link SurveyGeometryIndex.sectionsIntersectingBox}'s
+ * Cheap snapshot of the map camera for {@link SurveyGeometryIndex.linesIntersectingBox}'s
  * projected-AABB cache. `key` is any stable string that changes iff `project`
  * would map a given lng/lat to a different pixel (zoom / center / bearing /
  * pitch / viewport). `axisAligned` is true when the projection preserves axis
@@ -140,15 +140,15 @@ export class SurveyGeometryIndex {
 
   // Lazily built (first query) so update() flushes stay cheap.
   private built = false;
-  private sectionById = new Map<number, SectionMetadata>();
-  /** sectionId -> global station indices (iteration order). */
-  private sectionStationIdxs = new Map<number, number[]>();
-  /** sectionId -> (stationIndex -> global station index). */
+  private lineById = new Map<number, LineMetadata>();
+  /** lineId -> global station indices (iteration order). */
+  private lineStationIdxs = new Map<number, number[]>();
+  /** lineId -> (stationIndex -> global station index). */
   private stationLookup = new Map<number, Map<number, number>>();
-  /** Per-section cache: stationIndex values that touch >=1 non-reference shot
+  /** Per-line cache: stationIndex values that touch >=1 non-reference shot
    *  (both endpoints present - mirrors the builder's feature-emission guard). */
   private stationKindMaskCache = new Map<number, Map<number, number>>();
-  /** Per-section world-coord (map coords) AABB over its stations, stored as flat
+  /** Per-line world-coord (map coords) AABB over its stations, stored as flat
    *  parallel arrays (index 0..boundsCount-1) for cache-friendly projection.
    *  Lazily built by {@link ensureBounds} the first time the gate runs. */
   private boundsSid: Uint32Array = new Uint32Array(0);
@@ -158,8 +158,8 @@ export class SurveyGeometryIndex {
   private boundsMaxLat: Float64Array = new Float64Array(0);
   private boundsCount = 0;
   private boundsBuilt = false;
-  /** Projected screen-space AABB per section (parallel to the bounds arrays),
-   *  reused across probes of the SAME camera. {@link sectionsIntersectingBox}
+  /** Projected screen-space AABB per line (parallel to the bounds arrays),
+   *  reused across probes of the SAME camera. {@link linesIntersectingBox}
    *  reprojects only when the caller's camera key changes - during hover the
    *  camera is static, so every probe after the first is pure AABB overlap. */
   private projMinX: Float32Array = new Float32Array(0);
@@ -176,13 +176,13 @@ export class SurveyGeometryIndex {
   private ensureBuilt(): void {
     if (this.built) return;
     this.built = true;
-    for (const s of this.data.sections) this.sectionById.set(s.id, s);
+    for (const s of this.data.lines) this.lineById.set(s.id, s);
     for (let g = 0; g < this.data.stationCount; g++) {
-      const sid = this.data.stationSectionIds[g]!;
-      let idxs = this.sectionStationIdxs.get(sid);
+      const sid = this.data.stationLineIds[g]!;
+      let idxs = this.lineStationIdxs.get(sid);
       if (!idxs) {
         idxs = [];
-        this.sectionStationIdxs.set(sid, idxs);
+        this.lineStationIdxs.set(sid, idxs);
       }
       idxs.push(g);
       let inner = this.stationLookup.get(sid);
@@ -195,22 +195,22 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * Build the per-section world-coord bounding boxes used by
-   * {@link sectionsIntersectingBox}. Kept separate from + lazier than
-   * {@link ensureBuilt}: only the candidate-section gate needs projected bounds,
+   * Build the per-line world-coord bounding boxes used by
+   * {@link linesIntersectingBox}. Kept separate from + lazier than
+   * {@link ensureBuilt}: only the candidate-line gate needs projected bounds,
    * so the per-item resolvers must not pay this pass. One metersToMapCoords per
    * station, on the first gate query only.
    */
   private ensureBounds(): void {
     if (this.boundsBuilt) return;
     this.boundsBuilt = true;
-    // Accumulate per-section AABBs in a Map, then flatten to parallel arrays.
+    // Accumulate per-line AABBs in a Map, then flatten to parallel arrays.
     const acc = new Map<
       number,
       { minLng: number; minLat: number; maxLng: number; maxLat: number }
     >();
     for (let g = 0; g < this.data.stationCount; g++) {
-      const sid = this.data.stationSectionIds[g]!;
+      const sid = this.data.stationLineIds[g]!;
       const [lng, lat] = this.stationLngLat(g);
       const b = acc.get(sid);
       if (!b) {
@@ -247,7 +247,7 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * Reproject every section's world-coord AABB into the screen-space cache.
+   * Reproject every line's world-coord AABB into the screen-space cache.
    * With `axisAligned` (bearing 0, pitch 0) the projection preserves axis order,
    * so the two diagonal corners bound the footprint exactly; otherwise all four
    * corners are projected to keep the superset conservative under an affine map.
@@ -288,26 +288,26 @@ export class SurveyGeometryIndex {
     );
   }
 
-  /** Which kinds of shot touch each station in `sectionId`, keyed by station
+  /** Which kinds of shot touch each station in `lineId`, keyed by station
    *  index (#27). Same encoding as the circle shader's `a_all_reference`:
    *  0 = at least one Normal shot, 1 = only Jumps, 2 = only References,
    *  3 = both virtual kinds (also the no-legs default). Toggle-independent, so
-   *  it caches per section; the toggles are applied by
+   *  it caches per line; the toggles are applied by
    *  [`isStationVisible`](Self.isStationVisible) at query time. */
-  private stationKindMask(sectionId: number): Map<number, number> {
-    let cached = this.stationKindMaskCache.get(sectionId);
+  private stationKindMask(lineId: number): Map<number, number> {
+    let cached = this.stationKindMaskCache.get(lineId);
     if (cached) return cached;
     cached = new Map<number, number>();
-    const section = this.sectionById.get(sectionId);
-    const lookup = this.stationLookup.get(sectionId);
-    if (section && lookup) {
+    const line = this.lineById.get(lineId);
+    const lookup = this.stationLookup.get(lineId);
+    if (line && lookup) {
       const touch = (idx: number, bit: number) => {
         const prev = cached!.get(idx);
         if (prev === 0) return; // a Normal shot already won
         cached!.set(idx, bit === 0 ? 0 : prev === undefined ? bit : prev | bit);
       };
-      for (let i = 0; i < section.shotCount; i++) {
-        const shotGlobalIdx = section.shotOffset + i;
+      for (let i = 0; i < line.shotCount; i++) {
+        const shotGlobalIdx = line.shotOffset + i;
         if (lookup.get(i) === undefined || lookup.get(i + 1) === undefined) continue;
         const kind = shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!);
         const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;
@@ -315,18 +315,18 @@ export class SurveyGeometryIndex {
         touch(i + 1, bit);
       }
     }
-    this.stationKindMaskCache.set(sectionId, cached);
+    this.stationKindMaskCache.set(lineId, cached);
     return cached;
   }
 
   /** Whether a station is currently drawn, and so hit-testable
    *  ({@link isMaskVisible} of its kind mask). */
   private isStationVisible(
-    sectionId: number,
+    lineId: number,
     stationIndex: number,
     visible: VisibleKinds,
   ): boolean {
-    return SurveyGeometryIndex.isMaskVisible(this.stationKindMask(sectionId).get(stationIndex) ?? 3, visible);
+    return SurveyGeometryIndex.isMaskVisible(this.stationKindMask(lineId).get(stationIndex) ?? 3, visible);
   }
 
   /** Whether a station with this kind mask is currently drawn, and so
@@ -341,26 +341,26 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * Nearest station (screen space) among the candidate sections, within
+   * Nearest station (screen space) among the candidate lines, within
    * `maxDistance` px of (px, py). Returns null if none qualifies.
    *
    * Rank (`stationKindRank`: real, then jump, then reference) settles which of
    * several stations takes the pick, the way the circles are drawn (real-line
    * markers on top, `writeCircleDrawOrder`):
    *  - stations at the same distance (coincident markers, e.g. a jump or
-   *    reference section tied in at a real station): the best rank;
+   *    reference line tied in at a real station): the best rank;
    *  - with `stationDiscPx`, when the cursor is on the drawn disc of a station
    *    that outranks the nearest one: that station, since its marker covers
    *    the nearer one's there. The visible edge of a worse-ranked marker poking
    *    out from under it still picks the worse-ranked station.
    * Among stations of one rank the nearest wins, as before. The raised
-   * section (`opts.raisedSectionId`) outranks every rank: it is drawn on top.
+   * line (`opts.raisedLineId`) outranks every rank: it is drawn on top.
    */
   nearestStation(
     project: ProjectFn,
     px: number,
     py: number,
-    sectionIds: Iterable<number>,
+    lineIds: Iterable<number>,
     maxDistance: number,
     opts: ResolveOptions,
   ): NearestStationHit | null {
@@ -372,8 +372,8 @@ export class SurveyGeometryIndex {
     // The best-ranked (then nearest) station whose drawn disc is under the cursor.
     let covering: NearestStationHit | null = null;
     let coveringRank = 0;
-    for (const sid of sectionIds) {
-      const idxs = this.sectionStationIdxs.get(sid);
+    for (const sid of lineIds) {
+      const idxs = this.lineStationIdxs.get(sid);
       if (!idxs) continue;
       const kinds = opts.visibleKinds;
       const masks = this.stationKindMask(sid);
@@ -385,14 +385,14 @@ export class SurveyGeometryIndex {
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
         if (dist > maxDistance) continue;
-        const rank = stationKindRank(mask) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
+        const rank = stationKindRank(mask) - (sid === opts.raisedLineId ? RAISED_RANK_SHIFT : 0);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           disc > 0 &&
           dist <= disc * sizeMulOf(sid, (this.data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0) &&
           (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
         if (!nearer && !covers) continue;
-        const hit: NearestStationHit = { ref: { section_id: sid, station_index: stationIndex }, distance: dist, lngLat };
+        const hit: NearestStationHit = { ref: { line_id: sid, station_index: stationIndex }, distance: dist, lngLat };
         if (nearer) {
           best = hit;
           bestRank = rank;
@@ -407,7 +407,7 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * Nearest shot segment (screen space) among the candidate sections, within
+   * Nearest shot segment (screen space) among the candidate lines, within
    * `maxDistance` px of (px, py). Returns null if none qualifies.
    *
    * Rank settles overlaps the way the lines are drawn (Normal on top of Jump on
@@ -415,13 +415,13 @@ export class SurveyGeometryIndex {
    * markers: equal distances go to the better rank, and with `shotHalfWidthPx`
    * a cursor on the drawn width of a better-ranked line picks it over a nearer,
    * worse-ranked one it covers. Among shots of one kind the nearest wins. The
-   * raised section's shots outrank every kind, as they are drawn on top.
+   * raised line's shots outrank every kind, as they are drawn on top.
    */
   nearestShot(
     project: ProjectFn,
     px: number,
     py: number,
-    sectionIds: Iterable<number>,
+    lineIds: Iterable<number>,
     maxDistance: number,
     opts: ResolveOptions,
   ): NearestShotHit | null {
@@ -432,13 +432,13 @@ export class SurveyGeometryIndex {
     // The best-ranked (then nearest) shot whose drawn width is under the cursor.
     let covering: NearestShotHit | null = null;
     let coveringRank = 0;
-    for (const sid of sectionIds) {
-      const section = this.sectionById.get(sid);
+    for (const sid of lineIds) {
+      const line = this.lineById.get(sid);
       const lookup = this.stationLookup.get(sid);
-      if (!section || !lookup) continue;
+      if (!line || !lookup) continue;
       const reach = half > 0 ? half * (opts.shotWidthMul?.(sid) ?? 1) : 0;
-      for (let i = 0; i < section.shotCount; i++) {
-        const shotGlobalIdx = section.shotOffset + i;
+      for (let i = 0; i < line.shotCount; i++) {
+        const shotGlobalIdx = line.shotOffset + i;
         const flags = this.data.shotFlags[shotGlobalIdx]!;
         if (!isKindVisible(flags, opts.visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
@@ -450,7 +450,7 @@ export class SurveyGeometryIndex {
         const p2 = project(to);
         const dist = distanceToLineSegment(px, py, p1.x, p1.y, p2.x, p2.y);
         if (dist > maxDistance) continue;
-        const rank = shotKindRank(flags) - (sid === opts.raisedSectionId ? RAISED_RANK_SHIFT : 0);
+        const rank = shotKindRank(flags) - (sid === opts.raisedLineId ? RAISED_RANK_SHIFT : 0);
         const nearer = !best || dist < best.distance || (dist === best.distance && rank < bestRank);
         const covers =
           reach > 0 &&
@@ -458,7 +458,7 @@ export class SurveyGeometryIndex {
           (!covering || rank < coveringRank || (rank === coveringRank && dist < covering.distance));
         if (!nearer && !covers) continue;
         const hit: NearestShotHit = {
-          sectionId: sid,
+          lineId: sid,
           shotId: this.data.shotIds[shotGlobalIdx]!,
           distance: dist,
           t: projectParamOnSegment(px, py, p1.x, p1.y, p2.x, p2.y),
@@ -479,24 +479,24 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * Sections whose geometry may intersect the screen-space box
+   * Lines whose geometry may intersect the screen-space box
    * `[minX, minY, maxX, maxY]` (already padded by the caller to the type's hit
-   * reach). Replaces the old `queryRenderedFeatures` candidate-section prefilter
+   * reach). Replaces the old `queryRenderedFeatures` candidate-line prefilter
    * (#customRender): once the custom WebGL layer renders the survey, the stock
    * shots/stations layers are hidden (visibility:none) and return nothing from
    * `queryRenderedFeatures`, so candidate discovery must come from the SoA index
    * rather than rendered features.
    *
-   * Each section's world-coord AABB is projected corner by corner; the screen
-   * AABB of those four corners is a conservative SUPERSET of the section's
+   * Each line's world-coord AABB is projected corner by corner; the screen
+   * AABB of those four corners is a conservative SUPERSET of the line's
    * projected footprint (exact under the app's unrotated top-down projection,
-   * a safe over-approximation under any affine map transform). A section is a
+   * a safe over-approximation under any affine map transform). A line is a
    * candidate iff that screen AABB overlaps the probe box. The result is a
    * superset - the per-item resolvers ({@link nearestStation} /
    * {@link nearestShot}) then trim to exact tolerance, so no in-tolerance hit
    * is dropped and none leaks past it.
    */
-  sectionsIntersectingBox(
+  linesIntersectingBox(
     project: ProjectFn,
     minX: number,
     minY: number,
@@ -505,7 +505,7 @@ export class SurveyGeometryIndex {
     camera?: CameraSnapshot | null,
   ): Set<number> {
     this.ensureBounds();
-    // Reproject the section AABBs only when the camera changed. Without a
+    // Reproject the line AABBs only when the camera changed. Without a
     // snapshot (unit tests / legacy callers) reproject every call - same result,
     // just uncached. With a matching key, skip straight to the overlap test.
     if (!camera || camera.key !== this.cachedCameraKey) {
@@ -530,23 +530,23 @@ export class SurveyGeometryIndex {
    *  interact overlay to place individual highlight features. */
   stationCoords(ref: StationRef): [number, number] | null {
     this.ensureBuilt();
-    const g = this.stationLookup.get(ref.section_id)?.get(ref.station_index);
+    const g = this.stationLookup.get(ref.line_id)?.get(ref.station_index);
     return g === undefined ? null : this.stationLngLat(g);
   }
 
   /** Global station index by ref, or null. */
   stationGlobalIndex(ref: StationRef): number | null {
     this.ensureBuilt();
-    const g = this.stationLookup.get(ref.section_id)?.get(ref.station_index);
+    const g = this.stationLookup.get(ref.line_id)?.get(ref.station_index);
     return g === undefined ? null : g;
   }
 
   /**
-   * Endpoints + global index of one shot by (sectionId, shotId), or null.
+   * Endpoints + global index of one shot by (lineId, shotId), or null.
    * Used by the interact overlay to draw individual shot highlights.
    */
   shotGeometry(
-    sectionId: number,
+    lineId: number,
     shotId: number,
   ): {
     from: [number, number];
@@ -557,11 +557,11 @@ export class SurveyGeometryIndex {
     kindFlags: number;
   } | null {
     this.ensureBuilt();
-    const section = this.sectionById.get(sectionId);
-    const lookup = this.stationLookup.get(sectionId);
-    if (!section || !lookup) return null;
-    for (let i = 0; i < section.shotCount; i++) {
-      const shotGlobalIdx = section.shotOffset + i;
+    const line = this.lineById.get(lineId);
+    const lookup = this.stationLookup.get(lineId);
+    if (!line || !lookup) return null;
+    for (let i = 0; i < line.shotCount; i++) {
+      const shotGlobalIdx = line.shotOffset + i;
       if (this.data.shotIds[shotGlobalIdx] !== shotId) continue;
       const fromGlobal = lookup.get(i);
       const toGlobal = lookup.get(i + 1);
@@ -579,15 +579,15 @@ export class SurveyGeometryIndex {
 
   /**
    * Endpoints of every shot whose canonical feature id
-   * (`encodeFeatureId(sectionId, shotId)`) is in `fids`. The measured along-line
+   * (`encodeFeatureId(lineId, shotId)`) is in `fids`. The measured along-line
    * path's shot tint (#26) resolves its segments through here.
    *
    * Membership is tested by RE-DERIVING each shot's fid the same way every
    * producer does (`colorResolvers` / distance + gas overlays / the interact
-   * overlay), NOT by decoding the fid back to `(section, shot)`. Decoding is lossy
+   * overlay), NOT by decoding the fid back to `(line, shot)`. Decoding is lossy
    * for shots: the scoped id folded into the fid is the GLOBAL shot id (already
-   * `sectionId * FEATURE_ID_STRIDE + local`), so a `floor(fid / STRIDE)` split
-   * mis-attributes every shot in section >= 1 to the wrong section and shot id,
+   * `lineId * FEATURE_ID_STRIDE + local`), so a `floor(fid / STRIDE)` split
+   * mis-attributes every shot in line >= 1 to the wrong line and shot id,
    * dropping its tint. Re-deriving is exact regardless of the shot-id range.
    *
    * `visibleKinds` mirrors the per-kind toggles: legs of a hidden kind are
@@ -600,12 +600,12 @@ export class SurveyGeometryIndex {
     this.ensureBuilt();
     const out: Array<{ from: [number, number]; to: [number, number] }> = [];
     if (fids.size === 0) return out;
-    for (const section of this.data.sections) {
-      const lookup = this.stationLookup.get(section.id);
+    for (const line of this.data.lines) {
+      const lookup = this.stationLookup.get(line.id);
       if (!lookup) continue;
-      for (let i = 0; i < section.shotCount; i++) {
-        const gi = section.shotOffset + i;
-        if (!fids.has(encodeFeatureId(section.id, this.data.shotIds[gi]!))) continue;
+      for (let i = 0; i < line.shotCount; i++) {
+        const gi = line.shotOffset + i;
+        if (!fids.has(encodeFeatureId(line.id, this.data.shotIds[gi]!))) continue;
         if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
@@ -631,39 +631,39 @@ export class SurveyGeometryIndex {
    * filter them.
    */
   enumerateGeometry(visibleKinds: VisibleKinds): {
-    stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+    stations: Array<{ lineId: number; stationIndex: number; lngLat: [number, number] }>;
     shots: Array<{
-      sectionId: number;
+      lineId: number;
       shotId: number;
       from: [number, number];
       to: [number, number];
     }>;
   } {
     this.ensureBuilt();
-    const stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }> = [];
+    const stations: Array<{ lineId: number; stationIndex: number; lngLat: [number, number] }> = [];
     for (let g = 0; g < this.data.stationCount; g++) {
-      const sectionId = this.data.stationSectionIds[g]!;
+      const lineId = this.data.stationLineIds[g]!;
       const stationIndex = this.data.stationIndices[g]!;
-      if (!this.isStationVisible(sectionId, stationIndex, visibleKinds)) continue;
-      stations.push({ sectionId, stationIndex, lngLat: this.stationLngLat(g) });
+      if (!this.isStationVisible(lineId, stationIndex, visibleKinds)) continue;
+      stations.push({ lineId, stationIndex, lngLat: this.stationLngLat(g) });
     }
     const shots: Array<{
-      sectionId: number;
+      lineId: number;
       shotId: number;
       from: [number, number];
       to: [number, number];
     }> = [];
-    for (const section of this.data.sections) {
-      const lookup = this.stationLookup.get(section.id);
+    for (const line of this.data.lines) {
+      const lookup = this.stationLookup.get(line.id);
       if (!lookup) continue;
-      for (let i = 0; i < section.shotCount; i++) {
-        const gi = section.shotOffset + i;
+      for (let i = 0; i < line.shotCount; i++) {
+        const gi = line.shotOffset + i;
         if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
         shots.push({
-          sectionId: section.id,
+          lineId: line.id,
           shotId: this.data.shotIds[gi]!,
           from: this.stationLngLat(fromGlobal),
           to: this.stationLngLat(toGlobal),
@@ -674,21 +674,21 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * One section's stations (ordered by `station_index`) and shots, straight from
+   * One line's stations (ordered by `station_index`) and shots, straight from
    * the SoA - map coords + the global indices the color resolvers need.
    *
    * This exists so the drag-preview capture never touches the lazy `Station[]`
-   * proxy or the lazy `section.shots` getter. Doing `stations.filter(s => s.
-   * station_ref.section_id === id)` per section materialized the WHOLE ~89k
-   * station object graph once per section (quadratic, and on a 14k-section
+   * proxy or the lazy `line.shots` getter. Doing `stations.filter(s => s.
+   * station_ref.line_id === id)` per line materialized the WHOLE ~89k
+   * station object graph once per line (quadratic, and on a 14k-line
    * project it pinned a core for minutes), and `shotGeometry()` per shot is a
-   * linear scan over the section, so the pair was O(stations x sections) +
+   * linear scan over the line, so the pair was O(stations x lines) +
    * O(shots^2). Both are linear here.
    */
-  sectionGeometry(sectionId: number): {
+  lineGeometry(lineId: number): {
     stations: Array<{ stationIndex: number; lngLat: [number, number]; globalIdx: number }>;
     shots: Array<{
-      /** Position in the section: joins station `index` to `index + 1`. NOT the
+      /** Position in the line: joins station `index` to `index + 1`. NOT the
        *  array position - shots with a missing endpoint are skipped. */
       index: number;
       shotId: number;
@@ -699,12 +699,12 @@ export class SurveyGeometryIndex {
     }>;
   } {
     this.ensureBuilt();
-    const section = this.sectionById.get(sectionId);
-    const lookup = this.stationLookup.get(sectionId);
-    if (!section || !lookup) return { stations: [], shots: [] };
+    const line = this.lineById.get(lineId);
+    const lookup = this.stationLookup.get(lineId);
+    if (!line || !lookup) return { stations: [], shots: [] };
 
     const stations: Array<{ stationIndex: number; lngLat: [number, number]; globalIdx: number }> = [];
-    for (const g of this.sectionStationIdxs.get(sectionId) ?? []) {
+    for (const g of this.lineStationIdxs.get(lineId) ?? []) {
       stations.push({
         stationIndex: this.data.stationIndices[g]!,
         lngLat: this.stationLngLat(g),
@@ -724,8 +724,8 @@ export class SurveyGeometryIndex {
       from: [number, number];
       to: [number, number];
     }> = [];
-    for (let i = 0; i < section.shotCount; i++) {
-      const gi = section.shotOffset + i;
+    for (let i = 0; i < line.shotCount; i++) {
+      const gi = line.shotOffset + i;
       const fromGlobal = lookup.get(i);
       const toGlobal = lookup.get(i + 1);
       if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -750,18 +750,18 @@ export class SurveyGeometryIndex {
    *  callers outside the index cannot drift from the circle shader (#27). */
   isStationDrawn(ref: StationRef, visible: VisibleKinds): boolean {
     this.ensureBuilt();
-    return this.isStationVisible(ref.section_id, ref.station_index, visible);
+    return this.isStationVisible(ref.line_id, ref.station_index, visible);
   }
 
   isAllReferenceStation(ref: StationRef): boolean {
     this.ensureBuilt();
-    return (this.stationKindMask(ref.section_id).get(ref.station_index) ?? 3) !== 0;
+    return (this.stationKindMask(ref.line_id).get(ref.station_index) ?? 3) !== 0;
   }
 
-  /** Section metadata by id (color lookup for overlay styling). */
-  section(sectionId: number): SectionMetadata | undefined {
+  /** Line metadata by id (color lookup for overlay styling). */
+  line(lineId: number): LineMetadata | undefined {
     this.ensureBuilt();
-    return this.sectionById.get(sectionId);
+    return this.lineById.get(lineId);
   }
 
   /** Whether the station is a zero-datum station. */

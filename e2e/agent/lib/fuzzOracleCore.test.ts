@@ -20,10 +20,10 @@ function projectState(overrides: Record<string, unknown> = {}): Record<string, u
       created_at: '2026-01-01T00:00:00Z',
       modified_at: '2026-01-02T00:00:00Z',
       file_path: '/tmp/a.stalx',
-      next_section_id: 9,
+      next_line_id: 9,
       next_closure_id: 3,
-      section_offsets: { 10: [3.5, 4.5], 2: [1.5, 2.5] },
-      sections: [
+      line_offsets: { 10: [3.5, 4.5], 2: [1.5, 2.5] },
+      lines: [
         {
           id: 4,
           name: 's4',
@@ -38,22 +38,22 @@ function projectState(overrides: Record<string, unknown> = {}): Record<string, u
         { id: 1, name: 's1', next_shot_id: 100001, shots: [{ id: 100000, uuid: 'u-c', length: 1 }] },
       ],
       station_merges: [
-        { station_a: { section_id: 4, station_index: 0 }, station_b: { section_id: 1, station_index: 1 }, merged_at: 't' },
+        { station_a: { line_id: 4, station_index: 0 }, station_b: { line_id: 1, station_index: 1 }, merged_at: 't' },
       ],
-      zero_datums: [{ station_ref: { section_id: 1, station_index: 0 }, gps: { latitude: 20.5 } }],
+      zero_datums: [{ station_ref: { line_id: 1, station_index: 0 }, gps: { latitude: 20.5 } }],
       loop_closures: [
-        { id: 7, station_a: { section_id: 4, station_index: 1 }, path_length: 12.5 },
-        { id: 2, station_a: { section_id: 1, station_index: 0 }, path_length: 30 },
+        { id: 7, station_a: { line_id: 4, station_index: 1 }, path_length: 12.5 },
+        { id: 2, station_a: { line_id: 1, station_index: 0 }, path_length: 30 },
       ],
       imported_file_hashes: ['h1'],
       ...overrides,
     },
     stations: [
-      { station_ref: { section_id: 4, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 } },
-      { station_ref: { section_id: 4, station_index: 1 }, coordinates: { x: 1.5, y: 0, z: 0 } },
-      { station_ref: { section_id: 1, station_index: 0 }, coordinates: { x: 9, y: 9, z: 0 }, comment: 'c' },
+      { station_ref: { line_id: 4, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 } },
+      { station_ref: { line_id: 4, station_index: 1 }, coordinates: { x: 1.5, y: 0, z: 0 } },
+      { station_ref: { line_id: 1, station_index: 0 }, coordinates: { x: 9, y: 9, z: 0 }, comment: 'c' },
     ],
-    stats: { section_count: 2, shot_count: 3 },
+    stats: { line_count: 2, shot_count: 3 },
     frozen_shots: [],
   };
 }
@@ -80,7 +80,7 @@ describe('oracle core is a single source of truth', () => {
   });
 
   it('agrees on a payload with nothing in it', () => {
-    const empty = { project: { sections: [] }, stations: [], stats: {}, frozen_shots: [] };
+    const empty = { project: { lines: [] }, stations: [], stats: {}, frozen_shots: [] };
 
     expect(evalInjected().canonical(empty)).toBe(canonicalProjectSnapshot(empty));
     expect(evalInjected().digest(empty)).toEqual(buildTargetingDigest(empty));
@@ -105,7 +105,7 @@ describe('oracle core is a single source of truth', () => {
 describe('canonicalProjectSnapshot', () => {
   it('drops exactly the documented non-rolling-back fields', () => {
     const parsed = JSON.parse(canonicalProjectSnapshot(projectState())) as {
-      project: Record<string, unknown> & { sections: Record<string, unknown>[] };
+      project: Record<string, unknown> & { lines: Record<string, unknown>[] };
     };
 
     expect(NON_ROLLBACK_PATHS).toEqual([
@@ -113,29 +113,29 @@ describe('canonicalProjectSnapshot', () => {
       'project.file_path',
       'project.next_section_id',
       'project.next_closure_id',
-      'project.sections.*.next_shot_id',
+      'project.lines.*.next_shot_id',
     ]);
-    for (const key of ['modified_at', 'file_path', 'next_section_id', 'next_closure_id']) {
+    for (const key of ['modified_at', 'file_path', 'next_line_id', 'next_closure_id']) {
       expect(key in parsed.project).toBe(false);
     }
-    expect('next_shot_id' in (parsed.project.sections[0] as object)).toBe(false);
+    expect('next_shot_id' in (parsed.project.lines[0] as object)).toBe(false);
     // ...and keeps everything a real undo bug would show up in.
     expect(parsed.project.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(parsed.project.sections[0]?.reverse_parity).toBe(true);
-    expect(parsed.project.sections[0]?.gauge_shot_uuid).toBe('g-1');
+    expect(parsed.project.lines[0]?.reverse_parity).toBe(true);
+    expect(parsed.project.lines[0]?.gauge_shot_uuid).toBe('g-1');
   });
 
-  it('keeps shot uuids so the CreateSection-redo re-mint is still reported', () => {
+  it('keeps shot uuids so the CreateLine-redo re-mint is still reported', () => {
     const mutated = projectState();
-    const sections = (mutated.project as { sections: { shots: { uuid: string }[] }[] }).sections;
-    const shot = sections[0]?.shots[0];
+    const lines = (mutated.project as { lines: { shots: { uuid: string }[] }[] }).lines;
+    const shot = lines[0]?.shots[0];
     if (shot) shot.uuid = 'changed';
 
     expect(canonicalProjectSnapshot(mutated)).not.toBe(canonicalProjectSnapshot(projectState()));
   });
 
-  it('is insensitive to map key order (HashMap-backed section_offsets)', () => {
-    const shuffled = projectState({ section_offsets: { 2: [1.5, 2.5], 10: [3.5, 4.5] } });
+  it('is insensitive to map key order (HashMap-backed line_offsets)', () => {
+    const shuffled = projectState({ line_offsets: { 2: [1.5, 2.5], 10: [3.5, 4.5] } });
 
     expect(canonicalProjectSnapshot(shuffled)).toBe(canonicalProjectSnapshot(projectState()));
   });
@@ -179,7 +179,7 @@ describe('canonicalProjectSnapshot', () => {
 describe('buildTargetingDigest', () => {
   it('carries exactly the fields the generators read, in payload order', () => {
     expect(buildTargetingDigest(projectState())).toEqual({
-      // Section order preserved (4 before 1), shot ids in shot order.
+      // Line order preserved (4 before 1), shot ids in shot order.
       s: [
         [4, [400000, 400001]],
         [1, [100000]],
@@ -201,8 +201,8 @@ describe('buildTargetingDigest', () => {
     expect(buildTargetingDigest(null)).toEqual({ s: [], st: [], m: [], z: [], c: [] });
   });
 
-  it('handles a section with no shots', () => {
-    const state = { project: { sections: [{ id: 3, shots: [] }] }, stations: [] };
+  it('handles a line with no shots', () => {
+    const state = { project: { lines: [{ id: 3, shots: [] }] }, stations: [] };
 
     expect(buildTargetingDigest(state).s).toEqual([[3, []]]);
   });
@@ -217,37 +217,37 @@ describe('buildTargetingDigest', () => {
 });
 
 describe('checkProjectInvariants', () => {
-  /** A minimal SOUND state: 2 sections, 1 and 2 shots, 5 stations. */
+  /** A minimal SOUND state: 2 lines, 1 and 2 shots, 5 stations. */
   function sound(): Record<string, unknown> {
     return {
       project: {
-        next_section_id: 3,
+        next_line_id: 3,
         next_closure_id: 2,
-        sections: [
+        lines: [
           { id: 1, next_shot_id: 100001, shots: [{ id: 100000, uuid: 'a' }] },
           { id: 2, next_shot_id: 200002, shots: [{ id: 200000, uuid: 'b' }, { id: 200001, uuid: 'c' }] },
         ],
         station_merges: [
-          { station_a: { section_id: 1, station_index: 1 }, station_b: { section_id: 2, station_index: 0 } },
+          { station_a: { line_id: 1, station_index: 1 }, station_b: { line_id: 2, station_index: 0 } },
         ],
-        zero_datums: [{ station_ref: { section_id: 1, station_index: 0 } }],
+        zero_datums: [{ station_ref: { line_id: 1, station_index: 0 } }],
         loop_closures: [
           {
             id: 1,
-            station_a: { section_id: 1, station_index: 0 },
-            station_b: { section_id: 2, station_index: 2 },
+            station_a: { line_id: 1, station_index: 0 },
+            station_b: { line_id: 2, station_index: 2 },
           },
         ],
       },
       stations: [
-        { station_ref: { section_id: 1, station_index: 0 } },
-        { station_ref: { section_id: 1, station_index: 1 } },
-        { station_ref: { section_id: 2, station_index: 0 } },
-        { station_ref: { section_id: 2, station_index: 1 } },
-        { station_ref: { section_id: 2, station_index: 2 } },
+        { station_ref: { line_id: 1, station_index: 0 } },
+        { station_ref: { line_id: 1, station_index: 1 } },
+        { station_ref: { line_id: 2, station_index: 0 } },
+        { station_ref: { line_id: 2, station_index: 1 } },
+        { station_ref: { line_id: 2, station_index: 2 } },
       ],
-      stats: { section_count: 2, shot_count: 3, station_count: 5 },
-      frozen_shots: [{ section_id: 2, shot_index: 1 }],
+      stats: { line_count: 2, shot_count: 3, station_count: 5 },
+      frozen_shots: [{ line_id: 2, shot_index: 1 }],
     };
   }
 
@@ -267,18 +267,18 @@ describe('checkProjectInvariants', () => {
     expect(checkProjectInvariants(null)).toEqual([]);
   });
 
-  it('fires on a duplicate section id', () => {
+  it('fires on a duplicate line id', () => {
     const violations = violationsAfter((state) => {
-      const sections = (state.project as { sections: { id: number }[] }).sections;
-      if (sections[1]) sections[1].id = 1;
+      const lines = (state.project as { lines: { id: number }[] }).lines;
+      if (lines[1]) lines[1].id = 1;
     });
 
-    expect(violations.some((v) => v.includes('duplicate section id 1'))).toBe(true);
+    expect(violations.some((v) => v.includes('duplicate line id 1'))).toBe(true);
   });
 
-  it('fires on a duplicate shot id within a section', () => {
+  it('fires on a duplicate shot id within a line', () => {
     const violations = violationsAfter((state) => {
-      const shots = (state.project as { sections: { shots: { id: number }[] }[] }).sections[1]?.shots;
+      const shots = (state.project as { lines: { shots: { id: number }[] }[] }).lines[1]?.shots;
       if (shots?.[1]) shots[1].id = 200000;
     });
 
@@ -291,8 +291,8 @@ describe('checkProjectInvariants', () => {
       project.next_closure_id = 3;
       project.loop_closures.push({
         id: 1,
-        station_a: { section_id: 1, station_index: 0 },
-        station_b: { section_id: 2, station_index: 0 },
+        station_a: { line_id: 1, station_index: 0 },
+        station_b: { line_id: 2, station_index: 0 },
       });
     });
 
@@ -302,14 +302,14 @@ describe('checkProjectInvariants', () => {
   it('fires when an id allocator no longer dominates the live ids', () => {
     expect(
       violationsAfter((state) => {
-        (state.project as { next_section_id: number }).next_section_id = 2;
-      }).some((v) => v.includes('section id 2 is at or above next_section_id 2')),
+        (state.project as { next_line_id: number }).next_line_id = 2;
+      }).some((v) => v.includes('line id 2 is at or above next_line_id 2')),
     ).toBe(true);
 
     expect(
       violationsAfter((state) => {
-        const sections = (state.project as { sections: { next_shot_id: number }[] }).sections;
-        if (sections[0]) sections[0].next_shot_id = 100000;
+        const lines = (state.project as { lines: { next_shot_id: number }[] }).lines;
+        if (lines[0]) lines[0].next_shot_id = 100000;
       }).some((v) => v.includes('at or above next_shot_id')),
     ).toBe(true);
 
@@ -320,19 +320,19 @@ describe('checkProjectInvariants', () => {
     ).toBe(true);
   });
 
-  it('fires on a wire ref pointing at a missing section', () => {
+  it('fires on a wire ref pointing at a missing line', () => {
     const violations = violationsAfter((state) => {
-      const merges = (state.project as { station_merges: { station_a: { section_id: number } }[] })
+      const merges = (state.project as { station_merges: { station_a: { line_id: number } }[] })
         .station_merges;
-      if (merges[0]) merges[0].station_a.section_id = 99;
+      if (merges[0]) merges[0].station_a.line_id = 99;
     });
 
-    expect(violations.some((v) => v.includes('station_merges[0].station_a references missing section 99'))).toBe(
+    expect(violations.some((v) => v.includes('station_merges[0].station_a references missing line 99'))).toBe(
       true,
     );
   });
 
-  it('fires on an out-of-range station index (a section with N shots has N+1 stations)', () => {
+  it('fires on an out-of-range station index (a line with N shots has N+1 stations)', () => {
     // index === shots.length is the terminal station and IS valid...
     expect(
       violationsAfter((state) => {
@@ -347,20 +347,20 @@ describe('checkProjectInvariants', () => {
         const datums = (state.project as { zero_datums: { station_ref: { station_index: number } }[] })
           .zero_datums;
         if (datums[0]) datums[0].station_ref.station_index = 2;
-      }).some((v) => v.includes('out of range for section 1 (0..1)')),
+      }).some((v) => v.includes('out of range for line 1 (0..1)')),
     ).toBe(true);
   });
 
-  it('fires when the derived station list disagrees with the sections', () => {
+  it('fires when the derived station list disagrees with the lines', () => {
     const violations = violationsAfter((state) => {
       (state.stations as unknown[]).pop();
       (state.stats as { station_count: number }).station_count = 4;
     });
 
-    expect(violations.some((v) => v.includes('stations has 4 entries but the sections imply 5'))).toBe(true);
+    expect(violations.some((v) => v.includes('stations has 4 entries but the lines imply 5'))).toBe(true);
   });
 
-  it('fires on a frozen shot outside its section', () => {
+  it('fires on a frozen shot outside its line', () => {
     expect(
       violationsAfter((state) => {
         (state.frozen_shots as { shot_index: number }[])[0]!.shot_index = 2;
@@ -369,8 +369,8 @@ describe('checkProjectInvariants', () => {
 
     expect(
       violationsAfter((state) => {
-        (state.frozen_shots as { section_id: number }[])[0]!.section_id = 42;
-      }).some((v) => v.includes('frozen_shots[0] references missing section 42')),
+        (state.frozen_shots as { line_id: number }[])[0]!.line_id = 42;
+      }).some((v) => v.includes('frozen_shots[0] references missing line 42')),
     ).toBe(true);
   });
 
@@ -382,31 +382,31 @@ describe('checkProjectInvariants', () => {
     ).toBe(true);
     expect(
       violationsAfter((state) => {
-        (state.stats as { section_count: number }).section_count = 7;
-      }).some((v) => v.includes('stats.section_count 7 != 2 section(s)')),
+        (state.stats as { line_count: number }).line_count = 7;
+      }).some((v) => v.includes('stats.line_count 7 != 2 line(s)')),
     ).toBe(true);
   });
 
   it('does NOT duplicate what check_project_integrity owns', () => {
-    // Per-section duplicate uuid, non-finite geometry and orphan section_offsets
+    // Per-line duplicate uuid, non-finite geometry and orphan line_offsets
     // are the integrity checker's job (and the integrity-delta oracle's); this
     // suite must stay silent on them or every run would double-report.
     const withIntegrityIssues = sound();
     const project = withIntegrityIssues.project as {
-      sections: { shots: { uuid: string; length?: number }[] }[];
-      section_offsets: Record<number, [number, number]>;
+      lines: { shots: { uuid: string; length?: number }[] }[];
+      line_offsets: Record<number, [number, number]>;
     };
-    const shots = project.sections[1]?.shots;
+    const shots = project.lines[1]?.shots;
     if (shots?.[0] && shots[1]) shots[1].uuid = shots[0].uuid;
     if (shots?.[0]) shots[0].length = Number.NaN;
-    project.section_offsets = { 99: [1, 2] };
+    project.line_offsets = { 99: [1, 2] };
 
     expect(checkProjectInvariants(withIntegrityIssues)).toEqual([]);
   });
 
   it('runs identically injected and called directly', () => {
     const corrupt = sound();
-    (corrupt.project as { next_section_id: number }).next_section_id = 1;
+    (corrupt.project as { next_line_id: number }).next_line_id = 1;
 
     const injected = new Function(
       `${oracleInjectionSource()}\nreturn globalThis.${ORACLE_GLOBAL}.invariants;`,
@@ -418,20 +418,20 @@ describe('checkProjectInvariants', () => {
 });
 
 describe('id-agnostic canonicalization (cross save/reload comparison)', () => {
-  /** Two sections whose shot ids are NOT positional (a mid-section delete). */
+  /** Two lines whose shot ids are NOT positional (a mid-line delete). */
   const preReload = {
     project: {
-      sections: [
+      lines: [
         { id: 3, shots: [{ id: 300004, uuid: 'u1' }, { id: 300009, uuid: 'u2' }] },
         { id: 7, shots: [{ id: 700002, uuid: 'u3' }] },
       ],
     },
     stations: [],
   };
-  /** The same project after a save/reload renumbered ids to section*STRIDE+seq. */
+  /** The same project after a save/reload renumbered ids to line*STRIDE+seq. */
   const postReload = {
     project: {
-      sections: [
+      lines: [
         { id: 3, shots: [{ id: 300000, uuid: 'u1' }, { id: 300001, uuid: 'u2' }] },
         { id: 7, shots: [{ id: 700000, uuid: 'u3' }] },
       ],
@@ -462,19 +462,19 @@ describe('id-agnostic canonicalization (cross save/reload comparison)', () => {
   it('does NOT hide a real change behind the renumbering', () => {
     // Same positions, but a shot's uuid and geometry changed: still different.
     const tampered = JSON.parse(JSON.stringify(postReload)) as typeof postReload;
-    const shot = tampered.project.sections[0]?.shots[1];
+    const shot = tampered.project.lines[0]?.shots[1];
     if (shot) shot.uuid = 'CHANGED';
 
     expect(canonicalProjectSnapshot(preReload, true)).not.toBe(canonicalProjectSnapshot(tampered, true));
   });
 
-  it('does not touch SECTION ids, which are persisted and must match', () => {
-    const renamedSection = JSON.parse(JSON.stringify(postReload)) as typeof postReload;
-    const section = renamedSection.project.sections[1];
-    if (section) section.id = 8;
+  it('does not touch LINE ids, which are persisted and must match', () => {
+    const renamedLine = JSON.parse(JSON.stringify(postReload)) as typeof postReload;
+    const line = renamedLine.project.lines[1];
+    if (line) line.id = 8;
 
     expect(canonicalProjectSnapshot(postReload, true)).not.toBe(
-      canonicalProjectSnapshot(renamedSection, true),
+      canonicalProjectSnapshot(renamedLine, true),
     );
   });
 

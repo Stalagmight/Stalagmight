@@ -66,15 +66,15 @@ const compassFile: CompassFile = {
   warnings: [],
 };
 
-const ok = (warnings: ValidationWarning[], section_ids: number[] = []): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids } as CommandResult);
+const ok = (warnings: ValidationWarning[], line_ids: number[] = []): CommandResult =>
+  ({ success: true, error: null, warnings, line_ids } as CommandResult);
 
 /** What the backend reports for a file whose every survey was dropped (#411). */
 const EMPTY_RECEIPT: ImportReceipt = {
   source_format: 'Compass',
   file_name: 'cave.dat',
-  sections_found: 3,
-  sections_imported: 0,
+  lines_found: 3,
+  lines_imported: 0,
   shot_count: 0,
   closures_requested: 0,
   closures_created: 0,
@@ -85,14 +85,14 @@ const EMPTY_RECEIPT: ImportReceipt = {
 };
 
 /**
- * The wire shape that CRASHED this dialog in #411: `section_ids` was
+ * The wire shape that CRASHED this dialog in #411: `line_ids` was
  * `#[serde(skip_serializing_if = "Vec::is_empty")]`, so an import that created
- * no section omitted the key while the generated type promised an array. #441
+ * no line omitted the key while the generated type promised an array. #441
  * removed the skip, so the backend always writes the key and this shape is no
  * longer reachable from the shipped binary - the literal is kept as the
  * regression record for #411 and pins the `?? []` that survives it.
  */
-const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
+const okWithoutLineIds = (receipt: ImportReceipt): CommandResult =>
   ({ success: true, error: null, warnings: [], import_receipt: receipt } as unknown as CommandResult);
 
 let executeCompassImport: ReturnType<typeof vi.fn>;
@@ -153,8 +153,8 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
     expect(openDialog).not.toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' }));
   });
 
-  it('shows the receipt when the import created nothing and section_ids is absent (#411)', async () => {
-    executeCompassImport.mockResolvedValue(okWithoutSectionIds(EMPTY_RECEIPT));
+  it('shows the receipt when the import created nothing and line_ids is absent (#411)', async () => {
+    executeCompassImport.mockResolvedValue(okWithoutLineIds(EMPTY_RECEIPT));
     render(<CompassImportDialog compassFile={compassFile} filePath="/tmp/cave.dat" />);
 
     await clickImport();

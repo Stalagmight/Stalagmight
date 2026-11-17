@@ -2,7 +2,7 @@
  * A native date input that can be EMPTY without looking dated.
  *
  * WebKitGTK (the desktop app's webview) paints an empty `<input type="date">`
- * as TODAY's date in ordinary text, so a shot or section with no survey date
+ * as TODAY's date in ordinary text, so a shot or line with no survey date
  * looked surveyed today. With no date this shows a muted "No date" button
  * instead; a click, Enter or Space on it opens the native input, and leaving
  * the input (or Escape) with nothing picked goes back to "No date". When there

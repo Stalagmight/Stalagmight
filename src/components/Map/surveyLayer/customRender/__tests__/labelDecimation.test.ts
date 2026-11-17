@@ -30,10 +30,10 @@ describe('shotStationDecimationModulus', () => {
 });
 
 describe('decimationModulusForKind', () => {
-  it('decimates shot + station labels, never section names or comments', () => {
+  it('decimates shot + station labels, never line names or comments', () => {
     expect(decimationModulusForKind(LABEL_KIND.SHOT_LABEL, 15)).toBe(4);
     expect(decimationModulusForKind(LABEL_KIND.STATION_LABEL, 16)).toBe(2);
-    expect(decimationModulusForKind(LABEL_KIND.SECTION_NAME, 15)).toBe(1);
+    expect(decimationModulusForKind(LABEL_KIND.LINE_NAME, 15)).toBe(1);
     expect(decimationModulusForKind(LABEL_KIND.STATION_COMMENT, 15)).toBe(1);
     expect(decimationModulusForKind(LABEL_KIND.SHOT_COMMENT, 15)).toBe(1);
   });
@@ -60,12 +60,12 @@ describe('decimationAdmitZoom', () => {
     expect(decimationAdmitZoom(LABEL_KIND.STATION_LABEL, 6, false, mz)).toBe(DECIM_BAND_MID_ZOOM);
   });
 
-  it('a first-in-section station admits at minzoom regardless of ordinal', () => {
+  it('a first-in-line station admits at minzoom regardless of ordinal', () => {
     expect(decimationAdmitZoom(LABEL_KIND.STATION_LABEL, 7, true, 14)).toBe(14);
   });
 
-  it('non-decimating kinds (section names, comments) admit at minzoom', () => {
-    expect(decimationAdmitZoom(LABEL_KIND.SECTION_NAME, 5, false, 10)).toBe(10);
+  it('non-decimating kinds (line names, comments) admit at minzoom', () => {
+    expect(decimationAdmitZoom(LABEL_KIND.LINE_NAME, 5, false, 10)).toBe(10);
     expect(decimationAdmitZoom(LABEL_KIND.STATION_COMMENT, 5, false, 14)).toBe(14);
   });
 });
@@ -79,7 +79,7 @@ describe('isLabelDecimatedOut', () => {
     expect(isLabelDecimatedOut(6, 4, false)).toBe(true);
   });
 
-  it('always shows a first-in-section label regardless of ordinal', () => {
+  it('always shows a first-in-line label regardless of ordinal', () => {
     expect(isLabelDecimatedOut(3, 4, true)).toBe(false);
     expect(isLabelDecimatedOut(7, 2, true)).toBe(false);
   });

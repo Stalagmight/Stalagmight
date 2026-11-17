@@ -38,7 +38,7 @@ export function recoveryBackupItemTestId(index: number): string {
 }
 
 export interface WarningTestIdIdentity {
-  sectionId: number;
+  lineId: number;
   shotId: number;
   code: string;
   datumStationIndex?: number;
@@ -49,7 +49,7 @@ export interface WarningTestIdIdentity {
 export function warningKey(warning: WarningTestIdIdentity): string {
   const datum = warning.datumStationIndex === undefined ? '' : `:d${warning.datumStationIndex}`;
   const closure = warning.closureId === undefined ? '' : `:c${warning.closureId}`;
-  return `${warning.sectionId}:${warning.shotId}:${warning.code}${datum}${closure}`;
+  return `${warning.lineId}:${warning.shotId}:${warning.code}${datum}${closure}`;
 }
 
 export function warningResolveTestId(warning: WarningTestIdIdentity): string {

@@ -1,7 +1,7 @@
 /**
  * MNemo station numbers -> station names, from the DMP rows the wizard sends.
  *
- * MNemo numbers a section's start 0 and the end of its N-th shot N. Only the
+ * MNemo numbers a line's start 0 and the end of its N-th shot N. Only the
  * shots the importer keeps (`isImportableDmpShot`: Standard, not 1 m) advance
  * the number, so the numbers are fixed when the file is read and every later
  * wizard edit - a deleted row, an overlap trim, an added row - must leave each
@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { convertToEditableShots, mnemoStationNumber } from '../../hooks/useImportState';
-import { buildZeroDatumSectionConfig, stationNamesForEmittedShots } from '../importSectionConfig';
+import { buildZeroDatumLineConfig, stationNamesForEmittedShots } from '../importLineConfig';
 import { isEmittedShot } from '../../components/common/emittedShots';
 import { blankEditableShot, type EditableShot } from '../../components/common/editableShot';
 import type { DmpShot } from '../../types/commands';
@@ -66,7 +66,7 @@ describe('MNemo station numbering', () => {
     expect(mnemoStationNumber(0)).toBe(1);
   });
 
-  it('names every station of an untouched section 0..N', () => {
+  it('names every station of an untouched line 0..N', () => {
     expect(names(rows(3))).toEqual([
       [0, '0'],
       [1, '1'],
@@ -86,7 +86,7 @@ describe('MNemo station numbering', () => {
     ]);
   });
 
-  it('an overlap trim of the first rows starts the section at its real number', () => {
+  it('an overlap trim of the first rows starts the line at its real number', () => {
     const shots = rows(4);
     shots[0] = deleted(shots[0]!);
     shots[1] = deleted(shots[1]!);
@@ -132,12 +132,12 @@ describe('MNemo station numbering', () => {
   });
 });
 
-describe('buildZeroDatumSectionConfig station names', () => {
+describe('buildZeroDatumLineConfig station names', () => {
   it('sends names in the emitted, pre-reverse order', () => {
     const shots = rows(3);
     shots[1] = deleted(shots[1]!);
     const config: ZeroDatumConfigResult = {
-      sectionIndex: 0,
+      lineIndex: 0,
       stationIndex: 0,
       gps: { latitude: 20.2, longitude: -87.4, depth_reference: 0 },
       metadata: {
@@ -153,7 +153,7 @@ describe('buildZeroDatumSectionConfig station names', () => {
       shots,
     };
 
-    const built = buildZeroDatumSectionConfig(config);
+    const built = buildZeroDatumLineConfig(config);
 
     expect(built.shots).toHaveLength(2);
     // Not mirrored here: the backend mirrors names for a reversed import.

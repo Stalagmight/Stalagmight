@@ -2,11 +2,11 @@ import { test, expect, type Page, type Locator } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
   openDebugFromMenu,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -20,18 +20,18 @@ import {
  * table's title. Escape and the toggle_data_table shortcut (Ctrl+3 in the
  * mock config) exit the mode without closing the table; Escape closes an
  * open dialog first. While fullscreen only save/undo/redo shortcuts stay
- * alive - the Sections view itself remains editable.
+ * alive - the Lines view itself remains editable.
  *
- * The table picker groups "Sections" (the editable table) and "Raw data" -
+ * The table picker groups "Lines" (the editable table) and "Raw data" -
  * read-only grids over the raw sqlite tables (mocked get_raw_table_names /
  * get_raw_table; blobs arrive as "<blob N KB>" placeholders). The raw view
  * shows last-saved state, so an "As of last save" hint appears while the
  * project is dirty and a save clears it (and refetches the page).
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Fullscreen Test Section',
+    name: 'Fullscreen Test Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -55,7 +55,7 @@ async function getActiveTool(page: Page): Promise<string> {
   });
 }
 
-/** Open the DataTable via keyboard shortcut (auto-selects the first section). */
+/** Open the DataTable via keyboard shortcut (auto-selects the first line). */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
@@ -99,7 +99,7 @@ async function openTablePicker(page: Page): Promise<Locator> {
   return listbox;
 }
 
-/** Pick a view in the fullscreen toolbar picker ('Sections' | 'Raw data'). */
+/** Pick a view in the fullscreen toolbar picker ('Lines' | 'Raw data'). */
 async function pickView(page: Page, optionName: string): Promise<void> {
   const listbox = await openTablePicker(page);
   await listbox.getByRole('option', { name: optionName }).click();
@@ -119,7 +119,7 @@ test.describe('Data table fullscreen mode', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Fullscreen Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);
@@ -238,7 +238,7 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
-    // The fullscreen Sections view stays editable - dirty the project.
+    // The fullscreen Lines view stays editable - dirty the project.
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
 
@@ -261,19 +261,19 @@ test.describe('Data table fullscreen mode', () => {
     await expect.poll(() => getActiveTool(page)).toBe('merge');
   });
 
-  test('raw data: picker groups, read-only grid, dirty hint, back to Sections', async ({ page }) => {
+  test('raw data: picker groups, read-only grid, dirty hint, back to Lines', async ({ page }) => {
     await enterFullScreen(page);
 
     // Clean baseline so the dirty hint assertions below are deterministic.
     await page.keyboard.press('Control+s');
     await expect.poll(() => getIsDirty(page)).toBe(false);
 
-    // The picker groups "Sections" and "Raw data" (raw = the sqlite tables).
+    // The picker groups "Lines" and "Raw data" (raw = the sqlite tables).
     // The toolbar picker offers just the two views; tables are chosen in the
     // sub-header.
     const listbox = await openTablePicker(page);
     // (the gap between label and qualifier is flex spacing, not a text space)
-    await expect(listbox.getByRole('option')).toHaveText(['Sections', 'Raw data(read-only)']);
+    await expect(listbox.getByRole('option')).toHaveText(['Lines', 'Raw data(read-only)']);
 
     // Entering raw mode auto-selects a table; the sub-header menu lists them
     // all and switches to the shots table. No Shots|Stations toggle in raw
@@ -282,7 +282,7 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
     await page.getByTestId('data-table-raw-table-menu').click();
     const tableList = page.getByTestId('data-table-raw-table-menu-list');
-    await expect(tableList.getByRole('button')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
+    await expect(tableList.getByRole('button')).toHaveText(['project', 'lines', 'shots', 'undo_stack']);
     await tableList.getByRole('button', { name: 'shots', exact: true }).click();
     await expect(page.getByTestId('raw-table-view')).toBeVisible();
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('shots');
@@ -299,8 +299,8 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('undo_stack');
     await expect(page.getByTestId('grid-cell-0-command_json')).toHaveText('<blob 1.2 KB>');
 
-    // Back to Sections: the editable table with its normal sub-header.
-    await pickView(page, 'Sections');
+    // Back to Lines: the editable table with its normal sub-header.
+    await pickView(page, 'Lines');
     await expect(page.getByTestId('raw-table-view')).toHaveCount(0);
     await expect(page.getByTestId('data-table-raw-name')).toHaveCount(0);
     await expect(page.getByTestId('data-table-view-select')).toBeVisible();

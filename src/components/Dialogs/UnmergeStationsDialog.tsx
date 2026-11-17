@@ -10,11 +10,11 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 
 function stationRefKey(ref: StationRef): string {
-  return `${ref.section_id}:${ref.station_index}`;
+  return `${ref.line_id}:${ref.station_index}`;
 }
 
 function sameStationRef(a: StationRef, b: StationRef): boolean {
-  return a.section_id === b.section_id && a.station_index === b.station_index;
+  return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 export default function UnmergeStationsDialog() {
@@ -57,12 +57,12 @@ export default function UnmergeStationsDialog() {
   ), [mergedStations, selectedKey]);
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
+    const line = project?.lines.find((item) => item.id === ref.line_id);
+    const lineLabel = line?.name?.trim() || `Line ${ref.line_id}`;
     return (
       <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
+        <EntityBlob entity="station">{formatStationId(ref.line_id, ref.station_index)}</EntityBlob>
+        <EntityBlob entity="line">{lineLabel}</EntityBlob>
       </span>
     );
   };
@@ -134,7 +134,7 @@ export default function UnmergeStationsDialog() {
                   value={key}
                   checked={selectedKey === key}
                   onChange={() => setSelectedKey(key)}
-                  data-testid={`unmerge-station-option-${ref.section_id}-${ref.station_index}`}
+                  data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                 />
                 <span>{getStationDisplayLabel(ref)}</span>
               </label>

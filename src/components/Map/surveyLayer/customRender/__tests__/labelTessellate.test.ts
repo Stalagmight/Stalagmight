@@ -22,7 +22,7 @@ import { labelVirtualRank, VIRTUAL_RANK_JUMP, VIRTUAL_RANK_REAL, VIRTUAL_RANK_RE
 /**
  * Label descriptor extraction + per-glyph buffer emission (#customRender labels,
  * Phase 1). Locks: the 5-kind descriptor set (with comments), the ordinals +
- * flag bits (reference / all-reference / first-in-section), and the buffer
+ * flag bits (reference / all-reference / first-in-line), and the buffer
  * output shape (4 verts + 6 indices per glyph, shared per-label attributes,
  * atlas-px uv corners).
  */
@@ -48,23 +48,23 @@ function fakeAtlas(): GlyphAtlas {
   return new GlyphAtlas({ rasterizer: raster });
 }
 
-/** One section, 2 shots (shot 1 is a reference shot), 3 stations; a comment on
+/** One line, 2 shots (shot 1 is a reference shot), 3 stations; a comment on
  *  shot 0 and on station g2. */
 function fixture(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     { id: 1, name: 'Alpha', color: '#4ecdc4', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);
-  d.shotSectionIds = new Uint32Array([1, 1]);
+  d.shotLineIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, shotKindToFlags('Reference')]);
   d.shotAzimuthIn = new Float32Array([312, 45]);
   d.shotLength = new Float32Array([4, 3]);
   d.shotDepthIn = new Float32Array([1, 2]);
   d.shotDepthOut = new Float32Array([2, 4]);
   d.stationCount = 3;
-  d.stationSectionIds = new Uint32Array([1, 1, 1]);
+  d.stationLineIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);
@@ -85,7 +85,7 @@ const CTX: LabelBuildContext = {
 };
 
 describe('buildLabelDescriptors', () => {
-  it('emits the 5 kinds: shot/station labels + shot/station comments + section name', () => {
+  it('emits the 5 kinds: shot/station labels + shot/station comments + line name', () => {
     const d = fixture();
     const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
     const byKind = (k: number): LabelDescriptor[] => descs.filter((x) => x.kind === k);
@@ -93,7 +93,7 @@ describe('buildLabelDescriptors', () => {
     expect(byKind(LABEL_KIND.SHOT_COMMENT)).toHaveLength(1);
     expect(byKind(LABEL_KIND.STATION_LABEL)).toHaveLength(3);
     expect(byKind(LABEL_KIND.STATION_COMMENT)).toHaveLength(1);
-    expect(byKind(LABEL_KIND.SECTION_NAME)).toHaveLength(1);
+    expect(byKind(LABEL_KIND.LINE_NAME)).toHaveLength(1);
   });
 
   it('station names mode: named stations only, labelled by name, everything else as for the ID', () => {
@@ -136,8 +136,8 @@ describe('buildLabelDescriptors', () => {
     expect(shots.map((s) => s.ordinal)).toEqual([0, 1]);
     const stations = descs.filter((x) => x.kind === LABEL_KIND.STATION_LABEL);
     expect(stations.map((s) => s.ordinal).sort((a, b) => a - b)).toEqual([0, 1, 2]);
-    // Comments + section names never decimate.
-    for (const k of [LABEL_KIND.SHOT_COMMENT, LABEL_KIND.STATION_COMMENT, LABEL_KIND.SECTION_NAME]) {
+    // Comments + line names never decimate.
+    for (const k of [LABEL_KIND.SHOT_COMMENT, LABEL_KIND.STATION_COMMENT, LABEL_KIND.LINE_NAME]) {
       for (const d2 of descs.filter((x) => x.kind === k)) expect(d2.ordinal).toBe(0);
     }
   });
@@ -149,14 +149,14 @@ describe('buildLabelDescriptors', () => {
     expect(shots[1]!.flags & LABEL_FLAG.REFERENCE).toBe(LABEL_FLAG.REFERENCE);
   });
 
-  it('sets FIRST_IN_SECTION on the first station, ALL_REFERENCE on the all-reference station', () => {
+  it('sets FIRST_IN_LINE on the first station, ALL_REFERENCE on the all-reference station', () => {
     const d = fixture();
     const stations = buildLabelDescriptors(d, null, 0, 0, CTX).filter((x) => x.kind === LABEL_KIND.STATION_LABEL);
     const byOrdinal = new Map(stations.map((s) => [s.ordinal, s]));
-    // Station g0 (index 0) is first-in-section; g2 only touches the reference
+    // Station g0 (index 0) is first-in-line; g2 only touches the reference
     // shot so it is all-reference; g0/g1 touch a non-reference shot.
-    expect(byOrdinal.get(0)!.flags & LABEL_FLAG.FIRST_IN_SECTION).toBe(LABEL_FLAG.FIRST_IN_SECTION);
-    expect(byOrdinal.get(1)!.flags & LABEL_FLAG.FIRST_IN_SECTION).toBe(0);
+    expect(byOrdinal.get(0)!.flags & LABEL_FLAG.FIRST_IN_LINE).toBe(LABEL_FLAG.FIRST_IN_LINE);
+    expect(byOrdinal.get(1)!.flags & LABEL_FLAG.FIRST_IN_LINE).toBe(0);
     expect(byOrdinal.get(0)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(0);
     expect(byOrdinal.get(2)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(LABEL_FLAG.ALL_REFERENCE);
   });
@@ -186,23 +186,23 @@ describe('buildLabelDescriptors', () => {
 
   it('flags let the declutter rank every label: real, jump or reference (real line first)', () => {
     // Shot 1 is a Jump: station g1 still touches the real shot 0 (a real-line
-    // label), g2 only the jump. A second section of one Reference shot is all
+    // label), g2 only the jump. A second line of one Reference shot is all
     // virtual, so its name and stations rank as reference labels.
     const d = fixture();
-    d.sections = [
-      d.sections[0]!,
+    d.lines = [
+      d.lines[0]!,
       { id: 2, name: 'Tie', color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
     ];
     d.shotCount = 3;
     d.shotIds = new Uint32Array([0, 1, 0]);
-    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotLineIds = new Uint32Array([1, 1, 2]);
     d.shotFlags = new Uint8Array([0, shotKindToFlags('Jump'), shotKindToFlags('Reference')]);
     d.shotAzimuthIn = new Float32Array([312, 45, 90]);
     d.shotLength = new Float32Array([4, 3, 5]);
     d.shotDepthIn = new Float32Array([1, 2, 1]);
     d.shotDepthOut = new Float32Array([2, 4, 1]);
     d.stationCount = 5;
-    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
     d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2, 0, 5, 0, 5, 5, 0]);
     d.stationFlags = new Uint8Array([0, 0, 0, 0, 0]);
@@ -221,19 +221,19 @@ describe('buildLabelDescriptors', () => {
       VIRTUAL_RANK_REFERENCE,
       VIRTUAL_RANK_REFERENCE,
     ]);
-    const section = (id: number) => descs.find((x) => x.kind === LABEL_KIND.SECTION_NAME && x.sectionId === id);
-    expect(rank(section(1))).toBe(VIRTUAL_RANK_REAL);
-    expect(rank(section(2))).toBe(VIRTUAL_RANK_REFERENCE);
+    const line = (id: number) => descs.find((x) => x.kind === LABEL_KIND.LINE_NAME && x.lineId === id);
+    expect(rank(line(1))).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(line(2))).toBe(VIRTUAL_RANK_REFERENCE);
   });
 
-  it('colors comments with labelColor and section names with the section color', () => {
+  it('colors comments with labelColor and line names with the line color', () => {
     const d = fixture();
     const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
     const comment = descs.find((x) => x.kind === LABEL_KIND.SHOT_COMMENT)!;
     expect(comment.color).toEqual(packCssColor('#e0e0e0'));
-    const section = descs.find((x) => x.kind === LABEL_KIND.SECTION_NAME)!;
-    expect(section.color).toEqual(packCssColor('#4ecdc4'));
-    expect(section.text).toBe('Alpha');
+    const line = descs.find((x) => x.kind === LABEL_KIND.LINE_NAME)!;
+    expect(line.color).toEqual(packCssColor('#4ecdc4'));
+    expect(line.text).toBe('Alpha');
   });
 
   it('viewport filter (§4): drops anchors outside the padded rect, keeps ordinals global', () => {
@@ -279,7 +279,7 @@ describe('buildLabelDescriptors', () => {
       },
     };
     const descs = buildLabelDescriptors(d, null, 0, 0, ctx);
-    // Shot comment on shot id 0 in section 1; station comment on station index 2.
+    // Shot comment on shot id 0 in line 1; station comment on station index 2.
     expect(keys.sort()).toEqual(['1:s0', '1:st2']);
     const shotComment = descs.find((x) => x.kind === LABEL_KIND.SHOT_COMMENT)!;
     expect(shotComment.color).toEqual(packCssColor(commentColorForKey('1:s0')));
@@ -295,7 +295,7 @@ describe('buildLabelBuffers output shape', () => {
     const atlas = fakeAtlas();
     // Two single-glyph labels of different kinds.
     const descs: LabelDescriptor[] = [
-      { kind: LABEL_KIND.STATION_LABEL, text: 'A', anchorX: 0.1, anchorY: 0.2, color: [10, 20, 30, 255], ordinal: 5, flags: LABEL_FLAG.FIRST_IN_SECTION },
+      { kind: LABEL_KIND.STATION_LABEL, text: 'A', anchorX: 0.1, anchorY: 0.2, color: [10, 20, 30, 255], ordinal: 5, flags: LABEL_FLAG.FIRST_IN_LINE },
       { kind: LABEL_KIND.SHOT_LABEL, text: 'BC', anchorX: 0.3, anchorY: 0.4, color: [40, 50, 60, 255], ordinal: 9, flags: 0 },
     ];
     const b = buildLabelBuffers(descs, atlas);

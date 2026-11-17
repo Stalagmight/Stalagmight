@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 
 interface SettingsSectionProps {
-  /** Section title displayed as header */
+  /** Line title displayed as header */
   title: string;
   /** Child setting rows */
   children: ReactNode;

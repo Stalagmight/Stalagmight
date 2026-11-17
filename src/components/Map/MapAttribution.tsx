@@ -82,7 +82,7 @@ interface MapAttributionProps {
   /**
    * `auto` shows the names inline when there is room and collapses below
    * {@link COMPACT_BELOW_PX}. `compact` forces the collapsed form - for small
-   * surfaces like the Section Preview, where inline names would cover the very
+   * surfaces like the Line Preview, where inline names would cover the very
    * thing being previewed.
    */
   variant?: 'auto' | 'compact';

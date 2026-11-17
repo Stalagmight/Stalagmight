@@ -6,9 +6,9 @@
 //! reproduces the naming convention used by Ariane.
 //!
 //! Key Ariane format rules learned from real files:
-//! - One START shot per ENTRANCE, not per file. A section merged into the survey
+//! - One START shot per ENTRANCE, not per file. A line merged into the survey
 //!   connects via `FromID` on its first REAL/VIRTUAL shot pointing directly at the
-//!   parent station, and gets no START; a section merged into nothing is a separate
+//!   parent station, and gets no START; a line merged into nothing is a separate
 //!   entrance and gets one of its own, as Ariane's own multi-entrance files do.
 //!   A parentless shot that is NOT a START is an orphan root, and Ariane draws an
 //!   empty map for any survey that has one alongside a closure - see
@@ -25,12 +25,12 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
+use crate::models::{normalize_azimuth, Project, LineId, Shot, StationRef};
 
 use super::atomic_write::write_atomic;
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
-    build_parent_map, choose_default_root_section_id, entrance_datums, station_depth,
+    build_parent_map, choose_default_root_line_id, entrance_datums, station_depth,
 };
 
 #[path = "tml_datums.rs"]
@@ -53,7 +53,7 @@ struct Names {
     id: &'static str,
     from_id: &'static str,
     shot_type: &'static str,
-    section: &'static str,
+    line: &'static str,
     azimuth: &'static str,
     length: &'static str,
     depth: &'static str,
@@ -89,7 +89,7 @@ const LONG: Names = Names {
     id: "ID",
     from_id: "FromID",
     shot_type: "Type",
-    section: "Section",
+    line: "Section",
     azimuth: "Azimut",
     length: "Length",
     depth: "Depth",
@@ -125,7 +125,7 @@ const SHORT: Names = Names {
     id: "ID",
     from_id: "FRID",
     shot_type: "TY",
-    section: "SC",
+    line: "SC",
     azimuth: "AZ",
     length: "LG",
     depth: "DP",
@@ -197,7 +197,7 @@ struct ExportShot {
     uuid: Option<String>,
     from_id: i64,
     shot_type: &'static str, // "START", "REAL", "VIRTUAL", "CLOSURE"
-    section: String,
+    line: String,
     azimuth: f64,
     length: f64,
     depth: f64, // absolute station depth (cumulative)
@@ -436,7 +436,7 @@ fn write_shot<W: std::io::Write>(
 
     write_text_element(writer, n.profiletype, "VERTICAL")?;
     write_text_element(writer, n.right, &format_f64(shot.right))?;
-    write_text_element(writer, n.section, &shot.section)?;
+    write_text_element(writer, n.line, &shot.line)?;
     write_text_element(writer, n.shot_type, shot.shot_type)?;
     write_text_element(writer, n.up, &format_f64(shot.up))?;
 
@@ -456,7 +456,7 @@ fn write_shot<W: std::io::Write>(
     // it is a real shot emitted with its heading and LRUD mirrored, and it is
     // that shot's ONLY appearance in the document, because every constructor
     // pairs it with a forward block over a DISJOINT index range (`0..split` vs
-    // `split..len`) or replaces the forward block entirely (the whole-section
+    // `split..len`) or replaces the forward block entirely (the whole-line
     // reversal). So no shot can appear twice, and `remint_duplicate_uuids`
     // cannot see a forward/reverse pair as a duplicate - pinned by
     // `a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted`.
@@ -515,9 +515,9 @@ fn row_date(credit: &crate::models::SurveyCredit) -> Option<String> {
     credit.date.map(|d| d.format("%Y-%m-%d").to_string())
 }
 
-/// Stand-in for a section with no survey date. `<Date>` is not optional to every
+/// Stand-in for a line with no survey date. `<Date>` is not optional to every
 /// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
-/// dateless section still gets a parseable one.
+/// dateless line still gets a parseable one.
 const DEFAULT_EXPORT_DATE: &str = "2000-01-01";
 
 /// Ariane's `DepthIn` sentinel: "this shot starts where the previous one ended".
@@ -622,20 +622,20 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
         return Ok(());
     };
 
-    let mut sections: Vec<&str> = orphans.iter().map(|s| s.section.as_str()).collect();
-    sections.sort_unstable();
-    sections.dedup();
-    // Section names come from imported third-party files, so neither their count
+    let mut lines: Vec<&str> = orphans.iter().map(|s| s.line.as_str()).collect();
+    lines.sort_unstable();
+    lines.dedup();
+    // Line names come from imported third-party files, so neither their count
     // nor their length is ours to trust - and this string reaches both the log
     // and the UI (#378 item g). Cap the list and truncate each name.
-    let listed = list_capped(&sections);
+    let listed = list_capped(&lines);
 
     // Without a closure Ariane never runs the loop solve, so the orphan is inert and
     // the file draws. Say so once and let the export through.
     if !shots.iter().any(|s| s.shot_type == "CLOSURE") {
         tracing::warn!(
             orphan_count = orphans.len(),
-            sections = listed,
+            lines = listed,
             "Exported shots have no parent station; Ariane will draw them as separate \
              entrances. Adding a loop closure to this survey would blank its map."
         );
@@ -645,7 +645,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
     anyhow::bail!(
         "Cannot export {listed}: {} shot(s) there have no parent station, and this survey \
          also has loop closures - Ariane draws an empty map for that combination. Connect \
-         the section to the rest of the survey, or remove the closures. \
+         the line to the rest of the survey, or remove the closures. \
          (First unrooted shot: id {}, type {}.)",
         orphans.len(),
         first.id,
@@ -653,34 +653,34 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
     )
 }
 
-/// How many section names an error/warning lists before summarising, and how
+/// How many line names an error/warning lists before summarising, and how
 /// long each shown name may be. Imported files decide both, so the message must
 /// not scale with them.
-const LISTED_SECTIONS_MAX: usize = 5;
-const LISTED_SECTION_NAME_MAX: usize = 60;
+const LISTED_LINES_MAX: usize = 5;
+const LISTED_LINE_NAME_MAX: usize = 60;
 
 fn list_capped(names: &[&str]) -> String {
     let mut shown: Vec<String> = names
         .iter()
-        .take(LISTED_SECTIONS_MAX)
+        .take(LISTED_LINES_MAX)
         .map(|name| {
             // Control characters would let an imported name forge log lines or
             // steer the terminal; the length caps alone don't stop that.
             let clean: String = name
                 .chars()
                 .filter(|c| !c.is_control())
-                .take(LISTED_SECTION_NAME_MAX + 1)
+                .take(LISTED_LINE_NAME_MAX + 1)
                 .collect();
-            if clean.chars().count() > LISTED_SECTION_NAME_MAX {
-                let cut: String = clean.chars().take(LISTED_SECTION_NAME_MAX).collect();
+            if clean.chars().count() > LISTED_LINE_NAME_MAX {
+                let cut: String = clean.chars().take(LISTED_LINE_NAME_MAX).collect();
                 format!("{cut}...")
             } else {
                 clean
             }
         })
         .collect();
-    if names.len() > LISTED_SECTIONS_MAX {
-        shown.push(format!("and {} more", names.len() - LISTED_SECTIONS_MAX));
+    if names.len() > LISTED_LINES_MAX {
+        shown.push(format!("and {} more", names.len() - LISTED_LINES_MAX));
     }
     shown.join(", ")
 }
@@ -732,7 +732,7 @@ fn shot_export_uuid(shot: &Shot) -> String {
 /// The fidelity guarantee is scoped: it holds for the FIRST occurrence only,
 /// and only that copy is stable across exports - a later repeat draws a fresh
 /// v4 per export (only the `ExportShot` is touched, never the project), so a
-/// project holding a cross-section duplicate does not re-export byte-identical.
+/// project holding a cross-line duplicate does not re-export byte-identical.
 /// Accepted: the sidecar profile has no such repeats (it drops them), and the
 /// user-facing byte-stability claim (`shot_export_uuid`) was always conditional
 /// on the project having been saved, i.e. on identities being settled.
@@ -766,11 +766,11 @@ fn build_export_shots_with_report(
     profile: TmlProfile,
     azimuth_export: AzimuthExport,
 ) -> (Vec<ExportShot>, usize) {
-    if project.sections.is_empty() {
+    if project.lines.is_empty() {
         return (Vec::new(), 0);
     }
 
-    // Pick the section the topology hangs off. A survey can emit more than one START
+    // Pick the line the topology hangs off. A survey can emit more than one START
     // (one per entrance - see the module docs), but only this one is the graph root:
     // when a primary zero datum exists, rooting here lets its GPS land on a START
     // without remapping.
@@ -781,39 +781,39 @@ fn build_export_shots_with_report(
     // laid out against a different anchor - every station displaced by the whole
     // inter-datum vector, silently, in the file the user hands to someone else.
     let frame_datum = project.frame_datum();
-    let root_section_id = frame_datum
-        .map(|d| d.station_ref.section_id)
-        .filter(|sid| project.sections.iter().any(|s| s.id == *sid))
-        .unwrap_or_else(|| choose_default_root_section_id(project));
+    let root_line_id = frame_datum
+        .map(|d| d.station_ref.line_id)
+        .filter(|sid| project.lines.iter().any(|s| s.id == *sid))
+        .unwrap_or_else(|| choose_default_root_line_id(project));
 
     // Build rooted parent links from station merges.
     let entrance_datums = entrance_datums(project);
-    let parent_map = build_parent_map(project, root_section_id, &entrance_datums);
+    let parent_map = build_parent_map(project, root_line_id, &entrance_datums);
     let primary_datum = frame_datum;
 
     let mut next_id: i64 = 0;
 
-    struct SectionBlock {
-        section_id: SectionId,
+    struct LineBlock {
+        line_id: LineId,
         apply_parent_link: bool,
         merge_station_index_override: Option<u32>,
         shots: Vec<ExportShot>,
     }
 
-    let mut blocks: Vec<SectionBlock> = Vec::new();
-    // Map: (section_id, station_index) → ariane_id. A START's id is the node of
+    let mut blocks: Vec<LineBlock> = Vec::new();
+    // Map: (line_id, station_index) → ariane_id. A START's id is the node of
     // the station it stands on, which is how the GPS pass finds each datum's
     // own START (#378 item e).
-    let mut station_to_ariane: HashMap<(SectionId, u32), i64> = HashMap::new();
+    let mut station_to_ariane: HashMap<(LineId, u32), i64> = HashMap::new();
 
-    for section in &project.sections {
-        let is_root = section.id == root_section_id;
-        // #438: identity unless the project's sections disagree about north, in
-        // which case each section's own correction is applied here so the whole
+    for line in &project.lines {
+        let is_root = line.id == root_line_id;
+        // #438: identity unless the project's lines disagree about north, in
+        // which case each line's own correction is applied here so the whole
         // document is true north - the only thing one file-level flag can say.
-        let emit_reference = azimuth_export.emit_reference(project, section);
+        let emit_reference = azimuth_export.emit_reference(project, line);
 
-        // A section that never merges into the tree is a separate entrance, not a
+        // A line that never merges into the tree is a separate entrance, not a
         // child of anything - two unconnected galleries in one project is an ordinary
         // state. Ariane represents those as additional START shots and its own files
         // do exactly that (`chanchemuyil_sur.tml` ships two). Leaving the first shot
@@ -833,35 +833,35 @@ fn build_export_shots_with_report(
         // is not an anchor and its whole component is dropped as orphans - which
         // is why every START must be GPS-stamped below whenever a datum exists.
         // Guarded by `the_sidecar_accepts_multiple_starts`.
-        let is_entrance = is_root || !parent_map.contains_key(&section.id);
+        let is_entrance = is_root || !parent_map.contains_key(&line.id);
 
-        let section_name = section
+        let line_name = line
             .name
             .as_deref()
-            .unwrap_or(&format!("Section {}", section.id))
+            .unwrap_or(&format!("Line {}", line.id))
             .to_string();
-        let color = color_to_ariane(&section.color);
+        let color = color_to_ariane(&line.color);
         // A START row takes the people and date of the shot it leads into, so
         // a reader grouping rows by (name, date, people) keeps it with them;
         // every shot row carries its own (`row_explorer` / `row_date`).
         let start_credit = |at: usize| {
-            section
+            line
                 .shots
                 .get(at)
-                .or(section.shots.first())
+                .or(line.shots.first())
                 .map_or(&crate::models::EMPTY_CREDIT, Shot::credit)
         };
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
-        // (see `root_section_id` above); any other entrance uses its own section's
+        // (see `root_line_id` above); any other entrance uses its own line's
         // first placement datum (#378 item e, #741). GPS lands only on START shots, so
-        // an entrance whose datum is mid-section must SPLIT there - stamping that
+        // an entrance whose datum is mid-line must SPLIT there - stamping that
         // datum's GPS onto a station-0 START would displace the whole component by
         // the station-to-datum vector, silently.
         let entrance_datum = if is_root {
-            primary_datum.filter(|datum| datum.station_ref.section_id == section.id)
+            primary_datum.filter(|datum| datum.station_ref.line_id == line.id)
         } else if is_entrance {
-            entrance_datums.get(&section.id).copied()
+            entrance_datums.get(&line.id).copied()
         } else {
             None
         };
@@ -871,12 +871,12 @@ fn build_export_shots_with_report(
                 .and_then(|datum| project.resolve_key(&datum.station_ref))
                 .and_then(|sr| {
                     let idx = sr.station_index as usize;
-                    if idx > section.shots.len() {
+                    if idx > line.shots.len() {
                         tracing::warn!(
-                            section_id = section.id,
+                            line_id = line.id,
                             station_index = sr.station_index,
-                            shot_count = section.shots.len(),
-                            "Zero datum station is out of bounds; exporting section without split"
+                            shot_count = line.shots.len(),
+                            "Zero datum station is out of bounds; exporting line without split"
                         );
                         None
                     } else if idx > 0 {
@@ -892,23 +892,23 @@ fn build_export_shots_with_report(
         if let Some(split_idx) = split_entrance_at {
             let start_id = next_id;
             next_id += 1;
-            let start_depth = station_depth(section, split_idx);
+            let start_depth = station_depth(line, split_idx);
 
             let mut root_shots = Vec::new();
             root_shots.push(start_shot(
                 start_id,
-                section_name.clone(),
+                line_name.clone(),
                 start_depth,
                 row_explorer(start_credit(split_idx)),
                 row_date(start_credit(split_idx)),
                 color.clone(),
             ));
-            station_to_ariane.insert((section.id, split_idx as u32), start_id);
+            station_to_ariane.insert((line.id, split_idx as u32), start_id);
 
-            // Forward segment: datum station -> original section end.
+            // Forward segment: datum station -> original line end.
             let mut cumulative_depth = start_depth;
-            for shot_idx in split_idx..section.shots.len() {
-                let shot = &section.shots[shot_idx];
+            for shot_idx in split_idx..line.shots.len() {
+                let shot = &line.shots[shot_idx];
                 let shot_ariane_id = next_id;
                 next_id += 1;
 
@@ -930,7 +930,7 @@ fn build_export_shots_with_report(
                     } else {
                         "REAL"
                     },
-                    section: section_name.clone(),
+                    line: line_name.clone(),
                     azimuth: emit_reference.to_true(shot.azimuth_in),
                     length: shot.length,
                     depth: shot.depth_out,
@@ -951,24 +951,24 @@ fn build_export_shots_with_report(
                     locked: false,
                 });
 
-                station_to_ariane.insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+                station_to_ariane.insert((line.id, (shot_idx + 1) as u32), shot_ariane_id);
             }
 
-            blocks.push(SectionBlock {
-                section_id: section.id,
+            blocks.push(LineBlock {
+                line_id: line.id,
                 apply_parent_link: false,
                 merge_station_index_override: None,
                 shots: root_shots,
             });
 
-            // Reverse segment: datum station -> original section start.
+            // Reverse segment: datum station -> original line start.
             if split_idx > 0 {
-                let split_name = format!("{section_name} (pre-zero-datum)");
+                let split_name = format!("{line_name} (pre-zero-datum)");
                 let mut reverse_shots = Vec::new();
                 let mut cumulative_depth = start_depth;
 
                 for shot_idx in (0..split_idx).rev() {
-                    let shot = &section.shots[shot_idx];
+                    let shot = &line.shots[shot_idx];
                     let shot_ariane_id = next_id;
                     next_id += 1;
 
@@ -996,7 +996,7 @@ fn build_export_shots_with_report(
                         } else {
                             "REAL"
                         },
-                        section: split_name.clone(),
+                        line: split_name.clone(),
                         // Ariane carries a single forward azimuth per shot. The reverse
                         // pre-zero leg must therefore be synthesized as reciprocal heading.
                         azimuth: reverse_pre_zero_azimuth(emit_reference.to_true(shot.azimuth_in)),
@@ -1021,11 +1021,11 @@ fn build_export_shots_with_report(
 
                     // Reversed shot from station (shot_idx + 1) to shot_idx:
                     // it ends at the original station shot_idx.
-                    station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
+                    station_to_ariane.insert((line.id, shot_idx as u32), shot_ariane_id);
                 }
 
-                blocks.push(SectionBlock {
-                    section_id: section.id,
+                blocks.push(LineBlock {
+                    line_id: line.id,
                     apply_parent_link: false,
                     merge_station_index_override: None,
                     shots: reverse_shots,
@@ -1035,20 +1035,20 @@ fn build_export_shots_with_report(
             continue;
         }
 
-        // Non-root child sections merged at a non-zero station need splitting
+        // Non-root child lines merged at a non-zero station need splitting
         // or reversal so the merge point becomes the first shot in each block.
         if !is_root {
-            if let Some(parent_link) = parent_map.get(&section.id) {
+            if let Some(parent_link) = parent_map.get(&line.id) {
                 let child_merge_idx = parent_link.child_station_index as usize;
 
-                if child_merge_idx > 0 && child_merge_idx < section.shots.len() {
-                    // Mid-section merge: split into forward + reverse blocks.
+                if child_merge_idx > 0 && child_merge_idx < line.shots.len() {
+                    // Mid-line merge: split into forward + reverse blocks.
 
                     // Forward block: shots from child_merge_idx to end.
                     let mut fwd_shots = Vec::new();
-                    let mut cumulative_depth = station_depth(section, child_merge_idx);
-                    for shot_idx in child_merge_idx..section.shots.len() {
-                        let shot = &section.shots[shot_idx];
+                    let mut cumulative_depth = station_depth(line, child_merge_idx);
+                    for shot_idx in child_merge_idx..line.shots.len() {
+                        let shot = &line.shots[shot_idx];
                         let shot_ariane_id = next_id;
                         next_id += 1;
 
@@ -1071,7 +1071,7 @@ fn build_export_shots_with_report(
                             } else {
                                 "REAL"
                             },
-                            section: section_name.clone(),
+                            line: line_name.clone(),
                             azimuth: emit_reference.to_true(shot.azimuth_in),
                             length: shot.length,
                             depth: shot.depth_out,
@@ -1093,23 +1093,23 @@ fn build_export_shots_with_report(
                         });
 
                         station_to_ariane
-                            .insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+                            .insert((line.id, (shot_idx + 1) as u32), shot_ariane_id);
                     }
 
-                    blocks.push(SectionBlock {
-                        section_id: section.id,
+                    blocks.push(LineBlock {
+                        line_id: line.id,
                         apply_parent_link: true,
                         merge_station_index_override: Some(0),
                         shots: fwd_shots,
                     });
 
                     // Reverse block: shots from child_merge_idx-1 down to 0, reversed.
-                    let rev_name = format!("{section_name} (reversed)");
+                    let rev_name = format!("{line_name} (reversed)");
                     let mut rev_shots = Vec::new();
-                    let mut cumulative_depth = station_depth(section, child_merge_idx);
+                    let mut cumulative_depth = station_depth(line, child_merge_idx);
 
                     for shot_idx in (0..child_merge_idx).rev() {
-                        let shot = &section.shots[shot_idx];
+                        let shot = &line.shots[shot_idx];
                         let shot_ariane_id = next_id;
                         next_id += 1;
 
@@ -1137,7 +1137,7 @@ fn build_export_shots_with_report(
                             } else {
                                 "REAL"
                             },
-                            section: rev_name.clone(),
+                            line: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
                                 emit_reference.to_true(shot.azimuth_in),
                             ),
@@ -1161,29 +1161,29 @@ fn build_export_shots_with_report(
                         });
 
                         // Reversed shot ends at original station shot_idx.
-                        station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
+                        station_to_ariane.insert((line.id, shot_idx as u32), shot_ariane_id);
                     }
 
-                    blocks.push(SectionBlock {
-                        section_id: section.id,
+                    blocks.push(LineBlock {
+                        line_id: line.id,
                         apply_parent_link: true,
                         merge_station_index_override: Some(0),
                         shots: rev_shots,
                     });
 
                     continue;
-                } else if child_merge_idx > 0 && child_merge_idx >= section.shots.len() {
-                    // End-of-section merge: reverse the entire section.
-                    let rev_name = format!("{section_name} (reversed)");
+                } else if child_merge_idx > 0 && child_merge_idx >= line.shots.len() {
+                    // End-of-line merge: reverse the entire line.
+                    let rev_name = format!("{line_name} (reversed)");
                     let mut rev_shots = Vec::new();
-                    let mut cumulative_depth = station_depth(section, section.shots.len());
+                    let mut cumulative_depth = station_depth(line, line.shots.len());
 
-                    for shot_idx in (0..section.shots.len()).rev() {
-                        let shot = &section.shots[shot_idx];
+                    for shot_idx in (0..line.shots.len()).rev() {
+                        let shot = &line.shots[shot_idx];
                         let shot_ariane_id = next_id;
                         next_id += 1;
 
-                        let prev_id = if shot_idx == section.shots.len() - 1 {
+                        let prev_id = if shot_idx == line.shots.len() - 1 {
                             -1 // placeholder - resolved in second pass
                         } else {
                             shot_ariane_id - 1
@@ -1207,7 +1207,7 @@ fn build_export_shots_with_report(
                             } else {
                                 "REAL"
                             },
-                            section: rev_name.clone(),
+                            line: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
                                 emit_reference.to_true(shot.azimuth_in),
                             ),
@@ -1231,11 +1231,11 @@ fn build_export_shots_with_report(
                         });
 
                         // Reversed shot ends at original station shot_idx.
-                        station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
+                        station_to_ariane.insert((line.id, shot_idx as u32), shot_ariane_id);
                     }
 
-                    blocks.push(SectionBlock {
-                        section_id: section.id,
+                    blocks.push(LineBlock {
+                        line_id: line.id,
                         apply_parent_link: true,
                         merge_station_index_override: Some(0),
                         shots: rev_shots,
@@ -1249,11 +1249,11 @@ fn build_export_shots_with_report(
         let mut shots = Vec::new();
 
         if is_entrance {
-            // The root, and any section not merged into it, each get a START shot
+            // The root, and any line not merged into it, each get a START shot
             let start_id = next_id;
             next_id += 1;
 
-            let start_depth = if let Some(first_shot) = section.shots.first() {
+            let start_depth = if let Some(first_shot) = line.shots.first() {
                 first_shot.depth_in
             } else {
                 0.0
@@ -1261,23 +1261,23 @@ fn build_export_shots_with_report(
 
             shots.push(start_shot(
                 start_id,
-                section_name.clone(),
+                line_name.clone(),
                 start_depth,
                 row_explorer(start_credit(0)),
                 row_date(start_credit(0)),
                 color.clone(),
             ));
 
-            station_to_ariane.insert((section.id, 0), start_id);
+            station_to_ariane.insert((line.id, 0), start_id);
         }
 
-        let mut cumulative_depth: f64 = if let Some(first_shot) = section.shots.first() {
+        let mut cumulative_depth: f64 = if let Some(first_shot) = line.shots.first() {
             first_shot.depth_in
         } else {
             0.0
         };
 
-        for (i, shot) in section.shots.iter().enumerate() {
+        for (i, shot) in line.shots.iter().enumerate() {
             let shot_ariane_id = next_id;
             next_id += 1;
 
@@ -1307,7 +1307,7 @@ fn build_export_shots_with_report(
                 } else {
                     "REAL"
                 },
-                section: section_name.clone(),
+                line: line_name.clone(),
                 azimuth: emit_reference.to_true(shot.azimuth_in),
                 length: shot.length,
                 depth: shot.depth_out,
@@ -1329,11 +1329,11 @@ fn build_export_shots_with_report(
             });
 
             // Station (i+1) is after this shot
-            station_to_ariane.insert((section.id, (i + 1) as u32), shot_ariane_id);
+            station_to_ariane.insert((line.id, (i + 1) as u32), shot_ariane_id);
         }
 
-        blocks.push(SectionBlock {
-            section_id: section.id,
+        blocks.push(LineBlock {
+            line_id: line.id,
             apply_parent_link: !is_entrance && !shots.is_empty(),
             merge_station_index_override: None,
             shots,
@@ -1342,9 +1342,9 @@ fn build_export_shots_with_report(
 
     // Second pass: resolve parent links from station merges.
     //
-    // A section's parent station is often another section's MERGE station, and that
+    // A line's parent station is often another line's MERGE station, and that
     // station only enters `station_to_ariane` through the alias at the bottom of this
-    // loop - that is, when the other section resolves. Walking `blocks` once therefore
+    // loop - that is, when the other line resolves. Walking `blocks` once therefore
     // makes resolution order-dependent even though the tree `build_parent_map` builds
     // is not: a child stored before its parent missed the lookup and kept the `-1`
     // placeholder. Ariane reads a parentless non-START shot as a second entrance, gives
@@ -1360,17 +1360,17 @@ fn build_export_shots_with_report(
         let mut progressed = false;
 
         for i in pending {
-            let section_id = blocks[i].section_id;
+            let line_id = blocks[i].line_id;
             let override_idx = blocks[i].merge_station_index_override;
 
-            // No parent link at all means a genuinely detached section, which is a
+            // No parent link at all means a genuinely detached line, which is a
             // different shape from an unresolved one; `ensure_rooted_chain` decides.
-            let Some(parent_link) = parent_map.get(&section_id) else {
+            let Some(parent_link) = parent_map.get(&line_id) else {
                 continue;
             };
 
             let Some(&parent_ariane_id) = station_to_ariane.get(&(
-                parent_link.parent_station.section_id,
+                parent_link.parent_station.line_id,
                 parent_link.parent_station.station_index,
             )) else {
                 unresolved.push(i);
@@ -1383,7 +1383,7 @@ fn build_export_shots_with_report(
                 blocks[i].shots[child_station_idx].from_id = parent_ariane_id;
             } else {
                 tracing::warn!(
-                    child_section_id = section_id,
+                    child_line_id = line_id,
                     child_station_index = parent_link.child_station_index,
                     shot_count = blocks[i].shots.len(),
                     "Skipping parent from_id rewrite: child merge station has no outgoing shot"
@@ -1393,7 +1393,7 @@ fn build_export_shots_with_report(
             // Treat merged stations as the same Ariane node ID so closures and GPS
             // references resolve to the parent-attached node.
             station_to_ariane.insert(
-                (section_id, parent_link.child_station_index),
+                (line_id, parent_link.child_station_index),
                 parent_ariane_id,
             );
             progressed = true;
@@ -1403,10 +1403,10 @@ fn build_export_shots_with_report(
         if !progressed {
             // Nothing moved, so nothing will: the rest are unreachable parents.
             for &i in &pending {
-                let parent_link = &parent_map[&blocks[i].section_id];
+                let parent_link = &parent_map[&blocks[i].line_id];
                 tracing::warn!(
-                    child_section_id = blocks[i].section_id,
-                    parent_section_id = parent_link.parent_station.section_id,
+                    child_line_id = blocks[i].line_id,
+                    parent_line_id = parent_link.parent_station.line_id,
                     parent_station_index = parent_link.parent_station.station_index,
                     "Unresolved parent link: parent station is not representable in Ariane export"
                 );
@@ -1426,7 +1426,7 @@ fn build_export_shots_with_report(
     // See `models::comment_split` for the marker convention.
     //
     // ariane_id -> list of (StationRef, comment), in a deterministic order
-    // (sorted by section_id then station_index) so the joined output is
+    // (sorted by line_id then station_index) so the joined output is
     // reproducible across exports.
     let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
     let mut entries: Vec<(StationRef, &str)> = project
@@ -1444,11 +1444,11 @@ fn build_export_shots_with_report(
             }
         })
         .collect();
-    entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+    entries.sort_by_key(|(sr, _)| (sr.line_id, sr.station_index));
     for (sr, text) in entries {
-        let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
+        let Some(&ariane_id) = station_to_ariane.get(&(sr.line_id, sr.station_index)) else {
             tracing::debug!(
-                section_id = sr.section_id,
+                line_id = sr.line_id,
                 station_index = sr.station_index,
                 "Station comment dropped from .tml export: no Ariane shot represents this station"
             );
@@ -1505,10 +1505,10 @@ fn build_export_shots_with_report(
             attachments.into_iter().map(move |(sr, _)| (sr, ariane_id))
         })
         .collect();
-    dropped.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+    dropped.sort_by_key(|(sr, _)| (sr.line_id, sr.station_index));
     for (sr, ariane_id) in dropped {
         tracing::debug!(
-            section_id = sr.section_id,
+            line_id = sr.line_id,
             station_index = sr.station_index,
             ariane_id,
             "Station comment dropped from .tml export: the Ariane shot representing this station takes no station comment (START, or no shot of its own)"
@@ -1517,7 +1517,7 @@ fn build_export_shots_with_report(
 
     // Third pass: generate CLOSURE shots from loop_closures
     // Depth of every Ariane node emitted so far, so a closure can be hung off
-    // the node it actually references rather than off its endpoint's section.
+    // the node it actually references rather than off its endpoint's line.
     let node_rows: HashMap<i64, &ExportShot> = blocks
         .iter()
         .flat_map(|b| b.shots.iter())
@@ -1535,24 +1535,24 @@ fn build_export_shots_with_report(
             );
             continue;
         };
-        let Some(&from_id) = station_to_ariane.get(&(a_ref.section_id, a_ref.station_index)) else {
+        let Some(&from_id) = station_to_ariane.get(&(a_ref.line_id, a_ref.station_index)) else {
             tracing::warn!(
                 closure_id = closure.id,
-                from_section_id = a_ref.section_id,
+                from_line_id = a_ref.line_id,
                 from_station_index = a_ref.station_index,
-                to_section_id = b_ref.section_id,
+                to_line_id = b_ref.line_id,
                 to_station_index = b_ref.station_index,
                 "Skipping closure export: from station is not representable in Ariane topology"
             );
             continue;
         };
 
-        let Some(&to_id) = station_to_ariane.get(&(b_ref.section_id, b_ref.station_index)) else {
+        let Some(&to_id) = station_to_ariane.get(&(b_ref.line_id, b_ref.station_index)) else {
             tracing::warn!(
                 closure_id = closure.id,
-                from_section_id = a_ref.section_id,
+                from_line_id = a_ref.line_id,
                 from_station_index = a_ref.station_index,
-                to_section_id = b_ref.section_id,
+                to_line_id = b_ref.line_id,
                 to_station_index = b_ref.station_index,
                 "Skipping closure export: target station is not representable in Ariane topology"
             );
@@ -1562,7 +1562,7 @@ fn build_export_shots_with_report(
         if from_id == to_id {
             tracing::warn!(
                 closure_id = closure.id,
-                section_id = a_ref.section_id,
+                line_id = a_ref.line_id,
                 station_index = a_ref.station_index,
                 "Skipping closure export: closure endpoints collapse to the same Ariane node"
             );
@@ -1572,17 +1572,17 @@ fn build_export_shots_with_report(
         let closure_id = next_id;
         next_id += 1;
 
-        let section_name = project
-            .sections
+        let line_name = project
+            .lines
             .iter()
-            .find(|s| s.id == closure.station_a.section_id)
+            .find(|s| s.id == closure.station_a.line_id)
             .and_then(|s| s.name.clone())
-            .unwrap_or_else(|| format!("Section {}", closure.station_a.section_id));
+            .unwrap_or_else(|| format!("Line {}", closure.station_a.line_id));
 
         let color = project
-            .sections
+            .lines
             .iter()
-            .find(|s| s.id == closure.station_a.section_id)
+            .find(|s| s.id == closure.station_a.line_id)
             .map(|s| color_to_ariane(&s.color))
             .unwrap_or_else(|| "0x4ecdc4ff".to_string());
 
@@ -1595,9 +1595,9 @@ fn build_export_shots_with_report(
         // `build_shots_map`, so they never reach the `length_2d` bound check); this
         // is for Ariane itself and for anything that does walk them.
         //
-        // Read from the emitted nodes, NOT from the endpoint's own section table:
+        // Read from the emitted nodes, NOT from the endpoint's own line table:
         // `station_to_ariane` maps a merged child station to the PARENT's node, so
-        // at a junction the child section's station depth is not the depth the
+        // at a junction the child line's station depth is not the depth the
         // consumer will use as this connector's origin. Taking it from the node is
         // what makes `length` cover the gap the consumer actually measures.
         //
@@ -1632,7 +1632,7 @@ fn build_export_shots_with_report(
             closure_id,
             from_id,
             to_id,
-            section_name,
+            line_name,
             color,
             node_rows.get(&from_id).copied(),
             depth_b,
@@ -1744,7 +1744,7 @@ fn length_covering_written_delta(delta: f64) -> f64 {
 /// the bound.
 ///
 /// The branch's FIRST shot is the same story with no cascade behind it: it is
-/// flagged against its own section, so the file hangs it off a station it was
+/// flagged against its own line, so the file hangs it off a station it was
 /// never measured from. Where the tape is long enough for the bound to hold, that
 /// used to pass every check while stating a vertical change nobody surveyed.
 ///
@@ -1814,7 +1814,7 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot], profile: TmlProf
     // at all (their exported drop was longer than their tape) from the ones merely
     // put where the file already says they are. The second is not a consequence of
     // the first: a branch's first shot is flagged same-as-previous against its OWN
-    // section, so it writes the sentinel and needs moving onto its parent even when
+    // line, so it writes the sentinel and needs moving onto its parent even when
     // nothing upstream was repaired.
     let mut repaired = 0usize;
     let mut carried = 0usize;
@@ -1836,7 +1836,7 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot], profile: TmlProf
             // measured to start, counted only when the file says the two meet -
             // which is precisely when a consumer takes this shot's origin from the
             // parent instead of from `DepthIn`. Non-zero for a branch's first shot
-            // (flagged against its own section, not against the station it hangs
+            // (flagged against its own line, not against the station it hangs
             // off) and for everything below a shot the repair has moved. The
             // tolerance matches the one the same-as-previous flag was computed
             // with, so a contiguous shot whose depths agree to within it is left
@@ -1955,9 +1955,9 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot], profile: TmlProf
 // ============================================================================
 
 /// The character SpeleoDB joins `name/description/date/explorers/surveyors` with
-/// before hashing a shot into a section (U+220E). Left inside one of those
-/// fields it re-cuts the survey into sections nobody drew.
-const SPELEODB_SECTION_FIELD_SEPARATOR: char = '\u{220e}';
+/// before hashing a shot into a line (U+220E). Left inside one of those
+/// fields it re-cuts the survey into lines nobody drew.
+const SPELEODB_LINE_FIELD_SEPARATOR: char = '\u{220e}';
 
 /// Year range of the IGRF model SpeleoDB derives magnetic declination from.
 /// Outside it the declination silently becomes 0.0, rotating the whole map by
@@ -2015,7 +2015,7 @@ fn speleodb_anchor_component(value: f64, limit: f64) -> f64 {
 /// A `<Date>` SpeleoDB will accept, and whose year its declination model covers.
 ///
 /// A missing, empty or non-ISO date fails validation for the ENTIRE file, not
-/// for the one section, so an unparseable date falls back rather than being
+/// for the one line, so an unparseable date falls back rather than being
 /// passed through. The year clamp trades a wrong date for a right declination:
 /// out of range the model returns 0.0 without saying so, which rotates the map.
 fn speleodb_date(raw: Option<&str>) -> String {
@@ -2051,8 +2051,8 @@ fn speleodb_uuid(raw: &str) -> Option<uuid::Uuid> {
         .then_some(parsed)
 }
 
-fn strip_section_separator(field: &str) -> String {
-    field.replace(SPELEODB_SECTION_FIELD_SEPARATOR, " ")
+fn strip_line_separator(field: &str) -> String {
+    field.replace(SPELEODB_LINE_FIELD_SEPARATOR, " ")
 }
 
 /// Bend the exported document into the shape SpeleoDB's converter can read.
@@ -2075,8 +2075,8 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
         // raw, and an azimuth outside [0, 360) then walks the shot somewhere the
         // survey never went.
         shot.azimuth = normalize_azimuth(shot.azimuth);
-        shot.section = strip_section_separator(&shot.section);
-        shot.explorer = shot.explorer.as_deref().map(strip_section_separator);
+        shot.line = strip_line_separator(&shot.line);
+        shot.explorer = shot.explorer.as_deref().map(strip_line_separator);
         shot.date = Some(speleodb_date(shot.date.as_deref()));
         // A repeat aliases the two shots onto one GeoJSON feature id. The model
         // keeps shot UUIDs unique across the project (see `shot_export_uuid`), so
@@ -2123,7 +2123,7 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
             uuid: None,
             from_id: -1,
             shot_type: "VIRTUAL",
-            section: anchor.section.clone(),
+            line: anchor.line.clone(),
             azimuth: 0.0,
             length: 0.0,
             depth: anchor.depth,
@@ -2188,7 +2188,7 @@ mod entrance_tests;
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, ShotKind,
+        ClosureStrategy, GpsCoordinates, LoopClosure, LineData, ShotData, ShotKind,
         StationAnchor, StationKey, StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
@@ -2234,7 +2234,7 @@ mod tests {
     #[test]
     fn reversed_leg_pitch_negates_the_forward_reading() {
         let project = simple_project();
-        let mut shot = project.sections[0].shots[0].clone();
+        let mut shot = project.lines[0].shots[0].clone();
         shot.pitch_in = Some(20.0);
         shot.pitch_out = Some(22.0);
         assert_eq!(
@@ -2275,7 +2275,7 @@ mod tests {
         // Ariane has no way to say "no inclination recorded", so an absent pitch
         // necessarily comes back as 0.0. That is format lossiness, not a sign
         // error, so compare against the value the format can actually carry.
-        let exported: Vec<f64> = project.sections[0]
+        let exported: Vec<f64> = project.lines[0]
             .shots
             .iter()
             .map(|s| s.pitch_in.unwrap_or(0.0))
@@ -2297,7 +2297,7 @@ mod tests {
         );
 
         let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
-        let reimported: Vec<f64> = parsed.sections[0]
+        let reimported: Vec<f64> = parsed.lines[0]
             .shots
             .iter()
             .map(|s| {
@@ -2316,7 +2316,7 @@ mod tests {
 
     fn simple_project() -> Project {
         let mut project = Project::new("Test Cave".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             surveyor: Some("Alice".to_string()),
             date: chrono::NaiveDate::from_ymd_opt(2025, 6, 15),
@@ -2375,7 +2375,7 @@ mod tests {
 
             assert_eq!(dir_entries(dir.path()), vec![name.to_string()]);
             let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
-            assert_eq!(parsed.sections.len(), 1, "{name}");
+            assert_eq!(parsed.lines.len(), 1, "{name}");
         }
     }
 
@@ -2408,7 +2408,7 @@ mod tests {
         // project byte-identical, which the SpeleoDB co-push render depends on
         // (#196). Synthesized shots (START here) carry none.
         let project = simple_project();
-        let total_shots: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+        let total_shots: usize = project.lines.iter().map(|s| s.shots.len()).sum();
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("out.tmlu");
 
@@ -2422,8 +2422,8 @@ mod tests {
 
         // Each emitted UUID is the shot's own persistent identity, not a
         // per-export mint.
-        for section in &project.sections {
-            for shot in &section.shots {
+        for line in &project.lines {
+            for shot in &line.shots {
                 let uuid = shot.uuid.as_deref().unwrap_or_default();
                 assert!(
                     !uuid.is_empty(),
@@ -2449,9 +2449,9 @@ mod tests {
     #[test]
     fn station_comments_fold_onto_their_shot_and_a_start_aliased_one_is_still_dropped() {
         let mut project = simple_project();
-        let section_id = project.sections[0].id;
-        let station_0 = project.key_for_ref(StationRef::new(section_id, 0)).unwrap();
-        let station_1 = project.key_for_ref(StationRef::new(section_id, 1)).unwrap();
+        let line_id = project.lines[0].id;
+        let station_0 = project.key_for_ref(StationRef::new(line_id, 0)).unwrap();
+        let station_1 = project.key_for_ref(StationRef::new(line_id, 1)).unwrap();
         project
             .station_comments
             .insert(station_0, "on the START station".to_string());
@@ -2461,7 +2461,7 @@ mod tests {
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
-        // Station 1 is created by the section's first shot, so its comment rides
+        // Station 1 is created by the line's first shot, so its comment rides
         // along there - beside that shot's own comment, split by the ZWSP marker.
         let first_real = shots.iter().find(|s| s.shot_type == "REAL").unwrap();
         let folded = first_real.comment.as_deref().unwrap_or_default();
@@ -2518,7 +2518,7 @@ mod tests {
         let v2 = dir.path().join("v2.tmlu");
 
         export_tml(&project, &v1).unwrap();
-        let uuids_v1: Vec<String> = project.sections[0]
+        let uuids_v1: Vec<String> = project.lines[0]
             .shots
             .iter()
             .map(|s| s.uuid.clone().unwrap_or_default())
@@ -2528,10 +2528,10 @@ mod tests {
             "every shot must carry a uuid after construction"
         );
 
-        // Insert a brand-new shot at the FRONT of section 0. All pre-existing
+        // Insert a brand-new shot at the FRONT of line 0. All pre-existing
         // shots' indices shift by +1.
         use crate::models::ShotData;
-        project.sections[0].shots.insert(
+        project.lines[0].shots.insert(
             0,
             Shot::new(
                 42,
@@ -2544,7 +2544,7 @@ mod tests {
         );
 
         export_tml(&project, &v2).unwrap();
-        let uuids_v2: Vec<String> = project.sections[0]
+        let uuids_v2: Vec<String> = project.lines[0]
             .shots
             .iter()
             .map(|s| s.uuid.clone().unwrap_or_default())
@@ -2578,7 +2578,7 @@ mod tests {
     fn export_tml_is_byte_stable_across_calls() {
         // #196 render-on-push: two renders of the same project must be
         // byte-identical so re-pushing unchanged content is a server no-op (304).
-        // Modern shots (via add_section → Shot::new) already carry stable UUIDs.
+        // Modern shots (via add_line → Shot::new) already carry stable UUIDs.
         let project = simple_project();
         let dir = tempfile::TempDir::new().unwrap();
         let a = dir.path().join("a.tml");
@@ -2598,8 +2598,8 @@ mod tests {
         // get a fresh ephemeral UUID minted per export (shot_export_uuid's last resort),
         // making renders differ. ensure_shot_uuids() mints stable UUIDs up front.
         let mut project = simple_project();
-        for section in &mut project.sections {
-            for shot in &mut section.shots {
+        for line in &mut project.lines {
+            for shot in &mut line.shots {
                 shot.uuid = None;
             }
         }
@@ -2713,8 +2713,8 @@ mod tests {
         let project = simple_project();
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
-        // One entrance in this fixture, so one START. A survey with a section merged
-        // into nothing emits one per entrance - see `a_detached_section_exports_as_its_own_entrance`.
+        // One entrance in this fixture, so one START. A survey with a line merged
+        // into nothing emits one per entrance - see `a_detached_line_exports_as_its_own_entrance`.
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
         assert_eq!(start_count, 1, "expected exactly 1 START shot");
 
@@ -2746,7 +2746,7 @@ mod tests {
         };
         let mut project = Project::new("Twice".to_string(), None);
         for name in ["Copy A", "Copy B"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![shot(Some(FOREIGN)), shot(None)],
@@ -2775,7 +2775,7 @@ mod tests {
             .iter()
             .find(|s| s.uuid.as_deref() == Some(FOREIGN))
             .unwrap();
-        assert_eq!(first_foreign.section, "Copy A");
+        assert_eq!(first_foreign.line, "Copy A");
     }
 
     #[test]
@@ -2804,7 +2804,7 @@ mod tests {
     #[test]
     fn test_virtual_shot_type() {
         let mut project = Project::new("Virtual Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Sec".to_string()),
             color: "#000000".to_string(),
             shots: vec![
@@ -2829,11 +2829,11 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_section_no_extra_starts() {
+    fn test_multi_line_no_extra_starts() {
         let mut project = Project::new("Multi".to_string(), None);
 
-        // Section 0: 2 shots (root)
-        project.add_section(SectionData {
+        // Line 0: 2 shots (root)
+        project.add_line(LineData {
             name: Some("Sec A".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -2852,8 +2852,8 @@ mod tests {
             ..Default::default()
         });
 
-        // Section 1: 1 shot (child, connected to station 1 of section 0)
-        project.add_section(SectionData {
+        // Line 1: 1 shot (child, connected to station 1 of line 0)
+        project.add_line(LineData {
             name: Some("Sec B".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![ShotData {
@@ -2864,15 +2864,15 @@ mod tests {
             ..Default::default()
         });
 
-        // Merge: section 1, station 0 → section 0, station 1
+        // Merge: line 1, station 0 → line 0, station 1
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 0,
             }
             .into(),
@@ -2881,12 +2881,12 @@ mod tests {
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
-        // Only ONE start shot should exist (for root section A)
+        // Only ONE start shot should exist (for root line A)
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
         assert_eq!(start_count, 1, "expected exactly 1 START shot");
 
-        // Section A: START(0), REAL(1), REAL(2)
-        // Section B: REAL(3) - no START, first shot links to parent
+        // Line A: START(0), REAL(1), REAL(2)
+        // Line B: REAL(3) - no START, first shot links to parent
         assert_eq!(shots.len(), 4);
 
         assert_eq!(shots[0].shot_type, "START");
@@ -2894,8 +2894,8 @@ mod tests {
         assert_eq!(shots[2].shot_type, "REAL");
         assert_eq!(shots[3].shot_type, "REAL"); // Sec B's shot, NOT a START
 
-        // Section B's first shot should reference ariane ID of section A station 1
-        // Station 1 in section A = ariane ID 1 (first real shot)
+        // Line B's first shot should reference ariane ID of line A station 1
+        // Station 1 in line A = ariane ID 1 (first real shot)
         assert_eq!(shots[3].from_id, 1);
     }
 
@@ -2903,8 +2903,8 @@ mod tests {
     fn test_child_merge_station_index_rewrites_matching_shot() {
         let mut project = Project::new("Child Merge Index".to_string(), None);
 
-        // Root section with 3 shots: station IDs become START(0), 1, 2, 3.
-        project.add_section(SectionData {
+        // Root line with 3 shots: station IDs become START(0), 1, 2, 3.
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -2924,8 +2924,8 @@ mod tests {
             ..Default::default()
         });
 
-        // Child section with 3 shots.
-        project.add_section(SectionData {
+        // Child line with 3 shots.
+        project.add_line(LineData {
             name: Some("Child".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![
@@ -2948,12 +2948,12 @@ mod tests {
         // Merge child station 1 to root station 2.
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 1,
             }
             .into(),
@@ -2986,7 +2986,7 @@ mod tests {
     fn test_child_station_zero_closure_resolves_to_parent_node() {
         let mut project = Project::new("Child Station Zero".to_string(), None);
 
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -3002,7 +3002,7 @@ mod tests {
             ..Default::default()
         });
 
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("B".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![ShotData {
@@ -3015,12 +3015,12 @@ mod tests {
         // B:0 merges to A:1.
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 0,
             }
             .into(),
@@ -3031,12 +3031,12 @@ mod tests {
         project.loop_closures.push(LoopClosure {
             id: 42,
             station_a: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 0,
             }
             .into(),
             station_b: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -3061,7 +3061,7 @@ mod tests {
     #[test]
     fn test_closure_export_uses_ariane_name_and_depth_in() {
         let mut project = Project::new("Closure Name".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -3080,12 +3080,12 @@ mod tests {
         project.loop_closures.push(LoopClosure {
             id: 7,
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -3116,7 +3116,7 @@ mod tests {
     #[test]
     fn test_zero_datum_coordinates_export_to_start_shot() {
         let mut project = Project::new("Datum Node".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -3138,7 +3138,7 @@ mod tests {
 
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -3162,7 +3162,7 @@ mod tests {
     /// laid out against, not from `zero_datums[0]` by position.
     ///
     /// When the first datum DANGLES - its anchor key no longer resolves, which
-    /// the app reaches by deleting the shot or section a datum was anchored to -
+    /// the app reaches by deleting the shot or line a datum was anchored to -
     /// every other reader of local metres falls through to the first datum that
     /// still resolves: that is `Project::frame_datum`, it is what
     /// `frame_datum_key` gates the renormalisation on, and a dangling datum is
@@ -3187,7 +3187,7 @@ mod tests {
 
         let mut project = Project::new("Dangling Frame".to_string(), None);
         let gallery_a = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Gallery A".to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -3199,7 +3199,7 @@ mod tests {
             })
             .id;
         let gallery_b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Gallery B".to_string()),
                 color: "#00ff00".to_string(),
                 shots: vec![ShotData {
@@ -3255,9 +3255,9 @@ mod tests {
         for start in &starts {
             assert!(
                 (start.latitude - FRAME.0).abs() < 1e-9 && (start.longitude - FRAME.1).abs() < 1e-9,
-                "START in section {:?} exported at {},{} - the frame datum is at \
+                "START in line {:?} exported at {},{} - the frame datum is at \
                  {},{} and the dangling zero_datums[0] at {},{}",
-                start.section,
+                start.line,
                 start.latitude,
                 start.longitude,
                 FRAME.0,
@@ -3278,7 +3278,7 @@ mod tests {
     #[test]
     fn depth_reference_never_leaks_into_entrance_elevation() {
         let mut project = Project::new("Datum Depth".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![ShotData {
@@ -3289,7 +3289,7 @@ mod tests {
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
@@ -3317,7 +3317,7 @@ mod tests {
     #[test]
     fn negative_surface_elevation_survives_its_sign() {
         let mut project = Project::new("Below Sea Level".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![ShotData {
@@ -3343,7 +3343,7 @@ mod tests {
     #[test]
     fn surface_elevation_is_emitted_in_the_tml_zip_profile_too() {
         let mut project = Project::new("Zip Elevation".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![ShotData {
@@ -3450,22 +3450,22 @@ mod tests {
             return;
         };
         let tml = crate::parsers::tml::parse_tml(Path::new(&input)).unwrap();
-        let (sections, _closures, _warnings) =
+        let (lines, _closures, _warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true).unwrap();
 
-        // Straight into `SectionData` rather than through the import command: the
+        // Straight into `LineData` rather than through the import command: the
         // shot chain is what this asserts on, and the import epilogue (placement,
         // closures, merges) needs an `AppState` that adds nothing here.
         let mut project = Project::new("Roundtrip".to_string(), None);
-        for section in sections {
-            project.add_section(SectionData {
-                name: section.name,
-                color: section.color,
-                shots: section.shots,
-                surveyor: section.surveyor,
-                date: section.date,
-                direction: section.direction,
-                quality: section.quality,
+        for line in lines {
+            project.add_line(LineData {
+                name: line.name,
+                color: line.color,
+                shots: line.shots,
+                surveyor: line.surveyor,
+                date: line.date,
+                direction: line.direction,
+                quality: line.quality,
             });
         }
 
@@ -3475,7 +3475,7 @@ mod tests {
         if std::env::var("TML_ROUNDTRIP_ANCHOR").is_ok() {
             project.zero_datums.push(ZeroDatum {
                 station_ref: StationRef {
-                    section_id: 0,
+                    line_id: 0,
                     station_index: 0,
                 }
                 .into(),
@@ -3499,7 +3499,7 @@ mod tests {
     /// project side: exports a real `.stalx` and checks Ariane can root every shot.
     /// A parentless non-START shot plus any closure blanks Ariane's map entirely, and
     /// the shape that produces one needs a real merge topology (a station shared by
-    /// three sections) that is tedious to hand-build. Skips when the var is unset.
+    /// three lines) that is tedious to hand-build. Skips when the var is unset.
     ///
     /// ```text
     /// STALX_EXPORT_IN=/path/project.stalx \
@@ -3528,8 +3528,8 @@ mod tests {
             .collect();
         for o in &orphans {
             println!(
-                "  ORPHAN id={} type={} section={:?}",
-                o.id, o.shot_type, o.section
+                "  ORPHAN id={} type={} line={:?}",
+                o.id, o.shot_type, o.line
             );
         }
         println!(
@@ -3556,7 +3556,7 @@ mod tests {
         // stations actually are, which reads as a connector with a full-depth
         // drop and no length.
         let mut project = Project::new("Closure Depths".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -3582,12 +3582,12 @@ mod tests {
         project.loop_closures.push(LoopClosure {
             id: 1,
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -3625,7 +3625,7 @@ mod tests {
         // is representable in our model and is NOT representable in Ariane's
         // chain. Exported verbatim it reads as a shot with more drop than length.
         let mut project = Project::new("Junction".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Parent".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![ShotData {
@@ -3640,7 +3640,7 @@ mod tests {
         });
         // The child starts 12.2 m down while the station it merges into is 17 m
         // down: a 4.8 m step across a 1.07 m shot.
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Branch".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![ShotData {
@@ -3655,12 +3655,12 @@ mod tests {
         });
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 0,
             }
             .into(),
@@ -3683,7 +3683,7 @@ mod tests {
                 id: 1,
                 from_id: -1,
                 shot_type: "START",
-                section: "S".to_string(),
+                line: "S".to_string(),
                 azimuth: 0.0,
                 length: 0.0,
                 depth: 17.0,
@@ -3708,7 +3708,7 @@ mod tests {
                 id: 2,
                 from_id: 1,
                 shot_type: "REAL",
-                section: "S".to_string(),
+                line: "S".to_string(),
                 azimuth: 45.0,
                 length: 1.07,
                 depth: 12.5,
@@ -3758,7 +3758,7 @@ mod tests {
             id,
             from_id,
             shot_type: if from_id == -1 { "START" } else { "REAL" },
-            section: "S".to_string(),
+            line: "S".to_string(),
             azimuth: 0.0,
             length,
             depth,
@@ -3813,7 +3813,7 @@ mod tests {
     #[test]
     fn a_branch_that_writes_the_sentinel_is_hung_off_its_parent_even_within_the_bound() {
         // The same defect without any re-hang upstream. A branch's first shot is
-        // always flagged same-as-previous (it is contiguous with its own section's
+        // always flagged same-as-previous (it is contiguous with its own line's
         // station), so it writes the sentinel and a consumer reads its origin as
         // the parent's depth - even though it was measured from a junction 4.79 m
         // away. With a long enough tape the bound holds and nothing looks wrong,
@@ -3916,7 +3916,7 @@ mod tests {
                 id: 1,
                 from_id: -1,
                 shot_type: "START",
-                section: "S".to_string(),
+                line: "S".to_string(),
                 azimuth: 0.0,
                 length: 0.0,
                 depth: 0.0,
@@ -3941,7 +3941,7 @@ mod tests {
                 id: 2,
                 from_id: 1,
                 shot_type: "REAL",
-                section: "S".to_string(),
+                line: "S".to_string(),
                 azimuth: f64::NAN,
                 length: f64::INFINITY,
                 depth: f64::NAN,
@@ -3969,9 +3969,9 @@ mod tests {
     }
 
     #[test]
-    fn test_nonzero_root_datum_splits_section_into_two_branches() {
+    fn test_nonzero_root_datum_splits_line_into_two_branches() {
         let mut project = Project::new("Split Root".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4004,7 +4004,7 @@ mod tests {
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -4039,7 +4039,7 @@ mod tests {
     #[test]
     fn test_parent_links_reoriented_when_datum_forces_root() {
         let mut project = Project::new("Datum Root Orientation".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4054,7 +4054,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("B".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![
@@ -4075,12 +4075,12 @@ mod tests {
         });
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 2,
             }
             .into(),
@@ -4088,7 +4088,7 @@ mod tests {
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 2,
             }
             .into(),
@@ -4099,15 +4099,15 @@ mod tests {
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
-        assert_eq!(start.section, "B");
+        assert_eq!(start.line, "B");
 
-        // Section A should now link into the forced-root section B.
+        // Line A should now link into the forced-root line B.
         let link_into_root = shots
             .iter()
-            .find(|s| s.section == "A" && s.from_id == start.id);
+            .find(|s| s.line == "A" && s.from_id == start.id);
         assert!(
             link_into_root.is_some(),
-            "expected a section A shot to link to B START after rooting at datum"
+            "expected a line A shot to link to B START after rooting at datum"
         );
     }
 
@@ -4124,14 +4124,14 @@ mod tests {
         assert_eq!(parsed.unit, crate::parsers::tml::TmlUnit::Metric);
         assert!(parsed.use_magnetic_azimuth);
 
-        // Should have one section with 2 shots
+        // Should have one line with 2 shots
         assert_eq!(
-            parsed.sections.len(),
+            parsed.lines.len(),
             1,
-            "expected 1 section, got {}",
-            parsed.sections.len()
+            "expected 1 line, got {}",
+            parsed.lines.len()
         );
-        let sec = &parsed.sections[0];
+        let sec = &parsed.lines[0];
         assert_eq!(
             sec.shots.len(),
             2,
@@ -4197,7 +4197,7 @@ mod tests {
         let project_of = |credits: &[SurveyCredit]| {
             let mut project = Project::new("Credit Cave".to_string(), None);
             let id = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Main".to_string()),
                     shots: credits
                         .iter()
@@ -4254,7 +4254,7 @@ mod tests {
         use crate::models::{Person, SurveyCredit};
         let reimport = |credit: SurveyCredit| -> SurveyCredit {
             let mut project = Project::new("Syntax".to_string(), None);
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some("Main".to_string()),
                 shots: vec![ShotData {
                     length: 5.0,
@@ -4308,14 +4308,14 @@ mod tests {
         let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
 
         assert_eq!(parsed.cave_name, "Test Cave");
-        assert_eq!(parsed.sections.len(), 1);
-        assert_eq!(parsed.sections[0].shots.len(), 2);
+        assert_eq!(parsed.lines.len(), 1);
+        assert_eq!(parsed.lines[0].shots.len(), 2);
     }
 
     #[test]
-    fn test_unicode_section_name() {
+    fn test_unicode_line_name() {
         let mut project = Project::new("Grotte de l'Ours".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Galería Principal".to_string()),
             surveyor: Some("José García".to_string()),
             color: "#ff0000".to_string(),
@@ -4340,7 +4340,7 @@ mod tests {
     fn test_depth_in_sentinel() {
         // When depth_in equals the previous depth_out, export should use -1.0
         let mut project = Project::new("Depth".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Sec".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4419,18 +4419,18 @@ mod tests {
         assert!(content.contains("<PT>VERTICAL</PT>"));
     }
 
-    /// A child whose parent station is ANOTHER section's merge station must still be
-    /// rooted, whatever order the sections happen to be stored in.
+    /// A child whose parent station is ANOTHER line's merge station must still be
+    /// rooted, whatever order the lines happen to be stored in.
     ///
-    /// Station 0 of a non-root section only enters `station_to_ariane` when that
-    /// section itself resolves, so resolving blocks in storage order left a child
+    /// Station 0 of a non-root line only enters `station_to_ariane` when that
+    /// line itself resolves, so resolving blocks in storage order left a child
     /// stored earlier pointing at nothing and it shipped with `from_id = -1`. Ariane
     /// reads that as a second entrance, abandons the loop solve, and draws an empty
     /// map for any survey that also has closures - which is exactly what happened to
-    /// a real 538-shot Naharon export (section `Trifurcate  North`, whose parent was
-    /// station 1 of `Trifurcate South`, a station shared by three sections).
+    /// a real 538-shot Naharon export (line `Trifurcate  North`, whose parent was
+    /// station 1 of `Trifurcate South`, a station shared by three lines).
     #[test]
-    fn a_child_of_a_merge_station_is_rooted_regardless_of_section_order() {
+    fn a_child_of_a_merge_station_is_rooted_regardless_of_line_order() {
         let mut project = Project::new("Out Of Order".to_string(), None);
 
         let shot = || ShotData {
@@ -4439,9 +4439,9 @@ mod tests {
             ..Default::default()
         };
 
-        // Deliberately added BEFORE the section it hangs off: Root(0), Branch(1), Middle(2).
+        // Deliberately added BEFORE the line it hangs off: Root(0), Branch(1), Middle(2).
         for name in ["Root", "Branch", "Middle"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![shot(), shot()],
@@ -4449,16 +4449,16 @@ mod tests {
             });
         }
 
-        let at = |section_id, station_index| {
+        let at = |line_id, station_index| {
             StationRef {
-                section_id,
+                line_id,
                 station_index,
             }
             .into()
         };
 
         // Middle hangs off Root, and Branch hangs off Middle's station 0 - the same
-        // station, so three sections meet there just as they do in the real survey.
+        // station, so three lines meet there just as they do in the real survey.
         project.station_merges.push(StationMerge {
             station_a: at(0, 1),
             station_b: at(2, 0),
@@ -4481,7 +4481,7 @@ mod tests {
             "parentless non-START shot(s) {:?} - Ariane would draw an empty map",
             orphans
                 .iter()
-                .map(|s| (s.id, s.shot_type, s.section.as_str()))
+                .map(|s| (s.id, s.shot_type, s.line.as_str()))
                 .collect::<Vec<_>>()
         );
 
@@ -4495,10 +4495,10 @@ mod tests {
     /// shot was left parentless - harmless until the survey gained a closure, at
     /// which point Ariane drew nothing at all.
     #[test]
-    fn a_detached_section_exports_as_its_own_entrance() {
+    fn a_detached_line_exports_as_its_own_entrance() {
         let mut project = Project::new("Detached".to_string(), None);
         for name in ["Gallery A", "Gallery B"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -4513,7 +4513,7 @@ mod tests {
 
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 0,
             }
             .into(),
@@ -4533,8 +4533,8 @@ mod tests {
         for start in &starts {
             assert!(
                 (start.latitude - 20.25).abs() < 1e-9 && (start.longitude - -87.5).abs() < 1e-9,
-                "entrance in section {:?} was left unanchored at {},{}",
-                start.section,
+                "entrance in line {:?} was left unanchored at {},{}",
+                start.line,
                 start.latitude,
                 start.longitude
             );
@@ -4549,12 +4549,12 @@ mod tests {
     }
 
     /// A gallery merged to itself but not to the rest of the survey is ONE entrance, not
-    /// one per section. `build_parent_map` used to traverse only from the export root, so
-    /// every section in a second component was absent from the map and read as its own
+    /// one per line. `build_parent_map` used to traverse only from the export root, so
+    /// every line in a second component was absent from the map and read as its own
     /// entrance: the gallery exported as N disconnected STARTs stacked on one anchor,
-    /// with the merges between its sections silently dropped.
+    /// with the merges between its lines silently dropped.
     #[test]
-    fn a_disconnected_gallery_is_rooted_once_not_per_section() {
+    fn a_disconnected_gallery_is_rooted_once_not_per_line() {
         let mut project = Project::new("Two Galleries".to_string(), None);
 
         let shot = || ShotData {
@@ -4565,7 +4565,7 @@ mod tests {
 
         // Root component: A. Second component: B -> C -> D, chained to each other only.
         for name in ["A", "B", "C", "D"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![shot(), shot()],
@@ -4573,14 +4573,14 @@ mod tests {
             });
         }
 
-        let at = |section_id, station_index| {
+        let at = |line_id, station_index| {
             StationRef {
-                section_id,
+                line_id,
                 station_index,
             }
             .into()
         };
-        // B(1)-C(0) and C(1)-D(0): a three-section gallery touching nothing in A.
+        // B(1)-C(0) and C(1)-D(0): a three-line gallery touching nothing in A.
         project.station_merges.push(StationMerge {
             station_a: at(1, 1),
             station_b: at(2, 0),
@@ -4601,7 +4601,7 @@ mod tests {
             "one entrance per component, got {:?}",
             starts
                 .iter()
-                .map(|s| s.section.as_str())
+                .map(|s| s.line.as_str())
                 .collect::<Vec<_>>()
         );
         assert!(
@@ -4618,7 +4618,7 @@ mod tests {
     #[test]
     fn the_guard_rejects_an_orphan_only_when_a_closure_is_present() {
         let mut project = Project::new("Guard".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Only".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4672,11 +4672,11 @@ mod tests {
     }
 
     #[test]
-    fn test_child_nonzero_merge_splits_section() {
+    fn test_child_nonzero_merge_splits_line() {
         let mut project = Project::new("Split Child".to_string(), None);
 
         // Root: 2 shots → stations 0,1,2
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4695,7 +4695,7 @@ mod tests {
         });
 
         // Child: 4 shots → stations 0,1,2,3,4. Merge at station 2.
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Branch".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![
@@ -4726,12 +4726,12 @@ mod tests {
         // Merge child station 2 → root station 1.
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 2,
             }
             .into(),
@@ -4748,14 +4748,14 @@ mod tests {
         let fwd0 = shots.iter().find(|s| s.id == 3).unwrap();
         let fwd1 = shots.iter().find(|s| s.id == 4).unwrap();
         assert_eq!(fwd0.from_id, 1, "forward first shot links to parent");
-        assert_eq!(fwd0.section, "Branch");
+        assert_eq!(fwd0.line, "Branch");
         assert_eq!(fwd1.from_id, 3, "forward second shot chains from previous");
 
         // Reverse block shots chain from parent
         let rev0 = shots.iter().find(|s| s.id == 5).unwrap();
         let rev1 = shots.iter().find(|s| s.id == 6).unwrap();
         assert_eq!(rev0.from_id, 1, "reverse first shot links to parent");
-        assert_eq!(rev0.section, "Branch (reversed)");
+        assert_eq!(rev0.line, "Branch (reversed)");
         assert_eq!(rev1.from_id, 5, "reverse second shot chains from previous");
 
         // Verify reversal: reverse shots should have reciprocal azimuths
@@ -4779,11 +4779,11 @@ mod tests {
     }
 
     #[test]
-    fn test_child_end_merge_reverses_section() {
+    fn test_child_end_merge_reverses_line() {
         let mut project = Project::new("End Merge".to_string(), None);
 
         // Root: 2 shots
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4802,7 +4802,7 @@ mod tests {
         });
 
         // Child: 3 shots → stations 0,1,2,3. Merge at station 3 (= shots.len()).
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Tail".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![
@@ -4828,12 +4828,12 @@ mod tests {
         // Merge child station 3 (end) → root station 2.
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 3,
             }
             .into(),
@@ -4848,7 +4848,7 @@ mod tests {
         let rev1 = shots.iter().find(|s| s.id == 4).unwrap();
         let rev2 = shots.iter().find(|s| s.id == 5).unwrap();
         assert_eq!(rev0.from_id, 2, "first reversed shot links to parent");
-        assert_eq!(rev0.section, "Tail (reversed)");
+        assert_eq!(rev0.line, "Tail (reversed)");
         assert_eq!(rev1.from_id, 3, "second reversed shot chains");
         assert_eq!(rev2.from_id, 4, "third reversed shot chains");
 
@@ -4878,8 +4878,8 @@ mod tests {
     fn test_downstream_of_split_child_resolves() {
         let mut project = Project::new("Downstream".to_string(), None);
 
-        // Section A (root): 2 shots → stations 0,1,2
-        project.add_section(SectionData {
+        // Line A (root): 2 shots → stations 0,1,2
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -4895,8 +4895,8 @@ mod tests {
             ..Default::default()
         });
 
-        // Section B: 3 shots → stations 0,1,2,3. Merge at station 1 (non-zero).
-        project.add_section(SectionData {
+        // Line B: 3 shots → stations 0,1,2,3. Merge at station 1 (non-zero).
+        project.add_line(LineData {
             name: Some("B".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![
@@ -4916,8 +4916,8 @@ mod tests {
             ..Default::default()
         });
 
-        // Section C: 1 shot → stations 0,1. Merge at station 0 (standard child).
-        project.add_section(SectionData {
+        // Line C: 1 shot → stations 0,1. Merge at station 0 (standard child).
+        project.add_line(LineData {
             name: Some("C".to_string()),
             color: "#0000ff".to_string(),
             shots: vec![ShotData {
@@ -4930,12 +4930,12 @@ mod tests {
         // B:1 merges to A:1
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 1,
             }
             .into(),
@@ -4945,12 +4945,12 @@ mod tests {
         // C:0 merges to B:3 (end of B's forward block)
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 3,
             }
             .into(),
             station_b: StationRef {
-                section_id: 2,
+                line_id: 2,
                 station_index: 0,
             }
             .into(),
@@ -4973,7 +4973,7 @@ mod tests {
             c_shot.from_id, 4,
             "C's first shot should chain from B's forward block station 3"
         );
-        assert_eq!(c_shot.section, "C");
+        assert_eq!(c_shot.line, "C");
 
         // No orphaned from_id = -1 in non-START shots
         for s in &shots {
@@ -5013,14 +5013,14 @@ mod tests {
         }
     }
 
-    /// A project whose only section descends 0 -> 4.1 -> 5.4 m, with a closure
+    /// A project whose only line descends 0 -> 4.1 -> 5.4 m, with a closure
     /// tying the two stations that end at those depths. The closure's length is
     /// their difference by construction, so it sits exactly on the bound in f64
     /// and crosses it once written: 5.4 - 4.1 is 1.3000000000000007, and the
     /// tape that covers it goes into the file as "1.3".
     fn closure_on_the_bound_project() -> Project {
         let mut project = Project::new("On The Bound".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -5042,12 +5042,12 @@ mod tests {
         project.loop_closures.push(LoopClosure {
             id: 1,
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -5168,7 +5168,7 @@ mod tests {
         // shipped unnoticed than the old 0,0 null-island form.
         let mut project = Project::new("Two Anchors".to_string(), None);
         for name in ["North", "South"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -5179,10 +5179,10 @@ mod tests {
                 ..Default::default()
             });
         }
-        for (section_id, latitude, longitude) in [(0, 20.25, -87.5), (1, 20.31, -87.42)] {
+        for (line_id, latitude, longitude) in [(0, 20.25, -87.5), (1, 20.31, -87.42)] {
             project.zero_datums.push(ZeroDatum {
                 station_ref: StationRef {
-                    section_id,
+                    line_id,
                     station_index: 0,
                 }
                 .into(),
@@ -5196,7 +5196,7 @@ mod tests {
         let start_of = |name: &str| {
             shots
                 .iter()
-                .find(|s| s.shot_type == "START" && s.section == name)
+                .find(|s| s.shot_type == "START" && s.line == name)
                 .unwrap()
         };
         let north = start_of("North");
@@ -5230,9 +5230,9 @@ mod tests {
     }
 
     #[test]
-    fn a_detached_entrance_with_a_mid_section_datum_splits_there() {
+    fn a_detached_entrance_with_a_mid_line_datum_splits_there() {
         // #378 item (e), the geometric half: GPS lands only on a START, so an
-        // entrance whose datum is mid-section must split at the datum station -
+        // entrance whose datum is mid-line must split at the datum station -
         // stamping that datum's GPS onto a station-0 START would displace the
         // whole component by the station-to-datum vector. The root already did
         // this; detached entrances now share the path.
@@ -5244,13 +5244,13 @@ mod tests {
             depth_out: 0.0,
             ..Default::default()
         };
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![shot()],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Gallery".to_string()),
             color: "#00ff00".to_string(),
             shots: vec![shot(), shot()],
@@ -5258,7 +5258,7 @@ mod tests {
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 0,
             }
             .into(),
@@ -5269,7 +5269,7 @@ mod tests {
         // The detached gallery's datum sits on its MIDDLE station (index 1).
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 1,
             }
             .into(),
@@ -5281,20 +5281,20 @@ mod tests {
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let gallery_start = shots
             .iter()
-            .find(|s| s.shot_type == "START" && s.section == "Gallery")
+            .find(|s| s.shot_type == "START" && s.line == "Gallery")
             .unwrap();
         assert!(
             (gallery_start.latitude - 20.31).abs() < f64::EPSILON
                 && (gallery_start.longitude - -87.42).abs() < f64::EPSILON,
             "the gallery START carries the gallery's own datum"
         );
-        // The split exists: a reversed pre-datum leg means the section name shows
+        // The split exists: a reversed pre-datum leg means the line name shows
         // up in both its forms, and every shot still chains (no orphan roots).
         assert!(
             shots
                 .iter()
-                .any(|s| s.section == "Gallery (pre-zero-datum)"),
-            "mid-section datum must split the entrance so the START sits on it"
+                .any(|s| s.line == "Gallery (pre-zero-datum)"),
+            "mid-line datum must split the entrance so the START sits on it"
         );
         assert!(
             shots
@@ -5306,10 +5306,10 @@ mod tests {
     }
 
     #[test]
-    fn a_disconnected_component_roots_at_its_datum_section() {
-        // #378 review follow-up: a detached gallery of three merged sections
-        // with the datum on the MIDDLE one must make that section the
-        // component's entrance - rooting at the first section in project order
+    fn a_disconnected_component_roots_at_its_datum_line() {
+        // #378 review follow-up: a detached gallery of three merged lines
+        // with the datum on the MIDDLE one must make that line the
+        // component's entrance - rooting at the first line in project order
         // would anchor the whole gallery at the frame datum's coordinates
         // while its own datum went unwritten.
         let mut project = Project::new("Datum Root".to_string(), None);
@@ -5319,7 +5319,7 @@ mod tests {
             ..Default::default()
         };
         for name in ["Main", "Gallery A", "Gallery B", "Gallery C"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![shot()],
@@ -5330,12 +5330,12 @@ mod tests {
         for (a, b) in [(1, 2), (2, 3)] {
             project.station_merges.push(StationMerge {
                 station_a: StationRef {
-                    section_id: a,
+                    line_id: a,
                     station_index: 1,
                 }
                 .into(),
                 station_b: StationRef {
-                    section_id: b,
+                    line_id: b,
                     station_index: 0,
                 }
                 .into(),
@@ -5344,7 +5344,7 @@ mod tests {
         }
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 0,
             }
             .into(),
@@ -5352,10 +5352,10 @@ mod tests {
             accuracy_m: None,
             entrance: None,
         });
-        // The gallery's own anchor sits on its MIDDLE section's first station.
+        // The gallery's own anchor sits on its MIDDLE line's first station.
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 2,
+                line_id: 2,
                 station_index: 0,
             }
             .into(),
@@ -5367,13 +5367,13 @@ mod tests {
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "one entrance per component");
-        let gallery_start = starts.iter().find(|s| s.section == "Gallery B");
+        let gallery_start = starts.iter().find(|s| s.line == "Gallery B");
         assert!(
             gallery_start.is_some(),
-            "the datum-carrying section must be the component's entrance; STARTs: {:?}",
+            "the datum-carrying line must be the component's entrance; STARTs: {:?}",
             starts
                 .iter()
-                .map(|s| s.section.as_str())
+                .map(|s| s.line.as_str())
                 .collect::<Vec<_>>()
         );
         let gallery_start = gallery_start.unwrap();
@@ -5394,8 +5394,8 @@ mod tests {
     }
 
     #[test]
-    fn the_rooted_chain_error_caps_its_section_list() {
-        // #378 item (g): section names come from imported files, so the refusal
+    fn the_rooted_chain_error_caps_its_line_list() {
+        // #378 item (g): line names come from imported files, so the refusal
         // message must not scale with their count or length, and must not carry
         // control characters a crafted name could forge log lines with.
         let long = "L".repeat(500);
@@ -5403,7 +5403,7 @@ mod tests {
         let listed = list_capped(&names);
         assert!(
             listed.ends_with("and 3 more"),
-            "8 sections must summarise the tail: {listed}"
+            "8 lines must summarise the tail: {listed}"
         );
         assert!(
             listed.len() < 120,
@@ -5413,7 +5413,7 @@ mod tests {
 
         let shown = list_capped(&[&long]);
         assert!(
-            shown.len() <= LISTED_SECTION_NAME_MAX + "...".len(),
+            shown.len() <= LISTED_LINE_NAME_MAX + "...".len(),
             "a single long name is truncated: {} chars",
             shown.len()
         );
@@ -5423,8 +5423,8 @@ mod tests {
         // worst - bounded either way, and no char-boundary panic.
         let wide = "é".repeat(500);
         let shown = list_capped(&[&wide]);
-        assert_eq!(shown.chars().count(), LISTED_SECTION_NAME_MAX + "...".len());
-        assert!(shown.len() <= LISTED_SECTION_NAME_MAX * 4 + "...".len());
+        assert_eq!(shown.chars().count(), LISTED_LINE_NAME_MAX + "...".len());
+        assert!(shown.len() <= LISTED_LINE_NAME_MAX * 4 + "...".len());
 
         // Control characters are stripped, not merely truncated around: the
         // newline and the ESC go; the (printable) SGR remnant stays inert.
@@ -5444,7 +5444,7 @@ mod tests {
         for i in 0..8_i64 {
             let mut orphan = geometry_shot(100 + i, -1, 0.0, 0.0, 5.0, false);
             orphan.shot_type = "REAL";
-            orphan.section = format!("Orphan {i}");
+            orphan.line = format!("Orphan {i}");
             shots.push(orphan);
         }
         let mut closure = geometry_shot(200, 0, 0.0, 0.0, 0.0, false);
@@ -5466,14 +5466,14 @@ mod tests {
     #[test]
     fn the_sidecar_accepts_multiple_starts() {
         // #378 item (c): `is_entrance` is not profile-gated, so a project with a
-        // detached section ships a multi-START sidecar to SpeleoDB. The server's
+        // detached line ships a multi-START sidecar to SpeleoDB. The server's
         // converter supports that (see the comment at `is_entrance`), PROVIDED
         // each START is a usable anchor: `is_geolocation_known()` there reads a
         // coordinate within ~1e-6 of zero as unknown, and a component with no
         // anchor is dropped from the GeoJSON wholesale.
         let mut project = Project::new("Two Entrances".to_string(), None);
         for name in ["Main", "Detached"] {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -5489,7 +5489,7 @@ mod tests {
         // No station_merges: two components, two entrances.
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 0,
             }
             .into(),
@@ -5510,7 +5510,7 @@ mod tests {
                 start.latitude.abs() > 1e-6 && start.longitude.abs() > 1e-6,
                 "START in {:?} is at {},{} - below openspeleo_lib's anchor \
                  threshold, so its whole component would be dropped as orphans",
-                start.section,
+                start.line,
                 start.latitude,
                 start.longitude,
             );
@@ -5531,7 +5531,7 @@ mod tests {
         // AttributeError. Zero elements it handles cleanly (EmptySurveyError),
         // and two or more is the normal path - so the fix is to never emit one.
         let mut project = Project::new("Lone Start".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Empty".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![],
@@ -5539,7 +5539,7 @@ mod tests {
         });
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        assert_eq!(user.len(), 1, "a shotless section exports its START alone");
+        assert_eq!(user.len(), 1, "a shotless line exports its START alone");
 
         let sidecar = build_export_shots(
             &project,
@@ -5563,7 +5563,7 @@ mod tests {
         let content = std::fs::read_to_string(file.path()).unwrap();
         assert_eq!(content.matches("<SRVD>").count(), 2);
 
-        // Nothing else is padded: no section means no shots at all, which is
+        // Nothing else is padded: no line means no shots at all, which is
         // safe, and a project already emitting two or more is left alone.
         let empty = Project::new("Nothing".to_string(), None);
         assert!(build_export_shots(
@@ -5598,7 +5598,7 @@ mod tests {
         assert_eq!(speleodb_date(Some("2999-01-01")), "2035-12-31");
 
         // Every emitted shot carries one, including the closure and the START,
-        // which have no section date of their own.
+        // which have no line date of their own.
         let sidecar_project = closure_on_the_bound_project();
         let sidecar = build_export_shots(
             &sidecar_project,
@@ -5744,7 +5744,7 @@ mod tests {
             email: None,
         };
         let mut project = Project::new("Controls".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             shots: vec![ShotData {
                 length: 5.0,
@@ -5778,13 +5778,13 @@ mod tests {
     }
 
     #[test]
-    fn the_sidecar_strips_the_section_identity_separator() {
-        // SpeleoDB groups shots into sections by hashing
+    fn the_sidecar_strips_the_line_identity_separator() {
+        // SpeleoDB groups shots into lines by hashing
         // name/description/date/explorers/surveyors joined with U+220E, so the
         // character inside one of those fields re-cuts the survey.
         let mut project = simple_project();
-        project.sections[0].name = Some("Main\u{220e}Line".to_string());
-        for shot in &mut project.sections[0].shots {
+        project.lines[0].name = Some("Main\u{220e}Line".to_string());
+        for shot in &mut project.lines[0].shots {
             shot.set_credit(crate::models::SurveyCredit {
                 explorers: vec![crate::models::Person::named("Alice\u{220e}Bob").unwrap()],
                 ..Default::default()
@@ -5792,7 +5792,7 @@ mod tests {
         }
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        assert_eq!(user[0].section, "Main\u{220e}Line");
+        assert_eq!(user[0].line, "Main\u{220e}Line");
         assert_eq!(
             user[0].explorer.as_deref(),
             Some("<Explorer>Alice\u{220e}Bob</Explorer><Surveyor></Surveyor>")
@@ -5803,7 +5803,7 @@ mod tests {
             TmlProfile::SpeleoDbSidecar,
             AzimuthExport::decide(&project),
         );
-        assert_eq!(sidecar[0].section, "Main Line");
+        assert_eq!(sidecar[0].line, "Main Line");
         assert_eq!(
             sidecar[0].explorer.as_deref(),
             Some("<Explorer>Alice Bob</Explorer><Surveyor></Surveyor>")
@@ -5816,9 +5816,9 @@ mod tests {
         // raw, so a VIRTUAL leg at -10 degrees walks off in a direction nothing
         // was surveyed in.
         let mut project = simple_project();
-        project.sections[0].shots[0].azimuth_in = -10.0;
-        project.sections[0].shots[0].kind = ShotKind::Jump;
-        project.sections[0].shots[1].azimuth_in = 400.0;
+        project.lines[0].shots[0].azimuth_in = -10.0;
+        project.lines[0].shots[0].kind = ShotKind::Jump;
+        project.lines[0].shots[1].azimuth_in = 400.0;
 
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert!((user[1].azimuth + 10.0).abs() < f64::EPSILON);
@@ -5836,13 +5836,13 @@ mod tests {
 
     #[test]
     fn exported_ariane_ids_are_unique_across_the_whole_document() {
-        // A duplicate `<ID>` anywhere - across sections, split blocks, closures,
+        // A duplicate `<ID>` anywhere - across lines, split blocks, closures,
         // the synthesized START - fails the whole file with a DuplicateValueError.
         // Nothing renumbers here because nothing has to: ids come off one counter
         // that is never reset, which this pins on the topologies that mint the
-        // most of them (a datum split, a mid-section merge, closures).
+        // most of them (a datum split, a mid-line merge, closures).
         let mut project = Project::new("Ids".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: (0..4)
@@ -5855,7 +5855,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Child".to_string()),
             color: "#00ff00".to_string(),
             shots: (0..3)
@@ -5868,12 +5868,12 @@ mod tests {
         });
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 1,
             }
             .into(),
@@ -5882,12 +5882,12 @@ mod tests {
         project.loop_closures.push(LoopClosure {
             id: 1,
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 1,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 3,
             }
             .into(),
@@ -5902,7 +5902,7 @@ mod tests {
         // A datum away from station 0 splits the root into two blocks.
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -5929,11 +5929,11 @@ mod tests {
         // a map preview and not for the file a user asked for. One project that
         // trips four of them at once, exported both ways.
         let mut project = closure_on_the_bound_project();
-        project.sections[0].name = Some("Main\u{220e}Line".to_string());
-        project.sections[0].shots[0].uuid = Some("not-a-uuid".to_string());
+        project.lines[0].name = Some("Main\u{220e}Line".to_string());
+        project.lines[0].shots[0].uuid = Some("not-a-uuid".to_string());
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 0,
             }
             .into(),
@@ -5972,11 +5972,11 @@ mod tests {
 
     // ---- reversed legs keep their shot's identity (export-roundtrip-fuzz X6) ----
 
-    /// A section split by a zero datum: the shots before the datum are
+    /// A line split by a zero datum: the shots before the datum are
     /// re-emitted as the reversed `(pre-zero-datum)` leg.
     fn project_split_by_a_zero_datum() -> Project {
         let mut project = Project::new("Split".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#ff0000".to_string(),
             shots: (0..4)
@@ -5990,7 +5990,7 @@ mod tests {
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
@@ -6002,10 +6002,10 @@ mod tests {
         project
     }
 
-    /// A child merged MID-section: a forward block plus a reversed block.
-    fn project_with_a_mid_section_merge() -> Project {
+    /// A child merged MID-line: a forward block plus a reversed block.
+    fn project_with_a_mid_line_merge() -> Project {
         let mut project = Project::new("Mid Merge".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -6022,7 +6022,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Branch".to_string()),
             color: "#00ff00".to_string(),
             shots: (0..4)
@@ -6038,12 +6038,12 @@ mod tests {
         // emits shots 2..4 forward and shots 0..2 reversed.
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 2,
             }
             .into(),
@@ -6053,11 +6053,11 @@ mod tests {
         project
     }
 
-    /// A child merged at its LAST station: the whole section is reversed and
+    /// A child merged at its LAST station: the whole line is reversed and
     /// there is no forward block at all.
     fn project_with_an_end_merge() -> Project {
         let mut project = Project::new("End Merge".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Root".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![
@@ -6074,7 +6074,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Tail".to_string()),
             color: "#00ff00".to_string(),
             shots: (0..3)
@@ -6088,12 +6088,12 @@ mod tests {
         });
         project.station_merges.push(StationMerge {
             station_a: StationRef {
-                section_id: 0,
+                line_id: 0,
                 station_index: 2,
             }
             .into(),
             station_b: StationRef {
-                section_id: 1,
+                line_id: 1,
                 station_index: 3,
             }
             .into(),
@@ -6105,14 +6105,14 @@ mod tests {
 
     fn project_uuids(project: &Project) -> HashSet<String> {
         project
-            .sections
+            .lines
             .iter()
             .flat_map(|s| s.shots.iter().filter_map(|sh| sh.uuid.clone()))
             .collect()
     }
 
     /// How many PROJECT shots the export re-emitted into a reversed block,
-    /// counted by the section label only the reversal constructors write and
+    /// counted by the line label only the reversal constructors write and
     /// the shot types only a real project shot gets. Deliberately blind to the
     /// UUID, so it stays a statement about the SHAPE of the export and cannot
     /// pass or fail for the reason the tests below are about.
@@ -6120,7 +6120,7 @@ mod tests {
         shots
             .iter()
             .filter(|s| {
-                (s.section.ends_with("(pre-zero-datum)") || s.section.ends_with("(reversed)"))
+                (s.line.ends_with("(pre-zero-datum)") || s.line.ends_with("(reversed)"))
                     && (s.shot_type == "REAL" || s.shot_type == "VIRTUAL")
             })
             .count()
@@ -6132,7 +6132,7 @@ mod tests {
     /// The count is asserted HERE, once, for every consumer below, because
     /// these tests are worth nothing the moment a fixture stops reaching the
     /// reversed constructor at all: a project whose shots are all emitted
-    /// forward satisfies every assertion in this section trivially, and the
+    /// forward satisfies every assertion in this line trivially, and the
     /// suite goes green over an export that no longer contains the thing under
     /// test. WHICH shots get reversed is a function of the export root, and the
     /// root is chosen from `Project::frame_datum` and the merge graph - both of
@@ -6143,7 +6143,7 @@ mod tests {
             // 4 shots split at station 2: shots 0 and 1 come back reversed.
             ("zero-datum split", project_split_by_a_zero_datum(), 2),
             // The child's 4 shots merge at its station 2: shots 0 and 1 reversed.
-            ("mid-section merge", project_with_a_mid_section_merge(), 2),
+            ("mid-line merge", project_with_a_mid_line_merge(), 2),
             // The child merges at its LAST station: all 3 shots reversed, and
             // there is no forward block at all.
             ("end merge", project_with_an_end_merge(), 3),
@@ -6252,7 +6252,7 @@ mod tests {
             let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
 
             let read_back: HashSet<String> = parsed
-                .sections
+                .lines
                 .iter()
                 .flat_map(|s| s.shots.iter().filter_map(|sh| sh.uuid.clone()))
                 .collect();

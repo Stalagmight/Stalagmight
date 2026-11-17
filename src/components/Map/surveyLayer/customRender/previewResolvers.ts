@@ -57,18 +57,18 @@ export function makePreviewResolvers(surveyData: SurveyData, colorCtx: DisplayCo
     const grey = packCssColor(colorCtx.themeColors.grayLine);
     const colorOf = (value: number | undefined): Rgba8 =>
       value === undefined || value < 0 ? grey : (lut(value) ?? grey);
-    const colorForShot = (g: number, sectionId: number): Rgba8 =>
-      colorOf(overlay.shots.get(encodeFeatureId(sectionId, surveyData.shotIds[g]!)));
+    const colorForShot = (g: number, lineId: number): Rgba8 =>
+      colorOf(overlay.shots.get(encodeFeatureId(lineId, surveyData.shotIds[g]!)));
     return {
       ...exact,
       colorForShot,
-      colorForShotEndpoints: (g, sectionId) => {
-        const c = colorForShot(g, sectionId);
+      colorForShotEndpoints: (g, lineId) => {
+        const c = colorForShot(g, lineId);
         return [c, c];
       },
       fillForStation: (g) =>
         colorOf(
-          overlay.stations.get(encodeFeatureId(surveyData.stationSectionIds[g]!, surveyData.stationIndices[g]!)),
+          overlay.stations.get(encodeFeatureId(surveyData.stationLineIds[g]!, surveyData.stationIndices[g]!)),
         ),
     };
   }
@@ -79,12 +79,12 @@ export function makePreviewResolvers(surveyData: SurveyData, colorCtx: DisplayCo
     const { shotDepthIn, shotDepthOut, stationCoords } = surveyData;
     return {
       ...exact,
-      colorForShot: (g, sectionId) =>
-        lut((shotDepthIn[g]! + shotDepthOut[g]!) / 2) ?? exact.colorForShot(g, sectionId),
-      colorForShotEndpoints: (g, sectionId) => {
+      colorForShot: (g, lineId) =>
+        lut((shotDepthIn[g]! + shotDepthOut[g]!) / 2) ?? exact.colorForShot(g, lineId),
+      colorForShotEndpoints: (g, lineId) => {
         const a = lut(shotDepthIn[g]!);
         const b = lut(shotDepthOut[g]!);
-        return a && b ? [a, b] : exact.colorForShotEndpoints(g, sectionId);
+        return a && b ? [a, b] : exact.colorForShotEndpoints(g, lineId);
       },
       fillForStation: (g) => lut(stationCoords[g * 3 + 2]!) ?? exact.fillForStation(g),
     };
@@ -101,40 +101,41 @@ export function makePreviewResolvers(surveyData: SurveyData, colorCtx: DisplayCo
  */
 export function segmentShotOrder(data: SurveyData, lookup: Map<number, Map<number, number>>): Uint32Array {
   const order: number[] = [];
-  for (const section of data.sections) {
-    const inner = lookup.get(section.id);
+  for (const line of data.lines) {
+    const inner = lookup.get(line.id);
     if (!inner) continue;
-    for (let i = 0; i < section.shotCount; i++) {
+    for (let i = 0; i < line.shotCount; i++) {
       if (inner.get(i) === undefined || inner.get(i + 1) === undefined) continue;
-      order.push(section.shotOffset + i);
+      order.push(line.shotOffset + i);
     }
   }
   return Uint32Array.from(order);
 }
 
 /**
- * Write a preview recolour into the line / circle colour arrays in place. Line
- * colours per segment (endpoint pair in depth mode, flat otherwise) and station
- * FILLS only: no palette or range changes a station's stroke.
+ * Write a preview recolour into the line-buffer / circle colour arrays in
+ * place. Shot colours per drawn segment (endpoint pair in depth mode, flat
+ * otherwise) and station FILLS only: no palette or range changes a station's
+ * stroke.
  */
 export function writePreviewColors(
   data: SurveyData,
   segShots: Uint32Array,
   res: ColorResolvers,
-  line: { colorFrom: Uint8Array; colorTo: Uint8Array },
+  lineBufs: { colorFrom: Uint8Array; colorTo: Uint8Array },
   fill: Uint8Array,
 ): void {
-  const { colorFrom, colorTo } = line;
-  const sectionIds = data.shotSectionIds;
+  const { colorFrom, colorTo } = lineBufs;
+  const lineIds = data.shotLineIds;
   for (let seg = 0; seg < segShots.length; seg++) {
     const g = segShots[seg]!;
-    const sectionId = sectionIds[g]!;
+    const lineId = lineIds[g]!;
     let a: Rgba8;
     let b: Rgba8;
     if (res.useDepthEndpoints) {
-      [a, b] = res.colorForShotEndpoints(g, sectionId);
+      [a, b] = res.colorForShotEndpoints(g, lineId);
     } else {
-      a = res.colorForShot(g, sectionId);
+      a = res.colorForShot(g, lineId);
       b = a;
     }
     const base = seg * 16;

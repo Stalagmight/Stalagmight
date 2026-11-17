@@ -42,7 +42,7 @@ export const defaultConfig: Config = {
     "font_color": "#f5f5f5",
     "measure_path_color": "#22d3ee"
   },
-  "section_colors": {
+  "line_colors": {
     "palette": [
       "#4ecdc4",
       "#ff6b6b",
@@ -173,7 +173,7 @@ export const defaultConfig: Config = {
     "toggle_shot_labels": [
       "Shift+L"
     ],
-    "toggle_section_labels": [
+    "toggle_line_labels": [
       "Ctrl+L"
     ],
     "fit_to_bounds": [
@@ -224,7 +224,7 @@ export const defaultConfig: Config = {
     "wizard_map_panel_width": 480,
     "data_table_shot_column_order": [],
     "data_table_shot_hidden_columns": [
-      "section_id",
+      "line_id",
       "shot_id",
       "surveyors",
       "explorers",
@@ -250,8 +250,8 @@ export const defaultConfig: Config = {
       "name"
     ],
     "data_table_station_column_widths": {},
-    "new_section_column_order": [],
-    "new_section_hidden_columns": [
+    "new_line_column_order": [],
+    "new_line_hidden_columns": [
       "azimuth_in",
       "azimuth_out",
       "_pitch_avg",
@@ -262,16 +262,16 @@ export const defaultConfig: Config = {
       "up",
       "down"
     ],
-    "new_section_column_widths": {},
-    "edit_section_column_order": [],
-    "edit_section_hidden_columns": [
+    "new_line_column_widths": {},
+    "edit_line_column_order": [],
+    "edit_line_hidden_columns": [
       "azimuth_in",
       "azimuth_out",
       "_pitch_avg",
       "pitch_in",
       "pitch_out"
     ],
-    "edit_section_column_widths": {},
+    "edit_line_column_widths": {},
     "import_shots_column_order": [],
     "import_shots_hidden_columns": [
       "azimuth_in",

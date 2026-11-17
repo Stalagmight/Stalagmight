@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -19,15 +19,15 @@ import {
  * update_data_table_view_impl tests).
  *
  * Calls are recorded in __MOCK_DATA_TABLE_VIEW_CALLS__ (camelCase payloads).
- * Default panels config hides section_id + shot_id and shows azimuth as avg /
+ * Default panels config hides line_id + shot_id and shows azimuth as avg /
  * inclination off, so the visible shot columns start as: _warnings, length,
  * _azimuth_avg, depth_in, depth_out, left, right, up, down, kind,
  * comment.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Column Prefs Section',
+    name: 'Column Prefs Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -41,7 +41,7 @@ async function getViewCalls(page: Page): Promise<Array<Record<string, unknown>>>
   return page.evaluate(() => ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
 }
 
-/** panels section of the in-memory config (re-synced via get_config after a save). */
+/** panels line of the in-memory config (re-synced via get_config after a save). */
 async function getPanelsConfig(page: Page): Promise<Record<string, unknown>> {
   return page.evaluate(() => (window as any).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
 }
@@ -131,7 +131,7 @@ test.describe('Data table column preferences', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Column Prefs Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);
@@ -172,7 +172,7 @@ test.describe('Data table column preferences', () => {
     expect(await getViewCalls(page)).toHaveLength(0);
 
     const call = await waitForSingleViewCall(page);
-    expect(call.hiddenColumns).toEqual(['comment', 'explorers', 'section_id', 'survey_date', 'surveyors']);
+    expect(call.hiddenColumns).toEqual(['comment', 'explorers', 'line_id', 'survey_date', 'surveyors']);
     expect(call).toMatchObject({ azimuthMode: 'avg', inclinationMode: 'off' });
 
     // Round trip: the post-save loadConfig() re-reads get_config, whose panels
@@ -186,7 +186,7 @@ test.describe('Data table column preferences', () => {
       undefined,
       { timeout: 5000 },
     );
-    expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual(['comment', 'explorers', 'section_id', 'survey_date', 'surveyors']);
+    expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual(['comment', 'explorers', 'line_id', 'survey_date', 'surveyors']);
   });
 
   test('dragging a header reorders the columns and persists the new order', async ({ page }) => {
@@ -244,7 +244,7 @@ test.describe('Data table column preferences', () => {
     const recorded = await getViewCalls(page);
     const order = recorded[recorded.length - 1]!.columnOrder as string[];
     expect(order.indexOf('depth_out')).toBe(order.indexOf('length') - 1);
-    expect(order).toContain('section_id');
+    expect(order).toContain('line_id');
     expect(order).toContain('shot_id');
 
     // The post-save config re-sync settles on that same persisted order.
@@ -370,7 +370,7 @@ test.describe('Data table column preferences', () => {
     await expect(page.getByTestId('grid-header-comment')).toHaveCount(0);
 
     // The debounced view-save can emit an interim snapshot (e.g. the pre-hide
-    // [section_id, shot_id, credit columns] state from the table settling) before the Hide save
+    // [line_id, shot_id, credit columns] state from the table settling) before the Hide save
     // lands, so grabbing the *first* recorded call races. Poll the latest call
     // until it settles on the expected hidden set. #171.
     await expect
@@ -381,7 +381,7 @@ test.describe('Data table column preferences', () => {
         },
         { timeout: 5000 },
       )
-      .toEqual(['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors']);
+      .toEqual(['comment', 'explorers', 'line_id', 'shot_id', 'survey_date', 'surveyors']);
 
     await page.waitForFunction(
       () => {
@@ -395,7 +395,7 @@ test.describe('Data table column preferences', () => {
     expect((await getPanelsConfig(page)).data_table_shot_hidden_columns).toEqual([
       'comment',
       'explorers',
-      'section_id',
+      'line_id',
       'shot_id',
       'survey_date',
       'surveyors',
@@ -431,7 +431,7 @@ test.describe('Data table column preferences - restore direction (#357 item 16)'
     await seedColumnWidths(page, { data_table_shot_column_widths: { length: 187 } });
     await setupMockedPage(page);
     await createProject(page, 'Restore Shot Width Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);
@@ -447,7 +447,7 @@ test.describe('Data table column preferences - restore direction (#357 item 16)'
     await seedColumnWidths(page, { data_table_station_column_widths: { _depth: 205 } });
     await setupMockedPage(page);
     await createProject(page, 'Restore Station Width Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);

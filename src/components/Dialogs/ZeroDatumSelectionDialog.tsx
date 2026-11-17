@@ -11,10 +11,10 @@ import type { DmpFile, DmpShot } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 
 /**
- * Lightweight SVG preview of a section shape.
+ * Lightweight SVG preview of a line shape.
  * Avoids the cost of a full MapLibre instance per card.
  */
-function SectionMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: number }) {
+function LineMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: number }) {
   const points = useMemo(() => {
     const stations: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
     for (const shot of shots) {
@@ -87,7 +87,7 @@ interface ZeroDatumSelectionDialogProps {
   onCancel: () => void;
   onBack: () => void;
   onSkip: () => void;
-  onSelectSection: (sectionIndex: number) => void;
+  onSelectLine: (lineIndex: number) => void;
 }
 
 export default function ZeroDatumSelectionDialog({
@@ -97,33 +97,33 @@ export default function ZeroDatumSelectionDialog({
   onCancel,
   onBack,
   onSkip,
-  onSelectSection,
+  onSelectLine,
 }: ZeroDatumSelectionDialogProps) {
   const { t } = useTranslation();
   const config = useProjectStore((s) => s.config);
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
 
-  // Single-fire guard: prevent double-click from calling onSelectSection twice
+  // Single-fire guard: prevent double-click from calling onSelectLine twice
   const selectedRef = useRef(false);
-  const handleSelectSection = useCallback((index: number) => {
+  const handleSelectLine = useCallback((index: number) => {
     if (selectedRef.current) return;
     selectedRef.current = true;
-    onSelectSection(index);
-  }, [onSelectSection]);
+    onSelectLine(index);
+  }, [onSelectLine]);
 
-  const selectedSections = useMemo(() => {
+  const selectedLines = useMemo(() => {
     return Array.from(selectionConfig.selectedIndices)
       .sort((a, b) => a - b)
       .map((idx) => {
-        const section = dmpFile.sections[idx];
-        if (!section) return null;
+        const line = dmpFile.lines[idx];
+        if (!line) return null;
 
-        const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
+        const standardShots = line.shots.filter((s) => s.shot_type === 'Standard');
         const totalLength = standardShots.reduce((sum, s) => sum + (s.length >= 0 ? s.length : 0), 0);
 
         // Extract time from first shot
         const firstShot = standardShots[0];
-        const dateStr = section.date?.split(/[T ]/)[0] ?? null;
+        const dateStr = line.date?.split(/[T ]/)[0] ?? null;
         let dateTimeStr = dateStr;
         if (dateStr && firstShot) {
           const hh = String(firstShot.hour).padStart(2, '0');
@@ -133,14 +133,14 @@ export default function ZeroDatumSelectionDialog({
 
         return {
           index: idx,
-          section,
+          line,
           shotCount: standardShots.length,
           totalLength,
           dateTimeStr,
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
-  }, [dmpFile.sections, selectionConfig.selectedIndices]);
+  }, [dmpFile.lines, selectionConfig.selectedIndices]);
 
   return (
     <DialogWrapper
@@ -164,16 +164,16 @@ export default function ZeroDatumSelectionDialog({
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-2 p-1">
-          {selectedSections.map(({ index, section, shotCount, totalLength, dateTimeStr }) => (
+          {selectedLines.map(({ index, line, shotCount, totalLength, dateTimeStr }) => (
             <button
               key={index}
               type="button"
-              onClick={() => handleSelectSection(index)}
+              onClick={() => handleSelectLine(index)}
               className="flex flex-col items-center gap-1 p-2 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus-visible:border-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-              data-testid={`zero-datum-section-card-${index}`}
+              data-testid={`zero-datum-line-card-${index}`}
             >
-              <SectionMiniPreview shots={section.shots} size={110} />
-              <span className="text-sm font-medium text-text-primary leading-tight">{section.name}</span>
+              <LineMiniPreview shots={line.shots} size={110} />
+              <span className="text-sm font-medium text-text-primary leading-tight">{line.name}</span>
               <span className="text-xs text-text-secondary leading-tight">
                 {t('dialogs.zeroDatumSelection.shotCount', { count: shotCount })}
                 {' \u00b7 '}

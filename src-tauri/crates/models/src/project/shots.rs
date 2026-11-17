@@ -2,7 +2,7 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
-    LoopClosure, SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor,
+    LoopClosure, LineId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor,
     StationKey, StationMerge, StationRef, FEATURE_ID_STRIDE,
 };
 
@@ -27,29 +27,29 @@ impl Project {
     fn station_neighbors_excluding_shot(
         &self,
         station_ref: StationRef,
-        excluded_shot: Option<(SectionId, usize)>,
+        excluded_shot: Option<(LineId, usize)>,
         include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
-        let Some(section) = self.get_section(station_ref.section_id) else {
+        let Some(line) = self.get_line(station_ref.line_id) else {
             return neighbors;
         };
         let idx = station_ref.station_index as usize;
-        if idx > section.shots.len() {
+        if idx > line.shots.len() {
             return neighbors;
         }
 
         // Adjacent stations via shots (skip the excluded shot)
         if idx > 0 {
             let shot_idx = idx - 1;
-            if excluded_shot != Some((station_ref.section_id, shot_idx)) {
-                neighbors.push(StationRef::new(station_ref.section_id, (idx - 1) as u32));
+            if excluded_shot != Some((station_ref.line_id, shot_idx)) {
+                neighbors.push(StationRef::new(station_ref.line_id, (idx - 1) as u32));
             }
         }
-        if idx < section.shots.len() {
+        if idx < line.shots.len() {
             let shot_idx = idx;
-            if excluded_shot != Some((station_ref.section_id, shot_idx)) {
-                neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
+            if excluded_shot != Some((station_ref.line_id, shot_idx)) {
+                neighbors.push(StationRef::new(station_ref.line_id, (idx + 1) as u32));
             }
         }
 
@@ -80,7 +80,7 @@ impl Project {
         &self,
         station_a: StationRef,
         station_b: StationRef,
-        excluded_shot: Option<(SectionId, usize)>,
+        excluded_shot: Option<(LineId, usize)>,
         include_closures: bool,
     ) -> bool {
         if station_a == station_b {
@@ -109,7 +109,7 @@ impl Project {
     fn station_reaches_zero_datum_excluding_shot(
         &self,
         station_ref: StationRef,
-        excluded_shot: Option<(SectionId, usize)>,
+        excluded_shot: Option<(LineId, usize)>,
     ) -> bool {
         // Placement datums only: a GPS fix (#741) does not pin raw geometry, so
         // a side that reaches only a fix is free to shift.
@@ -135,42 +135,42 @@ impl Project {
         false
     }
 
-    fn max_shots_per_section() -> usize {
+    fn max_shots_per_line() -> usize {
         FEATURE_ID_STRIDE.saturating_sub(1) as usize
     }
 
-    /// Why one more shot cannot go into `section_id`, if it cannot: the
-    /// section is missing, holds the most shots a section may, or has no shot
-    /// id left in this session ([`crate::Section::shot_ids_left`]). Read-only, so a
+    /// Why one more shot cannot go into `line_id`, if it cannot: the
+    /// line is missing, holds the most shots a line may, or has no shot
+    /// id left in this session ([`crate::Line::shot_ids_left`]). Read-only, so a
     /// caller can refuse before changing anything.
-    pub fn shot_insert_refusal(&self, section_id: SectionId) -> Option<String> {
-        let Some(section) = self.get_section(section_id) else {
-            return Some(format!("Section {section_id} not found"));
+    pub fn shot_insert_refusal(&self, line_id: LineId) -> Option<String> {
+        let Some(line) = self.get_line(line_id) else {
+            return Some(format!("Line {line_id} not found"));
         };
-        if section.shots.len() >= Self::max_shots_per_section() {
+        if line.shots.len() >= Self::max_shots_per_line() {
             return Some(format!(
-                "Section {section_id} has reached the maximum of {} shots",
-                Self::max_shots_per_section()
+                "Line {line_id} has reached the maximum of {} shots",
+                Self::max_shots_per_line()
             ));
         }
-        (section.shot_ids_left() == 0).then(|| {
+        (line.shot_ids_left() == 0).then(|| {
             format!(
-                "Section {section_id} has used up its shot numbers for this session: save \
+                "Line {line_id} has used up its shot numbers for this session: save \
                  and reopen to add a station to it"
             )
         })
     }
 
-    /// Add a shot to a section
-    pub fn add_shot(&mut self, section_id: SectionId, data: ShotData) -> Option<&Shot> {
-        let section = self.get_section_mut(section_id)?;
-        if section.shots.len() >= Self::max_shots_per_section() {
+    /// Add a shot to a line
+    pub fn add_shot(&mut self, line_id: LineId, data: ShotData) -> Option<&Shot> {
+        let line = self.get_line_mut(line_id)?;
+        if line.shots.len() >= Self::max_shots_per_line() {
             return None;
         }
-        let shot = section.add_shot(data);
+        let shot = line.add_shot(data);
         let shot_id = shot.id;
         self.touch();
-        self.get_section(section_id)?.get_shot(shot_id)
+        self.get_line(line_id)?.get_shot(shot_id)
     }
 
     /// Can `start` reach a still-resolvable zero datum through RIGID MERGES
@@ -183,11 +183,11 @@ impl Project {
     /// one is the right question for "will the offset cascade refuse to move
     /// this partner", because [`Self::cascade_connection_offsets`]'s first phase
     /// - and the merge-alignment invariant the app asserts - are merge-only.
-    fn has_merge_datum_path_excluding(&self, start: SectionId, excluded: SectionId) -> bool {
+    fn has_merge_datum_path_excluding(&self, start: LineId, excluded: LineId) -> bool {
         // Placement datums only, the cascade's authoritative set: a GPS fix
         // (#741) and a dangling datum (#174) anchor nothing.
-        let placed = self.placement_datum_sections();
-        let mut visited: HashSet<SectionId> = HashSet::new();
+        let placed = self.placement_datum_lines();
+        let mut visited: HashSet<LineId> = HashSet::new();
         let mut queue = vec![start];
         while let Some(current) = queue.pop() {
             if current == excluded || !visited.insert(current) {
@@ -197,11 +197,11 @@ impl Project {
                 return true;
             }
             for m in &self.station_merges {
-                if m.station_a.section_id == current {
-                    queue.push(m.station_b.section_id);
+                if m.station_a.line_id == current {
+                    queue.push(m.station_b.line_id);
                 }
-                if m.station_b.section_id == current {
-                    queue.push(m.station_a.section_id);
+                if m.station_b.line_id == current {
+                    queue.push(m.station_a.line_id);
                 }
             }
         }
@@ -212,10 +212,10 @@ impl Project {
     /// coordinates, as `(head_anchored, tail_anchored)`. `doomed_anchors` are
     /// keys a surrounding range delete will also remove, and never decide.
     ///
-    /// A section is rigid and its offset is ONE value for the whole section, so
-    /// with `world = section-local + section_offset` an insert or delete at
+    /// A line is rigid and its offset is ONE value for the whole line, so
+    /// with `world = line-local + line_offset` an insert or delete at
     /// `boundary` (which shifts every station of index `> boundary` in
-    /// section-local space) leaves exactly two possibilities in world space:
+    /// line-local space) leaves exactly two possibilities in world space:
     /// leave the offset alone and the HEAD keeps its position while the tail
     /// moves, or absorb the shift into the offset and the TAIL keeps its
     /// position while the head moves. Whichever side carries a datum constraint
@@ -251,14 +251,14 @@ impl Project {
     /// The head is then kept, deterministically.
     fn anchored_sides_of_edit(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         boundary: u32,
         doomed_anchors: &HashSet<StationKey>,
     ) -> (bool, bool) {
         // `Some(true)` = this key sits on the moving tail, `Some(false)` = on the
         // stationary head, `None` = not ours, doomed, or no longer resolvable.
         let side = |key: &StationKey| -> Option<bool> {
-            if key.section_id != section_id || doomed_anchors.contains(key) {
+            if key.line_id != line_id || doomed_anchors.contains(key) {
                 return None;
             }
             self.resolve_key(key).map(|sr| sr.station_index > boundary)
@@ -270,16 +270,16 @@ impl Project {
             }
         }
         for m in &self.station_merges {
-            let (ours, theirs) = if m.station_a.section_id == section_id {
+            let (ours, theirs) = if m.station_a.line_id == line_id {
                 (&m.station_a, &m.station_b)
-            } else if m.station_b.section_id == section_id {
+            } else if m.station_b.line_id == line_id {
                 (&m.station_b, &m.station_a)
             } else {
                 continue;
             };
             let Some(is_tail) = side(ours) else { continue };
-            if theirs.section_id != section_id
-                && self.has_merge_datum_path_excluding(theirs.section_id, section_id)
+            if theirs.line_id != line_id
+                && self.has_merge_datum_path_excluding(theirs.line_id, line_id)
             {
                 *(if is_tail { &mut tail } else { &mut head }) = true;
             }
@@ -293,16 +293,16 @@ impl Project {
             if !c.is_aligned {
                 continue;
             }
-            let (ours, theirs) = if c.station_a.section_id == section_id {
+            let (ours, theirs) = if c.station_a.line_id == line_id {
                 (&c.station_a, &c.station_b)
-            } else if c.station_b.section_id == section_id {
+            } else if c.station_b.line_id == line_id {
                 (&c.station_b, &c.station_a)
             } else {
                 continue;
             };
             let Some(is_tail) = side(ours) else { continue };
-            if theirs.section_id != section_id
-                && self.has_datum_path_excluding(theirs.section_id, section_id)
+            if theirs.line_id != line_id
+                && self.has_datum_path_excluding(theirs.line_id, line_id)
             {
                 *(if is_tail { &mut tail } else { &mut head }) = true;
             }
@@ -310,31 +310,31 @@ impl Project {
         (head, tail)
     }
 
-    /// Insert a shot after a specific shot in a section. `forced_id` preserves
+    /// Insert a shot after a specific shot in a line. `forced_id` preserves
     /// the original id and `forced_uuid` the original persistent shot UUID when
     /// redo re-runs this exact path (see [`AppState::redo`]); pass `None`/`None`
     /// for normal inserts (a fresh UUID is minted).
     pub fn insert_shot_after(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         after_shot_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
         forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
-        let section = self.get_section(section_id)?;
-        let pos = section.shots.iter().position(|s| s.id == after_shot_id)?;
-        if section.shots.len() >= Self::max_shots_per_section() {
+        let line = self.get_line(line_id)?;
+        let pos = line.shots.iter().position(|s| s.id == after_shot_id)?;
+        if line.shots.len() >= Self::max_shots_per_line() {
             return None;
         }
         // Compute displacement before data is consumed - the new shot shifts
-        // all stations after the insertion point. In the section's own frame
+        // all stations after the insertion point. In the line's own frame
         // (#438), matching the walk this compensates.
-        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
-        let section = self.get_section_mut(section_id)?;
+        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(line_id));
+        let line = self.get_line_mut(line_id)?;
         let shot =
-            section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
+            line.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
@@ -345,32 +345,32 @@ impl Project {
         // side has to be consulted too (#413 finding 14).
         if dx != 0.0 || dy != 0.0 {
             let (head_anchored, tail_anchored) =
-                self.anchored_sides_of_edit(section_id, (pos + 1) as u32, &HashSet::new());
+                self.anchored_sides_of_edit(line_id, (pos + 1) as u32, &HashSet::new());
             if tail_anchored && !head_anchored {
-                self.adjust_section_offset(section_id, -dx, -dy);
+                self.adjust_line_offset(line_id, -dx, -dy);
             }
         }
-        self.cascade_connection_offsets(&[section_id]);
+        self.cascade_connection_offsets(&[line_id]);
         self.debug_assert_merge_alignment("insert_shot_after");
         self.touch();
-        self.get_section(section_id)?.get_shot(shot_id)
+        self.get_line(line_id)?.get_shot(shot_id)
     }
 
-    /// Insert a shot before a specific shot in a section. `forced_id` preserves
+    /// Insert a shot before a specific shot in a line. `forced_id` preserves
     /// the original id and `forced_uuid` the original persistent shot UUID when
     /// redo re-runs this exact path; pass `None`/`None` for normal inserts.
     pub fn insert_shot_before(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         before_shot_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
         forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
-        let section = self.get_section(section_id)?;
-        let pos = section.shots.iter().position(|s| s.id == before_shot_id)?;
-        if section.shots.len() >= Self::max_shots_per_section() {
+        let line = self.get_line(line_id)?;
+        let pos = line.shots.iter().position(|s| s.id == before_shot_id)?;
+        if line.shots.len() >= Self::max_shots_per_line() {
             return None;
         }
 
@@ -382,41 +382,41 @@ impl Project {
         // partner). Only the prepend case (pos == 0, no preceding shot) is
         // genuinely distinct and handled below.
         if pos > 0 {
-            let prev_id = section.shots[pos - 1].id;
-            return self.insert_shot_after(section_id, prev_id, data, forced_id, forced_uuid);
+            let prev_id = line.shots[pos - 1].id;
+            return self.insert_shot_after(line_id, prev_id, data, forced_id, forced_uuid);
         }
 
-        // Prepend (pos == 0): the new shot becomes the section's first shot and
+        // Prepend (pos == 0): the new shot becomes the line's first shot and
         // every existing station shifts up by one; keep them in place by
         // back-shifting the offset.
-        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
-        let section = self.get_section_mut(section_id)?;
+        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(line_id));
+        let line = self.get_line_mut(line_id)?;
         let shot =
-            section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
+            line.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
-        // Prepend is the one insert that shifts identity: the old section-start
+        // Prepend is the one insert that shifts identity: the old line-start
         // station is now *after* the new first shot, so re-anchor any ref on this
-        // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
+        // line that was `LineStart` to `AfterShot(new_shot)`. Every other
         // anchor is position-independent and needs no change.
         let new_uuid = self
-            .get_section(section_id)
+            .get_line(line_id)
             .and_then(|s| s.shots.first()?.uuid.clone());
         if let Some(new_uuid) = new_uuid {
             self.map_station_refs(|key| {
-                if key.section_id == section_id && key.anchor == StationAnchor::SectionStart {
-                    StationKey::new(section_id, StationAnchor::AfterShot(new_uuid.clone()))
+                if key.line_id == line_id && key.anchor == StationAnchor::LineStart {
+                    StationKey::new(line_id, StationAnchor::AfterShot(new_uuid.clone()))
                 } else {
                     key
                 }
             });
         }
         if dx != 0.0 || dy != 0.0 {
-            self.adjust_section_offset(section_id, -dx, -dy);
+            self.adjust_line_offset(line_id, -dx, -dy);
         }
-        self.cascade_connection_offsets(&[section_id]);
+        self.cascade_connection_offsets(&[line_id]);
         self.debug_assert_merge_alignment("insert_shot_before");
         self.touch();
-        self.get_section(section_id)?.get_shot(shot_id)
+        self.get_line(line_id)?.get_shot(shot_id)
     }
 
     /// Insert a station mid-shot by splitting `shot_id` at `distance` meters
@@ -427,19 +427,19 @@ impl Project {
     /// at index `pos + 1` (the boundary between the two children).
     ///
     /// Every cross-reference (merge, closure, zero datum, comment) is stored
-    /// as a position-independent [`StationKey`] (`SectionStart` or
+    /// as a position-independent [`StationKey`] (`LineStart` or
     /// `AfterShot(uuid)`); since the original shot's uuid stays on the tail
     /// child, every existing anchor keeps resolving to the SAME station it
     /// always did (now one position further along), and NO remap is needed.
-    /// This only holds because the split never re-anchors `SectionStart` the
+    /// This only holds because the split never re-anchors `LineStart` the
     /// way [`Self::insert_shot_before`]'s prepend path does -- this method
-    /// therefore goes through the section-level insert directly rather than
+    /// therefore goes through the line-level insert directly rather than
     /// `Self::insert_shot_before`/`insert_shot_after`.
     ///
     /// The split is collinear (same azimuth/pitch on both children, depth
     /// linearly interpolated), so `horizontal_length_from_slope` is exact
     /// under the split and every downstream station's absolute position is
-    /// preserved exactly -- no section-offset adjustment is needed.
+    /// preserved exactly -- no line-offset adjustment is needed.
     ///
     /// Both children inherit the parent shot's LRUD unchanged: an interior
     /// point of the measured shot is better estimated by the parent's own
@@ -453,33 +453,33 @@ impl Project {
     /// per split (see [`crate::core::AppState::execute_split_shot_at_distance`]).
     pub fn split_shot_at_distance(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         distance: f64,
     ) -> Result<(ShotId, ShotData, ShotUpdates), String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        if section.shots.len() >= Self::max_shots_per_section() {
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        if line.shots.len() >= Self::max_shots_per_line() {
             return Err(format!(
-                "Section {section_id} has reached the maximum of {} shots",
-                Self::max_shots_per_section()
+                "Line {line_id} has reached the maximum of {} shots",
+                Self::max_shots_per_line()
             ));
         }
-        let shot = section
+        let shot = line
             .get_shot(shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
         let (head_data, tail_updates) = Self::compute_split(shot, distance)?;
 
-        let section = self
-            .get_section_mut(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let tail = section
+        let line = self
+            .get_line_mut(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        let tail = line
             .get_shot_mut(shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
         tail.apply_updates(&tail_updates);
 
-        let new_shot = section
+        let new_shot = line
             .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
             .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
         let new_shot_id = new_shot.id;
@@ -527,7 +527,7 @@ impl Project {
             // The head child is a NEW shot; only the tail keeps the parent's
             // identity (see this method's doc comment - it is what makes every
             // existing `AfterShot` anchor keep resolving without a remap).
-            // Copying the parent's uuid here would make the section hold two
+            // Copying the parent's uuid here would make the line hold two
             // shots with one id, and the FIRST-wins repair would then re-mint
             // the tail - moving every anchor. See [`ShotData::uuid`].
             uuid: None,
@@ -549,16 +549,16 @@ impl Project {
         Ok((head_data, tail_updates))
     }
 
-    /// The in-session id of the shot `uuid` names in `section_id`, if it is
+    /// The in-session id of the shot `uuid` names in `line_id`, if it is
     /// still there.
     ///
-    /// [`Shot::id`] is regenerated on every load (`section_id *
+    /// [`Shot::id`] is regenerated on every load (`line_id *
     /// FEATURE_ID_STRIDE + sequence_order`), so it cannot address a shot across
     /// a save; [`Shot::uuid`] exists precisely because it can. Anything holding
     /// a shot address longer than one session - a persisted undo entry, a
     /// station anchor - resolves through here.
-    pub fn shot_id_by_uuid(&self, section_id: SectionId, uuid: &str) -> Option<ShotId> {
-        self.get_section(section_id)?
+    pub fn shot_id_by_uuid(&self, line_id: LineId, uuid: &str) -> Option<ShotId> {
+        self.get_line(line_id)?
             .shots
             .iter()
             .find(|shot| shot.uuid.as_deref() == Some(uuid))
@@ -568,35 +568,35 @@ impl Project {
     /// Update a shot
     pub fn update_shot(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         updates: &ShotUpdates,
     ) -> Option<&Shot> {
-        let section = self.get_section_mut(section_id)?;
-        let shot = section.get_shot_mut(shot_id)?;
+        let line = self.get_line_mut(line_id)?;
+        let shot = line.get_shot_mut(shot_id)?;
         shot.apply_updates(updates);
         self.touch();
-        self.get_section(section_id)?.get_shot(shot_id)
+        self.get_line(line_id)?.get_shot(shot_id)
     }
 
     pub fn preview_delete_shot(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     ) -> Result<DeleteShotImpact, String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let pos = section
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        let pos = line
             .shots
             .iter()
             .position(|s| s.id == shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
 
         let removed_station = if pos == 0 {
-            StationRef::new(section_id, 0)
+            StationRef::new(line_id, 0)
         } else {
-            StationRef::new(section_id, (pos + 1) as u32)
+            StationRef::new(line_id, (pos + 1) as u32)
         };
 
         let mut impact = DeleteShotImpact {
@@ -649,7 +649,7 @@ impl Project {
                     let mut found_pair: Option<StationPair> = None;
                     for station_a in base_component {
                         for station_b in component {
-                            if station_a.section_id != station_b.section_id {
+                            if station_a.line_id != station_b.line_id {
                                 found_pair = Some(StationPair {
                                     station_a: *station_a,
                                     station_b: *station_b,
@@ -663,7 +663,7 @@ impl Project {
                     }
 
                     if let Some(pair) = found_pair {
-                        // Same guard the section/range deletion paths apply, so
+                        // Same guard the line/range deletion paths apply, so
                         // a single-shot delete cannot mint the merge those refuse
                         // to. This list is BOTH the dialog's preview and the list
                         // `remove_shot_with_rewire_excluding_anchors` replays, so
@@ -730,11 +730,11 @@ impl Project {
                     } else if self.are_stations_connected_excluding_shot(
                         replacement_station,
                         other,
-                        Some((section_id, pos)),
+                        Some((line_id, pos)),
                         false,
                     ) || self.would_double_anchor_after_removal(
-                        replacement_station.section_id,
-                        other.section_id,
+                        replacement_station.line_id,
+                        other.line_id,
                         &doomed,
                         &planned,
                     ) {
@@ -777,11 +777,11 @@ impl Project {
             }
         }
 
-        let is_mid_shot = pos > 0 && pos < section.shots.len() - 1;
+        let is_mid_shot = pos > 0 && pos < line.shots.len() - 1;
         if is_mid_shot {
-            let station_before = StationRef::new(section_id, pos as u32);
-            let station_after = StationRef::new(section_id, (pos + 1) as u32);
-            let excluded = Some((section_id, pos));
+            let station_before = StationRef::new(line_id, pos as u32);
+            let station_after = StationRef::new(line_id, (pos + 1) as u32);
+            let excluded = Some((line_id, pos));
 
             if self.are_stations_connected_excluding_shot(
                 station_before,
@@ -813,21 +813,21 @@ impl Project {
 
     /// Aggregate impact of deleting a contiguous range of shots
     /// `[start_shot_id .. end_shot_id]` (by their current positions) from one
-    /// section. Used by the bulk-delete dialog to show a range summary, the
+    /// line. Used by the bulk-delete dialog to show a range summary, the
     /// removed station relationships, and whether the gap-close (shift) path is
     /// available. `start`/`end` may be given in any order - they are normalized.
     pub fn preview_delete_shot_range(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
         let mut impact =
-            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+            self.preview_delete_shot_range_relationships(line_id, start_shot_id, end_shot_id)?;
         if Self::gap_close_is_offered(&impact) {
             impact.closures_removed_across_one_shot = self
                 .preview_gap_close_closure_removals(
-                    section_id,
+                    line_id,
                     impact.start_pos as usize,
                     impact.end_pos as usize,
                 )
@@ -842,16 +842,16 @@ impl Project {
     /// it again.
     pub fn into_preview_delete_shot_range(
         self,
-        section_id: SectionId,
+        line_id: LineId,
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
         let mut impact =
-            self.preview_delete_shot_range_relationships(section_id, start_shot_id, end_shot_id)?;
+            self.preview_delete_shot_range_relationships(line_id, start_shot_id, end_shot_id)?;
         if Self::gap_close_is_offered(&impact) {
             impact.closures_removed_across_one_shot = self
                 .into_gap_close_closure_removals(
-                    section_id,
+                    line_id,
                     impact.start_pos as usize,
                     impact.end_pos as usize,
                 )
@@ -862,7 +862,7 @@ impl Project {
 
     /// Only a gap-close that is actually offered gets a prediction (#737).
     fn gap_close_is_offered(impact: &DeleteShotRangeImpact) -> bool {
-        !impact.shift_blocked && impact.kind != RangeDeleteKind::WholeSection
+        !impact.shift_blocked && impact.kind != RangeDeleteKind::WholeLine
     }
 
     /// [`Self::preview_delete_shot_range`] without the gap-close closure
@@ -871,30 +871,30 @@ impl Project {
     /// same gap-close for real, so it asks this and does not pay twice.
     pub fn preview_delete_shot_range_relationships(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> Result<DeleteShotRangeImpact, String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let n = section.shots.len();
-        let mut start_pos = section
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        let n = line.shots.len();
+        let mut start_pos = line
             .shots
             .iter()
             .position(|s| s.id == start_shot_id)
-            .ok_or_else(|| format!("Shot {start_shot_id} not found in section {section_id}"))?;
-        let mut end_pos = section
+            .ok_or_else(|| format!("Shot {start_shot_id} not found in line {line_id}"))?;
+        let mut end_pos = line
             .shots
             .iter()
             .position(|s| s.id == end_shot_id)
-            .ok_or_else(|| format!("Shot {end_shot_id} not found in section {section_id}"))?;
+            .ok_or_else(|| format!("Shot {end_shot_id} not found in line {line_id}"))?;
         if start_pos > end_pos {
             std::mem::swap(&mut start_pos, &mut end_pos);
         }
 
         let kind = match (start_pos == 0, end_pos == n - 1) {
-            (true, true) => RangeDeleteKind::WholeSection,
+            (true, true) => RangeDeleteKind::WholeLine,
             (true, false) => RangeDeleteKind::Prefix,
             (false, true) => RangeDeleteKind::Suffix,
             (false, false) => RangeDeleteKind::Interior,
@@ -909,11 +909,11 @@ impl Project {
             RangeDeleteKind::Interior => ((start_pos as u32 + 1)..=(end_pos as u32 + 1)).collect(),
             RangeDeleteKind::Prefix => (0..=(end_pos as u32)).collect(),
             RangeDeleteKind::Suffix => ((start_pos as u32 + 1)..=(n as u32)).collect(),
-            RangeDeleteKind::WholeSection => (0..=(n as u32)).collect(),
+            RangeDeleteKind::WholeLine => (0..=(n as u32)).collect(),
         };
         let removed_set: HashSet<StationRef> = removed_indices
             .iter()
-            .map(|&i| StationRef::new(section_id, i))
+            .map(|&i| StationRef::new(line_id, i))
             .collect();
         let in_removed = |key: &StationKey| -> bool {
             self.resolve_key(key)
@@ -926,7 +926,7 @@ impl Project {
         // so these loss sets are intentionally split-only.
         let split_removed_set: HashSet<StationRef> = match kind {
             RangeDeleteKind::Interior => ((start_pos as u32 + 1)..=(end_pos as u32))
-                .map(|i| StationRef::new(section_id, i))
+                .map(|i| StationRef::new(line_id, i))
                 .collect(),
             // No split path exists for these - their loss set is the removed set.
             _ => removed_set.clone(),
@@ -962,8 +962,8 @@ impl Project {
         // survivors on `sim` (post-preservation), treating every removed station
         // (incl. the tail boundary `end_pos+1`) and the range's shots as gone.
         if kind == RangeDeleteKind::Interior {
-            let head = StationRef::new(section_id, start_pos as u32);
-            let tail = StationRef::new(section_id, end_pos as u32 + 2);
+            let head = StationRef::new(line_id, start_pos as u32);
+            let tail = StationRef::new(line_id, end_pos as u32 + 2);
             // Only a MERGE-based loop blocks: merges are hard coincidence
             // constraints that survive the delete, so gap-closing two
             // merge-connected sides is over-constrained. A loop closure is a
@@ -973,7 +973,7 @@ impl Project {
             if sim.stations_connected_excluding_range(
                 head,
                 tail,
-                section_id,
+                line_id,
                 start_pos,
                 end_pos,
                 &removed_set,
@@ -986,14 +986,14 @@ impl Project {
             }
             let head_anchored = sim.station_reaches_datum_excluding_range(
                 head,
-                section_id,
+                line_id,
                 start_pos,
                 end_pos,
                 &removed_set,
             );
             let tail_anchored = sim.station_reaches_datum_excluding_range(
                 tail,
-                section_id,
+                line_id,
                 start_pos,
                 end_pos,
                 &removed_set,
@@ -1031,7 +1031,7 @@ impl Project {
         // lists the same comments in a different order on every run of the same preview.
         // Nothing downstream re-sorts (`BulkDeleteDialog.tsx` renders the vector as
         // given), so this is the only place the order can be pinned.
-        removed_comments.sort_by_key(|sr| (sr.section_id, sr.station_index));
+        removed_comments.sort_by_key(|sr| (sr.line_id, sr.station_index));
 
         // The relationship panel (`removed_stations`/`removed_merges`/
         // `removed_closures`) and the preserved-connectivity replacements describe
@@ -1059,7 +1059,7 @@ impl Project {
         };
 
         let mut removed_stations: Vec<StationRef> = impact_removed_set.iter().copied().collect();
-        removed_stations.sort_by_key(|s| (s.section_id, s.station_index));
+        removed_stations.sort_by_key(|s| (s.line_id, s.station_index));
         let mut removed_merges = Vec::new();
         for merge in &self.station_merges {
             if in_impact(&merge.station_a) || in_impact(&merge.station_b) {
@@ -1088,7 +1088,7 @@ impl Project {
             self.preview_preserved_connections(impact_sim);
 
         Ok(DeleteShotRangeImpact {
-            section_id,
+            line_id,
             start_pos: start_pos as u32,
             end_pos: end_pos as u32,
             kind,
@@ -1110,31 +1110,31 @@ impl Project {
 
     /// Neighbors of `station_ref` for range-delete connectivity checks: like
     /// [`Self::station_neighbors_excluding_shot`] but skips ALL shot edges at
-    /// positions `start_pos..=end_pos` in `section_id` (the gap-closed range).
+    /// positions `start_pos..=end_pos` in `line_id` (the gap-closed range).
     fn range_neighbors(
         &self,
         station_ref: StationRef,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
         include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
-        let Some(section) = self.get_section(station_ref.section_id) else {
+        let Some(line) = self.get_line(station_ref.line_id) else {
             return neighbors;
         };
         let idx = station_ref.station_index as usize;
-        if idx > section.shots.len() {
+        if idx > line.shots.len() {
             return neighbors;
         }
         let in_range = |shot_idx: usize| {
-            station_ref.section_id == section_id && (start_pos..=end_pos).contains(&shot_idx)
+            station_ref.line_id == line_id && (start_pos..=end_pos).contains(&shot_idx)
         };
         if idx > 0 && !in_range(idx - 1) {
-            neighbors.push(StationRef::new(station_ref.section_id, (idx - 1) as u32));
+            neighbors.push(StationRef::new(station_ref.line_id, (idx - 1) as u32));
         }
-        if idx < section.shots.len() && !in_range(idx) {
-            neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
+        if idx < line.shots.len() && !in_range(idx) {
+            neighbors.push(StationRef::new(station_ref.line_id, (idx + 1) as u32));
         }
         for merge in &self.station_merges {
             if self.key_is_ref(&merge.station_a, station_ref) {
@@ -1155,7 +1155,7 @@ impl Project {
         neighbors
     }
 
-    /// Are `a` and `b` connected WITHOUT using a shot in `section_id`'s range
+    /// Are `a` and `b` connected WITHOUT using a shot in `line_id`'s range
     /// `start_pos..=end_pos` and without passing through a `removed` station?
     /// Used to detect a loop around a to-be-gap-closed interior range so the
     /// check sees the post-delete topology rather than each original single shot.
@@ -1163,7 +1163,7 @@ impl Project {
         &self,
         a: StationRef,
         b: StationRef,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
         removed: &HashSet<StationRef>,
@@ -1177,7 +1177,7 @@ impl Project {
         let mut queue = VecDeque::new();
         queue.push_back(a);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, include_closures) {
+            for nb in self.range_neighbors(cur, line_id, start_pos, end_pos, include_closures) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1198,7 +1198,7 @@ impl Project {
     fn station_reaches_datum_excluding_range(
         &self,
         station: StationRef,
-        section_id: SectionId,
+        line_id: LineId,
         start_pos: usize,
         end_pos: usize,
         removed: &HashSet<StationRef>,
@@ -1217,7 +1217,7 @@ impl Project {
         let mut queue = VecDeque::new();
         queue.push_back(station);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, true) {
+            for nb in self.range_neighbors(cur, line_id, start_pos, end_pos, true) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1308,10 +1308,10 @@ impl Project {
 
     pub fn remove_shot_with_rewire(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     ) -> Result<(Shot, DeleteShotImpact), String> {
-        self.remove_shot_with_rewire_excluding_anchors(section_id, shot_id, &HashSet::new(), false)
+        self.remove_shot_with_rewire_excluding_anchors(line_id, shot_id, &HashSet::new(), false)
     }
 
     /// [`Self::remove_shot_with_rewire`], also returning the loop closures its
@@ -1320,10 +1320,10 @@ impl Project {
     /// user (by the stations they had before, from a capture it took first).
     pub fn remove_shot_with_rewire_reporting(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     ) -> Result<(Shot, DeleteShotImpact, Vec<LoopClosure>), String> {
-        self.remove_shot_reporting(section_id, shot_id, &HashSet::new(), false)
+        self.remove_shot_reporting(line_id, shot_id, &HashSet::new(), false)
     }
 
     /// Like [`Self::remove_shot_with_rewire`] but for use inside a bulk-range
@@ -1336,15 +1336,15 @@ impl Project {
     ///   alignment assert. The range driver runs ONE cascade after all range
     ///   shots are gone (see `execute_delete_shot_range_shift`); a per-shot
     ///   cascade would propagate a doomed station's transient shift into a merged
-    ///   free-floating section before that merge is removed.
+    ///   free-floating line before that merge is removed.
     pub fn remove_shot_with_rewire_excluding_anchors(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         doomed_anchors: &HashSet<StationKey>,
         defer_cascade: bool,
     ) -> Result<(Shot, DeleteShotImpact), String> {
-        self.remove_shot_reporting(section_id, shot_id, doomed_anchors, defer_cascade)
+        self.remove_shot_reporting(line_id, shot_id, doomed_anchors, defer_cascade)
             .map(|(shot, impact, _)| (shot, impact))
     }
 
@@ -1352,21 +1352,21 @@ impl Project {
     /// excluding_anchors`] plus the closures its orphan sweep removed.
     fn remove_shot_reporting(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         doomed_anchors: &HashSet<StationKey>,
         defer_cascade: bool,
     ) -> Result<(Shot, DeleteShotImpact, Vec<LoopClosure>), String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let pos = section
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        let pos = line
             .shots
             .iter()
             .position(|s| s.id == shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
 
-        let impact = self.preview_delete_shot(section_id, shot_id)?;
+        let impact = self.preview_delete_shot(line_id, shot_id)?;
         // Which closures the sweep would act on ALREADY (orphans, and closures
         // between merged stations), before this removal touches anything - see
         // the conversion below for what that is for. Must be taken here, ahead of
@@ -1495,12 +1495,12 @@ impl Project {
         }
 
         let deleted_shot = {
-            let section_mut = self
-                .get_section_mut(section_id)
-                .ok_or_else(|| format!("Section {section_id} not found"))?;
-            section_mut
+            let line_mut = self
+                .get_line_mut(line_id)
+                .ok_or_else(|| format!("Line {line_id} not found"))?;
+            line_mut
                 .remove_shot(shot_id)
-                .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?
+                .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?
         };
 
         // Station keys are position-independent - no ref-shifting on delete. The
@@ -1510,15 +1510,15 @@ impl Project {
         // One case the `removed_station` rewire above can't catch: a ref anchored
         // directly on the DELETED shot's boundary, `AfterShot(deleted_uuid)`, that
         // is NOT the `removed_station` (this happens at `pos == 0`, where
-        // `removed_station` is `SectionStart` but a prepend had re-anchored a
+        // `removed_station` is `LineStart` but a prepend had re-anchored a
         // boundary ref to `AfterShot(first_shot)`). Its anchoring shot is now gone,
         // so re-anchor it to the station that absorbs the deleted boundary -
-        // `SectionStart` when the first shot was removed, else `AfterShot(prev)`.
+        // `LineStart` when the first shot was removed, else `AfterShot(prev)`.
         if let Some(deleted_uuid) = deleted_shot.uuid.clone() {
             let survivor = if pos == 0 {
-                Some(StationAnchor::SectionStart)
+                Some(StationAnchor::LineStart)
             } else {
-                self.get_section(section_id)
+                self.get_line(line_id)
                     .and_then(|s| s.shots.get(pos - 1))
                     .and_then(|s| s.uuid.clone())
                     .map(StationAnchor::AfterShot)
@@ -1526,8 +1526,8 @@ impl Project {
             if let Some(survivor) = survivor {
                 let stale = StationAnchor::AfterShot(deleted_uuid);
                 self.map_station_refs(|key| {
-                    if key.section_id == section_id && key.anchor == stale {
-                        StationKey::new(section_id, survivor.clone())
+                    if key.line_id == line_id && key.anchor == stale {
+                        StationKey::new(line_id, survivor.clone())
                     } else {
                         key
                     }
@@ -1536,7 +1536,7 @@ impl Project {
         }
 
         // The deletion may have removed the OTHER path of a loop, leaving a
-        // closure as the sole bridge to a section - that is no longer a loop, so
+        // closure as the sole bridge to a line - that is no longer a loop, so
         // turn any such closure into a merge before the offsets are recomputed
         // (issue #8, beyond the closure-touched-the-deleted-station case above).
         //
@@ -1561,7 +1561,7 @@ impl Project {
         let swept_away = swept.removed;
 
         // After removing a shot, stations after the deletion point (index > pos)
-        // shift by -displacement in section-local coordinates.  We must decide
+        // shift by -displacement in line-local coordinates.  We must decide
         // which side to keep at its original absolute position:
         //
         //   - tail anchored (datum reachable via post-deletion stations):
@@ -1573,17 +1573,17 @@ impl Project {
         // are datum-anchored.
         let (dx, dy) = Self::shot_displacement(
             &deleted_shot.to_shot_data(),
-            self.azimuth_reference_for_id(section_id),
+            self.azimuth_reference_for_id(line_id),
         );
 
         if pos == 0 {
             // First shot: station 0 removed, ALL remaining stations are "tail".
             // Always adjust to keep them in place.
             if dx != 0.0 || dy != 0.0 {
-                self.adjust_section_offset(section_id, dx, dy);
+                self.adjust_line_offset(line_id, dx, dy);
             }
         } else if dx != 0.0 || dy != 0.0 {
-            // Mid-section: keep whichever side of the deletion point is anchored.
+            // Mid-line: keep whichever side of the deletion point is anchored.
             // Tail stations resolve to index > pos (after the deletion renumbered
             // them). The HEAD side is consulted too, for the same reason the
             // insert consults it - see `anchored_sides_of_edit`: compensating for
@@ -1592,9 +1592,9 @@ impl Project {
             // cascade cannot put it back (#413 finding 14's undo-side mirror,
             // which reaches this function through undo of `CreateShot`).
             let (head_anchored, tail_anchored) =
-                self.anchored_sides_of_edit(section_id, pos as u32, doomed_anchors);
+                self.anchored_sides_of_edit(line_id, pos as u32, doomed_anchors);
             if tail_anchored && !head_anchored {
-                self.adjust_section_offset(section_id, dx, dy);
+                self.adjust_line_offset(line_id, dx, dy);
             }
         }
 
@@ -1602,25 +1602,25 @@ impl Project {
         // the coincidence it declares, by translating the movable side onto the
         // anchored one. This is the last thing that touches geometry before the
         // cascade, deliberately: the gap-close compensation above slides the whole
-        // edited section, and the shot removal itself re-placed that section's
+        // edited line, and the shot removal itself re-placed that line's
         // stations, so a translation computed when the merge was recorded would
         // already be stale. It runs even when the cascade is deferred - the range
-        // driver's single cascade is seeded with the edited section and cannot
+        // driver's single cascade is seeded with the edited line and cannot
         // reach a component the range has just cut loose (#464 defects B and C).
         self.settle_minted_merges(&minted);
 
         // A bulk range delete removes shots one at a time and runs ONE cascade +
         // alignment pass at the end (see execute_delete_shot_range_shift). A
         // per-step cascade here would propagate a doomed station's transient
-        // shift into a merged free-floating section BEFORE that merge is removed,
-        // leaving the section displaced with no edge to pull it back; and an
+        // shift into a merged free-floating line BEFORE that merge is removed,
+        // leaving the line displaced with no edge to pull it back; and an
         // intermediate step can transiently misalign a merge on a doomed station.
         // The range driver sets `defer_cascade`; standalone single-shot deletes
         // cascade + assert immediately.
         if !defer_cascade {
             // Cascade offset adjustments for any drifted connections on the
             // non-anchored side.
-            self.cascade_connection_offsets(&[section_id]);
+            self.cascade_connection_offsets(&[line_id]);
             self.debug_assert_merge_alignment("remove_shot_with_rewire");
         }
 
@@ -1628,23 +1628,23 @@ impl Project {
         Ok((deleted_shot, impact, swept_away))
     }
 
-    /// The exact inverse of [`Self::add_shot`] into an **empty** section:
-    /// remove the section's only shot and leave station 0 - and everything
+    /// The exact inverse of [`Self::add_shot`] into an **empty** line:
+    /// remove the line's only shot and leave station 0 - and everything
     /// anchored to it - exactly as the append found them.
     ///
     /// [`Self::remove_shot_with_rewire`] is the wrong inverse for this one
     /// shape. Its `pos == 0` branch answers the USER's delete-the-first-shot
-    /// question: station 0 goes away, station 1 becomes the new section start,
-    /// every ref keyed to station 0 is dropped, and `adjust_section_offset`
-    /// slides the section so the surviving stations keep their world positions.
+    /// question: station 0 goes away, station 1 becomes the new line start,
+    /// every ref keyed to station 0 is dropped, and `adjust_line_offset`
+    /// slides the line so the surviving stations keep their world positions.
     /// With exactly one shot the appended shot IS index 0, so there is no
-    /// survivor to keep in place: the compensation slides the whole section by
+    /// survivor to keep in place: the compensation slides the whole line by
     /// the shot's horizontal vector while the offset-neutral `add_shot` gave
     /// nothing back, and the redo re-appends offset-neutrally, so every
     /// undo/redo cycle slides it again (#413, finding 3, and finding 15 which
     /// is that leftover key observed several moves later). The same branch
     /// destroys the merges, zero datums and station comments keyed to station 0,
-    /// which in an empty section is every ref it has (finding 3's data-loss
+    /// which in an empty line is every ref it has (finding 3's data-loss
     /// half).
     ///
     /// The station this append CREATED is station 1, `AfterShot(uuid)`. That is
@@ -1656,19 +1656,19 @@ impl Project {
     /// function chose to move.
     ///
     /// Errors (rather than silently doing something else) when `shot_id` is not
-    /// the section's sole shot, so a caller that mis-detects the shape gets a
+    /// the line's sole shot, so a caller that mis-detects the shape gets a
     /// refusal instead of a wrong inverse.
     pub fn remove_appended_first_shot(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     ) -> Result<Shot, String> {
-        let section = self
-            .get_section(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        if section.shots.len() != 1 || section.shots[0].id != shot_id {
+        let line = self
+            .get_line(line_id)
+            .ok_or_else(|| format!("Line {line_id} not found"))?;
+        if line.shots.len() != 1 || line.shots[0].id != shot_id {
             return Err(format!(
-                "Shot {shot_id} is not the only shot of section {section_id}"
+                "Shot {shot_id} is not the only shot of line {line_id}"
             ));
         }
         // Which closures the sweep would act on ALREADY, before this inverse
@@ -1679,11 +1679,11 @@ impl Project {
         // follows its own `CreateShot` (anything anchored there would have been
         // pushed above this entry and undone first), but a ref whose anchoring
         // shot is gone dangles, so drop rather than orphan.
-        let created = section
+        let created = line
             .shots
             .first()
             .and_then(|shot| shot.uuid.clone())
-            .map(|uuid| StationKey::new(section_id, StationAnchor::AfterShot(uuid)));
+            .map(|uuid| StationKey::new(line_id, StationAnchor::AfterShot(uuid)));
         if let Some(key) = created {
             self.station_offsets.remove(&key);
             self.station_comments.remove(&key);
@@ -1697,9 +1697,9 @@ impl Project {
                 .retain(|c| c.station_a != key && c.station_b != key);
         }
         let removed = self
-            .get_section_mut(section_id)
-            .and_then(|section| section.remove_shot(shot_id))
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+            .get_line_mut(line_id)
+            .and_then(|line| line.remove_shot(shot_id))
+            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
 
         // Same duty `remove_shot_with_rewire` discharges after ITS retains
         // and its shot removal, for the same reason and in the same place: dropping
@@ -1736,12 +1736,12 @@ impl Project {
         let minted = swept.minted;
         if !minted.is_empty() {
             // Settled before the cascade, as the sibling does and for the same
-            // reason (#464): the cascade is seeded with this section, so a merge
+            // reason (#464): the cascade is seeded with this line, so a merge
             // whose other end is datum-anchored has BOTH ends authoritative and
             // the BFS never traverses it. Nothing between here and the cascade
             // moves anything, so "now" is final geometry for this function.
             self.settle_minted_merges(&minted);
-            self.cascade_connection_offsets(&[section_id]);
+            self.cascade_connection_offsets(&[line_id]);
         }
 
         self.touch();
@@ -1749,8 +1749,8 @@ impl Project {
     }
 
     /// Remove a shot
-    pub fn remove_shot(&mut self, section_id: SectionId, shot_id: ShotId) -> Option<Shot> {
-        self.remove_shot_with_rewire(section_id, shot_id)
+    pub fn remove_shot(&mut self, line_id: LineId, shot_id: ShotId) -> Option<Shot> {
+        self.remove_shot_with_rewire(line_id, shot_id)
             .ok()
             .map(|(shot, _)| shot)
     }
@@ -1758,14 +1758,14 @@ impl Project {
     /// Set a shot's kind (permanent / jump / reference, #27)
     pub fn set_shot_kind(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         kind: ShotKind,
     ) -> Option<&Shot> {
-        let section = self.get_section_mut(section_id)?;
-        let shot = section.get_shot_mut(shot_id)?;
+        let line = self.get_line_mut(line_id)?;
+        let shot = line.get_shot_mut(shot_id)?;
         shot.kind = kind;
         self.touch();
-        self.get_section(section_id)?.get_shot(shot_id)
+        self.get_line(line_id)?.get_shot(shot_id)
     }
 }

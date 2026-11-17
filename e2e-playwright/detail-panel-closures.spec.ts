@@ -1,9 +1,9 @@
 /**
- * E2E tests for Loop Closures section in the Detail Panel.
+ * E2E tests for Loop Closures line in the Detail Panel.
  *
  * Tests verify:
- * - Closure section appears in station details when closures_with is populated
- * - Closure section is hidden when station has no closures
+ * - Closure line appears in station details when closures_with is populated
+ * - Closure line is hidden when station has no closures
  * - Direct and transitive closures displayed with correct formatting
  * - Metrics displayed for each closure group
  * - Navigation via closure station links works
@@ -14,12 +14,12 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Tunnel',
     direction: 'in',
@@ -37,24 +37,24 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-async function createProjectWithSections(page: Page): Promise<void> {
+async function createProjectWithLines(page: Page): Promise<void> {
   await createProject(page, 'Closure Detail Test');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapIdle(page);
 }
 
-async function getSectionIds(page: Page): Promise<number[]> {
+async function getLineIds(page: Page): Promise<number[]> {
   return page.evaluate(() => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } };
+        projectStore: { getState: () => { project: { lines: Array<{ id: number }> } | null } };
       };
     }).__E2E_TEST__;
-    return stores?.projectStore.getState().project?.sections.map(s => s.id) ?? [];
+    return stores?.projectStore.getState().project?.lines.map(s => s.id) ?? [];
   });
 }
 
-async function selectStation(page: Page, sectionId: number, stationIndex: number): Promise<void> {
+async function selectStation(page: Page, lineId: number, stationIndex: number): Promise<void> {
   await page.evaluate(({ secId, idx }) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
@@ -64,10 +64,10 @@ async function selectStation(page: Page, sectionId: number, stationIndex: number
     if (stores) {
       stores.uiStore.getState().setSelection({
         type: 'station',
-        stationRef: { section_id: secId, station_index: idx },
+        stationRef: { line_id: secId, station_index: idx },
       });
     }
-  }, { secId: sectionId, idx: stationIndex });
+  }, { secId: lineId, idx: stationIndex });
 
   await expect.poll(
     async () => {
@@ -79,11 +79,11 @@ async function selectStation(page: Page, sectionId: number, stationIndex: number
         }).__E2E_TEST__;
         return stores?.uiStore.getState().selection as {
           type: string;
-          stationRef?: { section_id: number; station_index: number };
+          stationRef?: { line_id: number; station_index: number };
         } | null;
       });
       return sel?.type === 'station' &&
-        sel?.stationRef?.section_id === sectionId &&
+        sel?.stationRef?.line_id === lineId &&
         sel?.stationRef?.station_index === stationIndex;
     },
     { timeout: 5000 }
@@ -95,9 +95,9 @@ async function selectStation(page: Page, sectionId: number, stationIndex: number
  */
 async function setupClosures(
   page: Page,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
-  targetSectionId: number,
+  targetLineId: number,
   targetStationIndex: number,
 ): Promise<void> {
   await page.evaluate(
@@ -110,7 +110,7 @@ async function setupClosures(
                 loop_closures: Array<unknown>;
               } | null;
               stations: Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
                 closures_with?: Array<unknown>;
               }>;
             };
@@ -132,8 +132,8 @@ async function setupClosures(
           ...state.project.loop_closures,
           {
             id: closureId,
-            station_a: { section_id: secId, station_index: stIdx },
-            station_b: { section_id: targetSecId, station_index: targetStIdx },
+            station_a: { line_id: secId, station_index: stIdx },
+            station_b: { line_id: targetSecId, station_index: targetStIdx },
             path_length: 15.2,
             misclosure_distance: 0.3,
             error_percentage: 1.97,
@@ -146,7 +146,7 @@ async function setupClosures(
       // Add closures_with to the station
       const updatedStations = state.stations.map((station) => {
         if (
-          station.station_ref.section_id === secId &&
+          station.station_ref.line_id === secId &&
           station.station_ref.station_index === stIdx
         ) {
           return {
@@ -154,7 +154,7 @@ async function setupClosures(
             closures_with: [
               {
                 closure_id: closureId,
-                station_ref: { section_id: targetSecId, station_index: targetStIdx },
+                station_ref: { line_id: targetSecId, station_index: targetStIdx },
                 via_station: null,
                 is_transitive: false,
               },
@@ -169,7 +169,7 @@ async function setupClosures(
         stations: updatedStations,
       });
     },
-    { secId: sectionId, stIdx: stationIndex, targetSecId: targetSectionId, targetStIdx: targetStationIndex }
+    { secId: lineId, stIdx: stationIndex, targetSecId: targetLineId, targetStIdx: targetStationIndex }
   );
 }
 
@@ -178,7 +178,7 @@ async function setupClosures(
  */
 async function setupClosuresWithTransitive(
   page: Page,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
   directTargetSecId: number,
   directTargetStIdx: number,
@@ -197,7 +197,7 @@ async function setupClosuresWithTransitive(
                 loop_closures: Array<unknown>;
               } | null;
               stations: Array<{
-                station_ref: { section_id: number; station_index: number };
+                station_ref: { line_id: number; station_index: number };
                 closures_with?: Array<unknown>;
               }>;
             };
@@ -220,8 +220,8 @@ async function setupClosuresWithTransitive(
           ...state.project.loop_closures,
           {
             id: closureId1,
-            station_a: { section_id: secId, station_index: stIdx },
-            station_b: { section_id: dTargetSecId, station_index: dTargetStIdx },
+            station_a: { line_id: secId, station_index: stIdx },
+            station_b: { line_id: dTargetSecId, station_index: dTargetStIdx },
             path_length: 15.2,
             misclosure_distance: 0.3,
             error_percentage: 1.97,
@@ -230,8 +230,8 @@ async function setupClosuresWithTransitive(
           },
           {
             id: closureId2,
-            station_a: { section_id: secId, station_index: stIdx },
-            station_b: { section_id: tTargetSecId, station_index: tTargetStIdx },
+            station_a: { line_id: secId, station_index: stIdx },
+            station_b: { line_id: tTargetSecId, station_index: tTargetStIdx },
             path_length: 42.1,
             misclosure_distance: 0.85,
             error_percentage: 2.02,
@@ -243,7 +243,7 @@ async function setupClosuresWithTransitive(
 
       const updatedStations = state.stations.map((station) => {
         if (
-          station.station_ref.section_id === secId &&
+          station.station_ref.line_id === secId &&
           station.station_ref.station_index === stIdx
         ) {
           return {
@@ -251,14 +251,14 @@ async function setupClosuresWithTransitive(
             closures_with: [
               {
                 closure_id: closureId1,
-                station_ref: { section_id: dTargetSecId, station_index: dTargetStIdx },
+                station_ref: { line_id: dTargetSecId, station_index: dTargetStIdx },
                 via_station: null,
                 is_transitive: false,
               },
               {
                 closure_id: closureId2,
-                station_ref: { section_id: tTargetSecId, station_index: tTargetStIdx },
-                via_station: { section_id: vSecId, station_index: vStIdx },
+                station_ref: { line_id: tTargetSecId, station_index: tTargetStIdx },
+                via_station: { line_id: vSecId, station_index: vStIdx },
                 is_transitive: true,
               },
             ],
@@ -273,7 +273,7 @@ async function setupClosuresWithTransitive(
       });
     },
     {
-      secId: sectionId, stIdx: stationIndex,
+      secId: lineId, stIdx: stationIndex,
       dTargetSecId: directTargetSecId, dTargetStIdx: directTargetStIdx,
       tTargetSecId: transitiveTargetSecId, tTargetStIdx: transitiveTargetStIdx,
       vSecId: viaSecId, vStIdx: viaStIdx,
@@ -286,50 +286,50 @@ test.describe('Detail Panel - Loop Closures', () => {
     await setupMockedPage(page);
   });
 
-  test('closure section appears when station has closures_with', async ({ page }) => {
-    await createProjectWithSections(page);
+  test('closure line appears when station has closures_with', async ({ page }) => {
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const sideSectionId = sectionIds[1]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const sideLineId = lineIds[1]!;
 
     // Set up closure data
-    await setupClosures(page, mainSectionId, 1, sideSectionId, 0);
+    await setupClosures(page, mainLineId, 1, sideLineId, 0);
 
     // Select the station that has closures
-    await selectStation(page, mainSectionId, 1);
+    await selectStation(page, mainLineId, 1);
 
-    // Verify closures section is visible
-    const closuresSection = page.getByTestId('closures-section');
+    // Verify closures line is visible
+    const closuresSection = page.getByTestId('closures-line');
     await expect(closuresSection).toBeVisible();
 
     // Should show "Loop Closures" label
     await expect(closuresSection.getByText('Loop Closures')).toBeVisible();
   });
 
-  test('closure section hidden when station has no closures', async ({ page }) => {
-    await createProjectWithSections(page);
+  test('closure line hidden when station has no closures', async ({ page }) => {
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
 
     // Select a station without closures
-    await selectStation(page, mainSectionId, 0);
+    await selectStation(page, mainLineId, 0);
 
-    // Verify closures section is not present
-    const closuresSection = page.getByTestId('closures-section');
+    // Verify closures line is not present
+    const closuresSection = page.getByTestId('closures-line');
     await expect(closuresSection).toBeHidden();
   });
 
   test('closure displays metrics: path length, error distance, error percentage', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const sideSectionId = sectionIds[1]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const sideLineId = lineIds[1]!;
 
-    await setupClosures(page, mainSectionId, 1, sideSectionId, 0);
-    await selectStation(page, mainSectionId, 1);
+    await setupClosures(page, mainLineId, 1, sideLineId, 0);
+    await selectStation(page, mainLineId, 1);
 
     // Verify metrics are displayed
     const metricsEl = page.getByTestId('closure-metrics-1');
@@ -340,17 +340,17 @@ test.describe('Detail Panel - Loop Closures', () => {
   });
 
   test('closure navigation works - clicking station link changes selection', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const sideSectionId = sectionIds[1]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const sideLineId = lineIds[1]!;
 
-    await setupClosures(page, mainSectionId, 1, sideSectionId, 0);
-    await selectStation(page, mainSectionId, 1);
+    await setupClosures(page, mainLineId, 1, sideLineId, 0);
+    await selectStation(page, mainLineId, 1);
 
     // Click the closure station link
-    const closureLink = page.getByTestId(`station-${sideSectionId}-0-link`);
+    const closureLink = page.getByTestId(`station-${sideLineId}-0-link`);
     await expect(closureLink).toBeVisible();
     await closureLink.click();
 
@@ -365,11 +365,11 @@ test.describe('Detail Panel - Loop Closures', () => {
           }).__E2E_TEST__;
           return stores?.uiStore.getState().selection as {
             type: string;
-            stationRef?: { section_id: number; station_index: number };
+            stationRef?: { line_id: number; station_index: number };
           } | null;
         });
         return sel?.type === 'station' &&
-          sel?.stationRef?.section_id === sideSectionId &&
+          sel?.stationRef?.line_id === sideLineId &&
           sel?.stationRef?.station_index === 0;
       },
       { timeout: 5000 }
@@ -377,20 +377,20 @@ test.describe('Detail Panel - Loop Closures', () => {
   });
 
   test('transitive closures shown with via station and muted text', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const sideSectionId = sectionIds[1]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const sideLineId = lineIds[1]!;
 
     await setupClosuresWithTransitive(
       page,
-      mainSectionId, 1,           // source station
-      sideSectionId, 0,            // direct target
-      sideSectionId, 1,            // transitive target
-      sideSectionId, 0,            // via station
+      mainLineId, 1,           // source station
+      sideLineId, 0,            // direct target
+      sideLineId, 1,            // transitive target
+      sideLineId, 0,            // via station
     );
-    await selectStation(page, mainSectionId, 1);
+    await selectStation(page, mainLineId, 1);
 
     // Verify direct closure is shown
     const directEl = page.getByTestId('closure-direct-10');
@@ -405,21 +405,21 @@ test.describe('Detail Panel - Loop Closures', () => {
   });
 
   test('collapsible toggle hides and shows closure content', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
-    const sectionIds = await getSectionIds(page);
-    const mainSectionId = sectionIds[0]!;
-    const sideSectionId = sectionIds[1]!;
+    const lineIds = await getLineIds(page);
+    const mainLineId = lineIds[0]!;
+    const sideLineId = lineIds[1]!;
 
-    await setupClosures(page, mainSectionId, 1, sideSectionId, 0);
-    await selectStation(page, mainSectionId, 1);
+    await setupClosures(page, mainLineId, 1, sideLineId, 0);
+    await selectStation(page, mainLineId, 1);
 
     // Content should be visible by default (expanded)
-    const content = page.getByTestId('closures-section-content');
+    const content = page.getByTestId('closures-line-content');
     await expect(content).toBeVisible();
 
     // Click toggle to collapse
-    const toggle = page.getByTestId('closures-section-toggle');
+    const toggle = page.getByTestId('closures-line-toggle');
     await toggle.click();
 
     // Content should be hidden

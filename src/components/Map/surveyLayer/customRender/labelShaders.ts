@@ -51,7 +51,7 @@
 export const LABEL_KIND = {
   SHOT_LABEL: 0,
   STATION_LABEL: 1,
-  SECTION_NAME: 2,
+  LINE_NAME: 2,
   STATION_COMMENT: 3,
   SHOT_COMMENT: 4,
   SHOT_ERROR: 5,
@@ -64,15 +64,15 @@ export const LABEL_KIND_COUNT = 7;
 /**
  * `a_flags` bitfield (a UNSIGNED_BYTE integer attribute). Kept here because the
  * shader is the contract for their meaning. `labelTessellate.ts` sets them.
- *  - FIRST_IN_SECTION: station label that is first in its section -> always shown
- *    (overrides decimation), mirroring the stock `isFirstInSection` filter branch.
+ *  - FIRST_IN_LINE: station label that is first in its line -> always shown
+ *    (overrides decimation), mirroring the stock `isFirstInLine` filter branch.
  *    CPU-ONLY now: the reveal pass (`labelReveal.ts`) reads it to floor the reveal
  *    zoom at the kind minzoom; the SHADER no longer tests it (decimation moved
  *    out of the shader into `a_reveal_zoom`). Still stamped for the CPU refresh
  *    paths + parity tests.
  *  - REFERENCE: shot label of a reference shot -> collapsed when reference shots
  *    are hidden.
- *  - ALL_REFERENCE: station label / all-reference section name -> collapsed with
+ *  - ALL_REFERENCE: station label / all-reference line name -> collapsed with
  *    reference shots (mirrors `allShotsReference` / `allStationsReference`).
  *  - DIM: anchored / immovable label -> drawn at 0.25 opacity (move tools).
  *  - DRAG_HIDE: drag-excluded (a move tool is dragging this feature) -> collapsed.
@@ -90,7 +90,7 @@ export const LABEL_KIND_COUNT = 7;
  * frame - see the module header + `labelReveal.ts`.
  */
 export const LABEL_FLAG = {
-  FIRST_IN_SECTION: 1 << 0,
+  FIRST_IN_LINE: 1 << 0,
   REFERENCE: 1 << 1,
   ALL_REFERENCE: 1 << 2,
   DIM: 1 << 3,
@@ -100,7 +100,7 @@ export const LABEL_FLAG = {
    *  specifically - the two split when the display toggles did, so a label can
    *  be culled with the exact kind whose geometry the line shader collapsed. */
   JUMP: 1 << 6,
-  /** Station/section counterpart of ALL_REFERENCE: the station is touched by
+  /** Station/line counterpart of ALL_REFERENCE: the station is touched by
    *  Jumps (#27). A station can be touched by BOTH virtual kinds, so unlike a
    *  shot it needs a pair of bits rather than one - it stays drawn while ANY
    *  kind touching it is drawn, which is not the same as "hide if my bit is
@@ -215,7 +215,7 @@ void main() {
   // hiding one kind cannot orphan the other's text over an empty line (#27).
   if (u_hide_reference > 0.5 && (a_flags & FLAG_REFERENCE) != 0u) { collapse(); return; }
   if (u_hide_jump > 0.5 && (a_flags & FLAG_JUMP) != 0u) { collapse(); return; }
-  // A station (or section name) whose every leg is virtual disappears when every
+  // A station (or line name) whose every leg is virtual disappears when every
   // kind that touches IT is hidden - the same per-kind rule the circle shader
   // applies, so a label can never outlive its own station marker. The two bits
   // are independent: a station touched by both kinds carries both.

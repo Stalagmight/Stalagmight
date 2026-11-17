@@ -3,8 +3,8 @@
  * Init once when the config arrives; later changes save debounced.
  *
  * Parameterized over the three `panels` field names and the partial-update
- * command, because there are now three of these grids - the new-section dialog,
- * the edit-section dialog, and (through its own older hook) the data table -
+ * command, because there are now three of these grids - the new-line dialog,
+ * the edit-line dialog, and (through its own older hook) the data table -
  * and they each own a disjoint set of fields.
  *
  * A slimmed `useDataTableViewPersistence`, keeping the four behaviours that file

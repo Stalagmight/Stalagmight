@@ -86,7 +86,7 @@ pub struct AppState {
     /// persist it exactly once (#92 / PR #104).
     pub(super) initial_save_deferred: AtomicBool,
     /// Whether the open project's shot UUIDs a file held in more than one
-    /// section were renamed (`Project::make_shot_uuids_project_unique`), by its
+    /// line were renamed (`Project::make_shot_uuids_project_unique`), by its
     /// load or by a Repair. Until a save re-keys them, ignored warnings can be
     /// stored against the old ids, and only then is it worth deriving the
     /// replacement to match them. Set by both load paths once the project is
@@ -165,7 +165,7 @@ pub struct AppState {
     /// The id is load-bearing, not bookkeeping. Two loads can overlap: switching
     /// projects cancels the first, but a cancelled load keeps running until its
     /// next checkpoint, so it can write here AFTER the new project already did.
-    /// An unversioned slot would then hand project B the section and shot ids
+    /// An unversioned slot would then hand project B the line and shot ids
     /// belonging to project A, and applying that resolution would write kinds
     /// onto whatever shots in B happen to share those ids.
     pub(super) unrecognised_shot_kinds:
@@ -180,7 +180,7 @@ pub struct AppState {
     /// file they will never read, which docs/notifications.md names as a "silent state
     /// change" and forbids. This flag is what the banner in `App.tsx` renders from.
     ///
-    /// Written ONLY inside the load's non-cancellable finalize section, under the same
+    /// Written ONLY inside the load's non-cancellable finalize line, under the same
     /// `project` mutex acquisition that commits the project it describes. That is what
     /// keeps it honest under overlapping loads: a cancelled load never reaches finalize,
     /// so it cannot leave its verdict on the project the user actually opened. Every
@@ -198,7 +198,7 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
-    /// Ignored warnings an "Add .stalx" carried in for sections the open file's
+    /// Ignored warnings an "Add .stalx" carried in for lines the open file's
     /// database does not hold yet (#674; see `project_add.rs`). Written by the
     /// next save, cleared with every project-slot commit. Transient.
     pub(super) pending_ignores: Mutex<Vec<crate::persistence::ResolvedWarning>>,
@@ -402,7 +402,7 @@ impl AppState {
     /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
     ///   `display_settings` is stripped from the push snapshot and re-applied locally
     ///   across pull/FF - purely local view state that never proliferates, never lost.
-    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
+    /// - `track_imported_file`/`track_line_hashes` import-dedup bookkeeping stays
     ///   UNGATED for now: the in-import path gates + dirties, but the standalone
     ///   `track_imported_file` command does not - a deferred follow-up, lower-impact
     ///   than a lost annotation (re-import is the worst case, not silent data loss).
@@ -756,8 +756,8 @@ impl AppState {
     /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
     /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
     /// layout into the project's git history, permanently, readable by every collaborator
-    /// and by whoever runs the server. Snapshot pairs come from Delete shot, Delete section,
-    /// Reverse section and every Batch import, so this is routine editing, not an edge case.
+    /// and by whoever runs the server. Snapshot pairs come from Delete shot, Delete line,
+    /// Reverse line and every Batch import, so this is routine editing, not an edge case.
     ///
     /// Cleared HERE, at the one place a snapshot is produced, rather than scrubbed out of
     /// the upload: a snapshot that never holds the value cannot leak it through a log, a bug
@@ -791,11 +791,11 @@ impl AppState {
     }
 
     /// Deserialize a project snapshot and install it into `slot`, rebuilding the
-    /// transient lookup caches (`section_index_cache`, `shot_uuid_index`) that
+    /// transient lookup caches (`line_index_cache`, `shot_uuid_index`) that
     /// serde skips. THE single place a restored project enters the live slot:
     /// every rollback/undo/redo path routes through here so none can forget to
     /// rebuild a cache and leave a half-populated / stale map behind (which would
-    /// silently mis-resolve sections) - see catalog #14/#39. The merge adjacency
+    /// silently mis-resolve lines) - see catalog #14/#39. The merge adjacency
     /// needs nothing here: [`MergeTopology`](crate::models::MergeTopology) builds
     /// it on first use, so a freshly deserialized project is correct by
     /// construction.
@@ -842,42 +842,42 @@ impl AppState {
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
                 // #557: the snapshot blob is FILE-SUPPLIED (persisted undo is
-                // loaded from the .stalx), and serde rebuilds `Section`s
-                // field-by-field - never through `Section::new`, so neither the
+                // loaded from the .stalx), and serde rebuilds `Line`s
+                // field-by-field - never through `Line::new`, so neither the
                 // open-refusal in `persistence/sqlite/read.rs` nor the
-                // `restore_section` bound can see a hostile value arriving
+                // `restore_line` bound can see a hostile value arriving
                 // here. Two fields are load-bearing for the shot-id encode and
                 // both come straight from the JSON:
-                // - `id` past MAX_SECTION_ID puts the first uuid-index or
+                // - `id` past MAX_LINE_ID puts the first uuid-index or
                 //   save-path encode back in the debug-panic / release-wrap
                 //   regime the bound exists to end;
-                // - `next_shot_id` outside the section's stride window makes
+                // - `next_shot_id` outside the line's stride window makes
                 //   the next `add_shot` (`self.next_shot_id += 1`) panic in
-                //   debug or wrap into another section's id space in release
+                //   debug or wrap into another line's id space in release
                 //   (Codex, PR #575). A legit counter always sits inside
-                //   [id * STRIDE, (id + 1) * STRIDE] - `Section::new` starts it
-                //   at the window base and the max-shots-per-section check caps
-                //   growth. Upper bound in u64: for id = MAX_SECTION_ID the
+                //   [id * STRIDE, (id + 1) * STRIDE] - `Line::new` starts it
+                //   at the window base and the max-shots-per-line check caps
+                //   growth. Upper bound in u64: for id = MAX_LINE_ID the
                 //   window end is u32::MAX + 1.
                 // Refuse the whole restore rather than repair it: a snapshot is
                 // a before/after pair, and a "fixed" one no longer restores the
                 // state it recorded.
-                let window_violation = |s: &crate::models::Section| {
+                let window_violation = |s: &crate::models::Line| {
                     let base = u64::from(s.id) * u64::from(crate::models::FEATURE_ID_STRIDE);
                     let end = base + u64::from(crate::models::FEATURE_ID_STRIDE);
                     let counter = u64::from(s.next_shot_id);
                     counter < base || counter > end
                 };
-                if let Some(section) = restored
-                    .sections
+                if let Some(line) = restored
+                    .lines
                     .iter()
-                    .find(|s| s.id > crate::models::MAX_SECTION_ID || window_violation(s))
+                    .find(|s| s.id > crate::models::MAX_LINE_ID || window_violation(s))
                 {
                     tracing::warn!(
-                        section_id = section.id,
-                        next_shot_id = section.next_shot_id,
-                        max = crate::models::MAX_SECTION_ID,
-                        "Refusing snapshot restore: section id or shot counter outside the shot-id encode bound"
+                        line_id = line.id,
+                        next_shot_id = line.next_shot_id,
+                        max = crate::models::MAX_LINE_ID,
+                        "Refusing snapshot restore: line id or shot counter outside the shot-id encode bound"
                     );
                     return false;
                 }
@@ -908,21 +908,21 @@ impl AppState {
                 }
                 restored.file_path = current_file_path;
                 // A snapshot written before the survey credit moved onto the
-                // shots carries each section's surveyor/date at section level;
+                // shots carries each line's surveyor/date at line level;
                 // give it to the shots that have none (a no-op for a current
                 // snapshot, which never serializes those keys).
-                restored.absorb_legacy_section_credit();
-                restored.rebuild_section_index();
+                restored.absorb_legacy_line_credit();
+                restored.rebuild_line_index();
                 restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
                 // transitional positional `Index` cross-reference anchors (undo/redo
                 // history is persisted to SQLite and reloaded across sessions, and the
                 // back-compat StationKey deserializer accepts the legacy
-                // `{section_id, station_index}` shape). The live-model invariant is
+                // `{line_id, station_index}` shape). The live-model invariant is
                 // "no Index anchors": a later shot insert/delete only shifts
-                // AfterShot/SectionStart refs, so a live Index ref would silently start
+                // AfterShot/LineStart refs, so a live Index ref would silently start
                 // resolving to the wrong station. Canonicalize such a snapshot - the
-                // same step the load path runs - to AfterShot/SectionStart.
+                // same step the load path runs - to AfterShot/LineStart.
                 //
                 // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
                 // anchor is present). A CURRENT same-session snapshot is already
@@ -958,7 +958,7 @@ impl AppState {
                 // heal-by-heal reasoning for what that includes (and what it
                 // deliberately does not) is on the function.
                 reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
-                // The `section_offsets` invariant (`Project::write_section_offset`)
+                // The `line_offsets` invariant (`Project::write_line_offset`)
                 // has to hold for a map this app did not write, and a snapshot
                 // payload is exactly that case: undo/redo history is persisted to
                 // SQLite and reloaded across sessions, so an entry recorded by a
@@ -967,12 +967,12 @@ impl AppState {
                 // one payload over. Not a heal decided per-heal like the block
                 // above - it is an invariant, and a restore may not install a state
                 // the app cannot otherwise reach.
-                let dropped = restored.normalize_section_offsets();
+                let dropped = restored.normalize_line_offsets();
                 if dropped > 0 {
                     tracing::info!(
                         dropped,
-                        purpose = "hold the section_offsets invariant across a snapshot restore",
-                        "Dropped restored section offsets that were within dust of the origin"
+                        purpose = "hold the line_offsets invariant across a snapshot restore",
+                        "Dropped restored line offsets that were within dust of the origin"
                     );
                 }
                 *slot = Some(restored);

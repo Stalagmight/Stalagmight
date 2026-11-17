@@ -3,14 +3,14 @@
  *
  * A geometry flush after an edit normally full-rebuilds every vertex buffer
  * (~231 ms on 92.stalx) even when the edit moved a single station. When the SoA
- * *layout* is unchanged (same section sequence + per-section shot/station
- * counts, same station→section mapping) only a handful of sections' positions /
- * colors actually changed, so the controller can re-emit just those sections'
+ * *layout* is unchanged (same line sequence + per-line shot/station
+ * counts, same station→line mapping) only a handful of lines' positions /
+ * colors actually changed, so the controller can re-emit just those lines'
  * vertex ranges and `gl.bufferSubData` them (single-digit ms).
  *
  * This module is the PURE decision half: given the previous and next
  * `SurveyData` + color context, it either returns a plan naming the changed
- * sections (and the moved stations to reproject) or `null` to force a full
+ * lines (and the moved stations to reproject) or `null` to force a full
  * rebuild. It performs no mutation and no GL, so it is unit-testable in `node`.
  *
  * Why a direct SoA diff rather than reusing the vector-tile `diffVtLayerBounds`
@@ -26,13 +26,13 @@ import type { DisplayColorContext, OverlayColorInput } from '../displayColor';
 import { computeMercatorAnchor } from './mercator';
 import { sameColorScaleInput } from '../../../../utils/palettes';
 
-/** What the incremental apply step must recompute. Section indices are into
- *  `next.sections` (declaration order, stable under a non-structural edit). */
+/** What the incremental apply step must recompute. Line indices are into
+ *  `next.lines` (declaration order, stable under a non-structural edit). */
 export interface IncrementalPlan {
-  /** Sections whose line range + stations + all-reference must be re-emitted. */
-  dirtySectionIdxs: number[];
+  /** Lines whose line range + stations + all-reference must be re-emitted. */
+  dirtyLineIdxs: number[];
   /** Global station indices whose x/y moved (reproject their anchor-relative
-   *  position before re-emitting). A subset of the dirty sections' stations. */
+   *  position before re-emitting). A subset of the dirty lines' stations. */
   reprojectStationGlobals: number[];
 }
 
@@ -44,23 +44,23 @@ export function sameGpsOrigin(a: GpsOrigin | null, b: GpsOrigin | null): boolean
 }
 
 /**
- * Whether the SoA layout is byte-stable between two surveys: same section
- * sequence (id, shotOffset, shotCount) and same station→section/index mapping
- * and count. When true, every drawn vertex keeps its slot, so a per-section
+ * Whether the SoA layout is byte-stable between two surveys: same line
+ * sequence (id, shotOffset, shotCount) and same station→line/index mapping
+ * and count. When true, every drawn vertex keeps its slot, so a per-line
  * re-emit lands in the exact range the full build wrote. A false here forces a
  * full rebuild (insert / delete / merge / split / reorder, and their undos).
  */
 export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
   if (prev.stationCount !== next.stationCount) return false;
   if (prev.shotCount !== next.shotCount) return false;
-  if (prev.sections.length !== next.sections.length) return false;
-  for (let i = 0; i < next.sections.length; i++) {
-    const a = prev.sections[i]!;
-    const b = next.sections[i]!;
+  if (prev.lines.length !== next.lines.length) return false;
+  for (let i = 0; i < next.lines.length; i++) {
+    const a = prev.lines[i]!;
+    const b = next.lines[i]!;
     if (a.id !== b.id || a.shotOffset !== b.shotOffset || a.shotCount !== b.shotCount) return false;
   }
   // shotIds must be slot-stable too: the incremental path re-emits a dirty
-  // section's positions/colors but NOT its dim/hide/highlight buffers, which the
+  // line's positions/colors but NOT its dim/hide/highlight buffers, which the
   // immovable-feature predicates key on `shotIds` (controller.ts dimPredicates).
   // A shotId that changed slot under an otherwise-stable layout would leave a
   // stale dim/highlight on that vertex, so force a full rebuild instead.
@@ -69,8 +69,8 @@ export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
   for (let gi = 0; gi < next.shotCount; gi++) {
     if (pShotIds[gi] !== nShotIds[gi]) return false;
   }
-  const pS = prev.stationSectionIds;
-  const nS = next.stationSectionIds;
+  const pS = prev.stationLineIds;
+  const nS = next.stationLineIds;
   const pI = prev.stationIndices;
   const nI = next.stationIndices;
   for (let g = 0; g < next.stationCount; g++) {
@@ -81,8 +81,8 @@ export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
 
 /**
  * Whether the GLOBAL color inputs are unchanged, so color differences are
- * confined to the sections whose geometry / section-color changed. A change to
- * any of these can recolor every section, which the incremental path cannot
+ * confined to the lines whose geometry / line-color changed. A change to
+ * any of these can recolor every line, which the incremental path cannot
  * bound cheaply - the caller full-rebuilds instead. In Survey Issues mode the
  * scores are recomputed whenever the geometry or the warnings change (new
  * identity) and a change can move scores non-locally (warnings, merge groups),
@@ -107,7 +107,7 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   if (!sameOverlay(prev.overlay ?? null, next.overlay ?? null)) return false;
   // Move-comment tint (#52) reads per-feature comment ownership the incremental
   // diff doesn't track (adding / moving / removing a comment recolors a feature
-  // without any coord / flag / section-color change). Toggling the tool and every
+  // without any coord / flag / line-color change). Toggling the tool and every
   // flush while it is active force a full rebuild; the tool is not a hot-edit path
   // (full rebuild is ~1 ms on 4naharon), so the conservative gate is cheap.
   if ((prev.commentTint === true) || (next.commentTint === true)) return false;
@@ -136,11 +136,11 @@ function sameOverlay(a: OverlayColorInput | null, b: OverlayColorInput | null): 
 
 /**
  * Plan an incremental update, or return `null` to force a full rebuild. Pure:
- * compares the two surveys' per-station and per-section inputs and collects the
- * changed sections. Falls back (returns null) on a structural change, a global
+ * compares the two surveys' per-station and per-line inputs and collects the
+ * changed lines. Falls back (returns null) on a structural change, a global
  * color-input change, an anchor shift (all positions move), a gps-origin change,
  * a build-time exclusion (buffers would be compacted, breaking the g↦[4g] map),
- * or when so many sections changed that a full rebuild is cheaper.
+ * or when so many lines changed that a full rebuild is cheaper.
  */
 export function planIncrementalUpdate(
   prev: SurveyData,
@@ -160,14 +160,14 @@ export function planIncrementalUpdate(
   const [ax, ay] = computeMercatorAnchor(next, nextGpsOrigin);
   if (ax !== cachedAnchorX || ay !== cachedAnchorY) return null;
 
-  const sectionIdxById = new Map<number, number>();
-  for (let i = 0; i < next.sections.length; i++) sectionIdxById.set(next.sections[i]!.id, i);
+  const lineIdxById = new Map<number, number>();
+  for (let i = 0; i < next.lines.length; i++) lineIdxById.set(next.lines[i]!.id, i);
 
   const dirty = new Set<number>();
   const reproject: number[] = [];
 
   // Pass 1: moved / flag-changed stations. x/y move ⇒ reproject; any coord or
-  // flag change ⇒ the station's section is dirty (position, depth-fill, size).
+  // flag change ⇒ the station's line is dirty (position, depth-fill, size).
   const pC = prev.stationCoords;
   const nC = next.stationCoords;
   for (let g = 0; g < next.stationCount; g++) {
@@ -176,21 +176,21 @@ export function planIncrementalUpdate(
     const zChanged = pC[b + 2] !== nC[b + 2];
     const flagChanged = prev.stationFlags[g] !== next.stationFlags[g];
     if (xyChanged) reproject.push(g);
-    if (xyChanged || zChanged || flagChanged) dirty.add(sectionIdxById.get(next.stationSectionIds[g]!)!);
+    if (xyChanged || zChanged || flagChanged) dirty.add(lineIdxById.get(next.stationLineIds[g]!)!);
   }
 
-  // Pass 2: section-color and per-shot color/flag changes (depth-fill uses shot
+  // Pass 2: line-color and per-shot color/flag changes (depth-fill uses shot
   // depths; is_reference drives the reference + all-reference flags).
   const depthActive = nextCtx.showDepthGradient && !nextCtx.showIssueSeverity;
-  for (let si = 0; si < next.sections.length; si++) {
+  for (let si = 0; si < next.lines.length; si++) {
     if (dirty.has(si)) continue;
-    const section = next.sections[si]!;
-    if (prev.sections[si]!.color !== section.color) {
+    const line = next.lines[si]!;
+    if (prev.lines[si]!.color !== line.color) {
       dirty.add(si);
       continue;
     }
-    const off = section.shotOffset;
-    const cnt = section.shotCount;
+    const off = line.shotOffset;
+    const cnt = line.shotCount;
     for (let i = 0; i < cnt; i++) {
       const gi = off + i;
       if (prev.shotFlags[gi] !== next.shotFlags[gi]) {
@@ -207,10 +207,10 @@ export function planIncrementalUpdate(
     }
   }
 
-  // If most sections changed, a full rebuild is cheaper than many sub-uploads.
-  if (dirty.size > next.sections.length / 2) return null;
+  // If most lines changed, a full rebuild is cheaper than many sub-uploads.
+  if (dirty.size > next.lines.length / 2) return null;
 
-  return { dirtySectionIdxs: [...dirty], reprojectStationGlobals: reproject };
+  return { dirtyLineIdxs: [...dirty], reprojectStationGlobals: reproject };
 }
 
 /**
@@ -228,7 +228,7 @@ export function planIncrementalUpdate(
  * a geometry edit or no-op), on a gps / layout / anchor change, or when any
  * non-color geometry input moved too (a combined edit the color-only path cannot
  * bound): station x/y (⇒ positions), station flags (⇒ zero-datum `sizeMul`), or
- * shot flags (⇒ per-vertex `reference` + per-station `allReference`). Section
+ * shot flags (⇒ per-vertex `reference` + per-station `allReference`). Line
  * colors, depths, and z are pure color inputs and MAY change - the resolvers
  * read them from `next`, so the recolor stays correct.
  */

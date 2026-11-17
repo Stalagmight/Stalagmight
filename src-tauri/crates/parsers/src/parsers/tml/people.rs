@@ -10,7 +10,7 @@
 //! Everything read here is an Ariane NAME LIST ([`NameSource::NameList`]):
 //! names split on `,` and `;` only, so `ds, kb` is two people (#427), never
 //! one `Last, First` person. The plain form goes through the SAME splitter as
-//! a `.stalx` file's legacy `sections.surveyor` column ([`split_roles`]), so
+//! a `.stalx` file's legacy `lines.surveyor` column ([`split_roles`]), so
 //! one text names people in the same roles on both paths: a single value with
 //! no `" / "` is surveyors, which is what every saved file and SpeleoDB's
 //! reader have always made of it.
@@ -84,7 +84,7 @@ pub(super) fn shot_people(
 }
 
 /// One line for a shot's people (`TmlShot::explorer`, and through it
-/// `TmlSection::surveyor`, the section's legacy template): the legacy column's
+/// `TmlSection::surveyor`, the line's legacy template): the legacy column's
 /// text ([`crate::models::legacy_credit_text`]), so the legacy splitter reads
 /// it back into the same people in the same roles - `"explorers / surveyors"`,
 /// `"explorers /"`, or the surveyors alone.
@@ -178,7 +178,7 @@ mod tests {
     }
 
     /// The line is the legacy column's text, so the legacy splitter (which
-    /// reads it as the section template) gives every role back.
+    /// reads it as the line template) gives every role back.
     #[test]
     fn the_people_line_reads_back_into_the_same_roles() {
         let p = |n: &str| Person::named(n).unwrap();

@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 use crate::config::PlacementSuggestionConfig;
 
-use super::{horizontal_length_from_slope, AzimuthReference, SectionId, Shot, ShotData};
+use super::{horizontal_length_from_slope, AzimuthReference, LineId, Shot, ShotData};
 
 /// Direction of match between import and existing shots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -24,15 +24,15 @@ pub enum SuggestionConfidence {
     Low,
 }
 
-/// A suggested placement for an import section based on reference shot overlap.
+/// A suggested placement for an import line based on reference shot overlap.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacementSuggestion {
-    /// The existing section that the import overlaps with.
-    pub existing_section_id: SectionId,
-    /// Station index in the existing section to merge with.
+    /// The existing line that the import overlaps with.
+    pub existing_line_id: LineId,
+    /// Station index in the existing line to merge with.
     pub existing_station_index: usize,
-    /// Station index in the import section (0 = first, N = last).
+    /// Station index in the import line (0 = first, N = last).
     pub import_station_index: usize,
     /// Aggregate match score (higher = better).
     pub score: f64,
@@ -50,12 +50,12 @@ pub struct PlacementSuggestion {
     pub is_partial: bool,
     /// Confidence tier based on score.
     pub confidence: SuggestionConfidence,
-    /// Human-readable name of the existing section.
-    pub existing_section_name: String,
+    /// Human-readable name of the existing line.
+    pub existing_line_name: String,
 }
 
-/// Whether the target of a cross-section suggestion is an existing project
-/// section or another section being imported in the same batch.
+/// Whether the target of a cross-line suggestion is an existing project
+/// line or another line being imported in the same batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum TargetType {
@@ -63,14 +63,14 @@ pub enum TargetType {
     Importing,
 }
 
-/// A placement suggestion that includes source/target metadata for cross-section
+/// A placement suggestion that includes source/target metadata for cross-line
 /// matching (import-to-existing AND import-to-import).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct CrossSectionSuggestion {
-    /// Station index in the existing/target section to merge with.
+pub struct CrossLineSuggestion {
+    /// Station index in the existing/target line to merge with.
     pub existing_station_index: usize,
-    /// Station index in the import section (0 = first, N = last).
+    /// Station index in the import line (0 = first, N = last).
     pub import_station_index: usize,
     /// Aggregate match score (higher = better).
     pub score: f64,
@@ -88,35 +88,35 @@ pub struct CrossSectionSuggestion {
     pub is_partial: bool,
     /// Confidence tier based on score.
     pub confidence: SuggestionConfidence,
-    /// Human-readable name of the target section.
-    pub existing_section_name: String,
-    /// Index of the import section this suggestion is for.
-    pub import_section_index: u32,
-    /// Name of the import section.
-    pub import_section_name: String,
-    /// Whether the target is an existing project section or another import.
+    /// Human-readable name of the target line.
+    pub existing_line_name: String,
+    /// Index of the import line this suggestion is for.
+    pub import_line_index: u32,
+    /// Name of the import line.
+    pub import_line_name: String,
+    /// Whether the target is an existing project line or another import.
     pub target_type: TargetType,
-    /// For existing targets: the section ID.
-    pub existing_section_id: Option<SectionId>,
-    /// For importing targets: the index of the target import section.
+    /// For existing targets: the line ID.
+    pub existing_line_id: Option<LineId>,
+    /// For importing targets: the index of the target import line.
     pub target_import_index: Option<u32>,
 }
 
-/// A suggestion for connecting an orphaned section leaf to a newly imported section.
+/// A suggestion for connecting an orphaned line leaf to a newly imported line.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct OrphanPlacementSuggestion {
-    /// The orphan section ID
-    pub orphan_section_id: SectionId,
-    /// Human-readable name of the orphan section
-    pub orphan_section_name: String,
-    /// Station index on the orphan section's leaf end
+    /// The orphan line ID
+    pub orphan_line_id: LineId,
+    /// Human-readable name of the orphan line
+    pub orphan_line_name: String,
+    /// Station index on the orphan line's leaf end
     pub orphan_station_index: usize,
-    /// The target (newly imported) section ID
-    pub target_section_id: SectionId,
-    /// Human-readable name of the target section
-    pub target_section_name: String,
-    /// Station index on the target section to merge with
+    /// The target (newly imported) line ID
+    pub target_line_id: LineId,
+    /// Human-readable name of the target line
+    pub target_line_name: String,
+    /// Station index on the target line to merge with
     pub target_station_index: usize,
     /// Aggregate match score (higher = better)
     pub score: f64,
@@ -136,18 +136,18 @@ pub struct OrphanPlacementSuggestion {
     pub confidence: SuggestionConfidence,
 }
 
-/// Minimal per-section data needed for the cross-section suggestion algorithm.
+/// Minimal per-line data needed for the cross-line suggestion algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ImportSectionForSuggestion {
+pub struct ImportLineForSuggestion {
     pub index: u32,
     pub name: String,
     pub shots: Vec<ShotData>,
-    /// What THIS section's readings are measured against (#438), as the
-    /// importer that produced them declared it on its `ImportSectionConfig`.
+    /// What THIS line's readings are measured against (#438), as the
+    /// importer that produced them declared it on its `ImportLineConfig`.
     ///
     /// The matcher compares bearings across the import/existing boundary, so a
-    /// section scored in the wrong frame mismatches a correct overlap by the
+    /// line scored in the wrong frame mismatches a correct overlap by the
     /// difference of the two corrections - 5 degrees is already outside the
     /// default `max_azimuth_error_full`. `None` falls back to the project
     /// default, which is what a caller with nothing better to say sends.
@@ -156,31 +156,31 @@ pub struct ImportSectionForSuggestion {
     pub azimuth_reference: Option<AzimuthReference>,
 }
 
-/// Suggest placements for ALL import sections against BOTH existing project
-/// sections AND each other. Returns a flat list sorted by score descending.
+/// Suggest placements for ALL import lines against BOTH existing project
+/// lines AND each other. Returns a flat list sorted by score descending.
 ///
-/// Each import section is scored in ITS OWN frame
-/// ([`ImportSectionForSuggestion::azimuth_reference`]); `fallback_reference` is
-/// what a section that declares none is read against, normally the project
+/// Each import line is scored in ITS OWN frame
+/// ([`ImportLineForSuggestion::azimuth_reference`]); `fallback_reference` is
+/// what a line that declares none is read against, normally the project
 /// default (#438). Every comparison therefore has both sides in true north:
-/// import-to-existing uses each existing section's own reference, and
-/// import-to-import uses each import section's.
+/// import-to-existing uses each existing line's own reference, and
+/// import-to-import uses each import line's.
 pub fn suggest_all_placements(
-    import_sections: &[ImportSectionForSuggestion],
+    import_lines: &[ImportLineForSuggestion],
     fallback_reference: AzimuthReference,
-    existing_sections: &[ExistingSection],
+    existing_lines: &[ExistingLine],
     ps_config: &PlacementSuggestionConfig,
-) -> Vec<CrossSectionSuggestion> {
-    let mut all: Vec<CrossSectionSuggestion> = Vec::new();
+) -> Vec<CrossLineSuggestion> {
+    let mut all: Vec<CrossLineSuggestion> = Vec::new();
 
-    // Use high IDs for import sections so they don't collide with real section IDs.
+    // Use high IDs for import lines so they don't collide with real line IDs.
     // Map: fake_id = FAKE_ID_BASE + import.index
-    const FAKE_ID_BASE: SectionId = 0x8000_0000;
+    const FAKE_ID_BASE: LineId = 0x8000_0000;
 
-    let import_as_existing: Vec<ExistingSection> = import_sections
+    let import_as_existing: Vec<ExistingLine> = import_lines
         .iter()
-        .map(|s| ExistingSection {
-            id: FAKE_ID_BASE + SectionId::from(s.index),
+        .map(|s| ExistingLine {
+            id: FAKE_ID_BASE + LineId::from(s.index),
             name: s.name.clone(),
             shots: s
                 .shots
@@ -192,23 +192,23 @@ pub fn suggest_all_placements(
         })
         .collect();
 
-    for import in import_sections {
+    for import in import_lines {
         if import.shots.is_empty() {
             continue;
         }
 
-        let fake_self_id = FAKE_ID_BASE + SectionId::from(import.index);
+        let fake_self_id = FAKE_ID_BASE + LineId::from(import.index);
         let import_reference = import.azimuth_reference.unwrap_or(fallback_reference);
 
-        // Match against existing project sections
+        // Match against existing project lines
         let existing_suggestions = suggest_placements(
             &import.shots,
             import_reference,
-            existing_sections,
+            existing_lines,
             ps_config,
         );
         for s in existing_suggestions {
-            all.push(CrossSectionSuggestion {
+            all.push(CrossLineSuggestion {
                 existing_station_index: s.existing_station_index,
                 import_station_index: s.import_station_index,
                 score: s.score,
@@ -218,17 +218,17 @@ pub fn suggest_all_placements(
                 direction: s.direction,
                 is_partial: s.is_partial,
                 confidence: s.confidence,
-                existing_section_name: s.existing_section_name,
-                import_section_index: import.index,
-                import_section_name: import.name.clone(),
+                existing_line_name: s.existing_line_name,
+                import_line_index: import.index,
+                import_line_name: import.name.clone(),
                 target_type: TargetType::Existing,
-                existing_section_id: Some(s.existing_section_id),
+                existing_line_id: Some(s.existing_line_id),
                 target_import_index: None,
             });
         }
 
-        // Match against other import sections (exclude self)
-        let other_imports: Vec<ExistingSection> = import_as_existing
+        // Match against other import lines (exclude self)
+        let other_imports: Vec<ExistingLine> = import_as_existing
             .iter()
             .filter(|e| e.id != fake_self_id)
             .cloned()
@@ -239,14 +239,14 @@ pub fn suggest_all_placements(
                 suggest_placements(&import.shots, import_reference, &other_imports, ps_config);
             for s in import_suggestions {
                 // Decode the fake ID back to an import index
-                let target_idx = (s.existing_section_id - FAKE_ID_BASE) as u32;
-                let target_name = import_sections
+                let target_idx = (s.existing_line_id - FAKE_ID_BASE) as u32;
+                let target_name = import_lines
                     .iter()
                     .find(|is| is.index == target_idx)
                     .map(|is| is.name.clone())
                     .unwrap_or_default();
 
-                all.push(CrossSectionSuggestion {
+                all.push(CrossLineSuggestion {
                     existing_station_index: s.existing_station_index,
                     import_station_index: s.import_station_index,
                     score: s.score,
@@ -256,11 +256,11 @@ pub fn suggest_all_placements(
                     direction: s.direction,
                     is_partial: s.is_partial,
                     confidence: s.confidence,
-                    existing_section_name: target_name,
-                    import_section_index: import.index,
-                    import_section_name: import.name.clone(),
+                    existing_line_name: target_name,
+                    import_line_index: import.index,
+                    import_line_name: import.name.clone(),
                     target_type: TargetType::Importing,
-                    existing_section_id: None,
+                    existing_line_id: None,
                     target_import_index: Some(target_idx),
                 });
             }
@@ -400,7 +400,7 @@ impl TracePoint {
 
 impl MatchShot {
     /// `avg_azimuth` is a TRUE-north bearing (#438). The matcher compares an
-    /// incoming section against sections already in the project, and those two
+    /// incoming line against lines already in the project, and those two
     /// can carry different declinations - comparing measured readings across
     /// that boundary would score a correct overlap as a mismatch by the
     /// difference of the corrections.
@@ -492,7 +492,7 @@ fn station_depths_from_match_shots(shots: &[MatchShot]) -> Vec<f64> {
     depths
 }
 
-fn section_trace_points(shots: &[MatchShot]) -> Vec<TracePoint> {
+fn line_trace_points(shots: &[MatchShot]) -> Vec<TracePoint> {
     let depths = station_depths_from_match_shots(shots);
     let mut points = Vec::with_capacity(shots.len() + 1);
     let (mut x, mut y) = (0.0_f64, 0.0_f64);
@@ -831,7 +831,7 @@ fn single_front_overlap_key(suggestion: &PlacementSuggestion) -> Option<(usize, 
 
 fn suggestion_endpoint_key(
     suggestion: &PlacementSuggestion,
-) -> Option<(SectionId, usize, usize, usize, usize)> {
+) -> Option<(LineId, usize, usize, usize, usize)> {
     if suggestion.is_partial || suggestion.matched_shots != suggestion.existing_matched_shots {
         return None;
     }
@@ -867,7 +867,7 @@ fn suggestion_endpoint_key(
     };
 
     Some((
-        suggestion.existing_section_id,
+        suggestion.existing_line_id,
         import_lo,
         import_hi,
         existing_lo,
@@ -878,12 +878,12 @@ fn suggestion_endpoint_key(
 fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSuggestion>) {
     const SCORE_EPSILON: f64 = 0.02;
 
-    let forward_keys: Vec<(SectionId, (usize, usize), f64)> = suggestions
+    let forward_keys: Vec<(LineId, (usize, usize), f64)> = suggestions
         .iter()
         .filter(|suggestion| suggestion.direction == MatchDirection::Forward)
         .filter_map(|suggestion| {
             single_front_overlap_key(suggestion)
-                .map(|key| (suggestion.existing_section_id, key, suggestion.score))
+                .map(|key| (suggestion.existing_line_id, key, suggestion.score))
         })
         .collect();
 
@@ -898,8 +898,8 @@ fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSugg
 
         !forward_keys
             .iter()
-            .any(|(section_id, other_key, other_score)| {
-                *section_id == candidate.existing_section_id
+            .any(|(line_id, other_key, other_score)| {
+                *line_id == candidate.existing_line_id
                     && *other_key == key
                     && *other_score + SCORE_EPSILON >= candidate.score
             })
@@ -1103,8 +1103,8 @@ fn try_match_sequence(
     // the matched prefixes are the whole search space: walk them in order and
     // stop at the first pair under the per-shot floor. Only the first
     // `import_shots.len()` oriented shots can ever be paired, so no more are
-    // built - copying the rest of a long section at every start made each
-    // section's scan quadratic in its length (#674).
+    // built - copying the rest of a long line at every start made each
+    // line's scan quadratic in its length (#674).
     let existing_oriented =
         oriented_existing_shots(existing_shots, start_idx, direction, import_shots.len());
     let mut candidates: Vec<DpCell> = Vec::new();
@@ -1162,28 +1162,28 @@ fn try_match_sequence(
     }
 }
 
-/// Existing section data needed for matching.
+/// Existing line data needed for matching.
 #[derive(Clone)]
-pub struct ExistingSection {
-    pub id: SectionId,
+pub struct ExistingLine {
+    pub id: LineId,
     pub name: String,
     pub shots: Vec<Shot>,
-    /// The section's resolved north reference (#438), so its bearings can be
+    /// The line's resolved north reference (#438), so its bearings can be
     /// compared with an import's in one frame. Callers get it from
     /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for).
     pub azimuth_reference: AzimuthReference,
 }
 
-/// Suggest placements for an import section against existing sections.
+/// Suggest placements for an import line against existing lines.
 pub fn suggest_placements(
     import_shots: &[ShotData],
     import_reference: AzimuthReference,
-    existing_sections: &[ExistingSection],
+    existing_lines: &[ExistingLine],
     ps_config: &PlacementSuggestionConfig,
 ) -> Vec<PlacementSuggestion> {
     let config = &SuggestionConfig::from(ps_config);
 
-    if import_shots.is_empty() || existing_sections.is_empty() {
+    if import_shots.is_empty() || existing_lines.is_empty() {
         return Vec::new();
     }
 
@@ -1199,7 +1199,7 @@ pub fn suggest_placements(
         .iter()
         .map(|s| MatchShot::from_shot_data(s, import_reference))
         .collect();
-    let import_trace = section_trace_points(&import_match_shots);
+    let import_trace = line_trace_points(&import_match_shots);
 
     // Build import match shots for station N (last N shots, reversed)
     let import_from_n: Vec<MatchShot> = import_shots[import_shots.len().saturating_sub(max_ref)..]
@@ -1212,7 +1212,7 @@ pub fn suggest_placements(
 
     let mut suggestions: Vec<PlacementSuggestion> = Vec::new();
 
-    for existing in existing_sections {
+    for existing in existing_lines {
         if existing.shots.is_empty() {
             continue;
         }
@@ -1222,9 +1222,9 @@ pub fn suggest_placements(
             .iter()
             .map(|s| MatchShot::from_shot(s, existing.azimuth_reference))
             .collect();
-        let existing_trace = section_trace_points(&existing_match_shots);
+        let existing_trace = line_trace_points(&existing_match_shots);
 
-        // Try from both leaves of the import section
+        // Try from both leaves of the import line
         let leaf_configs: &[(&[MatchShot], usize)] =
             &[(&import_from_0, 0), (&import_from_n, import_station_n)];
 
@@ -1233,7 +1233,7 @@ pub fn suggest_placements(
                 continue;
             }
 
-            // Try all starting positions in the existing section
+            // Try all starting positions in the existing line
             for start_idx in 0..existing_match_shots.len() {
                 // Try both forward and reverse directions
                 for &direction in &[MatchDirection::Forward, MatchDirection::Reverse] {
@@ -1256,7 +1256,7 @@ pub fn suggest_placements(
                     };
 
                     let mut suggestion = PlacementSuggestion {
-                        existing_section_id: existing.id,
+                        existing_line_id: existing.id,
                         existing_station_index,
                         import_station_index: import_station,
                         score: result.score,
@@ -1270,7 +1270,7 @@ pub fn suggest_placements(
                         direction,
                         is_partial: result.is_partial,
                         confidence: SuggestionConfidence::Low,
-                        existing_section_name: existing.name.clone(),
+                        existing_line_name: existing.name.clone(),
                     };
 
                     let mut best_context: Option<(f64, usize)> = None;
@@ -1344,7 +1344,7 @@ pub fn suggest_placements(
 
                     // Check for duplicates
                     let is_dup = suggestions.iter().any(|s| {
-                        s.existing_section_id == suggestion.existing_section_id
+                        s.existing_line_id == suggestion.existing_line_id
                             && s.existing_station_index == suggestion.existing_station_index
                             && s.import_station_index == suggestion.import_station_index
                             && s.direction == suggestion.direction
@@ -1352,7 +1352,7 @@ pub fn suggest_placements(
                     if is_dup {
                         // Keep the better score
                         if let Some(existing_suggestion) = suggestions.iter_mut().find(|s| {
-                            s.existing_section_id == suggestion.existing_section_id
+                            s.existing_line_id == suggestion.existing_line_id
                                 && s.existing_station_index == suggestion.existing_station_index
                                 && s.import_station_index == suggestion.import_station_index
                                 && s.direction == suggestion.direction
@@ -1421,8 +1421,8 @@ mod tests {
         )
     }
 
-    fn make_section(id: SectionId, name: &str, shots: Vec<Shot>) -> ExistingSection {
-        ExistingSection {
+    fn make_line(id: LineId, name: &str, shots: Vec<Shot>) -> ExistingLine {
+        ExistingLine {
             id,
             name: name.to_string(),
             shots,
@@ -1430,8 +1430,8 @@ mod tests {
         }
     }
 
-    /// #438: the matcher compares an INCOMING section's bearings against
-    /// sections already in the project, and the two can carry different
+    /// #438: the matcher compares an INCOMING line's bearings against
+    /// lines already in the project, and the two can carry different
     /// declinations. Both sides have to be read in one frame or a correct
     /// overlap scores as a mismatch by the difference of the corrections - 5
     /// degrees is already past `max_azimuth_error_full`.
@@ -1441,7 +1441,7 @@ mod tests {
     /// degree declination and once as the corrected bearings, so it matches
     /// only when the import side is read through its own reference.
     #[test]
-    fn an_import_section_is_scored_in_its_own_frame_not_the_projects() {
+    fn an_import_line_is_scored_in_its_own_frame_not_the_projects() {
         let corrected: Vec<Shot> = (0..4)
             .map(|i| {
                 make_shot(
@@ -1454,10 +1454,10 @@ mod tests {
                 )
             })
             .collect();
-        let existing = vec![make_section(0, "Existing", corrected)];
+        let existing = vec![make_line(0, "Existing", corrected)];
 
         // The same line as MEASURED, 5 degrees off, with the declination on the
-        // section rather than in the readings.
+        // line rather than in the readings.
         let measured: Vec<ShotData> = (0..4)
             .map(|i| {
                 make_shot_data(
@@ -1495,10 +1495,10 @@ mod tests {
         );
     }
 
-    /// The cross-section entry point reads each import section's OWN reference,
+    /// The cross-line entry point reads each import line's OWN reference,
     /// and only falls back for one that declares none.
     #[test]
-    fn suggest_all_reads_each_import_sections_own_reference() {
+    fn suggest_all_reads_each_import_lines_own_reference() {
         let corrected: Vec<Shot> = (0..4)
             .map(|i| {
                 make_shot(
@@ -1511,7 +1511,7 @@ mod tests {
                 )
             })
             .collect();
-        let existing = vec![make_section(0, "Existing", corrected)];
+        let existing = vec![make_line(0, "Existing", corrected)];
         let measured: Vec<ShotData> = (0..4)
             .map(|i| {
                 make_shot_data(
@@ -1525,7 +1525,7 @@ mod tests {
             .collect();
         let config = PlacementSuggestionConfig::default();
 
-        let declaring = vec![ImportSectionForSuggestion {
+        let declaring = vec![ImportLineForSuggestion {
             index: 0,
             name: "Incoming".to_string(),
             shots: measured.clone(),
@@ -1535,15 +1535,15 @@ mod tests {
             )),
         }];
         // The FALLBACK is deliberately wrong here, so a suggestion can only
-        // come from the section's own reference being read.
+        // come from the line's own reference being read.
         let found =
             suggest_all_placements(&declaring, AzimuthReference::default(), &existing, &config);
         assert!(
             !found.is_empty(),
-            "the section's own reference must win over the fallback"
+            "the line's own reference must win over the fallback"
         );
 
-        let silent = vec![ImportSectionForSuggestion {
+        let silent = vec![ImportLineForSuggestion {
             index: 0,
             name: "Incoming".to_string(),
             shots: measured,
@@ -1557,7 +1557,7 @@ mod tests {
         );
         assert!(
             !via_fallback.is_empty(),
-            "a section that declares nothing must still be read through the fallback"
+            "a line that declares nothing must still be read through the fallback"
         );
     }
 
@@ -2223,7 +2223,7 @@ mod tests {
     #[test]
     fn crossing_ignore_pairs_include_aligned_shots_and_one_continuation() {
         let forward = PlacementSuggestion {
-            existing_section_id: 1,
+            existing_line_id: 1,
             existing_station_index: 10,
             import_station_index: 0,
             score: 1.0,
@@ -2233,7 +2233,7 @@ mod tests {
             direction: MatchDirection::Forward,
             is_partial: false,
             confidence: SuggestionConfidence::High,
-            existing_section_name: "target".to_string(),
+            existing_line_name: "target".to_string(),
         };
         assert_eq!(
             ignored_crossing_pairs_for_suggestion(&forward, 5, 20),
@@ -2263,7 +2263,7 @@ mod tests {
             make_shot_data(130.0, 135.0, 8.0, 4.5, 7.0),
         ];
 
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Main Passage",
             vec![
@@ -2286,7 +2286,7 @@ mod tests {
         );
 
         let best = &suggestions[0];
-        assert_eq!(best.existing_section_id, 1);
+        assert_eq!(best.existing_line_id, 1);
         assert_eq!(best.existing_station_index, 0);
         assert_eq!(best.import_station_index, 0);
         assert_eq!(best.direction, MatchDirection::Forward);
@@ -2306,7 +2306,7 @@ mod tests {
             make_shot_data(130.0, 135.0, 8.0, 3.0, 5.0),
         ];
 
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Main Passage",
             vec![
@@ -2325,7 +2325,7 @@ mod tests {
         assert!(!suggestions.is_empty(), "should find reverse match");
 
         let best = &suggestions[0];
-        assert_eq!(best.existing_section_id, 1);
+        assert_eq!(best.existing_line_id, 1);
         assert_eq!(best.direction, MatchDirection::Reverse);
         assert_eq!(best.import_station_index, 0);
         // Reverse from shot 1: existing_station_index = 1 + 1 = 2
@@ -2334,17 +2334,17 @@ mod tests {
 
     #[test]
     fn suggest_match_from_station_n() {
-        // Reference shots at the END of the import section
+        // Reference shots at the END of the import line
         let import_shots = vec![
             // New shots first
             make_shot_data(130.0, 135.0, 8.0, 20.0, 22.0),
             make_shot_data(300.0, 305.0, 6.0, 22.0, 23.0),
-            // Then reference shots matching existing section (forward)
+            // Then reference shots matching existing line (forward)
             make_shot_data(88.0, 92.0, 5.0, 3.0, 4.0),
             make_shot_data(43.0, 47.0, 3.0, 4.0, 4.5),
         ];
 
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Main Passage",
             vec![
@@ -2392,7 +2392,7 @@ mod tests {
 
     #[test]
     fn no_suggestions_for_empty_import() {
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Test",
             vec![make_shot(0, 90.0, 90.0, 5.0, 3.0, 4.0)],
@@ -2407,12 +2407,12 @@ mod tests {
     }
 
     #[test]
-    fn no_match_for_unrelated_sections() {
+    fn no_match_for_unrelated_lines() {
         let import_shots = vec![
             make_shot_data(0.0, 0.0, 1.0, 0.0, 0.5),
             make_shot_data(0.0, 0.0, 1.0, 0.5, 1.0),
         ];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Different",
             vec![
@@ -2429,30 +2429,30 @@ mod tests {
         // Should have no good suggestions
         assert!(
             suggestions.is_empty() || suggestions[0].score < 0.45,
-            "unrelated sections should not match well"
+            "unrelated lines should not match well"
         );
     }
 
     #[test]
-    fn multiple_existing_sections_finds_best() {
-        // Reference shots match section 2, not section 1
+    fn multiple_existing_lines_finds_best() {
+        // Reference shots match line 2, not line 1
         let import_shots = vec![
             make_shot_data(175.0, 185.0, 7.0, 10.0, 12.0),
             make_shot_data(260.0, 265.0, 4.0, 12.0, 13.0),
         ];
 
         let existing = vec![
-            make_section(
+            make_line(
                 1,
-                "Wrong Section",
+                "Wrong Line",
                 vec![
                     make_shot(0, 90.0, 90.0, 5.0, 3.0, 4.0),
                     make_shot(1, 45.0, 45.0, 3.0, 4.0, 4.5),
                 ],
             ),
-            make_section(
+            make_line(
                 2,
-                "Right Section",
+                "Right Line",
                 vec![
                     make_shot(0, 175.0, 185.0, 7.0, 10.0, 12.0),
                     make_shot(1, 260.0, 265.0, 4.0, 12.0, 13.0),
@@ -2469,8 +2469,8 @@ mod tests {
         );
         assert!(!suggestions.is_empty());
         assert_eq!(
-            suggestions[0].existing_section_id, 2,
-            "should match section 2"
+            suggestions[0].existing_line_id, 2,
+            "should match line 2"
         );
     }
 
@@ -2481,7 +2481,7 @@ mod tests {
             make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0),
             make_shot_data(45.0, 45.0, 3.0, 4.0, 4.5),
         ];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Test",
             vec![
@@ -2502,9 +2502,9 @@ mod tests {
     }
 
     #[test]
-    fn single_shot_section_can_match() {
+    fn single_shot_line_can_match() {
         let import_shots = vec![make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0)];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Test",
             vec![
@@ -2554,12 +2554,12 @@ mod tests {
             single_score > 0.0,
             "fixture shot should pass the one-shot scorer"
         );
-        let import_trace = section_trace_points(&[import_match]);
+        let import_trace = line_trace_points(&[import_match]);
         let existing_match_shots: Vec<MatchShot> = existing_shots
             .iter()
             .map(|s| MatchShot::from_shot(s, reference))
             .collect();
-        let existing_trace = section_trace_points(&existing_match_shots);
+        let existing_trace = line_trace_points(&existing_match_shots);
         assert!(
             placement_crossing_clearance_ok(
                 &import_trace,
@@ -2575,7 +2575,7 @@ mod tests {
         let suggestions = suggest_placements(
             &import_shots,
             AzimuthReference::default(),
-            &[make_section(1, "AC3", existing_shots)],
+            &[make_line(1, "AC3", existing_shots)],
             &PlacementSuggestionConfig::default(),
         );
 
@@ -2597,7 +2597,7 @@ mod tests {
             make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0),
             make_shot_data(45.0, 45.0, 0.6, 4.0, 4.1),
         ];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Test",
             vec![
@@ -2624,7 +2624,7 @@ mod tests {
             make_shot_data(275.3, 285.2, 0.95, 21.40, 21.20),
             make_shot_data(263.6, 262.7, 3.02, 21.17, 21.63),
         ];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "AA1",
             vec![
@@ -2960,7 +2960,7 @@ mod tests {
     fn deduplication_keeps_best_score() {
         // Two sequences might match the same position - should keep only the best
         let import_shots = vec![make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0)];
-        let existing = vec![make_section(
+        let existing = vec![make_line(
             1,
             "Test",
             vec![make_shot(0, 90.0, 90.0, 5.0, 3.0, 4.0)],
@@ -2976,7 +2976,7 @@ mod tests {
         let count = suggestions
             .iter()
             .filter(|s| {
-                s.existing_section_id == 1
+                s.existing_line_id == 1
                     && s.existing_station_index == 0
                     && s.import_station_index == 0
                     && s.direction == MatchDirection::Forward
@@ -2988,7 +2988,7 @@ mod tests {
     #[test]
     fn equivalent_single_front_reverse_is_suppressed() {
         let forward = PlacementSuggestion {
-            existing_section_id: 1,
+            existing_line_id: 1,
             existing_station_index: 10,
             import_station_index: 0,
             score: 0.580,
@@ -2998,10 +2998,10 @@ mod tests {
             direction: MatchDirection::Forward,
             is_partial: false,
             confidence: SuggestionConfidence::Low,
-            existing_section_name: "AA1".to_string(),
+            existing_line_name: "AA1".to_string(),
         };
         let reverse = PlacementSuggestion {
-            existing_section_id: 1,
+            existing_line_id: 1,
             existing_station_index: 11,
             import_station_index: 0,
             score: 0.581,
@@ -3011,7 +3011,7 @@ mod tests {
             direction: MatchDirection::Reverse,
             is_partial: true,
             confidence: SuggestionConfidence::Low,
-            existing_section_name: "AA1".to_string(),
+            existing_line_name: "AA1".to_string(),
         };
         let mut suggestions = vec![reverse, forward.clone()];
 
@@ -3028,7 +3028,7 @@ mod tests {
     #[test]
     fn duplicate_endpoint_pairs_keep_best_score() {
         let forward = PlacementSuggestion {
-            existing_section_id: 1,
+            existing_line_id: 1,
             existing_station_index: 10,
             import_station_index: 0,
             score: 0.8,
@@ -3038,10 +3038,10 @@ mod tests {
             direction: MatchDirection::Forward,
             is_partial: false,
             confidence: SuggestionConfidence::Medium,
-            existing_section_name: "AA1".to_string(),
+            existing_line_name: "AA1".to_string(),
         };
         let reverse = PlacementSuggestion {
-            existing_section_id: 1,
+            existing_line_id: 1,
             existing_station_index: 12,
             import_station_index: 0,
             score: 0.9,
@@ -3051,7 +3051,7 @@ mod tests {
             direction: MatchDirection::Reverse,
             is_partial: false,
             confidence: SuggestionConfidence::High,
-            existing_section_name: "AA1".to_string(),
+            existing_line_name: "AA1".to_string(),
         };
         let mut suggestions = vec![forward, reverse.clone()];
 

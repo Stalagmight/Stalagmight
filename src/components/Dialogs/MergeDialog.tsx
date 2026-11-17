@@ -24,15 +24,15 @@ export default function MergeDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Get section names
-  const sectionAName = useMemo(() => {
+  // Get line names
+  const lineAName = useMemo(() => {
     if (!stationA) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationA.section_id)?.name ?? `Section ${stationA.section_id}`;
+    return project?.lines.find((s) => s.id === stationA.line_id)?.name ?? `Line ${stationA.line_id}`;
   }, [stationA, project]);
 
-  const sectionBName = useMemo(() => {
+  const lineBName = useMemo(() => {
     if (!stationB) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationB.section_id)?.name ?? `Section ${stationB.section_id}`;
+    return project?.lines.find((s) => s.id === stationB.line_id)?.name ?? `Line ${stationB.line_id}`;
   }, [stationB, project]);
 
   // Optional callbacks from snap-to-merge drag flow
@@ -95,15 +95,15 @@ export default function MergeDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionAName}</EntityBlob>
+              <EntityBlob entity="station">{formatStationId(stationA.line_id, stationA.station_index)}</EntityBlob>
+              <EntityBlob entity="line">{lineAName}</EntityBlob>
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionBName}</EntityBlob>
+              <EntityBlob entity="station">{formatStationId(stationB.line_id, stationB.station_index)}</EntityBlob>
+              <EntityBlob entity="line">{lineBName}</EntityBlob>
             </span>
           </div>
         </div>
@@ -136,11 +136,11 @@ export default function MergeDialog() {
 function DatumShiftNotice({ shift, afterMove }: { shift: MergeDatumShift; afterMove: boolean }) {
   const { t } = useTranslation();
   const { project } = useProjectStore();
-  const nameOf = (id: number) => project?.sections.find((s) => s.id === id)?.name ?? `Section ${id}`;
-  const [first, ...rest] = shift.moving_section_ids;
+  const nameOf = (id: number) => project?.lines.find((s) => s.id === id)?.name ?? `Line ${id}`;
+  const [first, ...rest] = shift.moving_line_ids;
   const firstName = first === undefined ? '' : nameOf(first);
   const piece = rest.length === 0 ? firstName : t('dialogs.mergeStations.pieceMore', { name: firstName, count: rest.length });
-  const station = formatStationId(shift.datum_station.section_id, shift.datum_station.station_index);
+  const station = formatStationId(shift.datum_station.line_id, shift.datum_station.station_index);
   return (
     <p className="p-2 rounded bg-warning-10 text-warning-text text-sm" data-testid="merge-datum-shift">
       {afterMove

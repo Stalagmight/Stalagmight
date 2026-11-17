@@ -1,6 +1,6 @@
 //! The Closures Computed View and a station moved by hand (#759): a manual
 //! station offset (`station_offsets`), as an older or hand-edited file
-//! carries it. Move Station folds its moves into the shots; Split Section
+//! carries it. Move Station folds its moves into the shots; Split Line
 //! Here, Append Project and Undo carry an existing one on.
 //!
 //! The view adjusts the measured shots, never a hand move: every station is
@@ -19,7 +19,7 @@ use super::combine_closure_tests::{
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
     gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LoopClosure, Project,
-    SectionId, StationRef, ZeroDatum,
+    LineId, StationRef, ZeroDatum,
 };
 
 /// Every station's closure-adjusted position (the Plan and Export geometry).
@@ -34,7 +34,7 @@ fn view(project: &Project) -> HashMap<StationRef, (f64, f64)> {
 /// The Closures Computed View and a station moved by hand (a manual station
 /// offset, as an older or hand-edited file carries it): A runs 10 m east from
 /// the origin and its start, the station the view holds the survey at (the
-/// lowest section id's), was moved 0.1 m east and 0.05 m north by hand. B
+/// lowest line id's), was moved 0.1 m east and 0.05 m north by hand. B
 /// (two shots) and C run north from A's end, merged there, B 10 m and C
 /// 9.5 m, their ends tied by a loop closure, which the view solves. A's end
 /// is on no loop and nothing was moved there: the view must show it where it
@@ -47,7 +47,7 @@ fn a_hand_move_on_the_held_station_does_not_shift_the_closures_computed_view() {
     let c = add(&mut p, "C", vec![shot(0.0, 9.5)]);
     let junction = StationRef::new(a, 1);
     for id in [b, c] {
-        p.set_section_offset(id, (10.0, 0.0));
+        p.set_line_offset(id, (10.0, 0.0));
         p.merge_stations(junction, StationRef::new(id, 0)).unwrap();
     }
     p.create_loop_closure(
@@ -78,10 +78,10 @@ fn a_hand_move_on_the_held_station_keeps_merges_closed_in_the_closures_computed_
     let a = add(&mut p, "A", vec![shot(90.0, 10.0)]);
     let b = add(&mut p, "B", vec![shot(0.0, 10.0)]);
     let c = add(&mut p, "C", vec![shot(90.0, 9.5)]);
-    p.set_section_offset(b, (10.0, 0.0));
+    p.set_line_offset(b, (10.0, 0.0));
     p.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    p.set_section_offset(c, (0.0, 10.0));
+    p.set_line_offset(c, (0.0, 10.0));
     p.loop_closures.push(LoopClosure {
         id: 1,
         station_a: p.key_for_ref(StationRef::new(c, 1)).unwrap(),
@@ -118,7 +118,7 @@ fn deep_shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> crate:
 /// of each strategy the solve takes), a branch merged on a loop and a spur
 /// merged off it, and a second part held by a zero datum with a loop of its
 /// own. Depths vary, so the view's depth is pinned too.
-fn pinned_survey() -> (Project, [SectionId; 4]) {
+fn pinned_survey() -> (Project, [LineId; 4]) {
     let mut p = Project::new("Pinned".to_string(), None);
     let a = add(
         &mut p,
@@ -130,7 +130,7 @@ fn pinned_survey() -> (Project, [SectionId; 4]) {
             deep_shot(263.4, 4.93, 4.4, 3.3),
         ],
     );
-    p.set_section_offset(a, (3.7, -2.1));
+    p.set_line_offset(a, (3.7, -2.1));
     let b = add(
         &mut p,
         "B",
@@ -174,7 +174,7 @@ fn pinned_survey() -> (Project, [SectionId; 4]) {
             deep_shot(275.0, 10.1, 1.8, 1.1),
         ],
     );
-    p.set_section_offset(d, (100.0, 100.0));
+    p.set_line_offset(d, (100.0, 100.0));
     p.set_zero_datum(
         StationRef::new(d, 1),
         GpsCoordinates {
@@ -200,7 +200,7 @@ fn view_bits(project: &Project) -> Vec<(u32, u32, [u64; 3])> {
         .into_iter()
         .map(|s| {
             (
-                s.station_ref.section_id,
+                s.station_ref.line_id,
                 s.station_ref.station_index,
                 [
                     s.coordinates.x.to_bits(),
@@ -401,11 +401,11 @@ fn a_survey_without_a_hand_move_keeps_its_closures_computed_view() {
 }
 
 /// What the Closures Computed View solve did with a project: how many
-/// connected surveys it adjusted, and the sections of those it failed on
+/// connected surveys it adjusted, and the lines of those it failed on
 /// (shown as measured instead).
 struct ViewSolve {
     adjusted: usize,
-    failed: HashSet<SectionId>,
+    failed: HashSet<LineId>,
 }
 
 /// Union-find root of `x` in `parent`.
@@ -434,7 +434,7 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 ///   pulling its group's shown point toward its GPS by its weight;
 /// - a survey the view does not solve, or fails to, is shown as measured.
 ///
-/// Returns what the solve did: the surveys it adjusted and the sections of
+/// Returns what the solve did: the surveys it adjusted and the lines of
 /// those it failed on (which this check skips, so a caller compares them).
 fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
     let config = ClosureAdjustmentConfig::default();
@@ -444,10 +444,10 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
         .iter()
         .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
         .collect();
-    let failed: HashSet<SectionId> = adjusted
+    let failed: HashSet<LineId> = adjusted
         .failures
         .iter()
-        .flat_map(|f| f.section_ids.iter().copied())
+        .flat_map(|f| f.line_ids.iter().copied())
         .collect();
     let hand = |at: StationRef| {
         project
@@ -459,16 +459,16 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
         .into_iter()
         .map(|c| c.closure_id)
         .collect();
-    let mut solved: HashSet<SectionId> = HashSet::new();
+    let mut solved: HashSet<LineId> = HashSet::new();
     let mut adjusted_surveys = 0;
     for anchor in project.adjustment_anchors_for_tests() {
-        let component = project.get_connected_section_ids(anchor.section_id);
+        let component = project.get_connected_line_ids(anchor.line_id);
         if component.iter().any(|id| failed.contains(id)) {
             continue;
         }
         solved.extend(component.iter().copied());
         adjusted_surveys += 1;
-        let inside = |at: &StationRef| component.contains(&at.section_id);
+        let inside = |at: &StationRef| component.contains(&at.line_id);
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         let ties = project
             .station_merges
@@ -533,13 +533,13 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
         }
         let mut point: HashMap<StationRef, (StationRef, (f64, f64))> = HashMap::new();
         let mut pull: HashMap<StationRef, ([f64; 2], [f64; 2])> = HashMap::new();
-        for section in project
-            .sections
+        for line in project
+            .lines
             .iter()
             .filter(|s| component.contains(&s.id))
         {
-            for i in 0..=section.shots.len() as u32 {
-                let at = StationRef::new(section.id, i);
+            for i in 0..=line.shots.len() as u32 {
+                let at = StationRef::new(line.id, i);
                 let r = root(&mut parent, at);
                 let (first, p) = *point.entry(r).or_insert((at, view[&at]));
                 assert!(
@@ -548,18 +548,18 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
                     dist(p, view[&at])
                 );
             }
-            let quality = if section.quality.is_finite() && section.quality > 0.0 {
-                section.quality
+            let quality = if line.quality.is_finite() && line.quality > 0.0 {
+                line.quality
             } else {
                 1.0
             };
             let sigma_len = config.base_sigma_length_m * quality;
             let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
-            let reference = project.azimuth_reference_for(section);
-            for (k, s) in section.shots.iter().enumerate() {
+            let reference = project.azimuth_reference_for(line);
+            for (k, s) in line.shots.iter().enumerate() {
                 let (i, j) = (
-                    StationRef::new(section.id, k as u32),
-                    StationRef::new(section.id, k as u32 + 1),
+                    StationRef::new(line.id, k as u32),
+                    StationRef::new(line.id, k as u32 + 1),
                 );
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
                 if ri == rj {
@@ -627,7 +627,7 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
         }
     }
     for at in every_station(project) {
-        if solved.contains(&at.section_id) {
+        if solved.contains(&at.line_id) {
             continue;
         }
         assert!(
@@ -725,7 +725,7 @@ fn a_hand_move_at_a_merge_off_a_loop_moves_what_hangs_there_in_both_views() {
         plant(&mut with, at, (hand.0, hand.1, 0.0));
         let (view_with, view_without) = (view(&with), view(&without));
         for id in [a, b, c, d] {
-            let n = with.get_section(id).unwrap().shots.len() as u32;
+            let n = with.get_line(id).unwrap().shots.len() as u32;
             for i in 0..=n {
                 let s = StationRef::new(id, i);
                 let (raw_with, raw_without) = (xy(&with, s), xy(&without, s));
@@ -753,7 +753,7 @@ fn a_hand_move_at_a_merge_off_a_loop_moves_what_hangs_there_in_both_views() {
 }
 
 /// A hand move on a merged station where the merge is on a loop: the Raw
-/// Data View lines the merged section up on the station as shown, so the
+/// Data View lines the merged line up on the station as shown, so the
 /// loop through the merge carries the hand move, and the view closes it with
 /// the rest of the loop's misclosure, holding the merge on one point as
 /// shown and the held station where it is shown.
@@ -788,7 +788,7 @@ fn a_hand_move_on_a_closure_end_is_closed_with_the_loop() {
 }
 
 /// A hand move on the station the view holds the survey at (the lowest
-/// section id's station 0, here also a closure's end): it stays where the
+/// line id's station 0, here also a closure's end): it stays where the
 /// Raw Data View shows it, and the rest is solved around it.
 #[test]
 fn a_hand_move_on_the_held_station_holds_the_survey_where_it_is_shown() {
@@ -911,7 +911,7 @@ fn choose_gps_fixes(project: &Project, rng: &mut Rng) -> Vec<ZeroDatum> {
     let candidates: Vec<StationRef> = every_station(project)
         .into_iter()
         .filter(|at| !taken.contains(at))
-        .filter(|at| project.placement_datum_index(at.section_id).is_some())
+        .filter(|at| project.placement_datum_index(at.line_id).is_some())
         .collect();
     let mut fixes = Vec::new();
     if candidates.is_empty() {
@@ -1004,8 +1004,8 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             ("side by side", side_by_side_network),
         ] {
             // A file that carries hand moves was written by an older version,
-            // which lined merged sections up on each hand-moved station as it
-            // was moved, before #741's GPS fixes existed (a fix's section is
+            // which lined merged lines up on each hand-moved station as it
+            // was moved, before #741's GPS fixes existed (a fix's line is
             // held by the offset cascade, so a hand move planted beside one
             // later tears the merge, and opening the file turns that merge
             // into a closure). So the hand moves go on the survey first, and
@@ -1037,10 +1037,10 @@ fn hand_moves_anywhere_keep_the_closures_computed_view_the_solve() {
             // A hand move adjusts nothing the solve takes (shots, ties), so it
             // never turns a part the solve adjusts into one it fails on.
             let no_new_failure = |now: &ViewSolve, what: &str| {
-                let new: Vec<&SectionId> = now.failed.difference(&before.failed).collect();
+                let new: Vec<&LineId> = now.failed.difference(&before.failed).collect();
                 assert!(
                     new.is_empty(),
-                    "{what}: the solve fails with the hand moves on sections {new:?}"
+                    "{what}: the solve fails with the hand moves on lines {new:?}"
                 );
             };
 
@@ -1114,7 +1114,7 @@ fn fixed_survey(
     hand: Option<(f64, f64)>,
     gps: (f64, f64),
     accuracy_m: Option<f64>,
-) -> (Project, [SectionId; 2]) {
+) -> (Project, [LineId; 2]) {
     let mut p = Project::new("Fix".to_string(), None);
     let a = add(
         &mut p,
@@ -1126,7 +1126,7 @@ fn fixed_survey(
     let c = add(&mut p, "C", vec![shot(10.0, 6.0), shot(350.0, 6.0)]);
     let end = StationRef::new(a, 5);
     let at = xy(&p, end);
-    p.set_section_offset(c, at);
+    p.set_line_offset(c, at);
     p.merge_stations(end, StationRef::new(c, 0)).unwrap();
     p.zero_datums.push(ZeroDatum::new(
         p.key_for_ref(StationRef::new(a, 0)).unwrap(),
@@ -1205,7 +1205,7 @@ fn a_hand_move_on_a_soft_gps_fix_is_its_gps_moved_the_other_way() {
     let (with, [a, c]) = fixed_survey(Some(hand), target, Some(0.2));
     let (without, _) = fixed_survey(None, (target.0 - hand.0, target.1 - hand.1), Some(0.2));
     let (now, was) = (view(&with), view(&without));
-    let carried = |at: &StationRef| at.section_id == c || *at == StationRef::new(a, 5);
+    let carried = |at: &StationRef| at.line_id == c || *at == StationRef::new(a, 5);
     for (at, p) in &was {
         let h = if carried(at) { hand } else { (0.0, 0.0) };
         let want = (p.0 + h.0, p.1 + h.1);

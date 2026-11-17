@@ -5,14 +5,14 @@ import {
   createProject,
   getMapCenter,
   getSelection,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForMapIdle,
   waitForNoDialogs,
   waitForActiveTool,
   waitForDrawnStations,
   type ScreenPoint,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -28,7 +28,7 @@ import {
 
 test.use({ hasTouch: true });
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Touch Main',
     direction: 'in',
@@ -128,7 +128,7 @@ test.describe('Map touch gestures', () => {
     cdp = await page.context().newCDPSession(page);
     await setupMockedPage(page);
     await createProject(page, 'Touch Gestures');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await waitForMapIdle(page);

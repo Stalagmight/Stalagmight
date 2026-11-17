@@ -4,7 +4,7 @@ import {
   setupMockedPage,
   createProject,
   seedNavigationTools,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
@@ -15,10 +15,10 @@ import {
   readCanvasPixelBlock,
   type PixelRgba,
   type ScreenPoint,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Passage',
     direction: 'in',
@@ -29,9 +29,9 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-async function createProjectWithSections(page: import('./fixtures/coverage').Page): Promise<void> {
+async function createProjectWithLines(page: import('./fixtures/coverage').Page): Promise<void> {
   await createProject(page, 'Tool Groups Test');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
@@ -62,7 +62,7 @@ async function pressUntilFocused(
 // `survey-data-stations` vector-tile source, which a paint expression turned
 // into opacity 0.25. Both are gone: the survey is drawn by a custom WebGL layer
 // with no sources and no feature-state, and "anchored" is now a per-vertex `dim`
-// attribute (SurveyLayer.setAnchoredSections -> syncCustomDimming ->
+// attribute (SurveyLayer.setAnchoredLines -> syncCustomDimming ->
 // customRender.setDimming, uploaded by controller.setDimming). The shader turns
 // it into the same alpha multiplier the stock expression used
 // (`dimF = a_dim > 0.5 ? 0.25 : 1.0` in surveyLayer/customRender/shaders.ts), so
@@ -143,7 +143,7 @@ async function pollMass(
 
 /**
  * Zoom in on the seeded survey before probing pixels. The mock lays stations out
- * at `x = index * 10` metres, so at the fit-to-bounds zoom the whole section is a
+ * at `x = index * 10` metres, so at the fit-to-bounds zoom the whole line is a
  * ~9 px smear with no per-station pixel to read. `jumpTo` is not animated, so
  * positions read afterwards already match the new view.
  */
@@ -180,7 +180,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('tool group buttons are visible with correct testids @smoke', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Navigate group and Move group should be visible
     const navigateGroup = page.getByTestId('tool-group-navigate');
@@ -191,7 +191,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('left-click on inactive group activates last-used subtool @smoke', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Start with select tool active
     await page.keyboard.press('s');
@@ -204,7 +204,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('left-click on active group cycles to next subtool', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Activate move_segment via keyboard
     await page.keyboard.press('v');
@@ -225,7 +225,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('right-click on group opens flyout panel @smoke', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Right-click on the move group
     const moveGroup = page.getByTestId('tool-group-move');
@@ -242,7 +242,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('clicking subtool in flyout activates it and closes flyout', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Open flyout for navigate group
     const navigateGroup = page.getByTestId('tool-group-navigate');
@@ -262,7 +262,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('clicking outside flyout closes it', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Open flyout
     const moveGroup = page.getByTestId('tool-group-move');
@@ -280,7 +280,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('flyout keyboard navigation: ArrowDown/ArrowUp move focus, Enter and Space select', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Activate move_segment first so flyout opens with it focused
     await page.keyboard.press('v');
@@ -336,7 +336,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('flyout keyboard navigation: Escape closes flyout', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Open flyout for move group
     const moveGroup = page.getByTestId('tool-group-move');
@@ -356,7 +356,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('keyboard shortcuts: V activates move_segment, G activates move_shot, T activates move_station', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // V should activate move_segment
     await page.keyboard.press('v');
@@ -372,7 +372,7 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   test('toolbar separators are visible between tool groups', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // The toolbar container should have separator dividers (thin vertical lines)
     const toolbar = page.getByTestId('toolbar');
@@ -385,10 +385,10 @@ test.describe('Toolbar Tool Groups', () => {
     expect(count).toBe(2);
   });
 
-  test('anchored sections are faded when Move Segment tool is active', async ({ page }) => {
-    await createProjectWithSections(page);
+  test('anchored lines are faded when Move Segment tool is active', async ({ page }) => {
+    await createProjectWithLines(page);
 
-    // Set a zero datum on the first section's station 0 via store
+    // Set a zero datum on the first line's station 0 via store
     await page.evaluate(async () => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
@@ -401,17 +401,17 @@ test.describe('Toolbar Tool Groups', () => {
       }).__E2E_TEST__;
       if (!e2e) throw new Error('E2E stores not available');
       await e2e.projectStore.getState().setZeroDatum(
-        { section_id: 1, station_index: 0 },
+        { line_id: 1, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
       );
     });
 
-    // Baseline the paint on section 1's own geometry BEFORE the tool is active,
+    // Baseline the paint on line 1's own geometry BEFORE the tool is active,
     // so the fade is a before/after fact about the exact same pixels. Station
     // index 0 is skipped because it carries the zero datum, whose marker is drawn
-    // on top of the disc. The seeded project has a single section and the datum
-    // anchors all of it, so there is no unanchored section to contrast against
-    // here (the mock lays every section on the same coordinates, so a second one
+    // on top of the disc. The seeded project has a single line and the datum
+    // anchors all of it, so there is no unanchored line to contrast against
+    // here (the mock lays every line on the same coordinates, so a second one
     // would only stack on these pixels anyway).
     await waitForDrawnStations(page, 1);
     await zoomInOnSurvey(page);
@@ -434,8 +434,8 @@ test.describe('Toolbar Tool Groups', () => {
       p.x + STATION_BLOCK / 2 <= canvasBox.width &&
       p.y + STATION_BLOCK / 2 <= canvasBox.height;
     const probes: ScreenPoint[] = [
-      ...stations.filter((s) => s.sectionId === 1 && s.stationIndex > 0).map((s) => ({ x: s.x, y: s.y })),
-      ...shots.filter((s) => s.sectionId === 1).map((s) => s.mid),
+      ...stations.filter((s) => s.lineId === 1 && s.stationIndex > 0).map((s) => ({ x: s.x, y: s.y })),
+      ...shots.filter((s) => s.lineId === 1).map((s) => s.mid),
     ].filter(onCanvas);
     expect(probes.length).toBeGreaterThan(0);
 
@@ -447,7 +447,7 @@ test.describe('Toolbar Tool Groups', () => {
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
 
-    // The anchored section is really PAINTED faded once the anchored-id fetch
+    // The anchored line is really PAINTED faded once the anchored-id fetch
     // resolves. A dimmed shot body lands on exactly the 0.25 the stock opacity
     // expression used; a dimmed station disc reads higher (~0.58 measured)
     // because two translucent round caps and the disc overlap at a junction and
@@ -464,7 +464,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // The fade belongs to Move Segment's anchored set, not to some one-way
     // repaint: leaving the tool empties the set (MapCanvas clears
-    // anchoredSectionIds for every other tool) and the section is painted at full
+    // anchoredLineIds for every other tool) and the line is painted at full
     // opacity again, byte-for-byte back to the baseline.
     await page.keyboard.press('s');
     await waitForActiveTool(page, 'select');
@@ -472,23 +472,23 @@ test.describe('Toolbar Tool Groups', () => {
   });
 
   // The fade above is painted by the CUSTOM renderer, which dims from the real
-  // section id. This covers the other consumer of the anchored set: the interact
+  // line id. This covers the other consumer of the anchored set: the interact
   // overlay, which must withhold the hover highlight for an anchored shot.
   //
   // It also pins that a late-arriving anchored set invalidates the overlay's
   // id-only cache key, by never moving the pointer after the first hover.
   //
   // NOTE (#301): this does NOT pin the floor(fid / STRIDE) decode that #301 fixed.
-  // That bug needed a shot whose id is section-encoded, and the IPC mock does not
+  // That bug needed a shot whose id is line-encoded, and the IPC mock does not
   // reproduce the backend's convention: insert_shot_* allocates max(existing) + 1
-  // (mocks/tauri-ipc.ts), so every section's shots are 1, 2, 3 ..., while the real
-  // backend seeds next_shot_id = section.id * FEATURE_ID_STRIDE
-  // (src-tauri/src/models/section.rs). With flat ids the old decode happened to be
+  // (mocks/tauri-ipc.ts), so every line's shots are 1, 2, 3 ..., while the real
+  // backend seeds next_shot_id = line.id * FEATURE_ID_STRIDE
+  // (src-tauri/src/models/line.rs). With flat ids the old decode happened to be
   // right, so this test passed before the fix too. The decode itself is pinned at
   // unit level in src/utils/__tests__/ids.test.ts; teaching the mock the real id
   // convention would make this test cover it too, and is tracked separately.
-  test('anchored section suppresses the shot hover highlight in Move Segment', async ({ page }) => {
-    await createProjectWithSections(page);
+  test('anchored line suppresses the shot hover highlight in Move Segment', async ({ page }) => {
+    await createProjectWithLines(page);
 
     await page.evaluate(async () => {
       const e2e = (window as unknown as {
@@ -502,7 +502,7 @@ test.describe('Toolbar Tool Groups', () => {
       }).__E2E_TEST__;
       if (!e2e) throw new Error('E2E stores not available');
       await e2e.projectStore.getState().setZeroDatum(
-        { section_id: 1, station_index: 0 },
+        { line_id: 1, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
       );
     });
@@ -512,8 +512,8 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForMapIdle(page);
     await waitForDrawnStations(page, 3);
 
-    const shot = (await getShotScreenPositions(page)).find((s) => s.sectionId === 1);
-    if (!shot) throw new Error('no section-1 shot to hover');
+    const shot = (await getShotScreenPositions(page)).find((s) => s.lineId === 1);
+    if (!shot) throw new Error('no line-1 shot to hover');
 
     // Read the interact-overlay source rather than pixels: it is the exact
     // collection refreshInteractOverlay builds, so a leaked highlight is a
@@ -565,7 +565,7 @@ test.describe('Toolbar Tool Groups', () => {
     // Switch to Move Segment WITHOUT moving the pointer. The anchored ids arrive
     // asynchronously, one IPC round-trip after activation, and they are not part
     // of the interact overlay's cache key - so this also pins that
-    // setAnchoredSections invalidates that cache. If it stops doing so, the
+    // setAnchoredLines invalidates that cache. If it stops doing so, the
     // highlight painted above stays bright forever and this poll times out.
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
@@ -610,7 +610,7 @@ test.describe('Toolbar Tool Groups - default config (#409)', () => {
   });
 
   test('the navigate group is absent while the other tools stay', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Gone from the DOM, not merely hidden - the toolbar filters the item out.
     await expect(page.getByTestId('tool-group-navigate')).toHaveCount(0);

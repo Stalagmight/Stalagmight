@@ -19,7 +19,7 @@ import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { distanceColorExpression, DISTANCE_FAR, DISTANCE_NEAR } from '../../../../utils/distanceGradient';
 import { levelsT, resolveChoice, THEME_PALETTE_ID, type ColorScaleInput } from '../../../../utils/palettes';
-import type { Section } from '../../../../types/ipc/Section';
+import type { Line } from '../../../../types/ipc/Line';
 import type { Station } from '../../../../types/ipc/Station';
 
 const theme = getMapThemeColors();
@@ -31,7 +31,7 @@ function surveyData() {
     left: null, right: null, up: null, down: null, comment: null, kind: 'Normal' as const,
     marker_index: null, temperature: null,
   });
-  const sections: Section[] = [
+  const lines: Line[] = [
     {
       id: 1, name: 'A', color: '#ff0000', direction: 'in', quality: 1,
       next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
@@ -39,10 +39,10 @@ function surveyData() {
     },
   ];
   const st = (i: number, z: number): Station => ({
-    station_ref: { section_id: 1, station_index: i }, coordinates: { x: i * 5, y: 0, z },
+    station_ref: { line_id: 1, station_index: i }, coordinates: { x: i * 5, y: 0, z },
     is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
   });
-  return surveyDataFromLegacy(sections, [st(0, 0), st(1, -4), st(2, -10)]);
+  return surveyDataFromLegacy(lines, [st(0, 0), st(1, -4), st(2, -10)]);
 }
 
 const ctx = (depthScale: ColorScaleInput | null = null): DisplayColorContext => ({

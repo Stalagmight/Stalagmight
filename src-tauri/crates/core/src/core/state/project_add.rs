@@ -20,8 +20,8 @@ use crate::core::{
     extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
 };
 use crate::models::{
-    live_shot_uuid_for_stored, warning_is_ignorable, Project, SectionId, FEATURE_ID_STRIDE,
-    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    live_shot_uuid_for_stored, warning_is_ignorable, Project, LineId, FEATURE_ID_STRIDE,
+    MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use crate::persistence::ResolvedWarning;
 
@@ -41,7 +41,7 @@ fn stalx_identity(project: &Project) -> String {
     format!("{STALX_IDENTITY_PREFIX}{}", project.created_at.to_rfc3339())
 }
 
-/// Re-key the source's ignored warnings onto the copied sections, by shot uuid.
+/// Re-key the source's ignored warnings onto the copied lines, by shot uuid.
 /// A legacy position-keyed row is resolved through the source shot at that
 /// position. Rows an ignore can never honor (error severity) and rows whose
 /// shot is gone are dropped.
@@ -50,27 +50,27 @@ fn remap_ignores(
     rows: &[ResolvedWarning],
     outcome: &AppendOutcome,
 ) -> Vec<CarriedIgnore> {
-    let shots = ShotIndex::of(source, rows.iter().map(|row| row.section_id));
+    let shots = ShotIndex::of(source, rows.iter().map(|row| row.line_id));
     let mut carried = IgnoreList::default();
     for row in rows {
         if !warning_is_ignorable(&row.warning_code) {
             continue;
         }
-        let Some(&section_id) = outcome.section_id_map.get(&row.section_id) else {
+        let Some(&line_id) = outcome.line_id_map.get(&row.line_id) else {
             continue;
         };
         let shot_uuid = match row.shot_uuid.as_deref() {
-            Some(uuid) => shots.live_uuid(row.section_id, uuid),
+            Some(uuid) => shots.live_uuid(row.line_id, uuid),
             None => shots
-                .uuid_of(row.section_id, row.shot_id)
+                .uuid_of(row.line_id, row.shot_id)
                 .map(str::to_string),
         };
         let Some(shot_uuid) = shot_uuid else {
             continue;
         };
         carried.push(CarriedIgnore {
-            section_id,
-            shot_uuid: outcome.target_uuid(section_id, &shot_uuid),
+            line_id,
+            shot_uuid: outcome.target_uuid(line_id, &shot_uuid),
             warning_code: row.warning_code.clone(),
             resolved_at: row.resolved_at,
             resolved_comment: row.resolved_comment.clone(),
@@ -79,71 +79,71 @@ fn remap_ignores(
     carried.items
 }
 
-/// The shots of some sections, indexed both ways, built once so a pass over N
+/// The shots of some lines, indexed both ways, built once so a pass over N
 /// ignore rows costs O(N) rather than a shot scan per row (a hostile source
 /// controls both counts). The FIRST shot wins a key, as a linear scan would.
 #[derive(Default)]
 struct ShotIndex<'a> {
-    id_by_uuid: HashMap<(SectionId, &'a str), u32>,
-    uuid_by_id: HashMap<(SectionId, u32), Option<&'a str>>,
+    id_by_uuid: HashMap<(LineId, &'a str), u32>,
+    uuid_by_id: HashMap<(LineId, u32), Option<&'a str>>,
 }
 
 impl<'a> ShotIndex<'a> {
-    fn of(project: &'a Project, sections: impl IntoIterator<Item = SectionId>) -> Self {
+    fn of(project: &'a Project, lines: impl IntoIterator<Item = LineId>) -> Self {
         let mut index = Self::default();
-        let wanted: HashSet<SectionId> = sections.into_iter().collect();
-        for section_id in wanted {
-            let Some(section) = project.get_section(section_id) else {
+        let wanted: HashSet<LineId> = lines.into_iter().collect();
+        for line_id in wanted {
+            let Some(line) = project.get_line(line_id) else {
                 continue;
             };
-            for shot in &section.shots {
+            for shot in &line.shots {
                 if let Some(uuid) = shot.uuid.as_deref() {
                     index
                         .id_by_uuid
-                        .entry((section_id, uuid))
+                        .entry((line_id, uuid))
                         .or_insert(shot.id);
                 }
                 index
                     .uuid_by_id
-                    .entry((section_id, shot.id))
+                    .entry((line_id, shot.id))
                     .or_insert(shot.uuid.as_deref());
             }
         }
         index
     }
 
-    /// The id of the shot carrying `uuid` in `section_id`.
-    fn id_of(&self, section_id: SectionId, uuid: &str) -> Option<u32> {
-        self.id_by_uuid.get(&(section_id, uuid)).copied()
+    /// The id of the shot carrying `uuid` in `line_id`.
+    fn id_of(&self, line_id: LineId, uuid: &str) -> Option<u32> {
+        self.id_by_uuid.get(&(line_id, uuid)).copied()
     }
 
-    /// The uuid a stored row's `uuid` names in `section_id` now: itself, or the
-    /// id the source's load gave that shot when it renamed a cross-section
+    /// The uuid a stored row's `uuid` names in `line_id` now: itself, or the
+    /// id the source's load gave that shot when it renamed a cross-line
     /// repeat (`live_shot_uuid_for_stored`). `None` when neither is there.
-    fn live_uuid(&self, section_id: SectionId, uuid: &str) -> Option<String> {
-        live_shot_uuid_for_stored(section_id, uuid, |id| self.id_of(section_id, id).is_some())
+    fn live_uuid(&self, line_id: LineId, uuid: &str) -> Option<String> {
+        live_shot_uuid_for_stored(line_id, uuid, |id| self.id_of(line_id, id).is_some())
     }
 
-    /// The uuid of the shot with `shot_id` in `section_id`, if it has one.
-    fn uuid_of(&self, section_id: SectionId, shot_id: u32) -> Option<&'a str> {
+    /// The uuid of the shot with `shot_id` in `line_id`, if it has one.
+    fn uuid_of(&self, line_id: LineId, shot_id: u32) -> Option<&'a str> {
         self.uuid_by_id
-            .get(&(section_id, shot_id))
+            .get(&(line_id, shot_id))
             .copied()
             .flatten()
     }
 }
 
-/// Carried ignores in first-seen order, one per (section, shot, warning).
+/// Carried ignores in first-seen order, one per (line, shot, warning).
 #[derive(Default)]
 struct IgnoreList {
     items: Vec<CarriedIgnore>,
-    seen: HashSet<(SectionId, String, String)>,
+    seen: HashSet<(LineId, String, String)>,
 }
 
 impl IgnoreList {
     fn push(&mut self, ignore: CarriedIgnore) {
         let key = (
-            ignore.section_id,
+            ignore.line_id,
             ignore.shot_uuid.clone(),
             ignore.warning_code.clone(),
         );
@@ -184,7 +184,7 @@ impl AppState {
     /// generation (local projects included - see `bump_speleodb_session` and the
     /// bump-site tripwire in `speleodb_session`). Appending into that successor
     /// would pair it with the first project's baseline, so its undo would delete
-    /// the successor's own sections. `push_add_undo` closes the same window after
+    /// the successor's own lines. `push_add_undo` closes the same window after
     /// the append.
     pub(super) fn add_project_file(
         &self,
@@ -254,26 +254,26 @@ impl AppState {
             Err(e) => return CommandResult::failure(e),
         };
         // Under the same project guard as the copy, so a save can never see the
-        // sections without their ignores (the save reads both under it).
+        // lines without their ignores (the save reads both under it).
         self.add_pending_ignores(project, &report.ignores);
         let shot_count: u32 = report
             .outcome
-            .new_section_ids
+            .new_line_ids
             .iter()
-            .filter_map(|id| project.get_section(*id))
+            .filter_map(|id| project.get_line(*id))
             .map(|s| s.shots.len() as u32)
             .sum();
         drop(guard);
 
         tracing::info!(
-            sections = report.outcome.new_section_ids.len(),
+            lines = report.outcome.new_line_ids.len(),
             ignores = report.ignores.len(),
             purpose = "add a project file into the open project",
             "Added a .stalx file's survey to the open project"
         );
         let receipt = Self::add_receipt(&label, &source, &report, shot_count);
         CommandResult::success()
-            .with_section_ids(report.outcome.new_section_ids)
+            .with_line_ids(report.outcome.new_line_ids)
             .with_import_receipt(receipt)
     }
 
@@ -283,18 +283,18 @@ impl AppState {
         project: &mut Project,
         source: &SourceProject,
     ) -> Result<AppendReport, String> {
-        // Section-id budget (#555), before a single section is appended: shot
-        // ids encode as `section_id * FEATURE_ID_STRIDE + position` in 32 bits,
-        // and `Section::new` computes that unchecked.
-        let incoming = source.project.sections.len();
-        let spent = project.next_section_id as usize;
-        if incoming.saturating_add(spent) > MAX_SECTIONS_IN_ID_SPACE {
+        // Line-id budget (#555), before a single line is appended: shot
+        // ids encode as `line_id * FEATURE_ID_STRIDE + position` in 32 bits,
+        // and `Line::new` computes that unchecked.
+        let incoming = source.project.lines.len();
+        let spent = project.next_line_id as usize;
+        if incoming.saturating_add(spent) > MAX_LINES_IN_ID_SPACE {
             return Err(format!(
-                "Add refused: the file holds {incoming} sections and this project has \
-                 already used {spent} section ids, past the limit of \
-                 {MAX_SECTIONS_IN_ID_SPACE} for one project. Shot ids encode as \
-                 section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
-                 past {MAX_SECTION_ID} cannot hold shots. No changes were made."
+                "Add refused: the file holds {incoming} lines and this project has \
+                 already used {spent} line ids, past the limit of \
+                 {MAX_LINES_IN_ID_SPACE} for one project. Shot ids encode as \
+                 line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
+                 past {MAX_LINE_ID} cannot hold shots. No changes were made."
             ));
         }
         let identity = stalx_identity(&source.project);
@@ -310,10 +310,10 @@ impl AppState {
         let baseline = AddedContent::stub(project, None);
         // A refused add must leave no trace, so beyond the removal the undo
         // runs it also winds back what that removal deliberately keeps: the id
-        // allocators (a refused add must not spend the section-id budget an
+        // allocators (a refused add must not spend the line-id budget an
         // exact-fit add needs) and the modification time.
-        let (next_section_id, next_closure_id, modified_at) = (
-            project.next_section_id,
+        let (next_line_id, next_closure_id, modified_at) = (
+            project.next_line_id,
             project.next_closure_id,
             project.modified_at,
         );
@@ -321,7 +321,7 @@ impl AppState {
             if let Some(added) = baseline.finalize(project, Vec::new()) {
                 added.remove_from(project);
             }
-            project.next_section_id = next_section_id;
+            project.next_line_id = next_line_id;
             project.next_closure_id = next_closure_id;
             project.modified_at = modified_at;
         };
@@ -345,8 +345,8 @@ impl AppState {
             &source.project.imported_file_hashes,
         );
         extend_unique_hashes(
-            &mut project.imported_section_hashes,
-            &source.project.imported_section_hashes,
+            &mut project.imported_line_hashes,
+            &source.project.imported_line_hashes,
         );
         extend_unique_hashes(
             &mut project.imported_file_hashes,
@@ -387,7 +387,7 @@ impl AppState {
     ) -> ImportReceipt {
         let mut warnings = Vec::new();
         if let Some(why) = report.duplicate {
-            warnings.push(format!("'{label}' {why}; its sections were added again"));
+            warnings.push(format!("'{label}' {why}; its lines were added again"));
         }
         if let Some(link) = &source.link {
             let name = sanitize_display_text(&link.project_name, MAX_FILE_NAME_LEN);
@@ -407,14 +407,14 @@ impl AppState {
                 "The ignored warnings in '{label}' could not be read and were not carried over"
             ));
         }
-        if source.project.sections.is_empty() {
-            warnings.push(format!("'{label}' holds no survey sections"));
+        if source.project.lines.is_empty() {
+            warnings.push(format!("'{label}' holds no survey lines"));
         }
         let mut receipt = ImportReceipt {
             source_format: "Stalagmight".to_string(),
             file_name: label.to_string(),
-            sections_found: source.project.sections.len() as u32,
-            sections_imported: report.outcome.new_section_ids.len() as u32,
+            lines_found: source.project.lines.len() as u32,
+            lines_imported: report.outcome.new_line_ids.len() as u32,
             shot_count,
             closures_requested: source.project.loop_closures.len() as u32,
             closures_created: report.closures_created,
@@ -432,7 +432,7 @@ impl AppState {
     /// against (lock order: `project` outranks `undo_stack`, as a load's own
     /// commit takes them). When another project was committed since - after the
     /// append, during `execute`'s epilogue - the record would measure that
-    /// project's sections as the add's and its undo would delete them, so
+    /// project's lines as the add's and its undo would delete them, so
     /// nothing is pushed and the command reports failure: the project the add
     /// went into has left the slot, and the one there now is untouched.
     ///
@@ -482,10 +482,10 @@ impl AppState {
     // === Ignores carried by an add, until a save persists them ===
     //
     // `resolved_warnings` lives in the open file's database with a FOREIGN KEY
-    // on `sections(id)`, and an added section is not in that table until the
+    // on `lines(id)`, and an added line is not in that table until the
     // next save - so an ignore carried in for it cannot be written there yet.
     // It waits here, is honored by `compute_project_warnings` meanwhile, and is
-    // written by the save that writes its section. Lock order: `project`
+    // written by the save that writes its line. Lock order: `project`
     // outranks this one, and nothing is ever taken while holding it.
 
     /// The carried ignores not yet in the database.
@@ -507,30 +507,30 @@ impl AppState {
 
     /// Hold `ignores` until the next save, keyed by the live shot's id.
     pub(super) fn add_pending_ignores(&self, project: &Project, ignores: &[CarriedIgnore]) {
-        let shots = ShotIndex::of(project, ignores.iter().map(|i| i.section_id));
+        let shots = ShotIndex::of(project, ignores.iter().map(|i| i.line_id));
         let mut pending = self
             .pending_ignores
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut held: HashSet<(SectionId, String, String)> = pending
+        let mut held: HashSet<(LineId, String, String)> = pending
             .iter()
             .filter_map(|row| {
                 let uuid = row.shot_uuid.clone()?;
-                Some((row.section_id, uuid, row.warning_code.clone()))
+                Some((row.line_id, uuid, row.warning_code.clone()))
             })
             .collect();
         for ignore in ignores {
-            let Some(shot_id) = shots.id_of(ignore.section_id, &ignore.shot_uuid) else {
+            let Some(shot_id) = shots.id_of(ignore.line_id, &ignore.shot_uuid) else {
                 continue;
             };
             let key = (
-                ignore.section_id,
+                ignore.line_id,
                 ignore.shot_uuid.clone(),
                 ignore.warning_code.clone(),
             );
             if held.insert(key) {
                 pending.push(ResolvedWarning {
-                    section_id: ignore.section_id,
+                    line_id: ignore.line_id,
                     shot_id,
                     warning_code: ignore.warning_code.clone(),
                     resolved_at: ignore.resolved_at,
@@ -541,21 +541,21 @@ impl AppState {
         }
     }
 
-    /// Drop the pending ignores of `sections` (the undo of an add). Rows a save
-    /// already wrote stay in the database: they name sections the undo just
+    /// Drop the pending ignores of `lines` (the undo of an add). Rows a save
+    /// already wrote stay in the database: they name lines the undo just
     /// removed, so they match nothing, and the next save drops them - while a
     /// close WITHOUT saving keeps the file and its ignores consistent.
-    pub(super) fn remove_pending_ignores(&self, sections: &HashSet<SectionId>) {
+    pub(super) fn remove_pending_ignores(&self, lines: &HashSet<LineId>) {
         self.pending_ignores
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|row| !sections.contains(&row.section_id));
+            .retain(|row| !lines.contains(&row.line_id));
     }
 
     /// Un-ignore (#57) of a pending row; true when one was removed.
     pub(super) fn forget_pending_ignore(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: u32,
         warning_code: &str,
         shot_uuid: Option<&str>,
@@ -572,15 +572,15 @@ impl AppState {
                 Some(uuid) => row.shot_uuid.as_deref() == Some(uuid),
                 None => row.shot_id == shot_id,
             };
-            !(row.section_id == section_id && row.warning_code == warning_code && same_shot)
+            !(row.line_id == line_id && row.warning_code == warning_code && same_shot)
         });
         pending.len() != before
     }
 
-    /// Every uuid-keyed ignore currently in force on `sections` - pending or
+    /// Every uuid-keyed ignore currently in force on `lines` - pending or
     /// already saved - as an add's undo records them, so the redo puts back the
     /// ignores the undo found rather than the ones the add first brought.
-    pub(super) fn ignores_on_sections(&self, sections: &HashSet<SectionId>) -> Vec<CarriedIgnore> {
+    pub(super) fn ignores_on_lines(&self, lines: &HashSet<LineId>) -> Vec<CarriedIgnore> {
         let saved = {
             let db = self
                 .database
@@ -595,11 +595,11 @@ impl AppState {
             let Some(uuid) = row.shot_uuid.clone() else {
                 continue;
             };
-            if !sections.contains(&row.section_id) {
+            if !lines.contains(&row.line_id) {
                 continue;
             }
             found.push(CarriedIgnore {
-                section_id: row.section_id,
+                line_id: row.line_id,
                 shot_uuid: uuid,
                 warning_code: row.warning_code.clone(),
                 resolved_at: row.resolved_at,

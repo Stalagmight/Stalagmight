@@ -16,7 +16,7 @@ import { encodeFeatureId } from './ids';
  * `budget_view`'s `in_range`) - clamp to the ramp's FAR color (dimmed, not
  * greyed - see `GAS_DIM_ALPHA`); only topologically UNCONNECTED stations read grey.
  * This three-way split lets a diver tell "past my turn point or scooter range"
- * (dimmed, colored) apart from "not part of this cave section at all" (grey)
+ * (dimmed, colored) apart from "not part of this cave line at all" (grey)
  * at a glance. These pure helpers keep the transform unit-testable in
  * isolation.
  */
@@ -27,7 +27,7 @@ export const UNREACHABLE_GAS = -1;
 
 /** Sentinel `gasReach` for "connected to the survey, but beyond the gas/turn
  *  budget" (renders the ramp's far color, dimmed - never grey, never the base
- *  section color; a uniform "just gas reach, but dimmer" clamp). */
+ *  line color; a uniform "just gas reach, but dimmer" clamp). */
 export const BEYOND_GAS_RANGE = -2;
 
 /**
@@ -39,7 +39,7 @@ export const GAS_NEAR = '#f4d03f'; // gold - little gas spent
 export const GAS_FAR = '#7d3c98'; // purple - at the turn budget
 
 /**
- * The set of `${section_id}:${station_index}` keys for stations reachable on the current gas plan.
+ * The set of `${line_id}:${station_index}` keys for stations reachable on the current gas plan.
  * Centralizes the "what counts as reachable" rule + the key format so the reach overlay and the
  * Plan-mode nearest-turnaround pick (`nearestReachableStationRef`) can't drift (#236). `station_refs`
  * and `reachable` are parallel arrays from the backend `GasReachField`.
@@ -49,7 +49,7 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
   for (let i = 0; i < field.station_refs.length; i++) {
     if (field.reachable[i]) {
       const r = field.station_refs[i]!;
-      keys.add(`${r.section_id}:${r.station_index}`);
+      keys.add(`${r.line_id}:${r.station_index}`);
     }
   }
   return keys;
@@ -99,10 +99,10 @@ export function nearestOriginShotEndpoint(
     const byKey = new Map<string, number | null>();
     for (let i = 0; i < reachField.station_refs.length; i++) {
       const r = reachField.station_refs[i]!;
-      byKey.set(`${r.section_id}:${r.station_index}`, reachField.gas_to_reach[i] ?? null);
+      byKey.set(`${r.line_id}:${r.station_index}`, reachField.gas_to_reach[i] ?? null);
     }
-    const aGas = byKey.get(`${a.section_id}:${a.station_index}`) ?? null;
-    const bGas = byKey.get(`${b.section_id}:${b.station_index}`) ?? null;
+    const aGas = byKey.get(`${a.line_id}:${a.station_index}`) ?? null;
+    const bGas = byKey.get(`${b.line_id}:${b.station_index}`) ?? null;
     if (aGas != null || bGas != null) {
       const aCost = aGas ?? Infinity;
       const bCost = bGas ?? Infinity;
@@ -114,22 +114,22 @@ export function nearestOriginShotEndpoint(
     ? new Set(
         entrances
           .filter((d) => d.is_entrance)
-          .map((d) => `${d.station_ref.section_id}:${d.station_ref.station_index}`)
+          .map((d) => `${d.station_ref.line_id}:${d.station_ref.station_index}`)
       )
     : null;
   const zeroDatums = activeStations.filter(
     (s) =>
       s.is_zero_datum &&
-      (entranceKeys === null || entranceKeys.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`))
+      (entranceKeys === null || entranceKeys.has(`${s.station_ref.line_id}:${s.station_ref.station_index}`))
   );
   if (zeroDatums.length === 0) return a;
 
   const coordsOf = new Map<string, Coordinates>();
   for (const s of activeStations) {
-    coordsOf.set(`${s.station_ref.section_id}:${s.station_ref.station_index}`, s.coordinates);
+    coordsOf.set(`${s.station_ref.line_id}:${s.station_ref.station_index}`, s.coordinates);
   }
   const nearestDatumDistSq = (ref: StationRef): number => {
-    const c = coordsOf.get(`${ref.section_id}:${ref.station_index}`);
+    const c = coordsOf.get(`${ref.line_id}:${ref.station_index}`);
     if (!c) return Infinity;
     let best = Infinity;
     for (const zd of zeroDatums) {
@@ -182,12 +182,12 @@ function worseOf(a: number, b: number): number {
  * purple end always means "at your turn pressure" regardless of how much of the
  * cave is in range - spare budget reads as spare color, never a false "at-limit".
  *
- * Reads the struct-of-arrays `SurveyData` (section metadata + `shotIds`) rather
- * than `Section[].shots[]`, for the same reason as `buildDistanceFeatureState`:
+ * Reads the struct-of-arrays `SurveyData` (line metadata + `shotIds`) rather
+ * than `Line[].shots[]`, for the same reason as `buildDistanceFeatureState`:
  * enabling the overlay must not force-materialize every lazy `Shot` at load.
  */
 export function buildGasReachFeatureState(
-  data: Pick<SurveyData, 'sections' | 'shotIds'>,
+  data: Pick<SurveyData, 'lines' | 'shotIds'>,
   field: GasReachField,
 ): GasReachFeatureState {
   // station ref → classified value (litres, UNREACHABLE_GAS, or BEYOND_GAS_RANGE).
@@ -195,7 +195,7 @@ export function buildGasReachFeatureState(
   for (let i = 0; i < field.station_refs.length; i++) {
     const r = field.station_refs[i]!;
     byRef.set(
-      `${r.section_id}:${r.station_index}`,
+      `${r.line_id}:${r.station_index}`,
       classifyStation(field.gas_to_reach[i], field.reachable[i] ?? false),
     );
   }
@@ -203,21 +203,21 @@ export function buildGasReachFeatureState(
   const stations = new Map<number, number>();
   const shots = new Map<number, number>();
 
-  for (const section of data.sections) {
-    const n = section.shotCount;
+  for (const line of data.lines) {
+    const n = line.shotCount;
     // Stations: index 0..=n
     for (let idx = 0; idx <= n; idx++) {
-      const v = byRef.get(`${section.id}:${idx}`);
-      stations.set(encodeFeatureId(section.id, idx), v ?? UNREACHABLE_GAS);
+      const v = byRef.get(`${line.id}:${idx}`);
+      stations.set(encodeFeatureId(line.id, idx), v ?? UNREACHABLE_GAS);
     }
     // Shots: connect station i → i+1; key by the shot's stable id (from SoA).
     // Conservative rule: if either endpoint is not in-reach, the shot takes the
     // worse of the two classes (unconnected dominates beyond-reach).
     for (let i = 0; i < n; i++) {
-      const shotId = data.shotIds[section.shotOffset + i]!;
-      const from = byRef.get(`${section.id}:${i}`) ?? UNREACHABLE_GAS;
-      const to = byRef.get(`${section.id}:${i + 1}`) ?? UNREACHABLE_GAS;
-      shots.set(encodeFeatureId(section.id, shotId), worseOf(from, to));
+      const shotId = data.shotIds[line.shotOffset + i]!;
+      const from = byRef.get(`${line.id}:${i}`) ?? UNREACHABLE_GAS;
+      const to = byRef.get(`${line.id}:${i + 1}`) ?? UNREACHABLE_GAS;
+      shots.set(encodeFeatureId(line.id, shotId), worseOf(from, to));
     }
   }
 

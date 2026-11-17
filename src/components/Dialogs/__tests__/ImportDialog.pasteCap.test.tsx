@@ -40,7 +40,7 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
 
 import '../../../i18n';
 import ImportDialog from '../ImportDialog';
-import { MAX_PASTE_ROWS } from '../newSectionRows';
+import { MAX_PASTE_ROWS } from '../newLineRows';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
@@ -77,7 +77,7 @@ describe('ImportDialog capped-paste toast', () => {
 
     expect(showToast).toHaveBeenCalledWith(
       expect.any(String),
-      'new-section-paste-cap',
+      'new-line-paste-cap',
       'error'
     );
   });

@@ -2,16 +2,16 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMBINE_SIDE_BY_SIDE_M } from '../../utils/combineSections';
+import { COMBINE_SIDE_BY_SIDE_M } from '../../utils/combineLines';
 
 /**
- * Combine Sections side-by-side tolerance tripwire (#740).
+ * Combine Lines side-by-side tolerance tripwire (#740).
  *
- * Two section ends within `COMBINE_TOLERANCE_M` (Rust, `combine_candidate.rs`)
+ * Two line ends within `COMBINE_TOLERANCE_M` (Rust, `combine_candidate.rs`)
  * are "side by side here", and a join moves a side by their residual. The
  * dialog lists such a move only when it tears a tie, deciding "within the
  * tolerance" with its own copy, `COMBINE_SIDE_BY_SIDE_M`
- * (`src/utils/combineSections.ts`). Nothing generated ties the two, so a
+ * (`src/utils/combineLines.ts`). Nothing generated ties the two, so a
  * change to one alone would make the dialog list or hide moves at the wrong
  * size without any error. This pins that they AGREE, not what they are.
  */

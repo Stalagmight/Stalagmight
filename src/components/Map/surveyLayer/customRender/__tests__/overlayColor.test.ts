@@ -130,21 +130,21 @@ const THEME = {
   severityClear: '#00000000',
 } as unknown as DisplayColorContext['themeColors'];
 
-/** One section (id 1): stations 0,1,2; shots (shotId 0,1). */
+/** One line (id 1): stations 0,1,2; shots (shotId 0,1). */
 function survey(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     { id: 1, name: null, color: '#0a0b0c',
       direction: 'in' as never, quality: 0, next_shot_id: 3, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);
-  d.shotSectionIds = new Uint32Array([1, 1]);
+  d.shotLineIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, 0]);
   d.shotDepthIn = new Float32Array([0, -1]);
   d.shotDepthOut = new Float32Array([-1, -2]);
   d.stationCount = 3;
-  d.stationSectionIds = new Uint32Array([1, 1, 1]);
+  d.stationLineIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);
@@ -202,7 +202,7 @@ describe('makeColorResolvers with an active overlay', () => {
   it('is identical to the plain build when no overlay is set', () => {
     const d = survey();
     const plain = makeColorResolvers(d, ctx(null));
-    // Section color #0a0b0c for the shot; #0a0b0c for the (non-zero-datum) station.
+    // Line color #0a0b0c for the shot; #0a0b0c for the (non-zero-datum) station.
     expect(plain.colorForShot(0, 1)).toEqual(packCssColor('#0a0b0c'));
     expect(plain.fillForStation(2)).toEqual(packCssColor('#0a0b0c'));
   });

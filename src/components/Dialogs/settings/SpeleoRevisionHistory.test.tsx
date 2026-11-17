@@ -1,5 +1,5 @@
 /**
- * Component test (#218) - the Project Settings revision-history section. Fetches
+ * Component test (#218) - the Project Settings revision-history line. Fetches
  * speleodb_get_revisions on mount, marks the current HEAD (not restorable), and
  * gates the Restore button on holding the lock.
  */
@@ -260,7 +260,7 @@ describe('SpeleoRevisionHistory (#218)', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
     await waitFor(() => expect(reply).toBeDefined());
-    // The user opens a local project; the workspace's SpeleoDB section goes away.
+    // The user opens a local project; the workspace's SpeleoDB line goes away.
     useSpeleoStore.setState({ remoteProjectId: null, link: null });
     reply?.();
 

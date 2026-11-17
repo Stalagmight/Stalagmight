@@ -158,7 +158,7 @@ function makeRestoringMap() {
 }
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
-  return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), section_id: 0 };
+  return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), line_id: 0 };
 }
 
 function makeSystems(): SystemGeometry[] {
@@ -167,7 +167,7 @@ function makeSystems(): SystemGeometry[] {
     location: null,
     file_path: fp,
     modified_at: '2026-01-01T00:00:00Z',
-    section_count: 1,
+    line_count: 1,
     total_length: 100,
     station_count: 2,
     gps_center: [0, 0],

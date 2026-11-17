@@ -42,7 +42,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
   const maxLabel = formatVolume(field.budget_litres, units);
   const originLabel = origin
     ? t('map.gasLegend.fromStation', {
-        id: formatStationId(origin.section_id, origin.station_index),
+        id: formatStationId(origin.line_id, origin.station_index),
       })
     : t('map.gasLegend.fromEntrance');
 

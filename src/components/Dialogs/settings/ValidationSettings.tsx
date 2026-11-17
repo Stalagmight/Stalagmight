@@ -66,7 +66,7 @@ export function ValidationSettings({
         <p className="text-xs text-text-secondary mb-4">{t('settings.validation.defaultsNote')}</p>
       )}
 
-      <SettingsSection title={t('settings.validation.sections.shotLength')} data-testid="section-shot-length">
+      <SettingsSection title={t('settings.validation.sections.shotLength')} data-testid="line-shot-length">
         <SettingRow
           label={t('settings.validation.shotLength.min.label')}
           helpText={t('settings.validation.shotLength.min.help')}
@@ -108,7 +108,7 @@ export function ValidationSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.validation.sections.depth')} data-testid="section-depth-warnings">
+      <SettingsSection title={t('settings.validation.sections.depth')} data-testid="line-depth-warnings">
         <SettingRow
           label={t('settings.validation.depth.max.label')}
           helpText={t('settings.validation.depth.max.help')}
@@ -130,7 +130,7 @@ export function ValidationSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.validation.sections.diffThresholds')} data-testid="section-diff-thresholds">
+      <SettingsSection title={t('settings.validation.sections.diffThresholds')} data-testid="line-diff-thresholds">
         <SettingRow
           label={t('settings.validation.azimuthDiff.label')}
           helpText={t('settings.validation.azimuthDiff.help')}

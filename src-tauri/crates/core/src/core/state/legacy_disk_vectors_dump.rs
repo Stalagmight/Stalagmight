@@ -33,11 +33,11 @@ use crate::config::Config;
 use crate::core::{Command, CommandResult, CommentHolder, UndoData, UndoEntry};
 use crate::models::config::GasConfig;
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CombinePick, CombineSectionsOptions, Coordinates,
+    AzimuthReference, ClosureStrategy, CombinePick, CombineLinesOptions, Coordinates,
     CorrectionSource, CreditEdit, CreditTargets, DivePlanSnapshot, Diver, ExistingShotUpdate,
-    GpsCoordinates, ImportClosure, ImportPlacement, ImportSectionConfig, LoopClosure, MarkedPoint,
-    Person, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
-    ShotUpdates, SplitAt, SplitSectionOptions, SplitSide, StationAnchor, StationKey, StationMerge,
+    GpsCoordinates, ImportClosure, ImportPlacement, ImportLineConfig, LoopClosure, MarkedPoint,
+    Person, Project, LineData, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationAnchor, StationKey, StationMerge,
     StationRef, SurveyCredit, SurveyDirection,
 };
 use crate::persistence::Database;
@@ -108,29 +108,29 @@ fn project(state: &AppState) -> Project {
     state.get_project_state().expect("a project is open")
 }
 
-fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
+fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
     project(state)
-        .get_section(section_id)
-        .expect("section exists")
+        .get_line(line_id)
+        .expect("line exists")
         .shots
         .iter()
         .map(|s| s.id)
         .collect()
 }
 
-fn shot_id(state: &AppState, section_id: SectionId, index: usize) -> ShotId {
-    *shot_ids(state, section_id)
+fn shot_id(state: &AppState, line_id: LineId, index: usize) -> ShotId {
+    *shot_ids(state, line_id)
         .get(index)
         .expect("shot index in range")
 }
 
-/// The station at the far end of a section.
-fn end(state: &AppState, section_id: SectionId) -> StationRef {
-    StationRef::new(section_id, shot_ids(state, section_id).len() as u32)
+/// The station at the far end of a line.
+fn end(state: &AppState, line_id: LineId) -> StationRef {
+    StationRef::new(line_id, shot_ids(state, line_id).len() as u32)
 }
 
-fn section_ids(state: &AppState) -> Vec<SectionId> {
-    project(state).sections.iter().map(|s| s.id).collect()
+fn line_ids(state: &AppState) -> Vec<LineId> {
+    project(state).lines.iter().map(|s| s.id).collect()
 }
 
 fn undo_len(state: &AppState) -> usize {
@@ -167,10 +167,10 @@ impl Steps<'_> {
         self.run(label, |state| state.execute(cmd))
     }
 
-    fn create(&mut self, name: &str, shots: Vec<ShotData>) -> SectionId {
+    fn create(&mut self, name: &str, shots: Vec<ShotData>) -> LineId {
         let result = self.exec(
-            &format!("CreateSection {name}"),
-            Command::CreateSection {
+            &format!("CreateLine {name}"),
+            Command::CreateLine {
                 name: Some(name.to_string()),
                 surveyor: None,
                 date: None,
@@ -179,16 +179,16 @@ impl Steps<'_> {
                 shots,
             },
         );
-        result.section_id.expect("CreateSection returns the new id")
+        result.line_id.expect("CreateLine returns the new id")
     }
 }
 
-/// A second `.stalx` for "Add .stalx to current project": two sections, a
+/// A second `.stalx` for "Add .stalx to current project": two lines, a
 /// merge, a comment and a manual offset, so the add records each kind.
 fn write_add_source(dir: &Path) -> std::path::PathBuf {
     let mut source = Project::new("Added Source".to_string(), Some("Elsewhere".to_string()));
     let first = source
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("Added One".to_string()),
             color: "#aa5500".to_string(),
             direction: Some(SurveyDirection::Out),
@@ -197,7 +197,7 @@ fn write_add_source(dir: &Path) -> std::path::PathBuf {
         })
         .id;
     let second = source
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("Added Two".to_string()),
             color: "#00aa55".to_string(),
             shots: shots(2, 200.0, 4.0, "Adder"),
@@ -216,7 +216,7 @@ fn write_add_source(dir: &Path) -> std::path::PathBuf {
     source
         .station_comments
         .insert(comment_key, "added comment".to_string());
-    source.section_offsets.insert(first, (40.0, -15.0));
+    source.line_offsets.insert(first, (40.0, -15.0));
     let path = dir.join("added-source.stalx");
     let mut db = Database::open(&path).expect("open add source");
     db.save_project(&source).expect("save add source");
@@ -228,17 +228,17 @@ fn write_add_source(dir: &Path) -> std::path::PathBuf {
 /// serde shape too. Built from the live project so their payload is real.
 fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
     let live = project(state);
-    let section = live.sections.first().expect("a section exists");
-    let sid = section.id;
-    let first_shot = section.shots.first().expect("a shot exists");
-    let section_data = SectionData {
-        name: section.name.clone(),
+    let line = live.lines.first().expect("a line exists");
+    let sid = line.id;
+    let first_shot = line.shots.first().expect("a shot exists");
+    let line_data = LineData {
+        name: line.name.clone(),
         surveyor: None,
         date: None,
-        color: section.color.clone(),
-        direction: Some(section.direction),
-        quality: section.quality,
-        shots: section.shots.iter().cloned().map(ShotData::from).collect(),
+        color: line.color.clone(),
+        direction: Some(line.direction),
+        quality: line.quality,
+        shots: line.shots.iter().cloned().map(ShotData::from).collect(),
     };
     let shot_data = ShotData::from(first_shot.clone());
     let closure = LoopClosure {
@@ -264,12 +264,12 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
     };
     vec![
         (
-            "synthetic legacy SectionSnapshot".to_string(),
+            "synthetic legacy LineSnapshot".to_string(),
             entry(
-                Command::DeleteSection { section_id: sid },
-                UndoData::SectionSnapshot {
-                    section_id: sid,
-                    section_data,
+                Command::DeleteLine { line_id: sid },
+                UndoData::LineSnapshot {
+                    line_id: sid,
+                    line_data,
                 },
             ),
         ),
@@ -277,11 +277,11 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
             "synthetic legacy ShotSnapshot".to_string(),
             entry(
                 Command::DeleteShot {
-                    section_id: sid,
+                    line_id: sid,
                     shot_id: first_shot.id,
                 },
                 UndoData::ShotSnapshot {
-                    section_id: sid,
+                    line_id: sid,
                     shot_id: first_shot.id,
                     shot_data: shot_data.clone(),
                     position: 0,
@@ -330,7 +330,7 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
                     prev_shot_before: Some((first_shot.id, shot_data.clone())),
                     prev_shot_after: Some((first_shot.id, shot_data)),
                     prev_offset: Some((0.1, 0.2, 0.3)),
-                    prev_section_offset: Some((4.0, 5.0)),
+                    prev_line_offset: Some((4.0, 5.0)),
                 },
             ),
         ),
@@ -339,7 +339,7 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
             entry(
                 Command::Batch {
                     commands: vec![Command::MoveSegment {
-                        section_id: sid,
+                        line_id: sid,
                         offset: Coordinates::new(1.0, 1.0, 0.0),
                     }],
                 },
@@ -350,12 +350,12 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
             "synthetic legacy InverseCommand(SetShotKind)".to_string(),
             entry(
                 Command::SetShotKind {
-                    section_id: sid,
+                    line_id: sid,
                     shot_id: first_shot.id,
                     kind: ShotKind::Reference,
                 },
                 UndoData::InverseCommand(Command::SetShotKind {
-                    section_id: sid,
+                    line_id: sid,
                     shot_id: first_shot.id,
                     kind: ShotKind::Normal,
                 }),
@@ -668,12 +668,12 @@ fn legacy_disk_vectors_dump() {
         labels: Vec::new(),
     };
 
-    // --- Sections -----------------------------------------------------------
+    // --- Lines -----------------------------------------------------------
     let a = steps.create("Main", shots(4, 90.0, 10.0, "Alice"));
     let b = steps.create("Branch", shots(3, 0.0, 8.0, "Bob"));
     let c = steps.create("Side", shots(3, 180.0, 6.0, "Carol"));
-    let legacy = steps.run("CreateSection Legacy (legacy surveyor/date)", |state| {
-        state.execute(Command::CreateSection {
+    let legacy = steps.run("CreateLine Legacy (legacy surveyor/date)", |state| {
+        state.execute(Command::CreateLine {
             name: Some("Legacy".to_string()),
             surveyor: Some("Legacy Surveyor".to_string()),
             date: day(2),
@@ -682,7 +682,7 @@ fn legacy_disk_vectors_dump() {
             shots: Vec::new(),
         })
     });
-    let legacy = legacy.section_id.expect("legacy section id");
+    let legacy = legacy.line_id.expect("legacy line id");
     let d = steps.create("Spur", shots(2, 45.0, 5.0, "Dan"));
     let k = steps.create("Keep", shots(2, 90.0, 5.0, "Kim"));
     let o = steps.create("Other", shots(3, 270.0, 4.0, "Olga"));
@@ -694,9 +694,9 @@ fn legacy_disk_vectors_dump() {
 
     // --- Shots --------------------------------------------------------------
     steps.exec(
-        "CreateShot append into the legacy-credited empty section",
+        "CreateShot append into the legacy-credited empty line",
         Command::CreateShot {
-            section_id: legacy,
+            line_id: legacy,
             shot: shot(10.0, 4.0, 3.0, "Leo"),
             after_shot_id: None,
             before_shot_id: None,
@@ -705,7 +705,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "CreateShot after",
         Command::CreateShot {
-            section_id: a,
+            line_id: a,
             shot: shot(95.0, 3.0, 6.0, "Alice"),
             after_shot_id: Some(shot_id(&state, a, 1)),
             before_shot_id: None,
@@ -714,7 +714,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "CreateShot before",
         Command::CreateShot {
-            section_id: a,
+            line_id: a,
             shot: shot(85.0, 2.0, 5.0, "Alice"),
             after_shot_id: None,
             before_shot_id: Some(shot_id(&state, a, 0)),
@@ -723,7 +723,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "UpdateShot",
         Command::UpdateShot {
-            section_id: a,
+            line_id: a,
             shot_id: shot_id(&state, a, 2),
             updates: ShotUpdates {
                 length: Some(11.0),
@@ -737,16 +737,16 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "SetShotKind",
         Command::SetShotKind {
-            section_id: a,
+            line_id: a,
             shot_id: last_a,
             kind: ShotKind::Jump,
         },
     );
     steps.exec(
-        "UpdateSectionMetadata name/color/direction/quality",
-        Command::UpdateSectionMetadata {
-            section_id: a,
-            updates: SectionUpdates {
+        "UpdateLineMetadata name/color/direction/quality",
+        Command::UpdateLineMetadata {
+            line_id: a,
+            updates: LineUpdates {
                 name: Some(Some("Main Line".to_string())),
                 color: Some("#123456".to_string()),
                 direction: Some(SurveyDirection::Out),
@@ -756,10 +756,10 @@ fn legacy_disk_vectors_dump() {
         },
     );
     steps.exec(
-        "UpdateSectionMetadata legacy surveyor/date",
-        Command::UpdateSectionMetadata {
-            section_id: b,
-            updates: SectionUpdates {
+        "UpdateLineMetadata legacy surveyor/date",
+        Command::UpdateLineMetadata {
+            line_id: b,
+            updates: LineUpdates {
                 name: Some(Some("Branch Line".to_string())),
                 surveyor: Some(Some("Old Surveyor".to_string())),
                 date: Some(day(3)),
@@ -768,9 +768,9 @@ fn legacy_disk_vectors_dump() {
         },
     );
     steps.exec(
-        "EditShotCredit section",
+        "EditShotCredit line",
         Command::EditShotCredit {
-            targets: CreditTargets::Section { section_id: c },
+            targets: CreditTargets::Line { line_id: c },
             edit: CreditEdit {
                 add_surveyors: Some(vec![person("Carl")]),
                 set_date: Some(day(4)),
@@ -794,16 +794,16 @@ fn legacy_disk_vectors_dump() {
 
     // --- Moves and merges ---------------------------------------------------
     steps.exec(
-        "MoveSection",
-        Command::MoveSection {
-            section_id: b,
+        "MoveLine",
+        Command::MoveLine {
+            line_id: b,
             offset: Coordinates::new(3.0, 4.0, 0.0),
         },
     );
     steps.exec(
         "MoveSegment",
         Command::MoveSegment {
-            section_id: d,
+            line_id: d,
             offset: Coordinates::new(-2.0, 1.0, 0.0),
         },
     );
@@ -833,7 +833,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "UpdateShot inside a rigid group",
         Command::UpdateShot {
-            section_id: a,
+            line_id: a,
             shot_id: shot_id(&state, a, 1),
             updates: ShotUpdates {
                 length: Some(9.5),
@@ -922,7 +922,7 @@ fn legacy_disk_vectors_dump() {
                 station_ref: StationRef::new(a, 1),
             },
             target: CommentHolder::Shot {
-                section_id: a,
+                line_id: a,
                 shot_id: shot_id(&state, a, 0),
             },
             swap: false,
@@ -965,16 +965,16 @@ fn legacy_disk_vectors_dump() {
 
     // --- Reverse, delete, batch ---------------------------------------------
     steps.exec(
-        "ReverseSection",
-        Command::ReverseSection {
-            section_id: c,
+        "ReverseLine",
+        Command::ReverseLine {
+            line_id: c,
             swap_left_right: true,
         },
     );
     steps.exec(
         "DeleteShot",
         Command::DeleteShot {
-            section_id: d,
+            line_id: d,
             shot_id: shot_id(&state, d, 1),
         },
     );
@@ -982,7 +982,7 @@ fn legacy_disk_vectors_dump() {
         "Batch (create, update, credit, metadata, reverse)",
         Command::Batch {
             commands: vec![
-                Command::CreateSection {
+                Command::CreateLine {
                     name: Some("Batched".to_string()),
                     surveyor: None,
                     date: None,
@@ -991,7 +991,7 @@ fn legacy_disk_vectors_dump() {
                     shots: shots(2, 15.0, 3.0, "Bea"),
                 },
                 Command::UpdateShot {
-                    section_id: b,
+                    line_id: b,
                     shot_id: shot_id(&state, b, 0),
                     updates: ShotUpdates {
                         depth_in: Some(7.5),
@@ -999,21 +999,21 @@ fn legacy_disk_vectors_dump() {
                     },
                 },
                 Command::EditShotCredit {
-                    targets: CreditTargets::Section { section_id: b },
+                    targets: CreditTargets::Line { line_id: b },
                     edit: CreditEdit {
                         add_surveyors: Some(vec![person("Batch Surveyor")]),
                         ..Default::default()
                     },
                 },
-                Command::UpdateSectionMetadata {
-                    section_id: d,
-                    updates: SectionUpdates {
+                Command::UpdateLineMetadata {
+                    line_id: d,
+                    updates: LineUpdates {
                         name: Some(Some("Spur Line".to_string())),
                         ..Default::default()
                     },
                 },
-                Command::ReverseSection {
-                    section_id: d,
+                Command::ReverseLine {
+                    line_id: d,
                     swap_left_right: false,
                 },
             ],
@@ -1021,9 +1021,9 @@ fn legacy_disk_vectors_dump() {
     );
 
     // --- Import, withdraw, create-and-merge ---------------------------------
-    let before_import = section_ids(&state);
-    let import_section = |index: u32, name: &str, placement: ImportPlacement| ImportSectionConfig {
-        section_index: index,
+    let before_import = line_ids(&state);
+    let import_line = |index: u32, name: &str, placement: ImportPlacement| ImportLineConfig {
+        line_index: index,
         name: Some(name.to_string()),
         surveyor: Some("Importer".to_string()),
         date: day(5),
@@ -1041,10 +1041,10 @@ fn legacy_disk_vectors_dump() {
         azimuth_reference: None,
     };
     let b_last = end(&state, b);
-    steps.run("Import sections", |state| {
-        state.execute_import_sections(
+    steps.run("Import lines", |state| {
+        state.execute_import_lines(
             vec![
-                import_section(
+                import_line(
                     0,
                     "Imported One",
                     ImportPlacement::FromExisting {
@@ -1052,29 +1052,29 @@ fn legacy_disk_vectors_dump() {
                         existing_station: b_last,
                     },
                 ),
-                import_section(
+                import_line(
                     1,
                     "Imported Two",
                     ImportPlacement::FromImporting {
                         import_station: 0,
-                        target_section_index: 0,
+                        target_line_index: 0,
                         target_station_index: 2,
                     },
                 ),
             ],
             vec![ImportClosure {
-                from_section_index: 1,
+                from_line_index: 1,
                 from_station_index: 3,
-                to_section_index: 0,
+                to_line_index: 0,
                 to_station_index: 3,
             }],
             Some("synthetic-file-hash".to_string()),
             vec![
-                "synthetic-section-hash-0".to_string(),
-                "synthetic-section-hash-1".to_string(),
+                "synthetic-line-hash-0".to_string(),
+                "synthetic-line-hash-1".to_string(),
             ],
             vec![ExistingShotUpdate {
-                section_id: c,
+                line_id: c,
                 shot_id: shot_id(state, c, 0),
                 updates: ShotUpdates {
                     comment: Some(Some("updated by import".to_string())),
@@ -1084,21 +1084,21 @@ fn legacy_disk_vectors_dump() {
             VirtualShotMode::Auto,
         )
     });
-    let imported: Vec<SectionId> = section_ids(&state)
+    let imported: Vec<LineId> = line_ids(&state)
         .into_iter()
         .filter(|id| !before_import.contains(id))
         .collect();
-    let withdrawn = *imported.last().expect("the import created sections");
+    let withdrawn = *imported.last().expect("the import created lines");
     steps.exec(
-        "Batch (DeleteSection + UntrackImport)",
+        "Batch (DeleteLine + UntrackImport)",
         Command::Batch {
             commands: vec![
-                Command::DeleteSection {
-                    section_id: withdrawn,
+                Command::DeleteLine {
+                    line_id: withdrawn,
                 },
                 Command::UntrackImport {
                     file_hashes: vec!["synthetic-file-hash".to_string()],
-                    section_hashes: vec!["synthetic-section-hash-1".to_string()],
+                    line_hashes: vec!["synthetic-line-hash-1".to_string()],
                 },
             ],
         },
@@ -1127,17 +1127,17 @@ fn legacy_disk_vectors_dump() {
         },
     );
     steps.exec(
-        "ReverseSection O",
-        Command::ReverseSection {
-            section_id: o,
+        "ReverseLine O",
+        Command::ReverseLine {
+            line_id: o,
             swap_left_right: false,
         },
     );
-    steps.run("Combine sections", |state| {
-        state.execute_combine_sections(
+    steps.run("Combine lines", |state| {
+        state.execute_combine_lines(
             k,
             o,
-            CombineSectionsOptions {
+            CombineLinesOptions {
                 name: "Combined".to_string(),
                 color: "#abcdef".to_string(),
                 swap_lr: true,
@@ -1151,7 +1151,7 @@ fn legacy_disk_vectors_dump() {
     // --- Combine that leaves a held gauge -----------------------------------
     // X (lowest id) holds its component's gauge; Y, a branch off X, has an id
     // between X and Z. Combining X into Z retires X, so the component's new
-    // lowest section (Y) does not hold the gauge station and the combine
+    // lowest line (Y) does not hold the gauge station and the combine
     // records it in `Project::held_gauges`.
     let gx = steps.create("Gauge X", shots(2, 30.0, 5.0, "Gus"));
     let gy = steps.create("Gauge Y", shots(2, 120.0, 4.0, "Gus"));
@@ -1170,11 +1170,11 @@ fn legacy_disk_vectors_dump() {
             station_b: StationRef::new(gy, 0),
         },
     );
-    steps.run("Combine sections (held gauge)", |state| {
-        state.execute_combine_sections(
+    steps.run("Combine lines (held gauge)", |state| {
+        state.execute_combine_lines(
             gz,
             gx,
-            CombineSectionsOptions {
+            CombineLinesOptions {
                 name: "Gauge Combined".to_string(),
                 color: "#445566".to_string(),
                 swap_lr: false,
@@ -1190,7 +1190,7 @@ fn legacy_disk_vectors_dump() {
     );
 
     // --- Splits and delete-and-split ----------------------------------------
-    let split_options = |a_name: &str, b_name: &str| SplitSectionOptions {
+    let split_options = |a_name: &str, b_name: &str| SplitLineOptions {
         name_a: a_name.to_string(),
         name_b: b_name.to_string(),
         color_a: "#111111".to_string(),
@@ -1198,16 +1198,16 @@ fn legacy_disk_vectors_dump() {
         comment_side: SplitSide::Both,
         datum_side: SplitSide::A,
     };
-    steps.run("Split section at a station", |state| {
-        state.execute_split_section(
+    steps.run("Split line at a station", |state| {
+        state.execute_split_line(
             a,
             SplitAt::Station { station_index: 2 },
             split_options("Main A", "Main B"),
         )
     });
     let b_shot = shot_id(&state, b, 1);
-    steps.run("Split section inside a shot", |state| {
-        state.execute_split_section(
+    steps.run("Split line inside a shot", |state| {
+        state.execute_split_line(
             b,
             SplitAt::Shot {
                 shot_id: b_shot,
@@ -1240,8 +1240,8 @@ fn legacy_disk_vectors_dump() {
         state.execute_delete_shot_range_shift(ds3, ds3_from, ds3_to)
     });
     let ds4_shot = shot_id(&state, ds4, 0);
-    steps.run("Delete last shot and section", |state| {
-        state.execute_delete_last_shot_and_section(ds4, ds4_shot)
+    steps.run("Delete last shot and line", |state| {
+        state.execute_delete_last_shot_and_line(ds4, ds4_shot)
     });
     let ss_shot = shot_id(&state, ss, 0);
     steps.run("Split shot at distance", |state| {
@@ -1273,8 +1273,8 @@ fn legacy_disk_vectors_dump() {
     let source = write_add_source(temp.path());
     steps.exec("Add .stalx", Command::add_project_file(source));
     steps.exec(
-        "DeleteSection",
-        Command::DeleteSection { section_id: legacy },
+        "DeleteLine",
+        Command::DeleteLine { line_id: legacy },
     );
 
     // --- Three cheap edits, undone below so the redo stack holds them -------
@@ -1288,7 +1288,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "CreateShot append (to be undone)",
         Command::CreateShot {
-            section_id: ss,
+            line_id: ss,
             shot: shot(345.0, 2.0, 7.0, "Eve"),
             after_shot_id: None,
             before_shot_id: None,
@@ -1297,7 +1297,7 @@ fn legacy_disk_vectors_dump() {
     steps.exec(
         "UpdateShot (to be undone)",
         Command::UpdateShot {
-            section_id: ss,
+            line_id: ss,
             shot_id: shot_id(&state, ss, 0),
             updates: ShotUpdates {
                 depth_out: Some(9.0),

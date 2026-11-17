@@ -58,7 +58,7 @@ function stubContext(seed: number): ScenarioContext {
   return partial as unknown as ScenarioContext;
 }
 
-/** A digest with two populated sections, one merge, one datum and one closure. */
+/** A digest with two populated lines, one merge, one datum and one closure. */
 const DIGEST: TargetingDigest = {
   s: [
     [1, [1001, 1002, 1003]],
@@ -123,7 +123,7 @@ describe('the suggestion motif', () => {
     return value as number;
   };
 
-  it('keeps a drifted probe inside every cutoff of its own planted section', () => {
+  it('keeps a drifted probe inside every cutoff of its own planted line', () => {
     // Without this the probe is just `randomShotData` by another name: the
     // command returns an empty list and the scoring loop, the merge-offset
     // search and the crossing-clearance guard behind it never run.
@@ -266,11 +266,11 @@ describe('the v3 import group', () => {
     }
   });
 
-  it('bounds the shots one importSections call carries', () => {
+  it('bounds the shots one importLines call carries', () => {
     for (const action of drawAll(40)) {
-      if (action.action !== 'importSections') continue;
-      const sections = action.args[0] as { shots: unknown[] }[];
-      const total = sections.reduce((sum, section) => sum + section.shots.length, 0);
+      if (action.action !== 'importLines') continue;
+      const lines = action.args[0] as { shots: unknown[] }[];
+      const total = lines.reduce((sum, line) => sum + line.shots.length, 0);
       expect(total).toBeLessThanOrEqual(24);
     }
   });
@@ -297,7 +297,7 @@ describe('mustBeRejected', () => {
   });
 
   const config = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    section_index: 0,
+    line_index: 0,
     name: 'x',
     surveyor: null,
     date: '2024-01-01',
@@ -311,20 +311,20 @@ describe('mustBeRejected', () => {
     ...over,
   });
 
-  it('says nothing about actions that are not importSections', () => {
-    expect(mustBeRejected('createSection', [config()])).toBeNull();
+  it('says nothing about actions that are not importLines', () => {
+    expect(mustBeRejected('createLine', [config()])).toBeNull();
     expect(mustBeRejected('executeTmlImport', ['fuzz-files/a.tml', null])).toBeNull();
   });
 
   it('passes a legal payload, including a null date and an empty batch', () => {
-    expect(mustBeRejected('importSections', [[config()], null, null, 'Auto', null])).toBeNull();
-    expect(mustBeRejected('importSections', [[config({ date: null })], null, null, 'Auto', null])).toBeNull();
-    expect(mustBeRejected('importSections', [[], null, null, 'Auto', null])).toBeNull();
-    expect(mustBeRejected('importSections', [[config({ shots: [] })], null, null, 'Auto', null])).toBeNull();
+    expect(mustBeRejected('importLines', [[config()], null, null, 'Auto', null])).toBeNull();
+    expect(mustBeRejected('importLines', [[config({ date: null })], null, null, 'Auto', null])).toBeNull();
+    expect(mustBeRejected('importLines', [[], null, null, 'Auto', null])).toBeNull();
+    expect(mustBeRejected('importLines', [[config({ shots: [] })], null, null, 'Auto', null])).toBeNull();
   });
 
   it('refuses date:"" - issue #478, on the route that bypasses the wizard', () => {
-    const reason = mustBeRejected('importSections', [[config({ date: '' })], null, null, 'Auto', null]);
+    const reason = mustBeRejected('importLines', [[config({ date: '' })], null, null, 'Auto', null]);
 
     expect(reason).toContain('date');
     expect(reason).toContain('#478');
@@ -334,7 +334,7 @@ describe('mustBeRejected', () => {
     for (const poison of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null]) {
       for (const field of ['length', 'azimuth_in', 'azimuth_out', 'depth_in', 'depth_out']) {
         const args = [[config({ shots: [shot({ [field]: poison })] })], null, null, 'Auto', null];
-        expect(mustBeRejected('importSections', args), `${field}=${String(poison)}`).toContain(field);
+        expect(mustBeRejected('importLines', args), `${field}=${String(poison)}`).toContain(field);
       }
     }
   });
@@ -346,30 +346,30 @@ describe('mustBeRejected', () => {
     // claiming otherwise here would fail every run that drew one.
     for (const field of ['pitch_in', 'pitch_out', 'left', 'right', 'up', 'down']) {
       const args = [[config({ shots: [shot({ [field]: Number.NaN })] })], null, null, 'Auto', null];
-      expect(mustBeRejected('importSections', args), field).toBeNull();
+      expect(mustBeRejected('importLines', args), field).toBeNull();
     }
   });
 
   it('does NOT claim a refusal for a non-finite existing_shot_update', () => {
-    // `execute_import_sections` DOES refuse one by name - but only when it
+    // `execute_import_lines` DOES refuse one by name - but only when it
     // arrives non-finite, which nothing crossing JSON can. Every `ShotUpdates`
     // field is `Option<f64>` with `#[serde(default)]`, `JSON.stringify` spells
     // NaN `null`, and `null` reads back as `None` = "leave this field alone".
     // Claiming a refusal here failed a legal run (naharon seed 59 x60, v3).
-    const updates = [{ section_id: 1, shot_id: 1001, updates: { length: Number.NaN } }];
+    const updates = [{ line_id: 1, shot_id: 1001, updates: { length: Number.NaN } }];
 
-    expect(mustBeRejected('importSections', [[config()], null, null, 'Auto', null, updates])).toBeNull();
+    expect(mustBeRejected('importLines', [[config()], null, null, 'Auto', null, updates])).toBeNull();
   });
 
   it('has no opinion about anything the v1/v2 generators produce', () => {
     // The guarantee that matters for compatibility: this oracle was added with
     // v3, and it must be silent on every payload the older streams can build -
-    // `randomSectionData` uses finite boundary values and always a real date.
+    // `randomLineData` uses finite boundary values and always a real date.
     const v2Payloads = [
       [[config({ name: '', surveyor: '', quality: 1 })], null, null, 'AllJumps', null],
       [[config({ shots: [shot({ length: 0 }), shot({ length: 1e-9 }), shot({ length: -5 })] })], null, null, null, null],
       [[config({ station_comments: [[0, '']] })], null, null, 'AllReferences', null],
     ];
-    for (const args of v2Payloads) expect(mustBeRejected('importSections', args)).toBeNull();
+    for (const args of v2Payloads) expect(mustBeRejected('importLines', args)).toBeNull();
   });
 });

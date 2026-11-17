@@ -55,7 +55,7 @@ describe('collaborator suggestions', () => {
   });
 
   it('names a collaborator with no known name by their email local part, never the address', () => {
-    // The NAME reaches sections.surveyor and the TML / JSON exports, which must
+    // The NAME reaches lines.surveyor and the TML / JSON exports, which must
     // not carry an email.
     expect(collaboratorPerson({ name: null, email: ' quiet@caves.example ', level: 'READ_ONLY' })).toEqual({
       name: 'quiet',

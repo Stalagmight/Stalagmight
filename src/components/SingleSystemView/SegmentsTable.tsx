@@ -20,7 +20,7 @@ import type { StationRef } from '../../types/project';
 const MAX_VISIBLE_ROWS = 12;
 
 function sameStation(a: StationRef | null, b: StationRef | null): boolean {
-  return a != null && b != null && a.section_id === b.section_id && a.station_index === b.station_index;
+  return a != null && b != null && a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 /**
@@ -114,7 +114,7 @@ export function SegmentsTable() {
         boundaryLabelAt: (k) => boundaryLabels[k] ?? '',
         boundaryTitleAt: (k) => {
           const ref = boundaryRefs[k] ?? null;
-          return ref ? formatStationId(ref.section_id, ref.station_index) : undefined;
+          return ref ? formatStationId(ref.line_id, ref.station_index) : undefined;
         },
         parksAfter: (i) => sameStation(dropRef, boundaryRefs[i + 1] ?? null),
         onToggleScooter: (i, next) => applyEdits([{ row: i, colKey: SEG_COL.scooter, value: next }]),

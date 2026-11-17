@@ -166,7 +166,7 @@ describe('useDismissableLayer', () => {
   it('DOES dismiss on a mousedown inside an unrelated listbox owned by a trigger outside `contains` (#462)', () => {
     // A listbox whose owning trigger is NOT part of this layer (e.g. an unrelated
     // widget elsewhere on the page, such as SectionsPanel's own role="listbox"
-    // section list) must still count as a genuine outside click.
+    // line list) must still count as a genuine outside click.
     mount([dropdown]);
     const elsewhereTrigger = document.createElement('button');
     elsewhereTrigger.setAttribute('aria-controls', 'unrelated-listbox');

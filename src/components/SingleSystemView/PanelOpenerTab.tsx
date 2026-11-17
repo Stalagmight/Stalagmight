@@ -7,7 +7,7 @@ export type PanelEdge = 'left' | 'right' | 'bottom';
 interface PanelOpenerTabProps {
   reveal: PanelReveal;
   edge: PanelEdge;
-  /** Short panel name shown on the closed tab (e.g. "Sections"). */
+  /** Short panel name shown on the closed tab (e.g. "Lines"). */
   label: string;
   /** Chevron pointing into the viewport (open hint), e.g. ChevronRightIcon. */
   openArrow: ReactNode;

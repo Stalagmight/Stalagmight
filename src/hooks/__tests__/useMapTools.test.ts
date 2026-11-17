@@ -14,8 +14,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { nearestReachableStationRef } from '../useMapTools';
 
-const st = (section_id: number, station_index: number, x: number, y: number) => ({
-  station_ref: { section_id, station_index },
+const st = (line_id: number, station_index: number, x: number, y: number) => ({
+  station_ref: { line_id, station_index },
   coordinates: { x, y, z: 0 },
 });
 
@@ -25,11 +25,11 @@ describe('nearestReachableStationRef', () => {
 
   it('returns the nearest station when no reachability filter is applied (field not loaded yet)', () => {
     expect(nearestReachableStationRef({ x: 12, y: 1 }, stations, null)).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 1,
     });
     expect(nearestReachableStationRef({ x: 28, y: 0 }, stations, null)).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 3,
     });
   });
@@ -37,7 +37,7 @@ describe('nearestReachableStationRef', () => {
   it('with the whole cave reachable, picks the plain nearest station (the low-RMV use case)', () => {
     const allReachable = new Set(['1:0', '1:1', '1:2', '1:3']);
     expect(nearestReachableStationRef({ x: 21, y: 0 }, stations, allReachable)).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 2,
     });
   });
@@ -47,7 +47,7 @@ describe('nearestReachableStationRef', () => {
     // nearest one a diver can actually turn at (an unreachable pick would fall back to deepest).
     const reachable = new Set(['1:0', '1:1']);
     expect(nearestReachableStationRef({ x: 29, y: 0 }, stations, reachable)).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 1,
     });
   });
@@ -65,7 +65,7 @@ describe('nearestReachableStationRef', () => {
     const nothingReachable = new Set<string>();
     expect(nearestReachableStationRef({ x: 29, y: 0 }, stations, nothingReachable)).toBeNull();
     expect(nearestReachableStationRef({ x: 29, y: 0 }, stations, null)).toEqual({
-      section_id: 1,
+      line_id: 1,
       station_index: 3,
     });
   });

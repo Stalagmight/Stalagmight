@@ -6,7 +6,7 @@ import {
   openDmpSelectionDialog,
   proceedToDmpSectionConfig,
   ensureDmpNewImportDialogVisible,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
   openSettingsFromMenu,
@@ -127,7 +127,7 @@ test.describe('Focus Management', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
       await createProject(page, 'Focus Return Test');
-      await seedProjectWithSections(page, [
+      await seedProjectWithLines(page, [
         {
           name: 'Main Passage',
           direction: 'in',
@@ -147,23 +147,23 @@ test.describe('Focus Management', () => {
     });
 
     test('closing dialog via Escape returns focus to trigger element', async ({ page }) => {
-      // Use a stable, always-present control as the trigger. (Section delete moved
+      // Use a stable, always-present control as the trigger. (Line delete moved
       // to the context menu, whose item unmounts when the dialog opens - so it can
-      // no longer be the focus-return target.) Focus the Add-section button, then
+      // no longer be the focus-return target.) Focus the Add-line button, then
       // open the ConfirmDialog while it holds focus so the dialog captures it.
-      const trigger = page.getByTestId('sections-add-button');
+      const trigger = page.getByTestId('lines-add-button');
       await expect(trigger).toBeVisible({ timeout: 5000 });
       await trigger.focus();
       await expect(trigger).toBeFocused();
 
-      const sectionId = await page.evaluate(
-        () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id,
+      const lineId = await page.evaluate(
+        () => (window as any).__E2E_TEST__.projectStore.getState().project.lines[0].id,
       );
       await page.evaluate((id) => {
         (window as any).__E2E_TEST__.uiStore
           .getState()
-          .openDialog('confirm-delete', { type: 'section', sectionId: id });
-      }, sectionId);
+          .openDialog('confirm-delete', { type: 'line', lineId: id });
+      }, lineId);
 
       // ConfirmDialog should be open
       await expect(page.getByTestId('confirm-dialog')).toBeVisible({ timeout: 5000 });
@@ -173,7 +173,7 @@ test.describe('Focus Management', () => {
       await expect(page.getByTestId('confirm-dialog')).not.toBeVisible({ timeout: 3000 });
 
       // Focus should return to the trigger element.
-      expect(await focusedTestId(page)).toBe('sections-add-button');
+      expect(await focusedTestId(page)).toBe('lines-add-button');
     });
   });
 
@@ -246,9 +246,9 @@ test.describe('Focus Management', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
       await createProject(page, 'Initial Focus Test');
-      await seedProjectWithSections(page, [
+      await seedProjectWithLines(page, [
         {
-          name: 'Test Section',
+          name: 'Test Line',
           direction: 'in',
           shots: [
             {
@@ -266,10 +266,10 @@ test.describe('Focus Management', () => {
     });
 
     test('ConfirmDialog focuses the primary action button (Delete)', async ({ page }) => {
-      // Open ConfirmDialog via the section context menu (section delete moved
+      // Open ConfirmDialog via the line context menu (line delete moved
       // there from the per-row button).
-      await page.locator('[data-testid^="section-row-"]').first().click({ button: 'right' });
-      await page.getByRole('button', { name: 'Delete Section' }).click();
+      await page.locator('[data-testid^="line-row-"]').first().click({ button: 'right' });
+      await page.getByRole('button', { name: 'Delete Line' }).click();
 
       await expect(page.getByTestId('confirm-dialog')).toBeVisible({ timeout: 5000 });
 
@@ -282,8 +282,8 @@ test.describe('Focus Management', () => {
       // button should receive initial focus - ConfirmDialog has no form inputs
       // and no [data-autofocus].
       //
-      // Note: For 'section' type, the Delete button is disabled (type === 'station'
-      // check), but for section delete it should be enabled.
+      // Note: For 'line' type, the Delete button is disabled (type === 'station'
+      // check), but for line delete it should be enabled.
       const focusedEl = await page.evaluate(() => {
         const ae = document.activeElement;
         return {
@@ -391,7 +391,7 @@ test.describe('Focus Management', () => {
       await expect(dialog).toBeVisible({ timeout: 5000 });
 
       // Mark wizard state as dirty so cancel consistently opens the confirm overlay.
-      await dialog.getByRole('textbox', { name: 'Section name' }).fill('Main Passage (edited)');
+      await dialog.getByRole('textbox', { name: 'Line name' }).fill('Main Passage (edited)');
 
       // Trigger cancel confirmation
       await dialog.getByTestId('cancel-button').click();

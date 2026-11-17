@@ -1,20 +1,20 @@
 /**
  * Overlap treatment must land on the right target-import row even after the
- * user has edited that section in the wizard.
+ * user has edited that line in the wizard.
  *
- * `computeTargetShotIndex` answers in the target section's ORIGINAL DMP
+ * `computeTargetShotIndex` answers in the target line's ORIGINAL DMP
  * ordering, and `convertToEditableShots` stamps each original shot's id with
  * that same index. Indexing the edit array by that number went wrong the moment
  * a row was inserted before the overlap: the inserted row shifted every position
  * after it, so the treatment landed on the inserted row and left the real
- * overlap row untreated - the emitted target section came out with the wrong
+ * overlap row untreated - the emitted target line came out with the wrong
  * geometry. The fix resolves the row by identity (the non-new row whose id is
  * the DMP index), which follows the shot through inserts and deletions.
  */
 import { describe, it, expect } from 'vitest';
 import { applyAllOverlapTreatments } from '../overlapTreatment';
-import type { SectionEditState, ConfirmedOverlapInfo } from '../batchImportHelpers';
-import type { CrossSectionSuggestion, DmpFile } from '../../types/commands';
+import type { LineEditState, ConfirmedOverlapInfo } from '../batchImportHelpers';
+import type { CrossLineSuggestion, DmpFile } from '../../types/commands';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
 
 const measured = (id: number, length: number, overrides: Partial<EditableShot> = {}): EditableShot =>
@@ -57,7 +57,7 @@ const blankNew = (tempId: number): EditableShot =>
     kind: 'Normal',
   }) as EditableShot;
 
-const edits = (shots: EditableShot[]): SectionEditState => ({
+const edits = (shots: EditableShot[]): LineEditState => ({
   name: 'S',
   date: '',
   color: '',
@@ -67,10 +67,10 @@ const edits = (shots: EditableShot[]): SectionEditState => ({
   shots,
 });
 
-/** import section 0 (deleted on its side) overlapping target import section 1,
+/** import line 0 (deleted on its side) overlapping target import line 1,
  *  Front + forward, two matched shots against target stations 0 and 1. */
-const suggestion: CrossSectionSuggestion = {
-  importSectionIndex: 0,
+const suggestion: CrossLineSuggestion = {
+  importLineIndex: 0,
   importStationIndex: 0,
   existingStationIndex: 0,
   matchedShots: 2,
@@ -80,17 +80,17 @@ const suggestion: CrossSectionSuggestion = {
   direction: 'forward',
   isPartial: false,
   confidence: 'high',
-  existingSectionName: 'target',
-  importSectionName: 'import',
+  existingLineName: 'target',
+  importLineName: 'import',
   targetType: 'importing',
-  existingSectionId: null,
+  existingLineId: null,
   targetImportIndex: 1,
 };
 
-const dmpFile: DmpFile = { version: 1, sections: [] };
+const dmpFile: DmpFile = { version: 1, lines: [] };
 const noConfirmed = new Map<number, ConfirmedOverlapInfo>();
 
-/** The target section's original shots: ids 0..2 mirror the DMP ordering, with
+/** The target line's original shots: ids 0..2 mirror the DMP ordering, with
  *  lengths distinct enough to tell a correct pairing from a shifted one. */
 const targetOriginals = (): EditableShot[] => [
   measured(0, 20),
@@ -103,7 +103,7 @@ const importShots = (): EditableShot[] => [measured(0, 10), measured(1, 12), mea
 
 describe('applyAllOverlapTreatments target-import row resolution', () => {
   it('treats the correct originals when a blank row is inserted before the overlap', () => {
-    const sectionEdits = new Map<number, SectionEditState>([
+    const lineEdits = new Map<number, LineEditState>([
       [0, edits(importShots())],
       [1, edits([blankNew(-1), ...targetOriginals()])],
     ]);
@@ -111,12 +111,12 @@ describe('applyAllOverlapTreatments target-import row resolution', () => {
     applyAllOverlapTreatments(
       [suggestion],
       noConfirmed,
-      sectionEdits,
+      lineEdits,
       dmpFile,
       'interpolate',
     );
 
-    const target = sectionEdits.get(1)!.shots;
+    const target = lineEdits.get(1)!.shots;
     // The inserted blank row is still an invitation - untreated.
     expect(target[0]!.isNew).toBe(true);
     expect(Number.isNaN(target[0]!.length)).toBe(true);
@@ -132,7 +132,7 @@ describe('applyAllOverlapTreatments target-import row resolution', () => {
 
   it('leaves a filled-in inserted row alone and still treats the originals', () => {
     const inserted = measured(-5, 99, { tempId: 5, isNew: true, azimuth_in: 45, azimuth_out: 45 });
-    const sectionEdits = new Map<number, SectionEditState>([
+    const lineEdits = new Map<number, LineEditState>([
       [0, edits(importShots())],
       [1, edits([inserted, ...targetOriginals()])],
     ]);
@@ -140,12 +140,12 @@ describe('applyAllOverlapTreatments target-import row resolution', () => {
     applyAllOverlapTreatments(
       [suggestion],
       noConfirmed,
-      sectionEdits,
+      lineEdits,
       dmpFile,
       'interpolate',
     );
 
-    const target = sectionEdits.get(1)!.shots;
+    const target = lineEdits.get(1)!.shots;
     // The inserted new row keeps its own geometry - a positional index would
     // have interpolated it (avg of 99 and import id0's 10 = 54.5).
     expect(target[0]!.isNew).toBe(true);
@@ -157,7 +157,7 @@ describe('applyAllOverlapTreatments target-import row resolution', () => {
   });
 
   it('still treats the correct row on an unedited target (no inserts)', () => {
-    const sectionEdits = new Map<number, SectionEditState>([
+    const lineEdits = new Map<number, LineEditState>([
       [0, edits(importShots())],
       [1, edits(targetOriginals())],
     ]);
@@ -165,12 +165,12 @@ describe('applyAllOverlapTreatments target-import row resolution', () => {
     applyAllOverlapTreatments(
       [suggestion],
       noConfirmed,
-      sectionEdits,
+      lineEdits,
       dmpFile,
       'interpolate',
     );
 
-    const target = sectionEdits.get(1)!.shots;
+    const target = lineEdits.get(1)!.shots;
     expect(target[0]!.length).toBe(15);
     expect(target[1]!.length).toBe(17);
     expect(target[2]!.length).toBe(24);

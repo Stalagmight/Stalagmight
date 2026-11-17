@@ -4,13 +4,13 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
-import type { StationRef, SectionId, ShotId } from '../../types/project';
+import type { StationRef, LineId, ShotId } from '../../types/project';
 import type { CommentHolder } from '../../types/commands';
 
 interface CommentHolderUI {
   type: 'station' | 'shot';
   stationRef?: StationRef;
-  sectionId?: SectionId;
+  lineId?: LineId;
   shotId?: ShotId;
   comment: string;
 }
@@ -20,7 +20,7 @@ function toIpcHolder(h: CommentHolderUI): CommentHolder {
   if (h.type === 'station' && h.stationRef) {
     return { type: 'station', station_ref: h.stationRef };
   }
-  return { type: 'shot', section_id: h.sectionId!, shot_id: h.shotId! };
+  return { type: 'shot', line_id: h.lineId!, shot_id: h.shotId! };
 }
 
 export default function SwapCommentsDialog() {

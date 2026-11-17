@@ -56,7 +56,7 @@ export function SpeleoCachePurgeSection() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  // The section is the panel's last, so its result lands below the fold: bring it
+  // The line is the panel's last, so its result lands below the fold: bring it
   // into view when it arrives.
   useEffect(() => {
     if (message) resultRef.current?.scrollIntoView?.({ block: 'nearest' });
@@ -92,7 +92,7 @@ export function SpeleoCachePurgeSection() {
   };
 
   return (
-    <SettingsSection title={t('speleodb.cachedCopies.purge.title')} data-testid="section-speleodb-cache">
+    <SettingsSection title={t('speleodb.cachedCopies.purge.title')} data-testid="line-speleodb-cache">
       <p className="mb-3 text-xs text-text-secondary">{t('speleodb.cachedCopies.purge.help')}</p>
       <Button
         variant="danger"

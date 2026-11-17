@@ -126,11 +126,11 @@ describe('toggleDisplay: Station IDs and Station names are exclusive', () => {
   });
 
   it('leaves the other toggles alone', () => {
-    useUIStore.setState({ showStationLabels: true, showStationComments: true, showSectionNames: true });
+    useUIStore.setState({ showStationLabels: true, showStationComments: true, showLineNames: true });
     useUIStore.getState().toggleDisplay('showStationNames');
     const s = useUIStore.getState();
     expect(s.showStationComments).toBe(true);
-    expect(s.showSectionNames).toBe(true);
+    expect(s.showLineNames).toBe(true);
   });
 });
 

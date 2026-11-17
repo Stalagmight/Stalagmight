@@ -8,7 +8,7 @@
  */
 import type { CreditEdit, Person, SurveyCredit } from '../types/ipc.generated';
 import { dedupePeople, personKey, type PersonLike } from './people';
-import { EMPTY_CREDIT } from './sectionCredit';
+import { EMPTY_CREDIT } from './lineCredit';
 
 export type CreditRole = 'surveyors' | 'explorers';
 export const CREDIT_ROLES: readonly CreditRole[] = ['surveyors', 'explorers'];

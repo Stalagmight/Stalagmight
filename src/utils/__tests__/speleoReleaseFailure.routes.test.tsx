@@ -50,10 +50,10 @@ import { QUIT_SETTLE_MS, resetQuitWaitForTests } from '../quitAfterWork';
 import { closeAfterUpload, resetSpeleoExitPromptForTests } from '../speleoExit';
 import { resetReleaseFailurePromptForTests, useReleaseFailurePrompt } from '../speleoReleaseFailure';
 
-const ok: CommandResult = { success: true, warnings: [], error: null, section_ids: [] };
+const ok: CommandResult = { success: true, warnings: [], error: null, line_ids: [] };
 const released: CommandResult = { ...ok, lock_release: 'released' };
 const failed = (error = 'The SpeleoDB lock could not be handed back: SpeleoDB returned HTTP 503'): CommandResult =>
-  ({ success: false, warnings: [], error, section_ids: [], lock_release: 'failed' });
+  ({ success: false, warnings: [], error, line_ids: [], lock_release: 'failed' });
 
 const editing: SpeleoLinkState = {
   permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: 'me@example.com', lockedByOther: false,
@@ -192,7 +192,7 @@ describe('Close', () => {
 
 const loadResult = () => ({
   loadingId: 1n, isRemote: false,
-  project: { name: 'Other', sections: [], station_merges: [], zero_datums: [], loop_closures: [], file_path: '/synthetic/other.stalx' },
+  project: { name: 'Other', lines: [], station_merges: [], zero_datums: [], loop_closures: [], file_path: '/synthetic/other.stalx' },
   stations: [], surveyData: { shots: [], stations: [] }, stats: null, warnings: [], frozen_shots: [],
   displaySettings: { showStations: true },
 });
@@ -233,7 +233,7 @@ describe('Project switch', () => {
 
   it('New Project asks the same question; Retry that settles goes on to create', async () => {
     replies.speleodb_settle_open_lock = [failed(), released];
-    replies.create_project_full = [{ loadingId: 1n, project: { name: 'New', sections: [], file_path: null } } as never];
+    replies.create_project_full = [{ loadingId: 1n, project: { name: 'New', lines: [], file_path: null } } as never];
     const creating = useProjectStore.getState().createProject('New');
     const prompt = await waitForPrompt();
     expect(prompt.reason).toBe('switch');

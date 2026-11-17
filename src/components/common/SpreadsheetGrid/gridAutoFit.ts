@@ -10,7 +10,7 @@ import type { GridColumn } from './types';
  * cells, plus padding, clamped. Returns 0 when nothing was measurable.
  *
  * Selectors are built from the grid's OWN `testIdPrefix`. Hardcoding `grid-`
- * matched nothing in a grid that sets one - the new-section and shot-editor
+ * matched nothing in a grid that sets one - the new-line and shot-editor
  * grids - so the width stayed 0 and a double-click silently did nothing there
  * while working in the data table.
  */

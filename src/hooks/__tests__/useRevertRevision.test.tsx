@@ -148,12 +148,12 @@ describe('useRevertRevision - the swapped tree owns no stale entity refs (#258)'
     // the only thing that resets these - so `clearSelection` was the whole reset and
     // merge/comment/measure refs survived. #258 is what makes that dangerous: two
     // `.stalx` under one project are independent databases with independently assigned
-    // section ids, so a picker answer can swap in a DIFFERENT survey whose ids collide,
+    // line ids, so a picker answer can swap in a DIFFERENT survey whose ids collide,
     // and a half-armed merge would resolve its endpoint against the wrong station.
     useUIStore.setState({
-      mergeStationA: { section_id: 1, station_index: 0 },
+      mergeStationA: { line_id: 1, station_index: 0 },
       mergeStationB: null,
-      commentTarget: { sectionId: 1, shotId: 7 } as never,
+      commentTarget: { lineId: 1, shotId: 7 } as never,
     });
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),

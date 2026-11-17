@@ -149,16 +149,16 @@ export default function MnemoImportDialog() {
 
   const pulling = phase === 'pulling';
   const losses: string[] = [];
-  if (result && result.skipped_sections > 0) {
+  if (result && result.skipped_lines > 0) {
     losses.push(
-      result.skipped_sections === 1
-        ? '1 section could not be read and will not be imported.'
-        : `${result.skipped_sections} sections could not be read and will not be imported.`
+      result.skipped_lines === 1
+        ? '1 line could not be read and will not be imported.'
+        : `${result.skipped_lines} lines could not be read and will not be imported.`
     );
   }
   if (result && result.unread_trailing_bytes > 0) {
     losses.push(
-      `${formatBytes(result.unread_trailing_bytes)} after the last complete section were not read. ` +
+      `${formatBytes(result.unread_trailing_bytes)} after the last complete line were not read. ` +
         'This is usually a survey that was not closed on the device.'
     );
   }
@@ -234,7 +234,7 @@ export default function MnemoImportDialog() {
             <p className="text-text-secondary" data-testid="mnemo-result-summary">
               {result.unreadable_reason
                 ? `Saved ${result.file_name} (${formatBytes(result.bytes)}).`
-                : `Saved ${result.file_name}: ${result.sections === 1 ? '1 section' : `${result.sections} sections`}, ` +
+                : `Saved ${result.file_name}: ${result.lines === 1 ? '1 line' : `${result.lines} lines`}, ` +
                   `${result.shots === 1 ? '1 shot' : `${result.shots} shots`}.`}
             </p>
             {result.firmware && <p className="text-sm text-text-tertiary">Firmware: {result.firmware}</p>}

@@ -269,7 +269,7 @@ export function RedoIcon(props: IconProps) {
 // "External link" / open-out icon: a box with an arrow breaking out of the
 // open top-right corner. The arrowhead's two arms are collinear with the box's
 // top and right edges (aligned with the square), with a gap so the shapes stay
-// distinct. Used as the section focus-mode entry affordance.
+// distinct. Used as the line focus-mode entry affordance.
 export function ExternalLinkIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
@@ -879,11 +879,11 @@ export function PinIcon(props: IconProps) {
 }
 
 /**
- * Survey sections: a short survey line (three shots between four stations), the
+ * Survey lines: a short survey line (three shots between four stations), the
  * thing the Sections panel lists. Filled bars and discs, never strokes, so it
  * keeps its weight under the WebKit UI zoom.
  */
-export function SectionsIcon(props: IconProps) {
+export function LinesIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       <Bar x1={3.5} y1={15} x2={8} y2={7} />

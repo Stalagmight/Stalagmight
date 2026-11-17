@@ -21,7 +21,7 @@ export function formatPhaseLabel(
     // Project opening phases
     opening_database: t('globalView.loading.phases.openingDatabase'),
     loading_project_data: t('globalView.loading.phases.loadingProjectData'),
-    loading_sections: t('globalView.loading.phases.loadingSections'),
+    loading_lines: t('globalView.loading.phases.loadingSections'),
     computing_stations: t('globalView.loading.phases.computingStations'),
     computing_statistics: t('globalView.loading.phases.computingStatistics'),
     validating_data: t('globalView.loading.phases.validatingData'),

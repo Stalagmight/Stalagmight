@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, deleteShotAt, selectDropdownOption, type SectionSeed } from './helpers/app';
+import { seedProjectWithLines, deleteShotAt, selectDropdownOption, type LineSeed } from './helpers/app';
 import { gasWaypointUnresolvedIndicators } from './helpers/testIds';
 
 /**
@@ -13,7 +13,7 @@ import { gasWaypointUnresolvedIndicators } from './helpers/testIds';
  * `__MOCK_GET_DIVE_PLANS__`.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Plan A',
     direction: 'in',
@@ -28,7 +28,7 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 type PlanMetaLite = { id: number; name: string };
-type StationRefLite = { section_id: number; station_index: number };
+type StationRefLite = { line_id: number; station_index: number };
 type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
 
 type E2EWindow = {
@@ -143,7 +143,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Dive Plan Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await page.evaluate(() => (window as unknown as E2EWindow).__MOCK_RESET_DIVE_PLANS__?.());
   });
 
@@ -203,9 +203,9 @@ test.describe('Dive-plan persistence (#244)', () => {
 
     await page.evaluate(() => {
       const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
-      gas.addWaypoint({ section_id: 1, station_index: 2 });
-      gas.addWaypoint({ section_id: 1, station_index: 4 });
-      gas.addMarkedPoint({ section_id: 1, station_index: 3 });
+      gas.addWaypoint({ line_id: 1, station_index: 2 });
+      gas.addWaypoint({ line_id: 1, station_index: 4 });
+      gas.addMarkedPoint({ line_id: 1, station_index: 3 });
       gas.setMarkedPointLabel(0, 'photo here');
     });
     await saveAs(page, 'With route points');
@@ -232,11 +232,11 @@ test.describe('Dive-plan persistence (#244)', () => {
     });
     // Order is part of the plan, so it must come back in order.
     expect(restored.waypoints).toEqual([
-      { section_id: 1, station_index: 2 },
-      { section_id: 1, station_index: 4 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 1, station_index: 4 },
     ]);
     expect(restored.markedPoints).toEqual([
-      { station: { section_id: 1, station_index: 3 }, label: 'photo here' },
+      { station: { line_id: 1, station_index: 3 }, label: 'photo here' },
     ]);
   });
 
@@ -251,7 +251,7 @@ test.describe('Dive-plan persistence (#244)', () => {
       // A way point splits the default single segment into two; edit both away from their
       // defaults so a round trip that silently dropped the edits (or fell back to fresh
       // defaults) would be caught.
-      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.addWaypoint({ line_id: 1, station_index: 2 });
       gas.setSegments([
         { speed_m_per_min: 22, on_scooter: true },
         { speed_m_per_min: 8, on_scooter: false },
@@ -377,7 +377,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     // anchor this pin to.
     await page.evaluate(() => {
       (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
-        section_id: 1,
+        line_id: 1,
         station_index: 3,
       });
     });
@@ -388,7 +388,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     // driven by the anchor loss, not by a plan that just happened to already block saving.
     await page.evaluate(() => {
       (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
-        section_id: 1,
+        line_id: 1,
         station_index: 6,
       });
     });

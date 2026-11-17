@@ -15,7 +15,7 @@ import type { Projector } from '../dragPreviewSource';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { GAS_DIM_ALPHA, SHOT_ALPHA_REFERENCE, SHOT_ALPHA_NORMAL } from '../customRender/shaders';
-import type { Section } from '../../../../types/ipc/Section';
+import type { Line } from '../../../../types/ipc/Line';
 import type { Station } from '../../../../types/ipc/Station';
 
 const stubProjector: Projector = {
@@ -45,7 +45,7 @@ function shot(id: number, kind: 'Normal' | 'Reference') {
 }
 
 function fixture() {
-  const sections: Section[] = [
+  const lines: Line[] = [
     {
       id: 1, name: 'A', color: '#ff0000',
       direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
@@ -53,7 +53,7 @@ function fixture() {
     },
   ];
   const st = (station_index: number, x: number, y: number): Station => ({
-    station_ref: { section_id: 1, station_index },
+    station_ref: { line_id: 1, station_index },
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
@@ -61,7 +61,7 @@ function fixture() {
     closures_with: [],
   });
   const stations: Station[] = [st(0, 0, 0), st(1, 10, 0), st(2, 20, 0)];
-  return surveyDataFromLegacy(sections, stations);
+  return surveyDataFromLegacy(lines, stations);
 }
 
 function baseDeps(data: ReturnType<typeof fixture>, idleActive: boolean): InteractOverlayDeps {
@@ -73,7 +73,7 @@ function baseDeps(data: ReturnType<typeof fixture>, idleActive: boolean): Intera
     measuredPathIds: null,
     measuredPathStationIds: null,
     measureTintColor: '#ffffff',
-    isSectionAnchored: () => false,
+    isLineAnchored: () => false,
     isPlanIdleActive: idleActive,
     displayColorContext: {
       showDepthGradient: false,

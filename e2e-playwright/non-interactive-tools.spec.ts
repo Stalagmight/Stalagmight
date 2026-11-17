@@ -3,12 +3,12 @@ import {
   setupMockedPage,
   createProject,
   seedNavigationTools,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForActiveTool,
   getStationScreenPositions,
   waitForDrawnStations,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -22,11 +22,11 @@ import {
  */
 
 /**
- * Helper to create a project with imported sections so stations/shots are visible.
+ * Helper to create a project with imported lines so stations/shots are visible.
  */
 async function createProjectWithStations(page: Page): Promise<void> {
   await createProject(page, 'Non-Interactive Tool Test');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   // The survey is drawn by the custom WebGL renderer, so there is no stock
   // `survey-stations` layer for `queryRenderedFeatures` to read. Wait on the
@@ -34,7 +34,7 @@ async function createProjectWithStations(page: Page): Promise<void> {
   await waitForDrawnStations(page, 1);
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Non-Interactive Main',
     direction: 'in',
@@ -172,7 +172,7 @@ test.describe('Non-interactive tools', () => {
 
     // Click the most isolated station point (unambiguous single-station
     // resolution) and read which station the selection resolver picked. The
-    // store keys the ref by snake_case (section_id/station_index), so this
+    // store keys the ref by snake_case (line_id/station_index), so this
     // still reads it back from the resolved selection rather than the
     // drawn-geometry hook's camelCase identity.
     const points = await getStationScreenPositions(page);
@@ -182,7 +182,7 @@ test.describe('Non-interactive tools', () => {
     const canvasBox = await getCanvasBoundingBox(page);
     await page.mouse.click(canvasBox.x + target.x, canvasBox.y + target.y);
 
-    let stationRef: { section_id: number; station_index: number } | undefined;
+    let stationRef: { line_id: number; station_index: number } | undefined;
     await expect.poll(
       async () => {
         const sel = await page.evaluate(() => {
@@ -190,7 +190,7 @@ test.describe('Non-interactive tools', () => {
             __E2E_TEST__?: {
               uiStore: {
                 getState: () => {
-                  selection: { type: string; stationRef?: { section_id: number; station_index: number } } | null;
+                  selection: { type: string; stationRef?: { line_id: number; station_index: number } } | null;
                 };
               };
             };
@@ -214,7 +214,7 @@ test.describe('Non-interactive tools', () => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
-            getState: () => { setHoveredStation: (r: { section_id: number; station_index: number } | null) => void };
+            getState: () => { setHoveredStation: (r: { line_id: number; station_index: number } | null) => void };
           };
         };
       }).__E2E_TEST__;

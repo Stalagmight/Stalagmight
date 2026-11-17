@@ -2,18 +2,18 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  createSectionViaStore,
+  createLineViaStore,
   openDmpSelectionDialog,
 } from './helpers/app';
 
 async function openOrphanDialog(page: Page): Promise<void> {
   await openOrphanDialogWith(page, [
     {
-      orphanSectionId: 2,
-      orphanSectionName: 'Orphan Branch',
+      orphanLineId: 2,
+      orphanLineName: 'Orphan Branch',
       orphanStationIndex: 1,
-      targetSectionId: 1,
-      targetSectionName: 'Anchor Mainline',
+      targetLineId: 1,
+      targetLineName: 'Anchor Mainline',
       targetStationIndex: 1,
       score: 0.91,
       matchedShots: 0,
@@ -22,11 +22,11 @@ async function openOrphanDialog(page: Page): Promise<void> {
       confidence: 'high',
     },
     {
-      orphanSectionId: 2,
-      orphanSectionName: 'Orphan Branch',
+      orphanLineId: 2,
+      orphanLineName: 'Orphan Branch',
       orphanStationIndex: 1,
-      targetSectionId: 1,
-      targetSectionName: 'Anchor Mainline',
+      targetLineId: 1,
+      targetLineName: 'Anchor Mainline',
       targetStationIndex: 0,
       score: 0.74,
       matchedShots: 0,
@@ -58,7 +58,7 @@ async function openOrphanDialogWith(page: Page, suggestions: Array<Record<string
 }
 
 interface ProjectShape {
-  sections: Array<{ id: number; shots: Array<{ id: number; kind: string; length: number; azimuth_in: number }> }>;
+  lines: Array<{ id: number; shots: Array<{ id: number; kind: string; length: number; azimuth_in: number }> }>;
 }
 
 async function readProject(page: Page): Promise<ProjectShape> {
@@ -78,7 +78,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
   test('accepts orphan placement suggestion and executes merge', async ({ page }) => {
     await createProject(page, 'Orphan Merge Scenario');
 
-    await createSectionViaStore(page, {
+    await createLineViaStore(page, {
       name: 'Anchor Mainline',
       shots: [
         { azimuth_in: 10, azimuth_out: 10, length: 10, depth_in: -1, depth_out: -1.5 },
@@ -86,7 +86,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
       ],
     });
 
-    await createSectionViaStore(page, {
+    await createLineViaStore(page, {
       name: 'Orphan Branch',
       shots: [
         { azimuth_in: 100, azimuth_out: 100, length: 6, depth_in: -2, depth_out: -2.2 },
@@ -118,7 +118,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     await page.setViewportSize(viewport);
     await createProject(page, 'Orphan Repeat Scenario');
 
-    await createSectionViaStore(page, {
+    await createLineViaStore(page, {
       name: 'Anchor Mainline',
       shots: [
         { azimuth_in: 10, azimuth_out: 10, length: 10, depth_in: -1, depth_out: -1.5 },
@@ -128,7 +128,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     });
     // The orphan starts by re-surveying Mainline shots 2 and 3 (the second one
     // re-measured 0.5 m longer), then carries on into new passage.
-    await createSectionViaStore(page, {
+    await createLineViaStore(page, {
       name: 'Orphan Branch',
       shots: [
         { azimuth_in: 20, azimuth_out: 20, length: 8, depth_in: -1.5, depth_out: -2 },
@@ -139,11 +139,11 @@ test.describe('Orphan + Zero Datum Workflow', () => {
 
     await openOrphanDialogWith(page, [
       {
-        orphanSectionId: 2,
-        orphanSectionName: 'Orphan Branch',
+        orphanLineId: 2,
+        orphanLineName: 'Orphan Branch',
         orphanStationIndex: 0,
-        targetSectionId: 1,
-        targetSectionName: 'Anchor Mainline',
+        targetLineId: 1,
+        targetLineName: 'Anchor Mainline',
         targetStationIndex: 1,
         // The matcher's both-sides boost can push a score past 1.
         score: 1.18,
@@ -160,7 +160,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     return dialog;
   }
 
-  test('a repeated section resolves every repeated shot, one choice per shot (#681)', async ({ page }) => {
+  test('a repeated line resolves every repeated shot, one choice per shot (#681)', async ({ page }) => {
     const dialog = await openRepeatScenario(page);
 
     await expect(dialog.getByText('100% score')).toBeVisible();
@@ -185,12 +185,12 @@ test.describe('Orphan + Zero Datum Workflow', () => {
       return typeof getter === 'function' ? (getter as () => unknown[])() : [];
     });
     expect(mergeCalls).toEqual([
-      { stationA: { section_id: 2, station_index: 2 }, stationB: { section_id: 1, station_index: 3 } },
+      { stationA: { line_id: 2, station_index: 2 }, stationB: { line_id: 1, station_index: 3 } },
     ]);
 
     const project = await readProject(page);
-    const mainline = project.sections.find((s) => s.id === 1)!;
-    const orphan = project.sections.find((s) => s.id === 2)!;
+    const mainline = project.lines.find((s) => s.id === 1)!;
+    const orphan = project.lines.find((s) => s.id === 2)!;
     // Both repeated copies are kept as Reference; the new passage stays Normal.
     expect(orphan.shots.map((s) => s.kind)).toEqual(['Reference', 'Reference', 'Normal']);
     // Keep existing on row 0, Use new on row 1 - written into the EXISTING shot.
@@ -257,7 +257,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     await expect(dialog).toBeHidden({ timeout: 10000 });
 
     const project = await readProject(page);
-    const orphan = project.sections.find((s) => s.id === 2)!;
+    const orphan = project.lines.find((s) => s.id === 2)!;
     // Shot 2 runs on from the merge station: a Reference there would cut the
     // rest of the orphan off in Plan mode.
     expect(orphan.shots.map((s) => s.kind)).toEqual(['Reference', 'Normal', 'Normal']);
@@ -268,12 +268,12 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     await openDmpSelectionDialog(page);
 
     const selectionDialog = page.getByTestId('dmp-selection-dialog');
-    await expect(selectionDialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(selectionDialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
 
     await selectionDialog.getByTestId('continue-button').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 10000 });
 
-    await page.getByTestId('zero-datum-section-card-0').click();
+    await page.getByTestId('zero-datum-line-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 10000 });
 
     const gpsInput = page.getByTestId('zero-datum-gps-input');

@@ -2,8 +2,8 @@
  * Component test (#681) - OrphanPlacementDialog resolves the WHOLE repeat, one
  * choice per repeated shot.
  *
- * Synthetic layout: the existing "Mainline" (section 2) has 5 shots; the new
- * "Orphan" (section 1) starts with two shots repeating Mainline shots 4 and 5
+ * Synthetic layout: the existing "Mainline" (line 2) has 5 shots; the new
+ * "Orphan" (line 1) starts with two shots repeating Mainline shots 4 and 5
  * (indices 3, 4), then carries on. The repeat ends at Orphan stn 2 = Mainline
  * stn 5.
  *
@@ -12,8 +12,8 @@
  *   "defaults the connection to the end of the repeat";
  * - `computeOverlapPairs` pairing the whole overlap whatever the merge station
  *   (the first cut of #681): reds all four "a mid-repeat merge" cases - shots
- *   past the merge station became Reference, cutting the section off;
- * - `placeSuggestion(best, ..., new Map())` for the on-screen section in Accept
+ *   past the merge station became Reference, cutting the line off;
+ * - `placeSuggestion(best, ..., new Map())` for the on-screen line in Accept
  *   All (the old code): reds "Accept All applies the choices made on screen";
  * - dropping the filter in `handleMergeChange`: reds "a row that leaves the
  *   table forgets its choice";
@@ -23,10 +23,10 @@
  *   (Use new / Average become clickable);
  * - dropping the `isTargetDoublyAnchored` override in `effectiveChoices`: reds
  *   "a target that becomes anchored at both ends after a choice";
- * - passing `effectiveChoices` to the other sections in Accept All: reds "Accept
- *   All gives the other sections the defaults";
+ * - passing `effectiveChoices` to the other lines in Accept All: reds "Accept
+ *   All gives the other lines the defaults";
  * - marking each repeated shot Reference before checking the existing shot is
- *   there: reds "a repeated shot the existing section no longer has";
+ *   there: reds "a repeated shot the existing line no longer has";
  * - ignoring a refused merge, in `placeSuggestion` or in Accept / Accept All:
  *   reds both "refused merge" cases;
  * - `Math.round(score * 100)` instead of `scorePercent`: reds "never shows a
@@ -40,7 +40,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('./SectionPreview', () => ({ default: () => null }));
+vi.mock('./LinePreview', () => ({ default: () => null }));
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
   trackDialogComplete: vi.fn(),
@@ -101,7 +101,7 @@ const ORPHAN = [
   shot(103, 95, 4, 5, 6),
 ];
 
-// A second orphan, "Second" (section 3): its first two shots repeat Mainline
+// A second orphan, "Second" (line 3): its first two shots repeat Mainline
 // shots 1 and 2 (indices 0, 1), the second one re-measured 0.5 m longer.
 const SECOND = [
   shot(300, 10, 5, 0, 1),
@@ -109,27 +109,27 @@ const SECOND = [
   shot(302, 70, 3, 2, 2),
 ];
 
-const section = (id: number, name: string, shots: Shot[]) =>
-  ({ id, name, shots, direction: 'in', color: '#4a9eff' }) as unknown as Project['sections'][number];
+const line = (id: number, name: string, shots: Shot[]) =>
+  ({ id, name, shots, direction: 'in', color: '#4a9eff' }) as unknown as Project['lines'][number];
 
 // Mainline tied down at both ends: its own placement datum at station 0, and
-// at station 5 an aligned loop closure to a section (9) placed by its own
-// datum. A closure is not a merge, so section 9 is a piece of its own and its
+// at station 5 an aligned loop closure to a line (9) placed by its own
+// datum. A closure is not a merge, so line 9 is a piece of its own and its
 // datum a placement. A second datum on Mainline itself would be a GPS fix
 // (#741), which pins nothing in raw geometry, so it would not tie that end down.
 const ANCHORED_AT_BOTH_ENDS = {
   zero_datums: [
-    { station_ref: { section_id: 2, station_index: 0 }, role: 'Placement' },
-    { station_ref: { section_id: 9, station_index: 0 }, role: 'Placement' },
+    { station_ref: { line_id: 2, station_index: 0 }, role: 'Placement' },
+    { station_ref: { line_id: 9, station_index: 0 }, role: 'Placement' },
   ],
   loop_closures: [
-    { station_a: { section_id: 2, station_index: 5 }, station_b: { section_id: 9, station_index: 0 }, is_aligned: true },
+    { station_a: { line_id: 2, station_index: 5 }, station_b: { line_id: 9, station_index: 0 }, is_aligned: true },
   ],
 } as unknown as Partial<Project>;
 
 function makeProject(over: Partial<Project> = {}): Project {
   return {
-    sections: [section(1, 'Orphan', ORPHAN), section(2, 'Mainline', MAINLINE), section(3, 'Second', SECOND)],
+    lines: [line(1, 'Orphan', ORPHAN), line(2, 'Mainline', MAINLINE), line(3, 'Second', SECOND)],
     station_merges: [],
     zero_datums: [],
     loop_closures: [],
@@ -139,11 +139,11 @@ function makeProject(over: Partial<Project> = {}): Project {
 
 function makeSuggestion(over: Partial<OrphanPlacementSuggestion> = {}): OrphanPlacementSuggestion {
   return {
-    orphanSectionId: 1,
-    orphanSectionName: 'Orphan',
+    orphanLineId: 1,
+    orphanLineName: 'Orphan',
     orphanStationIndex: 0,
-    targetSectionId: 2,
-    targetSectionName: 'Mainline',
+    targetLineId: 2,
+    targetLineName: 'Mainline',
     targetStationIndex: 3,
     score: 0.9,
     matchedShots: 2,
@@ -228,8 +228,8 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     await acceptAndFinish();
 
     expect(mergeStations).toHaveBeenCalledWith(
-      { section_id: 1, station_index: 2 },
-      { section_id: 2, station_index: 5 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 2, station_index: 5 },
     );
   });
 
@@ -276,10 +276,10 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
   for (const [label, orphanShots, over, resolvedIndex, pastMerge] of MID_REPEAT) {
     it(`a mid-repeat merge resolves only the shot before it, the rest stay Normal (${label})`, async () => {
       setup(makeProject({
-        sections: [
+        lines: [
           { id: 1, name: 'Orphan', shots: orphanShots, direction: 'in', color: '#4a9eff' },
           { id: 2, name: 'Mainline', shots: MAINLINE, direction: 'in', color: '#4a9eff' },
-        ] as unknown as Project['sections'],
+        ] as unknown as Project['lines'],
       }));
       render(<OrphanPlacementDialog suggestions={[makeSuggestion(over)]} />);
 
@@ -312,7 +312,7 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(screen.queryByTestId('overlap-unresolved-note')).toBeNull();
 
     await pickOption('merge-station-select', '0');
-    expect(screen.queryByTestId('overlap-shot-section')).toBeNull();
+    expect(screen.queryByTestId('overlap-shot-line')).toBeNull();
     expect(screen.getByTestId('orphan-matched-shots').textContent)
       .toBe('2 shots matched \u2192, 0 resolved at this merge station');
     expect(screen.getByTestId('overlap-unresolved-note').textContent).toContain(
@@ -321,8 +321,8 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
     await acceptAndFinish();
     expect(mergeStations).toHaveBeenCalledWith(
-      { section_id: 1, station_index: 0 },
-      { section_id: 2, station_index: 3 },
+      { line_id: 1, station_index: 0 },
+      { line_id: 2, station_index: 3 },
     );
     expect(referenceCalls()).toEqual([]);
   });
@@ -352,8 +352,8 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
 
     expect(mergeStations).toHaveBeenCalledWith(
-      { section_id: 1, station_index: 2 },
-      { section_id: 2, station_index: 5 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 2, station_index: 5 },
     );
     expect(updateShot).toHaveBeenCalledTimes(1);
     expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.5, azimuth_in: 52 }));
@@ -408,10 +408,10 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     // must write it back in Mainline's direction.
     const back = [shot(100, 90, 4, 0, 0), shot(101, 95, 4, 0, 1), shot(102, 232, 7.2, 5, 4), shot(103, 220, 6, 4, 3)];
     setup(makeProject({
-      sections: [
+      lines: [
         { id: 1, name: 'Orphan', shots: back, direction: 'in', color: '#4a9eff' },
         { id: 2, name: 'Mainline', shots: MAINLINE, direction: 'in', color: '#4a9eff' },
-      ] as unknown as Project['sections'],
+      ] as unknown as Project['lines'],
     }));
     render(<OrphanPlacementDialog suggestions={[makeSuggestion({ orphanStationIndex: 4, targetStationIndex: 3 })]} />);
 
@@ -444,14 +444,14 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(updateShot).not.toHaveBeenCalled();
   });
 
-  it('a repeated shot the existing section no longer has is neither listed nor marked', async () => {
+  it('a repeated shot the existing line no longer has is neither listed nor marked', async () => {
     // A stale suggestion: Mainline has lost its last shot, so the second
     // repeated shot pairs with nothing. The table and the apply step agree.
     setup(makeProject({
-      sections: [
+      lines: [
         { id: 1, name: 'Orphan', shots: ORPHAN, direction: 'in', color: '#4a9eff' },
         { id: 2, name: 'Mainline', shots: MAINLINE.slice(0, 4), direction: 'in', color: '#4a9eff' },
-      ] as unknown as Project['sections'],
+      ] as unknown as Project['lines'],
     }));
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
 
@@ -462,7 +462,7 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(referenceCalls()).toEqual([[1, 100]]);
   });
 
-  it('a refused merge writes nothing else and leaves the section to place', async () => {
+  it('a refused merge writes nothing else and leaves the line to place', async () => {
     mergeStations.mockResolvedValueOnce(refused);
     setup();
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
@@ -483,10 +483,10 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.5 }));
   });
 
-  it('Accept All stops on a refused merge, with that section on screen', async () => {
-    mergeStations.mockImplementation(async (a: { section_id: number }) => (a.section_id === 3 ? refused : ok()));
+  it('Accept All stops on a refused merge, with that line on screen', async () => {
+    mergeStations.mockImplementation(async (a: { line_id: number }) => (a.line_id === 3 ? refused : ok()));
     setup();
-    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second', targetStationIndex: 0 });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
     await userEvent.click(screen.getByTestId('orphan-accept-all'));
@@ -496,12 +496,12 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(referenceCalls()).toEqual([[1, 100], [1, 101]]);
     expect(closeDialog).not.toHaveBeenCalled();
     expect(screen.getByTestId('wizard-suggestion').textContent).toContain('Second');
-    expect(screen.getByTestId('wizard-progress').textContent).toBe('Section 2 of 2');
+    expect(screen.getByTestId('wizard-progress').textContent).toBe('Line 2 of 2');
   });
 
-  it('Accept All gives the other sections the defaults, not the on-screen choices', async () => {
+  it('Accept All gives the other lines the defaults, not the on-screen choices', async () => {
     setup();
-    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second', targetStationIndex: 0 });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
     await pickOption('overlap-choice-1', 'use_new');
@@ -510,8 +510,8 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
     // Second joins at the end of its repeat, Orphan stn 2 = Mainline stn 2.
     expect(mergeStations).toHaveBeenCalledWith(
-      { section_id: 3, station_index: 2 },
-      { section_id: 2, station_index: 2 },
+      { line_id: 3, station_index: 2 },
+      { line_id: 2, station_index: 2 },
     );
     expect(referenceCalls()).toEqual([[1, 100], [1, 101], [3, 300], [3, 301]]);
     // Only the on-screen row 1 is rewritten; Second's re-measured shot 301
@@ -538,7 +538,7 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
   it('refuses to place while editing is blocked, and writes nothing', async () => {
     setup();
     useUIStore.setState({ appMode: 'export' });
-    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second', targetStationIndex: 0 });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
     await userEvent.click(screen.getByTestId('orphan-accept'));
@@ -552,7 +552,7 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(setShotKind).not.toHaveBeenCalled();
     expect(updateShot).not.toHaveBeenCalled();
     expect(closeDialog).not.toHaveBeenCalled();
-    expect(screen.getByTestId('wizard-progress').textContent).toBe('Section 1 of 2');
+    expect(screen.getByTestId('wizard-progress').textContent).toBe('Line 1 of 2');
   });
 
   it('never shows a score above 100%', () => {

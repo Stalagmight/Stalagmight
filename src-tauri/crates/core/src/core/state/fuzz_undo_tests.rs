@@ -57,14 +57,14 @@
 //!
 //! | # | was classified as | now | mode env | seed | moves |
 //! |---|---|---|---|---|---|
-//! | 1 (uuids) | `finding-1-redo-of-create-section-remints-shot-uuids` | FIXED - `CreatedSectionSnapshot` carries a `SectionIdentity`; seeds 1..40 x100 are clean | (none) | 1 | 60 |
-//! | 1 (anchors) | `finding-1-redo-of-create-section-drops-gauge-anchors` | FIXED with the uuids, by the same identity | (none), persistence half | 1 | 60 |
-//! | 2 | `finding-2-orphan-zero-section-offset` | FIXED - `Project::write_section_offset` drops the dust ball around zero | (none) | 1 | 60 |
-//! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-section` | FIXED - `Project::remove_appended_first_shot` is the undo of an append | (none) | 2 | 60 |
+//! | 1 (uuids) | `finding-1-redo-of-create-line-remints-shot-uuids` | FIXED - `CreatedLineSnapshot` carries a `LineIdentity`; seeds 1..40 x100 are clean | (none) | 1 | 60 |
+//! | 1 (anchors) | `finding-1-redo-of-create-line-drops-gauge-anchors` | FIXED with the uuids, by the same identity | (none), persistence half | 1 | 60 |
+//! | 2 | `finding-2-orphan-zero-line-offset` | FIXED - `Project::write_line_offset` drops the dust ball around zero | (none) | 1 | 60 |
+//! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-line` | FIXED - `Project::remove_appended_first_shot` is the undo of an append | (none) | 2 | 60 |
 //! | 3 (data loss) | `finding-3-undo-of-the-first-shot-drops-station-zero-refs` | FIXED with the offset half - the undo no longer routes through the general delete | (none) | 37 | 60 |
 //! | 4 | `finding-4-closure-reordered-on-undo` | FIXED - `UndoData::ClosureInfo` records the index the `Vec::remove` took | `CLOSURE_SHAPES=1` | 1 | 40 |
-//! | 5 | `finding-5-undo-cannot-restore-null-section-field` | FIXED - `SectionUpdates` carries `double_option` | (none) | 6 | 60 |
-//! | 5 (command) | `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` | FIXED with it; schema v17 drops pre-v17 history rather than reinterpret it | (none), persistence half | 1 | 60 |
+//! | 5 | `finding-5-undo-cannot-restore-null-line-field` | FIXED - `LineUpdates` carries `double_option` | (none) | 6 | 60 |
+//! | 5 (command) | `finding-5-a-reloaded-command-can-no-longer-clear-a-line-field` | FIXED with it; schema v17 drops pre-v17 history rather than reinterpret it | (none), persistence half | 1 | 60 |
 //! | 6 | `finding-6-undo-refused-by-a-delete-guard` | FIXED - the undo removes the created shot through `AppState::remove_created_shot`, which consults no user-intent guard | `CLOSURES=1` | 4 | 60 |
 //! | 7 | `finding-7-a-jump-is-not-n-single-steps` | FIXED - `undo_to`/`redo_to` reconcile per step; `bug_7_a_jump_is_n_single_steps` is no longer ignored and GATES it | `JUMPS=1 CLOSURE_SHAPES=1`, persistence half | 6 | 150 |
 //! | 8 | `finding-8-stale-id-deletes-the-wrong-shot` | FIXED - every restore path addresses its shot by `Shot::uuid` | `DIVERGENCE=1` | 1 | 12 |
@@ -78,7 +78,7 @@
 //! | 16 | `finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid` | FIXED - a redo refuses to duplicate a uuid | (none), persistence half | 13 | 60 |
 //! | 17 | `finding-17-zero-datum-reordered-on-undo` | FIXED with finding 4, on `UndoData::ZeroDatumInfo` | (none) | 1 | 60 |
 //! | 18 | `finding-18-raw-and-resolved-merge-alignment-disagree` | DELETED with finding 14 - `expect_raw_and_resolved_agree` still runs and now FAILS; the id never recorded a hit in any mode, before the fix or after | n/a | n/a | n/a |
-//! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | FIXED on both halves - an unanchored group is realigned against the edited section, and the heal gate is the app's own invariant; every drifted merge fails, at any magnitude | `HORIZON=1` | 1 | 2000 |
+//! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | FIXED on both halves - an unanchored group is realigned against the edited line, and the heal gate is the app's own invariant; every drifted merge fails, at any magnitude | `HORIZON=1` | 1 | 2000 |
 //! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | FIXED - `adjust_least_squares` numbers from a SORTED sequence; that test is no longer ignored and `ADJUSTED_TOLERANCE_REL` is deleted | n/a | n/a | n/a |
 //! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | RESOLVED as INTENDED - the metamorphic pair ASSERTS the difference now instead of tolerating it | metamorphic gate | 3 | n/a |
 //! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | FIXED - `serde_json`'s `float_roundtrip`, plus `cascade_bfs` declining a sub-dust correction; the format gate compares two generations EXACTLY | format-property gate | 1 | n/a |
@@ -145,8 +145,8 @@
 //!
 //! ## What finding 15 was
 //!
-//! Finding 15 ("an undo leaves a `section_offsets` entry carrying REAL geometry")
-//! is FINDING 3, re-measured. Finding 3 displaced the empty section on the undo
+//! Finding 15 ("an undo leaves a `line_offsets` entry carrying REAL geometry")
+//! is FINDING 3, re-measured. Finding 3 displaced the empty line on the undo
 //! that removed its first shot; nothing ever put that back, because the redo
 //! re-inserts through the offset-neutral append path - which is finding 3's own
 //! ratchet half. So the leftover was still in the project several undos later,
@@ -154,21 +154,21 @@
 //! against never had the key.
 //!
 //! Confirmed against the reported instance itself: seed 7 at 100 moves, depth 14,
-//! `section_offsets.1` = `[7.11187043796, 0.315846281796]` - whose two
+//! `line_offsets.1` = `[7.11187043796, 0.315846281796]` - whose two
 //! immediately preceding moves are `createShot(s=1,n=0,append)` and the undo of
-//! it, into and out of section 1, the very section that ends up displaced. The
+//! it, into and out of line 1, the very line that ends up displaced. The
 //! write-up read the move log from the wrong end.
 //!
 //! The classifiers carried that shape as `finding-3-cascade-...` until finding 3
 //! was fixed, which fixed this with it and took both classifiers with it.
-//! `unwinding_the_history_leaves_no_displaced_section_behind` in
+//! `unwinding_the_history_leaves_no_displaced_line_behind` in
 //! `open_undo_bugs_tests.rs` pins the consequence a user sees and now passes.
 //!
 //! ## Observations, and what each one turned out to be
 //!
 //! NOTHING IS OPEN. The dust-gate story was the last one - the first entry
 //! below, `CLOSURE_SHAPES=1` seed 18 - and it is fixed, with that regime back at
-//! 40/40. Every other observation this section has carried is resolved too: the
+//! 40/40. Every other observation this line has carried is resolved too: the
 //! orphan-closure story's two halves (the LOAD BOUNDARY half and the UNDO half),
 //! the closure that asserted its own coincidence, three into findings (20, 21,
 //! 25), two into model fixes, one into a duplicate of finding 12, and one
@@ -182,9 +182,9 @@
 //! * **RESOLVED, and FIXED: the offset cascade's dust gate was ABSOLUTE, and the
 //!   coordinates stopped being metre-scale.** `CLOSURE_SHAPES=1 SEEDS=40
 //!   ITERATIONS=150` failed seed 18 on `undo x1 did not restore the state
-//!   recorded at depth 11 | at section_offsets.8`, `expected: <absent>`,
-//!   `actual: [1.78e-14, -3.61e-12]` - a picometre key on a section the consumed
-//!   entry (`create_shot` on another section) never touched.
+//!   recorded at depth 11 | at line_offsets.8`, `expected: <absent>`,
+//!   `actual: [1.78e-14, -3.61e-12]` - a picometre key on a line the consumed
+//!   entry (`create_shot` on another line) never touched.
 //!
 //!   `fuzz_shrink_tests.rs` took the 84 recorded moves to THIRTEEN in 281
 //!   probes. Measured, not argued: a backtrace on the write names
@@ -192,7 +192,7 @@
 //!   on the UNDO of an appended `createShot`; the same value was written once
 //!   before, by a forward `deleteShot`, and cleared in between by
 //!   `removeZeroDatum`'s zero-trust `resolve_offsets`. The two cascades run from
-//!   DIFFERENT seed sets (the edited section plus every datum section, versus
+//!   DIFFERENT seed sets (the edited line plus every datum line, versus
 //!   one anchor per component), so they sum the same chains in different orders
 //!   and disagree in the last bits.
 //!
@@ -207,7 +207,7 @@
 //!   renormalisation disabled the minimized trace produced no failure, and
 //!   replayed on the commit before #469 item 2 (so the same `CLOSURE_SHAPES`
 //!   closures are `is_aligned` by assertion rather than by measurement, and the
-//!   cascade reaches different sections) it produced none either. Item 2 supplied
+//!   cascade reaches different lines) it produced none either. Item 2 supplied
 //!   the path; item 1 supplied the magnitude.
 //!
 //!   FIXED by re-measuring the constant rather than by bumping it. Every gate
@@ -368,8 +368,8 @@
 //!   The mechanism was the CREATE, not the drift. `create_loop_closure` stamped
 //!   `is_aligned: strategy == Move` without measuring, one line after
 //!   `compute_closure_metrics` had computed the refutation - and this module's
-//!   generator draws `Move` for half its closures over an arbitrary cross-section
-//!   pair, with `moveSection(+/-1000 m)` supplying the distance. Nothing could
+//!   generator draws `Move` for half its closures over an arbitrary cross-line
+//!   pair, with `moveLine(+/-1000 m)` supplying the distance. Nothing could
 //!   ever heal it: the flag was never set back to false, `realign_merges` looks at
 //!   merges only, and `cascade_connection_offsets` deliberately preserves a
 //!   redundant closure's residual.
@@ -384,23 +384,23 @@
 //!   save/reopen convergence) and `models/project/tests.rs` (three).
 //! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
 //!   left a merged pair 1.58 cm apart after an `updateShot`, because
-//!   `realign_after_shot_edit` returned early when the edited section's merge
+//!   `realign_after_shot_edit` returned early when the edited line's merge
 //!   group held no zero datum and the epilogue's `realign_merges` only re-solved
 //!   past the 5 cm REPORTING threshold, while the app's own `#[cfg(test)]`
 //!   invariant for the same pair was 1 cm. Both halves are closed: an unanchored
-//!   group is now realigned against the edited section, and the heal gate and the
+//!   group is now realigned against the edited line, and the heal gate and the
 //!   assert are one constant (`Project::MERGE_ALIGNMENT_INVARIANT_M`), so the app
 //!   cannot decline to repair a state it also asserts cannot exist. The
 //!   classifier is deleted and a drifted merge FAILS again, at any magnitude and
 //!   anchored or not.
 //! * RESOLVED as a MODEL FIX, and since made moot. Seeds 2, 7 and 8 were
-//!   described as failing on finding-3-shaped `section_offsets` values the
+//!   described as failing on finding-3-shaped `line_offsets` values the
 //!   cascade classifier no longer matched. Half of that was true and was fixed:
 //!   the classifier froze one value where finding 3 RATCHETS, so it stopped
 //!   matching after the second cycle; following the trajectory and requiring BOTH
 //!   sides to be on it took the survey from 35 to 39 clean seeds of 40 at 100
 //!   moves. Finding 3 is now FIXED at the source, so there is no trajectory and
-//!   no classifier - a `section_offsets` key gaining real geometry across a
+//!   no classifier - a `line_offsets` key gaining real geometry across a
 //!   history move fails again, and all 40 seeds are clean at 100.
 //! * RESOLVED as a MODEL FIX, and since made moot as well. `COMBINED=1
 //!   ITERATIONS=300` failed seeds 6 and 35, both halves, on
@@ -429,13 +429,13 @@
 //!   absolute tolerance alone.
 //! * RESOLVED as FINDING 25, and now FIXED. At horizon depths - seeds 2, 3, 4 and
 //!   5 somewhere past depth 1000 - an `undo` translated a whole CONNECTED
-//!   COMPONENT by a constant vector, with one section of it landing on exactly
-//!   `[0, 0]` (measured on seed 2 at depth 1189: sections 65 and 81 both off by
+//!   COMPONENT by a constant vector, with one line of it landing on exactly
+//!   `[0, 0]` (measured on seed 2 at depth 1189: lines 65 and 81 both off by
 //!   `(22230.0946076, -10480.744175)`, 81 on the origin).
 //!
 //!   `fuzz_shrink_tests.rs` took the 1770-move trace to SEVEN moves in 497
-//!   probes - `createSection(0 shots)`, `createShot(append)`,
-//!   `createSection(2 shots)`, `setZeroDatum`, `deleteShot`, `mergeStations`,
+//!   probes - `createLine(0 shots)`, `createShot(append)`,
+//!   `createLine(2 shots)`, `setZeroDatum`, `deleteShot`, `mergeStations`,
 //!   `updateShot` - and the reduction off that is four commands with no history
 //!   depth in it at all. The mechanism: `zero_datums[0]` IS the project's
 //!   coordinate origin, because every later datum is placed at
@@ -476,13 +476,13 @@
 //!   ignored.
 //! * TRIAGED OUT, and not a defect in the app: the METAMORPHIC engine's
 //!   `observation-split-routes-disagree-on-station-comment-keys` - the two
-//!   delete/split routes intermittently disagreeing about which section a station
+//!   delete/split routes intermittently disagreeing about which line a station
 //!   comment is keyed to. Every reported instance turned out to hold the SAME
-//!   multiset of `(section_id, comment)` pairs on both sides with one entry - the
-//!   newly minted section B - in a different slot, i.e. a PERMUTATION rather than
+//!   multiset of `(line_id, comment)` pairs on both sides with one entry - the
+//!   newly minted line B - in a different slot, i.e. a PERMUTATION rather than
 //!   a re-key. `canonical_snapshot` sorts `station_comments` by the pair's whole
 //!   JSON text, which for a `StationKey::AfterShot` anchor includes the shot
-//!   uuid; both routes mint section B's shots, and `Mask::MintedUuids` erased the
+//!   uuid; both routes mint line B's shots, and `Mask::MintedUuids` erased the
 //!   uuids only AFTER the sort had used them. Measured: 40 seeds x 6 repeats gave
 //!   7 divergences over 240 built instances before, 0 over the same 240 with a
 //!   re-sort after the mask, every other pair byte-identical. The record and the
@@ -572,8 +572,8 @@
 //! four seeds drew 1 and trimmed 19 to 26 entries each while still crossing the
 //! save boundary. At 64 seeds x 200 moves, 59 are clean and the five failures
 //! carry the same signatures the UNDRAWN survey produces at that length
-//! (`section_offsets.#[#]`, `station_comments[#][#].anchor`,
-//! `sections[#].shots[#].length`) - three of them at a drawn limit of 100, which
+//! (`line_offsets.#[#]`, `station_comments[#][#].anchor`,
+//! `lines[#].shots[#].length`) - three of them at a drawn limit of 100, which
 //! is the default, so the knob re-shuffles the space rather than manufacturing
 //! failures of its own.
 //!
@@ -625,7 +625,7 @@
 //!   computed once, in one place.
 //! * **A trace names what survives being shrunk.** Shots travel as
 //!   `Shot::uuid`, because `Shot::id` is renumbered by the loader and re-issued
-//!   by the allocator; sections and closures travel as ids, PAIRED between the
+//!   by the allocator; lines and closures travel as ids, PAIRED between the
 //!   recorded run and the replay through what each move created ([`Created`],
 //!   [`Refs`]). A reference that no longer maps makes its move inapplicable, and
 //!   an inapplicable move is skipped rather than fatal.
@@ -685,7 +685,7 @@
 //! | oracle | what it compares | what only it can see |
 //! |---|---|---|
 //! | ROUNDTRIP | a canonical serialized `Project` per undo depth | anything stored that a history move fails to restore |
-//! | ALIGNMENT | every cross-section merge, RAW and RESOLVED | a move that leaves the survey network geometrically broken, and a disagreement between the app's two measures of that |
+//! | ALIGNMENT | every cross-line merge, RAW and RESOLVED | a move that leaves the survey network geometrically broken, and a disagreement between the app's two measures of that |
 //! | INTEGRITY DELTA | `AppState::integrity_check`'s own verdict per depth | a state that roundtrips while the app's verdict on it does not |
 //! | ADJUSTED GEOMETRY | `get_adjusted_stations` per depth - what the map draws | a SOLVE whose result moved, including through a stale memo, while the stored inputs agree |
 //! | ENTRY CONTENT | the `UndoHistoryItem` rows themselves - what the history dropdown SAYS | an entry that misdescribes itself, whatever its effects do |
@@ -739,8 +739,8 @@
 //!   the loader's shot-id renumbering cannot reach them).
 //!
 //! `preview_data` is in the second half only, and that asymmetry is deliberate
-//! rather than a gap: it is a LIVE VIEW. `derive_preview_data` resolves section
-//! NAMES against the current project, so renaming a section - or undoing a
+//! rather than a gap: it is a LIVE VIEW. `derive_preview_data` resolves line
+//! NAMES against the current project, so renaming a line - or undoing a
 //! rename - legitimately changes what an older entry's preview reads. It is
 //! stable exactly where the project is, which the save/reload boundary is by
 //! construction and a history move is not.
@@ -748,7 +748,7 @@
 //! It found two things on its first run, both of them existing findings reaching
 //! a surface nothing else was looking at, and both were classified rather than
 //! fixed at the time:
-//! `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` and
+//! `finding-5-a-reloaded-command-can-no-longer-clear-a-line-field` and
 //! `finding-23-history-float-dust-moves-a-displayed-value`. Both are fixed now
 //! and both classifiers are deleted - see the matrix rows above - so a history
 //! row that reads differently after a reload than it did before the save FAILS
@@ -798,7 +798,7 @@ use super::AppState;
 use crate::core::undo::history_view::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 // CONFIG ISOLATION. Every test in this module opens with
@@ -904,7 +904,7 @@ impl Rng {
 ///
 /// Ported, not re-derived. The harness spent a finding on this (issue #413,
 /// finding 9): a 1e6 m displacement puts coordinates in a regime where
-/// re-deriving `section_offsets` loses ~4.6e-6 m ABSOLUTE to catastrophic
+/// re-deriving `line_offsets` loses ~4.6e-6 m ABSOLUTE to catastrophic
 /// cancellation, three orders above the oracle's 1e-9 floor, so it reads as a
 /// roundtrip failure when it is really the injected input. The bound goes on the
 /// INPUT rather than on the oracle, which would have blinded it to real
@@ -937,16 +937,16 @@ fn drop_key(path: &str) -> bool {
         path,
         "modified_at"
             | "file_path"
-            | "next_section_id"
+            | "next_line_id"
             | "next_closure_id"
-            | "sections.*.next_shot_id"
+            | "lines.*.next_shot_id"
     )
 }
 
 /// `station_offsets` and `station_comments` serialize as a Vec of `(key, value)`
 /// pairs built from a `HashMap`, so their ORDER is not stable across a restore.
 /// Sorting them canonicalizes that without hiding a value - the same treatment
-/// the harness gives `section_offsets` (whose JSON-object form serde_json already
+/// the harness gives `line_offsets` (whose JSON-object form serde_json already
 /// sorts on parse).
 fn sort_as_set(path: &str) -> bool {
     matches!(path, "station_offsets" | "station_comments")
@@ -965,7 +965,7 @@ fn round_significant(value: f64) -> f64 {
 /// Canonical, comparison-ready JSON for a serialized `Project`.
 ///
 /// `id_agnostic` replaces every `Shot::id` with its POSITION. `Shot::id` is not
-/// persisted - the loader renumbers to `section_id * FEATURE_ID_STRIDE +
+/// persisted - the loader renumbers to `line_id * FEATURE_ID_STRIDE +
 /// sequence_order` - so once a run has crossed a save/reload, comparing ids
 /// against a pre-save snapshot would report the renumbering as drift. Everything
 /// else stays compared exactly, and a run that never saves never turns this on.
@@ -1006,7 +1006,7 @@ pub(super) fn canonicalize(
             let mut out = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
                 let mut canonical = canonicalize(item, &child_path, id_agnostic);
-                if id_agnostic && child_path == "sections.*.shots.*" {
+                if id_agnostic && child_path == "lines.*.shots.*" {
                     if let serde_json::Value::Object(shot) = &mut canonical {
                         shot.insert("id".to_string(), serde_json::Value::from(index));
                     }
@@ -1290,7 +1290,7 @@ pub(super) struct Verdict {
     /// comparable at all.
     ///
     /// Values are kept VERBATIM otherwise, ids and distances included. Every id
-    /// a message can carry - section id, station index, closure id, uuid -
+    /// a message can carry - line id, station index, closure id, uuid -
     /// survives a save/reload unchanged, and the distances are quantized to a
     /// centimetre by the `{:.2}` in the messages themselves, so float dust
     /// cannot move one except exactly on a rounding boundary. Stripping them
@@ -1318,7 +1318,7 @@ impl Verdict {
 /// reports nothing - and asks which is authoritative. This is the oracle that
 /// mines that class instead of noting it.
 ///
-/// The pair's two SECTION ids used to be carried here as well, for finding 20's
+/// The pair's two LINE ids used to be carried here as well, for finding 20's
 /// classifier to ask whether their merge group was datum-anchored. That
 /// classifier is gone - every drifted merge fails now, anchored or not - so the
 /// distance is the whole measurement again.
@@ -1400,8 +1400,8 @@ struct Classifier {
 /// and any of them can carry a finding's precondition) went with findings 1, 3,
 /// 8 and 12's; `after_save` and `epoch` with finding 11's; `heal_reverted` with
 /// the findings 1/11 cascade; `displaced` (the trajectory finding 3's RATCHET
-/// had left in each section's `section_offsets` entry) with the cascade half of
-/// finding 3; and `corrupted` / `section_ids` with finding 16's. `stale` is what
+/// had left in each line's `line_offsets` entry) with the cascade half of
+/// finding 3; and `corrupted` / `line_ids` with finding 16's. `stale` is what
 /// is left, and it is now read only by the failure note - the first classifier
 /// that needs any of this again should put back what it needs.
 #[derive(Clone, Copy)]
@@ -1414,7 +1414,7 @@ struct MoveCtx {
 /// What an in-session shot id an entry carries now addresses.
 ///
 /// This is the fact findings 8, 12 and 13 are ABOUT: shot ids are not persisted
-/// (the loader renumbers to `section_id * FEATURE_ID_STRIDE + sequence_order`),
+/// (the loader renumbers to `line_id * FEATURE_ID_STRIDE + sequence_order`),
 /// undo entries reload as opaque JSON with no remapping, and the allocator hands
 /// out ids from the same space - so a persisted id either still names its shot,
 /// names a DIFFERENT one, or names nothing. The three outcomes are the three
@@ -1468,24 +1468,24 @@ impl StaleTargets {
 // * `command_is` ("did the move consume an entry of this command type?") went
 //   with findings 1, 8 and 12's classifiers;
 // * `entry_predates_save` went with finding 11's;
-// * `appended_into_empty` ("which section did a consumed `CreateShot` append the
+// * `appended_into_empty` ("which line did a consumed `CreateShot` append the
 //   FIRST shot into") and `is_finding_3_displacement` ("is this diff that
-//   section sliding along the RATCHET's trajectory") went with FINDING 3's two
+//   line sliding along the RATCHET's trajectory") went with FINDING 3's two
 //   classifiers, and took `displacements_equal`, `offset_pair` and `offset_of`
 //   with them;
-// * `is_in_a_corrupted_section` went with finding 16's cascade, and took
-//   `section_ids_of` and `section_of_path` with it.
+// * `is_in_a_corrupted_line` went with finding 16's cascade, and took
+//   `line_ids_of` and `line_of_path` with it.
 
-/// `(section, element)` for a diff path inside `section_offsets`.
+/// `(line, element)` for a diff path inside `line_offsets`.
 ///
-/// A whole key (`section_offsets.5`) is what an absent-vs-present difference
-/// produces; an element (`section_offsets.5[0]`) is what a key that exists on
+/// A whole key (`line_offsets.5`) is what an absent-vs-present difference
+/// produces; an element (`line_offsets.5[0]`) is what a key that exists on
 /// BOTH sides produces, because the differ recurses into the pair. The two
 /// spellings are the same defect seen through a different starting state, and a
 /// classifier that knew only the first silently stopped classifying as soon as
-/// the section already had an offset.
-fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
-    let rest = path.strip_prefix("section_offsets.")?;
+/// the line already had an offset.
+fn offset_key_of(path: &str) -> Option<(LineId, Option<usize>)> {
+    let rest = path.strip_prefix("line_offsets.")?;
     match rest.split_once('[') {
         None => rest.parse().ok().map(|id| (id, None)),
         Some((id, index)) => {
@@ -1503,7 +1503,7 @@ struct EntryMeta {
     /// Epoch the entry was pushed in.
     epoch: u32,
     // `appended_into_empty` - "this entry is a `CreateShot` that appended the
-    // first shot into a previously EMPTY section" - was finding 3's exact
+    // first shot into a previously EMPTY line" - was finding 3's exact
     // precondition and went with its classifiers.
     /// The shot this entry's own restore names by id, with the uuid that id
     /// addressed when the entry was pushed.
@@ -1521,7 +1521,7 @@ struct EntryMeta {
 /// rather than an inference from the damage afterwards.
 #[derive(Clone, Debug)]
 struct ShotTarget {
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     uuid: String,
 }
@@ -1534,8 +1534,8 @@ struct ShotTarget {
 ///
 /// Implemented by normalizing the path rather than by walking the pattern: every
 /// array index and numeric map key becomes `#`, and the result is compared whole.
-/// A prefix-walking version got this wrong for a trailing `#` (`section_offsets.5`
-/// did not match `section_offsets.#`), which silently un-classified finding 2 -
+/// A prefix-walking version got this wrong for a trailing `#` (`line_offsets.5`
+/// did not match `line_offsets.#`), which silently un-classified finding 2 -
 /// the failure mode a clever matcher invites and a boring one does not.
 fn path_is(diff: &Diff, pattern: &str) -> bool {
     let mut normalized = String::with_capacity(diff.path.len());
@@ -1557,15 +1557,15 @@ fn path_is(diff: &Diff, pattern: &str) -> bool {
 /// The classified set, in match order. EMPTY: every finding it named is fixed.
 const CLASSIFIERS: &[Classifier] = &[
     // FINDINGS 1 and 11 were classified here, in four classifiers: the two
-    // first-hand ones (a gauge anchor lost across a `create_section` entry, and
+    // first-hand ones (a gauge anchor lost across a `create_line` entry, and
     // one lost across an entry recorded before a save), their shared cascade,
     // and the shot-uuid re-mint. All FIXED:
     //
-    // * `UndoData::CreatedSectionSnapshot` carries a `SectionIdentity` alongside
-    //   its `SectionData` - every shot uuid, the reverse parity and the gauge
-    //   pair - and `Section::restore_with_identity` (models/section.rs) puts
-    //   them back instead of minting through `Section::new`. The undo refreshes
-    //   that identity from the live section immediately before deleting it, so
+    // * `UndoData::CreatedLineSnapshot` carries a `LineIdentity` alongside
+    //   its `LineData` - every shot uuid, the reverse parity and the gauge
+    //   pair - and `Line::restore_with_identity` (models/line.rs) puts
+    //   them back instead of minting through `Line::new`. The undo refreshes
+    //   that identity from the live line immediately before deleting it, so
     //   anchors a save captured after the entry was pushed are carried too.
     // * `reapply_heals_after_restore` (core/state/project_io.rs) brings a
     //   project restored from a `ProjectSnapshotPair` up to the standard a saved
@@ -1579,50 +1579,50 @@ const CLASSIFIERS: &[Classifier] = &[
     // `MoveCtx::entry_predates_save` and the `heal_reverted` latch went with
     // them; they had no other callers.
     //
-    // FINDING 2 was classified here as "an orphan zero section offset" (absent
+    // FINDING 2 was classified here as "an orphan zero line offset" (absent
     // or inert within a nanometre on both sides). FIXED, and the classifier is
-    // gone: a `section_offsets` key present on one side of a history move and
+    // gone: a `line_offsets` key present on one side of a history move and
     // absent on the other now fails the gate, whatever its value.
-    // `Project::write_section_offset` (models/project/offsets.rs) is THE write
-    // point for `section_offsets` and drops the whole dust ball around zero, so
+    // `Project::write_line_offset` (models/project/offsets.rs) is THE write
+    // point for `line_offsets` and drops the whole dust ball around zero, so
     // an adjustment that cancels leaves nothing behind - for EVERY writer
     // including a restore, which is the invariant that closed finding 27.
     // `is_absent_or_zero` went with it.
     //
-    // FINDING 5 was classified here. FIXED: `SectionUpdates`' three nullable
-    // fields carry `double_option` + `skip_serializing_if` (models/section.rs),
+    // FINDING 5 was classified here. FIXED: `LineUpdates`' three nullable
+    // fields carry `double_option` + `skip_serializing_if` (models/line.rs),
     // so `values_json` keeps the difference between "clear this field"
     // (`Some(None)`) and "leave it alone" (`None`). The classifier is deleted per
-    // the contract above - a section name, surveyor or date going null on one
+    // the contract above - a line name, surveyor or date going null on one
     // side of a history move is now an unclassified failure and fails the gate.
     //
-    // FINDING 3 was classified here, twice: first-hand, as "a `section_offsets`
+    // FINDING 3 was classified here, twice: first-hand, as "a `line_offsets`
     // key gaining or losing real geometry on the move that consumed an append of
-    // the FIRST shot into an empty section", and CASCADING (which is what finding
-    // 15 turned out to be) as "that same section still carrying a value on the
+    // the FIRST shot into an empty line", and CASCADING (which is what finding
+    // 15 turned out to be) as "that same line still carrying a value on the
     // ratchet's trajectory, several moves later".
     //
     // FIXED. Undo of `CreateShot` no longer reuses the general delete for the one
     // insert it is not the inverse of: `AppState::remove_created_shot`
     // (core/state/command_shot.rs) recognises the recorded append-into-an-empty-
-    // section shape and calls `Project::remove_appended_first_shot`
+    // line shape and calls `Project::remove_appended_first_shot`
     // (models/project/shots.rs), which removes the station the append CREATED and
-    // leaves `section_offsets` alone - as offset-neutral in reverse as
+    // leaves `line_offsets` alone - as offset-neutral in reverse as
     // `Project::add_shot` is forward, so there is nothing left to ratchet and
     // nothing left to cascade. Both classifiers are deleted per the
-    // delete-when-fixed contract: a `section_offsets` key gaining or losing real
+    // delete-when-fixed contract: a `line_offsets` key gaining or losing real
     // geometry across a history move is once again an unclassified failure that
     // fails the gate.
     //
     // FINDING 12 was classified here ("a stale in-session id edits the wrong
-    // shot"), and FINDING 16's cascade with it ("a section holding one
+    // shot"), and FINDING 16's cascade with it ("a line holding one
     // `Shot::uuid` twice cannot match any snapshot recorded before the
     // duplication"). Both are FIXED at the source: every restore path addresses
     // its shot by `Shot::uuid` rather than by the id the entry happens to carry
     // (core/state/undo.rs, core/state/undo_restore.rs), so a persisted id going
     // stale can no longer reach a shot it was not recorded against. A field
     // changing on a shot an undo did not name, and a uuid appearing twice in one
-    // section, are unclassified failures again.
+    // line, are unclassified failures again.
 ];
 
 /// Which classifier explains `diff`, if any.
@@ -1638,19 +1638,19 @@ fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
 /// save. Deliberately narrow by direction: an anchor may only be GAINED, a uuid
 /// filled in, an offset entry dropped.
 fn attributable_to_save(diff: &Diff) -> bool {
-    ((path_is(diff, "sections[#].gauge_shot_uuid")
-        || path_is(diff, "sections[#].gauge_neighbour_uuid"))
+    ((path_is(diff, "lines[#].gauge_shot_uuid")
+        || path_is(diff, "lines[#].gauge_neighbour_uuid"))
         && diff.expected == "null"
         && diff.actual != "null")
-        || (path_is(diff, "sections[#].shots[#].uuid")
+        || (path_is(diff, "lines[#].shots[#].uuid")
             && (diff.expected == ABSENT || diff.expected == "null")
             && diff.actual != ABSENT)
-        || (path_is(diff, "section_offsets.#") && diff.actual == ABSENT)
+        || (path_is(diff, "line_offsets.#") && diff.actual == ABSENT)
 }
 
 /// Derived geometry a RELOAD re-solves from scratch: `redrive_offsets_after_load`
 /// ends in an unconditional `resolve_offsets()` ("Zero-trust: never honor a
-/// persisted derivable offset"), so `section_offsets` and the station offsets
+/// persisted derivable offset"), so `line_offsets` and the station offsets
 /// derived from them are RECOMPUTED rather than restored.
 fn attributable_to_reload(diff: &Diff) -> bool {
     // BOTH spellings of an offset difference: the whole key when it is present
@@ -1668,12 +1668,12 @@ fn attributable_to_reload(diff: &Diff) -> bool {
 // contract:
 //
 // * FINDING 3's DATA-LOSS half - `diffs_without_station_zero_refs`, which
-//   stripped both sides of every ref keyed to one section's station 0
+//   stripped both sides of every ref keyed to one line's station 0
 //   (`names_station_zero` / `strip_station_zero_refs`), plus the cascade latch
-//   for the sections it had already destroyed them on. The `pos == 0` branch of
-//   `remove_shot_with_rewire` DROPS those refs, and an empty section has only
+//   for the lines it had already destroyed them on. The `pos == 0` branch of
+//   `remove_shot_with_rewire` DROPS those refs, and an empty line has only
 //   station 0, so a merge, zero datum or station comment anchored there was
-//   destroyed by the undo of the append that created the section's first shot.
+//   destroyed by the undo of the append that created the line's first shot.
 //   FIXED with the displacement half: that undo no longer routes through the
 //   general delete at all (`Project::remove_appended_first_shot`,
 //   models/project/shots.rs).
@@ -1681,7 +1681,7 @@ fn attributable_to_reload(diff: &Diff) -> bool {
 //   recognised a loop closure the LOAD had reclassified as a merge moving
 //   between two lists and re-indexing both. FIXED at the source: the commands
 //   that leave a closure orphaned convert it themselves
-//   (`execute_delete_last_shot_and_section` and the appended-first-shot undo,
+//   (`execute_delete_last_shot_and_line` and the appended-first-shot undo,
 //   core/state/command_delete_split.rs and command_shot.rs), so the load has
 //   nothing left to reclassify.
 // * FINDINGS 4 and 17 - `LIST_REORDER_SIGNATURES`, `diffs_without_list_reorders`
@@ -1691,9 +1691,9 @@ fn attributable_to_reload(diff: &Diff) -> bool {
 //   forward `Vec::remove` took the entry out of, recorded on the entry
 //   (core/undo.rs).
 // * FINDINGS 8 and 16 - `shot_uuids`, `is_shot_identity_swap`,
-//   `section_shot_uuids`, `strip_shot`, `diffs_without_misplaced_shot` and
+//   `line_shot_uuids`, `strip_shot`, `diffs_without_misplaced_shot` and
 //   `uuid_occurrences`, which recognised the wrong shot having been deleted, a
-//   shot having come back in the wrong PLACE, and a section holding one
+//   shot having come back in the wrong PLACE, and a line holding one
 //   `Shot::uuid` twice. All FIXED by the same change: every restore path
 //   addresses its shot by `Shot::uuid` instead of by the in-session id the
 //   entry happens to carry, a load-time pass drops an entry whose target no
@@ -1747,14 +1747,14 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
 }
 
 /// A starting project with the topology that made the naharon fixture productive:
-/// sections of varied length INCLUDING empty and single-shot ones, station
-/// merges, a zero datum, a genuine loop closure, station comments, and sections
+/// lines of varied length INCLUDING empty and single-shot ones, station
+/// merges, a zero datum, a genuine loop closure, station comments, and lines
 /// with null metadata.
 ///
 /// Built rather than loaded. The repo forbids committing fixtures and CI has
 /// none, so the shapes that matter are constructed explicitly - which also means
 /// each one is here on purpose and can be pointed at when a finding needs it.
-pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> Vec<SectionId> {
+pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> Vec<LineId> {
     let created = state.execute(Command::CreateProject {
         name: "RustFuzz".to_string(),
         location: None,
@@ -1762,15 +1762,15 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
     assert!(created.success, "CreateProject failed: {:?}", created.error);
 
     // Shot counts chosen to include the two shapes that have carried findings:
-    // 0 (bug 3's empty section) and 1 (bug 8's single-shot divergence).
+    // 0 (bug 3's empty line) and 1 (bug 8's single-shot divergence).
     let shape: &[usize] = &[3, 0, 1, 4, 2, 1, 3];
     let mut ids = Vec::new();
     for (index, count) in shape.iter().enumerate() {
         let shots: Vec<ShotData> = (0..*count).map(|_| random_shot(rng)).collect();
-        // Null name/surveyor/date on some sections: finding 5 only exists for a
+        // Null name/surveyor/date on some lines: finding 5 only exists for a
         // field that STARTS null, and the fractal fixture had none.
         let null_metadata = index % 3 == 0;
-        let result = state.execute(Command::CreateSection {
+        let result = state.execute(Command::CreateLine {
             name: (!null_metadata).then(|| format!("sec-{index}")),
             surveyor: (!null_metadata).then(|| format!("surveyor-{}", rng.range(1, 9))),
             date: None,
@@ -1782,8 +1782,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
             }),
             shots,
         });
-        assert!(result.success, "CreateSection failed: {:?}", result.error);
-        ids.push(result.section_id.expect("CreateSection returned no id"));
+        assert!(result.success, "CreateLine failed: {:?}", result.error);
+        ids.push(result.line_id.expect("CreateLine returned no id"));
     }
 
     // A zero datum anchors the first component, which is what makes closures and
@@ -1801,8 +1801,8 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
     // describe.
     //
     // FINDING 14 lives here, which is why the gate does not build it. With this
-    // chain in place and the datum at section 0, a later mid-section insert into
-    // section 0 leaves the 0 <-> 3 merge 6.97 m out of alignment and the app's own
+    // chain in place and the datum at line 0, a later mid-line insert into
+    // line 0 leaves the 0 <-> 3 merge 6.97 m out of alignment and the app's own
     // `#[cfg(test)]` assert panics inside `insert_shot_after`. The generators
     // still build merges, closures and datums during a run, so the gate keeps
     // exercising those commands - it just does not START from the shape that is
@@ -1859,92 +1859,92 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
 /// iteration order is not, and neither is `Vec` order once a command reorders a
 /// collection.
 pub(super) struct Targets {
-    /// `(section_id, [shot_id, ...])`, ascending.
-    pub(super) sections: Vec<(SectionId, Vec<ShotId>)>,
-    /// `(section_id, station_index)`, ascending.
-    pub(super) stations: Vec<(SectionId, u32)>,
+    /// `(line_id, [shot_id, ...])`, ascending.
+    pub(super) lines: Vec<(LineId, Vec<ShotId>)>,
+    /// `(line_id, station_index)`, ascending.
+    pub(super) stations: Vec<(LineId, u32)>,
     /// Merged pairs, as resolved positional refs, ascending.
-    pub(super) merges: Vec<((SectionId, u32), (SectionId, u32))>,
+    pub(super) merges: Vec<((LineId, u32), (LineId, u32))>,
     /// Zero-datum stations, ascending.
-    pub(super) datums: Vec<(SectionId, u32)>,
+    pub(super) datums: Vec<(LineId, u32)>,
     /// Loop closure ids, ascending.
     pub(super) closures: Vec<u64>,
-    /// `(section_id, shot_id, uuid)`, ascending, for every shot that has a uuid.
+    /// `(line_id, shot_id, uuid)`, ascending, for every shot that has a uuid.
     ///
     /// Read here rather than through a second `get_project_state()` because the
     /// TRACE names shots by uuid: `Shot::id` is renumbered by the loader and
     /// re-issued by the allocator, so an id is not an identity a recorded move
     /// can carry, while `Shot::uuid` is persisted and survives both.
-    pub(super) shot_uuids: Vec<(SectionId, ShotId, String)>,
+    pub(super) shot_uuids: Vec<(LineId, ShotId, String)>,
 }
 
 impl Targets {
-    /// The uuid the live shot `section_id`/`shot_id` carries, if it has one.
-    pub(super) fn uuid_of(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+    /// The uuid the live shot `line_id`/`shot_id` carries, if it has one.
+    pub(super) fn uuid_of(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
         self.shot_uuids
             .iter()
-            .find(|(section, shot, _)| *section == section_id && *shot == shot_id)
+            .find(|(line, shot, _)| *line == line_id && *shot == shot_id)
             .map(|(_, _, uuid)| uuid.clone())
     }
 
     /// Which live shot carries `uuid`, if any.
-    pub(super) fn by_uuid(&self, uuid: &str) -> Option<(SectionId, ShotId)> {
+    pub(super) fn by_uuid(&self, uuid: &str) -> Option<(LineId, ShotId)> {
         self.shot_uuids
             .iter()
             .find(|(_, _, candidate)| candidate == uuid)
-            .map(|(section, shot, _)| (*section, *shot))
+            .map(|(line, shot, _)| (*line, *shot))
     }
 
-    /// Shot ids of one live section, ascending, or `None` when the section is
+    /// Shot ids of one live line, ascending, or `None` when the line is
     /// gone.
-    pub(super) fn shots_of(&self, section_id: SectionId) -> Option<&[ShotId]> {
-        self.sections
+    pub(super) fn shots_of(&self, line_id: LineId) -> Option<&[ShotId]> {
+        self.lines
             .iter()
-            .find(|(id, _)| *id == section_id)
+            .find(|(id, _)| *id == line_id)
             .map(|(_, shots)| shots.as_slice())
     }
 }
 
 pub(super) fn read_targets(state: &AppState) -> Targets {
     let project = state.get_project_state().expect("no project open");
-    let mut sections: Vec<(SectionId, Vec<ShotId>)> = project
-        .sections
+    let mut lines: Vec<(LineId, Vec<ShotId>)> = project
+        .lines
         .iter()
-        .map(|section| {
-            let mut shots: Vec<ShotId> = section.shots.iter().map(|shot| shot.id).collect();
+        .map(|line| {
+            let mut shots: Vec<ShotId> = line.shots.iter().map(|shot| shot.id).collect();
             shots.sort_unstable();
-            (section.id, shots)
+            (line.id, shots)
         })
         .collect();
-    sections.sort_by_key(|entry| entry.0);
+    lines.sort_by_key(|entry| entry.0);
 
     let mut stations = Vec::new();
-    for (id, shots) in &sections {
+    for (id, shots) in &lines {
         for index in 0..=shots.len() {
             stations.push((*id, index as u32));
         }
     }
 
-    let mut merges: Vec<((SectionId, u32), (SectionId, u32))> = project
+    let mut merges: Vec<((LineId, u32), (LineId, u32))> = project
         .station_merges
         .iter()
         .filter_map(|merge| {
             let a = project.resolve_key(&merge.station_a)?;
             let b = project.resolve_key(&merge.station_b)?;
             Some((
-                (a.section_id, a.station_index),
-                (b.section_id, b.station_index),
+                (a.line_id, a.station_index),
+                (b.line_id, b.station_index),
             ))
         })
         .collect();
     merges.sort_unstable();
 
-    let mut datums: Vec<(SectionId, u32)> = project
+    let mut datums: Vec<(LineId, u32)> = project
         .zero_datums
         .iter()
         .filter_map(|datum| {
             let resolved = project.resolve_key(&datum.station_ref)?;
-            Some((resolved.section_id, resolved.station_index))
+            Some((resolved.line_id, resolved.station_index))
         })
         .collect();
     datums.sort_unstable();
@@ -1956,20 +1956,20 @@ pub(super) fn read_targets(state: &AppState) -> Targets {
         .collect();
     closures.sort_unstable();
 
-    let mut shot_uuids: Vec<(SectionId, ShotId, String)> = project
-        .sections
+    let mut shot_uuids: Vec<(LineId, ShotId, String)> = project
+        .lines
         .iter()
-        .flat_map(|section| {
-            section
+        .flat_map(|line| {
+            line
                 .shots
                 .iter()
-                .filter_map(move |shot| shot.uuid.clone().map(|uuid| (section.id, shot.id, uuid)))
+                .filter_map(move |shot| shot.uuid.clone().map(|uuid| (line.id, shot.id, uuid)))
         })
         .collect();
     shot_uuids.sort();
 
     Targets {
-        sections,
+        lines,
         stations,
         merges,
         datums,
@@ -1998,7 +1998,7 @@ pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
 /// A shot, named by the identity that survives BOTH a reload and the removal of
 /// the moves around it.
 ///
-/// `Shot::id` is neither. The loader renumbers it (`section_id *
+/// `Shot::id` is neither. The loader renumbers it (`line_id *
 /// FEATURE_ID_STRIDE + position`) and the allocator re-issues it, so a trace
 /// that named shots by id would address a DIFFERENT shot the moment a shrink
 /// step dropped a `create_shot` from in front of it. `Shot::uuid` is persisted,
@@ -2010,23 +2010,23 @@ pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
 /// the uuid cannot cover: a shot that has none.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct ShotRefT {
-    pub(super) section: SectionId,
+    pub(super) line: LineId,
     pub(super) id: ShotId,
     pub(super) uuid: Option<String>,
 }
 
 /// A station, named positionally - which is what a station IS. There is no
 /// stored station object to carry an identity, so a station reference is a
-/// section plus an index, and it stops resolving when the section is short.
+/// line plus an index, and it stops resolving when the line is short.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct StationRefT {
-    pub(super) section: SectionId,
+    pub(super) line: LineId,
     pub(super) index: u32,
 }
 
 impl StationRefT {
-    const fn new(section: SectionId, index: u32) -> Self {
-        Self { section, index }
+    const fn new(line: LineId, index: u32) -> Self {
+        Self { line, index }
     }
 }
 
@@ -2039,14 +2039,14 @@ impl StationRefT {
 /// drift from - which is the property the whole shrinker rests on.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) enum Op {
-    CreateSection {
+    CreateLine {
         name: Option<String>,
         surveyor: Option<String>,
         color: String,
         shots: Vec<ShotData>,
     },
     CreateShot {
-        section: SectionId,
+        line: LineId,
         shot: Box<ShotData>,
         after: Option<ShotRefT>,
         before: Option<ShotRefT>,
@@ -2059,22 +2059,22 @@ pub(super) enum Op {
         shot: ShotRefT,
         kind: ShotKind,
     },
-    UpdateSection {
-        section: SectionId,
-        updates: Box<SectionUpdates>,
+    UpdateLine {
+        line: LineId,
+        updates: Box<LineUpdates>,
     },
     DeleteShot {
         shot: ShotRefT,
     },
-    DeleteSection {
-        section: SectionId,
+    DeleteLine {
+        line: LineId,
     },
-    ReverseSection {
-        section: SectionId,
+    ReverseLine {
+        line: LineId,
         swap_left_right: bool,
     },
     Move {
-        section: SectionId,
+        line: LineId,
         offset: Coordinates,
         segment: bool,
     },
@@ -2116,32 +2116,32 @@ pub(super) enum Op {
     DeleteShotAndSplit {
         shot: ShotRefT,
     },
-    /// Split Section Here (#335): at the shot's end station, or `distance`
+    /// Split Line Here (#335): at the shot's end station, or `distance`
     /// along it when `along` is set. `side` picks where the split station's
     /// comment (0 A, 1 B, 2 both) and zero datum (even A, odd B) go.
-    SplitSection {
+    SplitLine {
         shot: ShotRefT,
         along: bool,
         distance: f64,
         side: u8,
     },
-    /// Combine Sections, routed through `combine_candidate` at an end
-    /// `station`: combines its section with whatever section ends there,
-    /// keeping the candidate's `b` section when `keep_b`. `pick` chooses the
+    /// Combine Lines, routed through `combine_candidate` at an end
+    /// `station`: combines its line with whatever line ends there,
+    /// keeping the candidate's `b` line when `keep_b`. `pick` chooses the
     /// join comment and name (0 kept, 1 other, 2 both), `swap_lr` the walls of
-    /// a section the combine reverses. A blocked candidate still runs, so the
+    /// a line the combine reverses. A blocked candidate still runs, so the
     /// refusal is exercised too.
-    CombineSections {
+    CombineLines {
         station: StationRefT,
         keep_b: bool,
         swap_lr: bool,
         pick: u8,
     },
-    DeleteLastShotAndSection {
+    DeleteLastShotAndLine {
         shot: ShotRefT,
     },
     DeleteShotRange {
-        section: SectionId,
+        line: LineId,
         from: ShotRefT,
         to: ShotRefT,
         split: bool,
@@ -2161,16 +2161,16 @@ pub(super) enum BatchOp {
         shot: ShotRefT,
         length: f64,
     },
-    MoveSection {
-        section: SectionId,
+    MoveLine {
+        line: LineId,
         offset: Coordinates,
     },
     MoveStation {
         station: StationRefT,
         offset: Coordinates,
     },
-    ReverseSection {
-        section: SectionId,
+    ReverseLine {
+        line: LineId,
         swap_left_right: bool,
     },
 }
@@ -2178,7 +2178,7 @@ pub(super) enum BatchOp {
 /// Everything one recorded move BROUGHT INTO EXISTENCE, in project order.
 ///
 /// The shrinker's map from recorded ids to live ids is built from these: a
-/// replayed move creates its own sections, shots and closures, and pairing what
+/// replayed move creates its own lines, shots and closures, and pairing what
 /// the recorded run created with what the replay created is what lets a later
 /// move still address the right thing after the moves before it changed.
 ///
@@ -2188,7 +2188,7 @@ pub(super) enum BatchOp {
 /// names the re-minted uuid.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Created {
-    pub(super) sections: Vec<SectionId>,
+    pub(super) lines: Vec<LineId>,
     pub(super) shots: Vec<String>,
     pub(super) closures: Vec<u64>,
 }
@@ -2233,16 +2233,16 @@ impl Op {
     /// One line, readable, naming the RECORDED ids - which is what the trace
     /// carries and what a reader matches against the original run's log.
     pub(super) fn describe(&self) -> String {
-        let station = |station: &StationRefT| format!("{}/{}", station.section, station.index);
-        let shot = |shot: &ShotRefT| format!("{}:{}", shot.section, shot.id);
+        let station = |station: &StationRefT| format!("{}/{}", station.line, station.index);
+        let shot = |shot: &ShotRefT| format!("{}:{}", shot.line, shot.id);
         match self {
-            Self::CreateSection { name, shots, .. } => format!(
-                "createSection(shots={},nullMeta={})",
+            Self::CreateLine { name, shots, .. } => format!(
+                "createLine(shots={},nullMeta={})",
                 shots.len(),
                 name.is_none()
             ),
             Self::CreateShot {
-                section,
+                line,
                 after,
                 before,
                 ..
@@ -2252,27 +2252,27 @@ impl Op {
                     (None, Some(anchor)) => format!("before {}", shot(anchor)),
                     (None, None) => "append".to_string(),
                 };
-                format!("createShot(s={section},{how})")
+                format!("createShot(s={line},{how})")
             }
             Self::UpdateShot { shot: target, .. } => format!("updateShot({})", shot(target)),
             Self::SetShotKind { shot: target, kind } => {
                 format!("setShotKind({},{kind:?})", shot(target))
             }
-            Self::UpdateSection { section, .. } => format!("updateSection(s={section})"),
+            Self::UpdateLine { line, .. } => format!("updateLine(s={line})"),
             Self::DeleteShot { shot: target } => format!("deleteShot({})", shot(target)),
-            Self::DeleteSection { section } => format!("deleteSection(s={section})"),
-            Self::ReverseSection {
-                section,
+            Self::DeleteLine { line } => format!("deleteLine(s={line})"),
+            Self::ReverseLine {
+                line,
                 swap_left_right,
-            } => format!("reverseSection(s={section},swapLR={swap_left_right})"),
+            } => format!("reverseLine(s={line},swapLR={swap_left_right})"),
             Self::Move {
-                section, segment, ..
+                line, segment, ..
             } => format!(
-                "{}(s={section})",
+                "{}(s={line})",
                 if *segment {
                     "moveSegment"
                 } else {
-                    "moveSection"
+                    "moveLine"
                 }
             ),
             Self::MoveStation { station: at, .. } => format!("moveStation({})", station(at)),
@@ -2297,34 +2297,34 @@ impl Op {
             Self::DeleteShotAndSplit { shot: target } => {
                 format!("deleteShotAndSplit({})", shot(target))
             }
-            Self::SplitSection {
+            Self::SplitLine {
                 shot: target,
                 along,
                 distance,
                 side,
             } => format!(
-                "splitSection({},along={along},{distance},side={side})",
+                "splitLine({},along={along},{distance},side={side})",
                 shot(target)
             ),
-            Self::CombineSections {
+            Self::CombineLines {
                 station: at,
                 keep_b,
                 swap_lr,
                 pick,
             } => format!(
-                "combineSections({},keep_b={keep_b},swap_lr={swap_lr},pick={pick})",
+                "combineLines({},keep_b={keep_b},swap_lr={swap_lr},pick={pick})",
                 station(at)
             ),
-            Self::DeleteLastShotAndSection { shot: target } => {
-                format!("deleteLastShotAndSection({})", shot(target))
+            Self::DeleteLastShotAndLine { shot: target } => {
+                format!("deleteLastShotAndLine({})", shot(target))
             }
             Self::DeleteShotRange {
-                section,
+                line,
                 from,
                 to,
                 split,
             } => format!(
-                "{}(s={section},{}..{})",
+                "{}(s={line},{}..{})",
                 if *split {
                     "deleteShotRangeSplit"
                 } else {
@@ -2340,7 +2340,7 @@ impl Op {
     }
 }
 
-/// Every section, its shots' uuids in project order, and every closure id.
+/// Every line, its shots' uuids in project order, and every closure id.
 ///
 /// Taken before and after a move: the difference is that move's [`Created`].
 /// Project ORDER rather than sorted, because the pairing between the recorded
@@ -2348,14 +2348,14 @@ impl Op {
 /// lists the same way.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Inventory {
-    pub(super) sections: Vec<(SectionId, Vec<String>)>,
+    pub(super) lines: Vec<(LineId, Vec<String>)>,
     pub(super) closures: Vec<u64>,
 }
 
 impl Inventory {
     /// Every shot uuid, in project order.
     fn shots(&self) -> Vec<&String> {
-        self.sections
+        self.lines
             .iter()
             .flat_map(|(_, uuids)| uuids.iter())
             .collect()
@@ -2363,15 +2363,15 @@ impl Inventory {
 
     /// What `self` holds that `before` did not.
     fn created_since(&self, before: &Self) -> Created {
-        let old_sections: BTreeSet<SectionId> = before.sections.iter().map(|(id, _)| *id).collect();
+        let old_lines: BTreeSet<LineId> = before.lines.iter().map(|(id, _)| *id).collect();
         let old_shots: BTreeSet<&String> = before.shots().into_iter().collect();
         let old_closures: BTreeSet<u64> = before.closures.iter().copied().collect();
         Created {
-            sections: self
-                .sections
+            lines: self
+                .lines
                 .iter()
                 .map(|(id, _)| *id)
-                .filter(|id| !old_sections.contains(id))
+                .filter(|id| !old_lines.contains(id))
                 .collect(),
             shots: self
                 .shots()
@@ -2397,7 +2397,7 @@ impl Inventory {
 /// one function, and turning recording on cannot change what a seed does.
 ///
 /// A REPLAY is a mapping, because the ids differ: the run allocates its own
-/// section ids (dropping a `create_section` shifts every later one down), mints
+/// line ids (dropping a `create_line` shifts every later one down), mints
 /// its own uuids, and numbers its own closures. Each map is seeded from the
 /// state the trace starts in and extended by every move's [`Created`].
 ///
@@ -2408,7 +2408,7 @@ impl Inventory {
 /// indistinguishable from a candidate that reproduced the bug.
 pub(super) struct Refs {
     identity: bool,
-    sections: BTreeMap<SectionId, SectionId>,
+    lines: BTreeMap<LineId, LineId>,
     shots: BTreeMap<String, String>,
     closures: BTreeMap<u64, u64>,
     /// Moves skipped so far, and why - reported with the minimized repro.
@@ -2420,7 +2420,7 @@ impl Refs {
     pub(super) fn identity() -> Self {
         Self {
             identity: true,
-            sections: BTreeMap::new(),
+            lines: BTreeMap::new(),
             shots: BTreeMap::new(),
             closures: BTreeMap::new(),
             skipped: Vec::new(),
@@ -2436,28 +2436,28 @@ impl Refs {
     /// recorded under a different plan and every later resolution would be
     /// quietly wrong.
     pub(super) fn replay(recorded: &Inventory, live: &Inventory) -> Result<Self, String> {
-        if recorded.sections.len() != live.sections.len() {
+        if recorded.lines.len() != live.lines.len() {
             return Err(format!(
-                "the trace starts in a project with {} section(s); this run starts with {} - \
+                "the trace starts in a project with {} line(s); this run starts with {} - \
                  the plan does not match the trace",
-                recorded.sections.len(),
-                live.sections.len()
+                recorded.lines.len(),
+                live.lines.len()
             ));
         }
         let mut refs = Self {
             identity: false,
-            sections: BTreeMap::new(),
+            lines: BTreeMap::new(),
             shots: BTreeMap::new(),
             closures: BTreeMap::new(),
             skipped: Vec::new(),
         };
         for ((recorded_id, recorded_shots), (live_id, live_shots)) in
-            recorded.sections.iter().zip(&live.sections)
+            recorded.lines.iter().zip(&live.lines)
         {
-            refs.sections.insert(*recorded_id, *live_id);
+            refs.lines.insert(*recorded_id, *live_id);
             if recorded_shots.len() != live_shots.len() {
                 return Err(format!(
-                    "the trace starts with {} shot(s) in section {recorded_id}; this run starts \
+                    "the trace starts with {} shot(s) in line {recorded_id}; this run starts \
                      with {} - the plan does not match the trace",
                     recorded_shots.len(),
                     live_shots.len()
@@ -2481,20 +2481,20 @@ impl Refs {
     /// something else; a move that mints (a redo of a create) brings back a new
     /// one on both sides, and those two are each other's.
     fn learn(&mut self, recorded: &Created, live: &Created) {
-        let fresh_sections: Vec<SectionId> = live
-            .sections
+        let fresh_lines: Vec<LineId> = live
+            .lines
             .iter()
             .copied()
-            .filter(|id| !self.sections.values().any(|live_id| live_id == id))
+            .filter(|id| !self.lines.values().any(|live_id| live_id == id))
             .collect();
-        let unknown_sections: Vec<SectionId> = recorded
-            .sections
+        let unknown_lines: Vec<LineId> = recorded
+            .lines
             .iter()
             .copied()
-            .filter(|id| !self.sections.contains_key(id))
+            .filter(|id| !self.lines.contains_key(id))
             .collect();
-        for (recorded_id, live_id) in unknown_sections.iter().zip(&fresh_sections) {
-            self.sections.insert(*recorded_id, *live_id);
+        for (recorded_id, live_id) in unknown_lines.iter().zip(&fresh_lines) {
+            self.lines.insert(*recorded_id, *live_id);
         }
         let fresh_shots: Vec<&String> = live
             .shots
@@ -2527,43 +2527,43 @@ impl Refs {
         }
     }
 
-    /// The live section a recorded section id names, if it still exists.
-    fn section(&self, recorded: SectionId, targets: &Targets) -> Option<SectionId> {
+    /// The live line a recorded line id names, if it still exists.
+    fn line(&self, recorded: LineId, targets: &Targets) -> Option<LineId> {
         if self.identity {
             return Some(recorded);
         }
-        let live = *self.sections.get(&recorded)?;
+        let live = *self.lines.get(&recorded)?;
         targets.shots_of(live).map(|_| live)
     }
 
     /// The live shot a recorded reference names, if it still exists.
-    fn shot(&self, recorded: &ShotRefT, targets: &Targets) -> Option<(SectionId, ShotId)> {
+    fn shot(&self, recorded: &ShotRefT, targets: &Targets) -> Option<(LineId, ShotId)> {
         if self.identity {
-            return Some((recorded.section, recorded.id));
+            return Some((recorded.line, recorded.id));
         }
         let Some(uuid) = recorded.uuid.as_ref() else {
             // No uuid to pair on: fall back to the id inside the mapped
-            // section, which is right exactly when the loader has not
+            // line, which is right exactly when the loader has not
             // renumbered it - and wrong loudly rather than quietly, because
             // a wrong target changes the signature and the step is rejected.
-            let section = self.section(recorded.section, targets)?;
+            let line = self.line(recorded.line, targets)?;
             return targets
-                .shots_of(section)?
+                .shots_of(line)?
                 .contains(&recorded.id)
-                .then_some((section, recorded.id));
+                .then_some((line, recorded.id));
         };
         targets.by_uuid(self.shots.get(uuid)?)
     }
 
-    /// The live station a recorded reference names, if the section is still that
+    /// The live station a recorded reference names, if the line is still that
     /// long.
-    fn station(&self, recorded: StationRefT, targets: &Targets) -> Option<(SectionId, u32)> {
-        let section = self.section(recorded.section, targets)?;
+    fn station(&self, recorded: StationRefT, targets: &Targets) -> Option<(LineId, u32)> {
+        let line = self.line(recorded.line, targets)?;
         if self.identity {
-            return Some((section, recorded.index));
+            return Some((line, recorded.index));
         }
-        let stations = targets.shots_of(section)?.len() as u32;
-        (recorded.index <= stations).then_some((section, recorded.index))
+        let stations = targets.shots_of(line)?.len() as u32;
+        (recorded.index <= stations).then_some((line, recorded.index))
     }
 
     /// The live closure a recorded closure id names, if it still exists.
@@ -2611,9 +2611,9 @@ pub(super) struct Trace {
 /// "whatever this run classifies" and which had nothing left to classify.
 ///
 /// So the failure is injected instead. [`run_trace`] fails the run the moment the
-/// project holds `at_sections` sections, which is a property of the moves a
+/// project holds `at_lines` lines, which is a property of the moves a
 /// candidate KEPT: a subsequence reproduces exactly when it still creates enough
-/// sections. That is a monotone predicate with a small, readable minimum, and it
+/// lines. That is a monotone predicate with a small, readable minimum, and it
 /// exercises the whole shrink flow - record, replay, reference remapping,
 /// signature match, the ddmin schedule, verify - without asking the app to be
 /// broken.
@@ -2623,8 +2623,8 @@ pub(super) struct Trace {
 /// no gate, survey, soak or corpus sweep can be affected by it.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Fault {
-    /// Fail the replay once the project holds this many sections.
-    pub(super) at_sections: usize,
+    /// Fail the replay once the project holds this many lines.
+    pub(super) at_lines: usize,
 }
 
 /// The recorder, per thread.
@@ -2752,7 +2752,7 @@ const fn bucket(count: usize) -> u8 {
 ///
 /// The features are the ones this programme has actually needed. Findings 4 and
 /// 10 were unreachable by random walk because they need a second closure and an
-/// orphaned one; finding 3 needs an EMPTY section; findings 8, 12 and 13 need
+/// orphaned one; finding 3 needs an EMPTY line; findings 8, 12 and 13 need
 /// ids that have diverged from positional order. Every one of those is a bit
 /// here, so a corpus keyed on this can tell "I have been in a project like this
 /// before" from "this is a shape I have never had".
@@ -2760,31 +2760,31 @@ pub(super) fn topology_signature(state: &AppState) -> String {
     let Some(project) = state.get_project_state() else {
         return "no-project".to_string();
     };
-    let sections = project.sections.len();
+    let lines = project.lines.len();
     let empty = project
-        .sections
+        .lines
         .iter()
-        .filter(|section| section.shots.is_empty())
+        .filter(|line| line.shots.is_empty())
         .count();
     let single = project
-        .sections
+        .lines
         .iter()
-        .filter(|section| section.shots.len() == 1)
+        .filter(|line| line.shots.len() == 1)
         .count();
-    let shots: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+    let shots: usize = project.lines.iter().map(|s| s.shots.len()).sum();
 
     // The merge graph's SHAPE, not its size: the largest degree tells a chain
     // (2) from a star (3+), and comparing the edge count against the node count
     // tells whether it holds a cycle.
-    let mut degree: BTreeMap<SectionId, usize> = BTreeMap::new();
+    let mut degree: BTreeMap<LineId, usize> = BTreeMap::new();
     let mut edges = 0;
     for merge in &project.station_merges {
-        if merge.station_a.section_id == merge.station_b.section_id {
+        if merge.station_a.line_id == merge.station_b.line_id {
             continue;
         }
         edges += 1;
-        *degree.entry(merge.station_a.section_id).or_insert(0) += 1;
-        *degree.entry(merge.station_b.section_id).or_insert(0) += 1;
+        *degree.entry(merge.station_a.line_id).or_insert(0) += 1;
+        *degree.entry(merge.station_b.line_id).or_insert(0) += 1;
     }
     let max_degree = degree.values().copied().max().unwrap_or(0);
     let merged_nodes = degree.len();
@@ -2793,16 +2793,16 @@ pub(super) fn topology_signature(state: &AppState) -> String {
 
     // The id-vs-position divergence findings 8, 12 and 13 need, as a bit.
     let diverged =
-        u8::from(project.sections.iter().any(|section| {
-            let base = section.id * crate::models::FEATURE_ID_STRIDE;
-            section.shots.iter().enumerate().any(|(position, shot)| {
+        u8::from(project.lines.iter().any(|line| {
+            let base = line.id * crate::models::FEATURE_ID_STRIDE;
+            line.shots.iter().enumerate().any(|(position, shot)| {
                 shot.id != base + position as u32 && shot.id != position as u32
             })
         }));
 
     format!(
         "s{}e{}o{}h{}m{}d{}c{}y{}z{}g{}k{}v{}",
-        bucket(sections),
+        bucket(lines),
         bucket(empty),
         bucket(single),
         bucket(shots),
@@ -2811,7 +2811,7 @@ pub(super) fn topology_signature(state: &AppState) -> String {
         bucket(project.loop_closures.len()),
         cyclic,
         bucket(project.zero_datums.len()),
-        bucket(project.section_offsets.len()),
+        bucket(project.line_offsets.len()),
         bucket(project.station_comments.len()),
         diverged,
     )
@@ -2942,9 +2942,9 @@ impl Outcome {
 /// The largest each unbounded-in-principle collection got during a run.
 #[derive(Debug, Default, Clone, Copy)]
 struct Peak {
-    sections: usize,
+    lines: usize,
     stations: usize,
-    section_offsets: usize,
+    line_offsets: usize,
     station_offsets: usize,
     station_comments: usize,
     merges: usize,
@@ -3035,7 +3035,7 @@ pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
         .map(|station| {
             format!(
                 "{}:{}|{}|{}|{}",
-                station.station_ref.section_id,
+                station.station_ref.line_id,
                 station.station_ref.station_index,
                 round_significant(station.coordinates.x),
                 round_significant(station.coordinates.y),
@@ -3043,8 +3043,8 @@ pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
             )
         })
         .collect();
-    // Sorted: `get_adjusted_stations` builds its list by walking sections, and a
-    // command that reorders sections would otherwise read as every station
+    // Sorted: `get_adjusted_stations` builds its list by walking lines, and a
+    // command that reorders lines would otherwise read as every station
     // having moved.
     rows.sort();
     rows.join("\n")
@@ -3103,20 +3103,20 @@ struct HistoryRow {
 // The RELOAD half of the entry-content oracle classified, once, and everything
 // that made that possible lived here: `classify_history_row` and its two
 // matchers, plus the `Preview` splitting they needed
-// (`CLEARABLE_SECTION_FIELDS`, `is_cleared_section_field_loss`,
+// (`CLEARABLE_LINE_FIELDS`, `is_cleared_line_field_loss`,
 // `is_cleared_row`, `is_history_payload_float_dust`, `Preview`,
 // `split_preview`, `rows_differ_only_in_the_last_shown_place` and
 // `rendered_numbers_are_one_place_apart`). Both findings are FIXED and the whole
 // block is deleted, so a history row that reads differently after a reload than
 // it did before the save now fails the run outright:
 //
-// * FINDING 5, COMMAND side. `SectionUpdates` carried `name`, `surveyor` and
+// * FINDING 5, COMMAND side. `LineUpdates` carried `name`, `surveyor` and
 //   `date` as `Option<Option<T>>` with a plain `#[serde(default)]`, so
 //   `Some(None)` ("clear it") and `None` ("leave it alone") both serialized to
 //   `null` AND both read back as `None` - the persisted TEXT was identical and
 //   its MEANING was not, which emptied the hover preview and made a reloaded
 //   redo of "clear the name" silently leave the name alone. The three fields
-//   carry `double_option` + `skip_serializing_if` now (models/section.rs), and
+//   carry `double_option` + `skip_serializing_if` now (models/line.rs), and
 //   schema v17 drops pre-v17 history rather than reinterpret them.
 // * FINDING 23, reaching the history dropdown. `serde_json` wrote an `f64`
 //   through ryu's shortest round-tripping form and read it back one ULP low, so
@@ -3205,16 +3205,16 @@ struct Fuzzer {
     /// Build finding 10's orphan-closure shape on the next boundary crossing.
     /// See `expose_orphan_closure` for why it cannot be built up front.
     orphan_pending: bool,
-    /// The join a successful Split Section Here just made, `(first half, its
+    /// The join a successful Split Line Here just made, `(first half, its
     /// end station)`, so the combine generator can put it back together.
     /// Written by `apply_op` (a function of the state, so a replay sets it
     /// the same way) and only READ by the draw.
-    last_split_join: Option<(SectionId, u32)>,
+    last_split_join: Option<(LineId, u32)>,
     // Four CASCADE LATCHES lived here, and every one went with the classifier
     // that read it: `heal_reverted` (findings 1 and 11 had reverted the save's
     // gauge capture), `displaced` (the trajectory finding 3's RATCHET had walked
-    // each section's offset along), `ref_dropped` (sections whose station-0 refs
-    // finding 3 had destroyed) and `corrupted` (sections finding 16 had
+    // each line's offset along), `ref_dropped` (lines whose station-0 refs
+    // finding 3 had destroyed) and `corrupted` (lines finding 16 had
     // duplicated a shot uuid in). `saved_anchors`, the gauge pairs the last save
     // captured, went with `heal_reverted`'s measurement.
     /// Set once a persisted in-session id has been measured stale in this run.
@@ -3351,12 +3351,12 @@ impl Fuzzer {
         out
     }
 
-    /// Every cross-section merge, measured raw AND resolved.
+    /// Every cross-line merge, measured raw AND resolved.
     fn merge_measurements(&self) -> Vec<MergeMeasurement> {
         let Some(project) = self.state.get_project_state() else {
             return Vec::new();
         };
-        let adjusted: BTreeMap<(SectionId, u32), (f64, f64)> = self
+        let adjusted: BTreeMap<(LineId, u32), (f64, f64)> = self
             .state
             .get_adjusted_stations()
             .unwrap_or_default()
@@ -3364,7 +3364,7 @@ impl Fuzzer {
             .map(|station| {
                 (
                     (
-                        station.station_ref.section_id,
+                        station.station_ref.line_id,
                         station.station_ref.station_index,
                     ),
                     (station.coordinates.x, station.coordinates.y),
@@ -3373,7 +3373,7 @@ impl Fuzzer {
             .collect();
         let mut out = Vec::new();
         for merge in &project.station_merges {
-            if merge.station_a.section_id == merge.station_b.section_id {
+            if merge.station_a.line_id == merge.station_b.line_id {
                 continue;
             }
             let (Some(a), Some(b)) = (
@@ -3389,15 +3389,15 @@ impl Fuzzer {
                 continue;
             };
             let (Some(res_a), Some(res_b)) = (
-                adjusted.get(&(a.section_id, a.station_index)),
-                adjusted.get(&(b.section_id, b.station_index)),
+                adjusted.get(&(a.line_id, a.station_index)),
+                adjusted.get(&(b.line_id, b.station_index)),
             ) else {
                 continue;
             };
             out.push(MergeMeasurement {
                 label: format!(
                     "{}:{} <-> {}:{}",
-                    a.section_id, a.station_index, b.section_id, b.station_index
+                    a.line_id, a.station_index, b.line_id, b.station_index
                 ),
                 raw: ((raw_a.x - raw_b.x).powi(2) + (raw_a.y - raw_b.y).powi(2)).sqrt(),
                 resolved: ((res_a.0 - res_b.0).powi(2) + (res_a.1 - res_b.1).powi(2)).sqrt(),
@@ -3410,7 +3410,7 @@ impl Fuzzer {
     /// first reload: `Shot::id` is not persisted, so from then on a byte-exact
     /// comparison against a pre-reload snapshot would report the renumbering as
     /// drift.
-    /// The derived models need no equivalent: an integrity message names section
+    /// The derived models need no equivalent: an integrity message names line
     /// ids, station indices, closure ids and uuids, and an adjusted station names
     /// a `StationRef` - none of which the loader renumbers. Shot ids appear in
     /// neither.
@@ -3576,7 +3576,7 @@ impl Fuzzer {
         // A KNOWN BUG gets first refusal, BEFORE the epoch attribution below.
         //
         // The ordering was settled while finding 3 was open, and is kept: the two
-        // overlapped on `section_offsets`, a reload re-solves the whole map, and
+        // overlapped on `line_offsets`, a reload re-solves the whole map, and
         // attributing first read finding 3's displacement as "the reload re-solved
         // offsets" - which silently swallowed the hit AND resynced the model to a
         // state carrying it, so the redo back up to that depth failed later with
@@ -3705,7 +3705,7 @@ impl Fuzzer {
     // them. `anchors_reverted` / `record_saved_anchors` measured whether a
     // restore had reverted the gauge pair a save captured, which armed findings
     // 1 and 11's cascade. `record_displacement` extended the trajectory finding
-    // 3 had walked a section's offset along, so its cascade could recognise the
+    // 3 had walked a line's offset along, so its cascade could recognise the
     // SAME ratchet later and nothing else. Every one of those findings is fixed.
 
     /// The two DERIVED-state oracles, run after the stored-state comparison has
@@ -3874,7 +3874,7 @@ impl Fuzzer {
         // `realign_after_shot_edit` returned early for want of an anchor, and
         // the epilogue's `realign_merges` re-solved only past the 5 cm report.
         // Both halves are FIXED: the realign now anchors an unanchored group on
-        // the edited section (models/project/mutations.rs) and the heal gate is
+        // the edited line (models/project/mutations.rs) and the heal gate is
         // `Project::MERGE_ALIGNMENT_INVARIANT_M`, the same 1 cm the app's own
         // assert uses (models/project/offsets.rs). There is no longer a band
         // between "the app asserts this cannot exist" and "the app declines to
@@ -4102,7 +4102,7 @@ struct Drawn {
     label: String,
     result: CommandResult,
     // `appended_into_empty` - "this was a `CreateShot` that appended the FIRST
-    // shot into an empty section", which only the generator could know - was
+    // shot into an empty line", which only the generator could know - was
     // finding 3's precondition and went with its classifiers.
     /// The shot this command's entry will address by id when it is restored.
     target: Option<ShotTarget>,
@@ -4149,14 +4149,14 @@ impl Fuzzer {
         // The delete family is held down so a long run does not empty the project.
         let kind = self.rng.below(100);
         match kind {
-            0..=9 => self.gen_create_section(),
+            0..=9 => self.gen_create_line(),
             10..=21 => self.gen_create_shot(targets),
             22..=35 => self.gen_update_shot(targets),
             36..=43 => self.gen_set_shot_kind(targets),
-            44..=50 => self.gen_update_section(targets),
+            44..=50 => self.gen_update_line(targets),
             51..=55 => self.gen_delete_shot(targets),
-            56..=58 => self.gen_delete_section(targets),
-            59..=63 => self.gen_reverse_section(targets),
+            56..=58 => self.gen_delete_line(targets),
+            59..=63 => self.gen_reverse_line(targets),
             64..=69 => self.gen_move(targets),
             70..=74 => self.gen_move_station(targets),
             75..=79 => self.gen_station_comment(targets),
@@ -4170,22 +4170,22 @@ impl Fuzzer {
     }
 
     /// A live shot, as a reference the trace can carry.
-    fn shot_ref(targets: &Targets, section_id: SectionId, shot_id: ShotId) -> ShotRefT {
+    fn shot_ref(targets: &Targets, line_id: LineId, shot_id: ShotId) -> ShotRefT {
         ShotRefT {
-            section: section_id,
+            line: line_id,
             id: shot_id,
-            uuid: targets.uuid_of(section_id, shot_id),
+            uuid: targets.uuid_of(line_id, shot_id),
         }
     }
 
-    fn gen_create_section(&mut self) -> Option<Op> {
-        // Includes the EMPTY section deliberately: finding 3 is literally "append
-        // the first shot into an empty section", and a uniform generator reaches
+    fn gen_create_line(&mut self) -> Option<Op> {
+        // Includes the EMPTY line deliberately: finding 3 is literally "append
+        // the first shot into an empty line", and a uniform generator reaches
         // that shape rarely.
         let count = self.rng.below(4);
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(&mut self.rng)).collect();
         let null_metadata = self.rng.chance(30);
-        Some(Op::CreateSection {
+        Some(Op::CreateLine {
             name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
             surveyor: (!null_metadata).then(|| "fuzz".to_string()),
             color: (*self.rng.pick(COLORS)).to_string(),
@@ -4194,13 +4194,13 @@ impl Fuzzer {
     }
 
     fn gen_create_shot(&mut self, targets: &Targets) -> Option<Op> {
-        if targets.sections.is_empty() {
+        if targets.lines.is_empty() {
             return None;
         }
-        let index = self.rng.below(targets.sections.len());
-        let (section_id, shots) = targets.sections[index].clone();
+        let index = self.rng.below(targets.lines.len());
+        let (line_id, shots) = targets.lines[index].clone();
         let shot = random_shot(&mut self.rng);
-        // A mid-section insert is what makes shot ids diverge from positional
+        // A mid-line insert is what makes shot ids diverge from positional
         // order, which is the precondition for findings 8, 12 and 13.
         let (after, before) = if shots.is_empty() {
             (None, None)
@@ -4212,31 +4212,31 @@ impl Fuzzer {
             }
         };
         Some(Op::CreateShot {
-            section: section_id,
+            line: line_id,
             shot: Box::new(shot),
-            after: after.map(|shot_id| Self::shot_ref(targets, section_id, shot_id)),
-            before: before.map(|shot_id| Self::shot_ref(targets, section_id, shot_id)),
+            after: after.map(|shot_id| Self::shot_ref(targets, line_id, shot_id)),
+            before: before.map(|shot_id| Self::shot_ref(targets, line_id, shot_id)),
         })
     }
 
-    /// `(section, shot, uuid)` for a live shot, or `None` when the id addresses
+    /// `(line, shot, uuid)` for a live shot, or `None` when the id addresses
     /// nothing.
-    fn shot_target(&self, section_id: SectionId, shot_id: ShotId) -> Option<ShotTarget> {
-        let uuid = self.uuid_of(section_id, shot_id)?;
+    fn shot_target(&self, line_id: LineId, shot_id: ShotId) -> Option<ShotTarget> {
+        let uuid = self.uuid_of(line_id, shot_id)?;
         Some(ShotTarget {
-            section_id,
+            line_id,
             shot_id,
             uuid,
         })
     }
 
-    /// The uuid the id `shot_id` addresses in `section_id` RIGHT NOW.
-    fn uuid_of(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+    /// The uuid the id `shot_id` addresses in `line_id` RIGHT NOW.
+    fn uuid_of(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
         self.state
             .get_project_state()?
-            .sections
+            .lines
             .iter()
-            .find(|section| section.id == section_id)?
+            .find(|line| line.id == line_id)?
             .shots
             .iter()
             .find(|shot| shot.id == shot_id)?
@@ -4244,22 +4244,22 @@ impl Fuzzer {
             .clone()
     }
 
-    /// A shot picked from a section that has one, with its section.
-    fn pick_shot(&mut self, targets: &Targets) -> Option<(SectionId, ShotId)> {
-        let populated: Vec<&(SectionId, Vec<ShotId>)> = targets
-            .sections
+    /// A shot picked from a line that has one, with its line.
+    fn pick_shot(&mut self, targets: &Targets) -> Option<(LineId, ShotId)> {
+        let populated: Vec<&(LineId, Vec<ShotId>)> = targets
+            .lines
             .iter()
             .filter(|(_, shots)| !shots.is_empty())
             .collect();
         if populated.is_empty() {
             return None;
         }
-        let (section_id, shots) = populated[self.rng.below(populated.len())];
-        Some((*section_id, shots[self.rng.below(shots.len())]))
+        let (line_id, shots) = populated[self.rng.below(populated.len())];
+        Some((*line_id, shots[self.rng.below(shots.len())]))
     }
 
     fn gen_update_shot(&mut self, targets: &Targets) -> Option<Op> {
-        let (section_id, shot_id) = self.pick_shot(targets)?;
+        let (line_id, shot_id) = self.pick_shot(targets)?;
         let mut updates = ShotUpdates::default();
         // Each field independently, so both the "set" and the "clear" arms of the
         // nullable ones are exercised.
@@ -4286,28 +4286,28 @@ impl Fuzzer {
             );
         }
         Some(Op::UpdateShot {
-            shot: Self::shot_ref(targets, section_id, shot_id),
+            shot: Self::shot_ref(targets, line_id, shot_id),
             updates: Box::new(updates),
         })
     }
 
     fn gen_set_shot_kind(&mut self, targets: &Targets) -> Option<Op> {
-        let (section_id, shot_id) = self.pick_shot(targets)?;
+        let (line_id, shot_id) = self.pick_shot(targets)?;
         let kind = *self
             .rng
             .pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]);
         Some(Op::SetShotKind {
-            shot: Self::shot_ref(targets, section_id, shot_id),
+            shot: Self::shot_ref(targets, line_id, shot_id),
             kind,
         })
     }
 
-    fn gen_update_section(&mut self, targets: &Targets) -> Option<Op> {
-        if targets.sections.is_empty() {
+    fn gen_update_line(&mut self, targets: &Targets) -> Option<Op> {
+        if targets.lines.is_empty() {
             return None;
         }
-        let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
-        let mut updates = SectionUpdates::default();
+        let line_id = targets.lines[self.rng.below(targets.lines.len())].0;
+        let mut updates = LineUpdates::default();
         if self.rng.chance(45) {
             updates.name = Some(
                 self.rng
@@ -4328,51 +4328,51 @@ impl Fuzzer {
         if self.rng.chance(30) {
             updates.quality = Some(self.rng.range(1, 5) as f64);
         }
-        Some(Op::UpdateSection {
-            section: section_id,
+        Some(Op::UpdateLine {
+            line: line_id,
             updates: Box::new(updates),
         })
     }
 
     fn gen_delete_shot(&mut self, targets: &Targets) -> Option<Op> {
-        let (section_id, shot_id) = self.pick_shot(targets)?;
+        let (line_id, shot_id) = self.pick_shot(targets)?;
         Some(Op::DeleteShot {
-            shot: Self::shot_ref(targets, section_id, shot_id),
+            shot: Self::shot_ref(targets, line_id, shot_id),
         })
     }
 
-    fn gen_delete_section(&mut self, targets: &Targets) -> Option<Op> {
-        // Keep at least two sections so cross-section merges stay reachable.
-        if targets.sections.len() <= 2 {
+    fn gen_delete_line(&mut self, targets: &Targets) -> Option<Op> {
+        // Keep at least two lines so cross-line merges stay reachable.
+        if targets.lines.len() <= 2 {
             return None;
         }
-        let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
-        Some(Op::DeleteSection {
-            section: section_id,
+        let line_id = targets.lines[self.rng.below(targets.lines.len())].0;
+        Some(Op::DeleteLine {
+            line: line_id,
         })
     }
 
-    fn gen_reverse_section(&mut self, targets: &Targets) -> Option<Op> {
-        if targets.sections.is_empty() {
+    fn gen_reverse_line(&mut self, targets: &Targets) -> Option<Op> {
+        if targets.lines.is_empty() {
             return None;
         }
-        let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
+        let line_id = targets.lines[self.rng.below(targets.lines.len())].0;
         let swap = self.rng.chance(50);
-        Some(Op::ReverseSection {
-            section: section_id,
+        Some(Op::ReverseLine {
+            line: line_id,
             swap_left_right: swap,
         })
     }
 
     fn gen_move(&mut self, targets: &Targets) -> Option<Op> {
-        if targets.sections.is_empty() {
+        if targets.lines.is_empty() {
             return None;
         }
-        let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
+        let line_id = targets.lines[self.rng.below(targets.lines.len())].0;
         let offset = random_offset(&mut self.rng);
         let segment = self.rng.chance(50);
         Some(Op::Move {
-            section: section_id,
+            line: line_id,
             offset,
             segment,
         })
@@ -4382,9 +4382,9 @@ impl Fuzzer {
         if targets.stations.is_empty() {
             return None;
         }
-        let (section_id, index) = targets.stations[self.rng.below(targets.stations.len())];
+        let (line_id, index) = targets.stations[self.rng.below(targets.stations.len())];
         Some(Op::MoveStation {
-            station: StationRefT::new(section_id, index),
+            station: StationRefT::new(line_id, index),
             offset: random_offset(&mut self.rng),
         })
     }
@@ -4393,29 +4393,29 @@ impl Fuzzer {
         if targets.stations.is_empty() {
             return None;
         }
-        let (section_id, index) = targets.stations[self.rng.below(targets.stations.len())];
+        let (line_id, index) = targets.stations[self.rng.below(targets.stations.len())];
         let comment = self
             .rng
             .chance(70)
             .then(|| format!("note-{}", self.rng.range(0, 9999)));
         Some(Op::StationComment {
-            station: StationRefT::new(section_id, index),
+            station: StationRefT::new(line_id, index),
             comment,
         })
     }
 
-    /// Two stations in DIFFERENT sections: merging or closing within one section
-    /// is rejected up front, so cross-section pairs are the ones that exercise the
+    /// Two stations in DIFFERENT lines: merging or closing within one line
+    /// is rejected up front, so cross-line pairs are the ones that exercise the
     /// undo path.
     fn pick_cross_pair(
         &mut self,
         targets: &Targets,
-    ) -> Option<((SectionId, u32), (SectionId, u32))> {
-        if targets.sections.len() < 2 || targets.stations.len() < 2 {
+    ) -> Option<((LineId, u32), (LineId, u32))> {
+        if targets.lines.len() < 2 || targets.stations.len() < 2 {
             return None;
         }
         let a = targets.stations[self.rng.below(targets.stations.len())];
-        let candidates: Vec<(SectionId, u32)> = targets
+        let candidates: Vec<(LineId, u32)> = targets
             .stations
             .iter()
             .copied()
@@ -4476,15 +4476,15 @@ impl Fuzzer {
 
     fn gen_zero_datum(&mut self, targets: &Targets) -> Option<Op> {
         if !targets.datums.is_empty() && self.rng.chance(50) {
-            let (section_id, index) = targets.datums[self.rng.below(targets.datums.len())];
+            let (line_id, index) = targets.datums[self.rng.below(targets.datums.len())];
             return Some(Op::RemoveZeroDatum {
-                station: StationRefT::new(section_id, index),
+                station: StationRefT::new(line_id, index),
             });
         }
         if targets.stations.is_empty() {
             return None;
         }
-        let (section_id, index) = targets.stations[self.rng.below(targets.stations.len())];
+        let (line_id, index) = targets.stations[self.rng.below(targets.stations.len())];
         let gps = GpsCoordinates::new(
             self.rng.float(20.2, 20.5),
             self.rng.float(-87.5, -87.2),
@@ -4492,22 +4492,22 @@ impl Fuzzer {
         )
         .ok()?;
         Some(Op::SetZeroDatum {
-            station: StationRefT::new(section_id, index),
+            station: StationRefT::new(line_id, index),
             coordinates: gps,
         })
     }
 
-    /// Combine Sections at a section end: the join the last Split Section Here
+    /// Combine Lines at a line end: the join the last Split Line Here
     /// made, most of the time while there is one (split-then-combine is the
-    /// inverse pair), otherwise either end of a random section.
-    fn gen_combine_sections(&mut self, targets: &Targets) -> Option<Op> {
-        let (section_id, index) = match self.last_split_join {
+    /// inverse pair), otherwise either end of a random line.
+    fn gen_combine_lines(&mut self, targets: &Targets) -> Option<Op> {
+        let (line_id, index) = match self.last_split_join {
             Some(join) if self.rng.chance(60) => join,
             _ => {
-                if targets.sections.is_empty() {
+                if targets.lines.is_empty() {
                     return None;
                 }
-                let (id, shots) = &targets.sections[self.rng.below(targets.sections.len())];
+                let (id, shots) = &targets.lines[self.rng.below(targets.lines.len())];
                 let index = if self.rng.chance(50) {
                     0
                 } else {
@@ -4516,8 +4516,8 @@ impl Fuzzer {
                 (*id, index)
             }
         };
-        Some(Op::CombineSections {
-            station: StationRefT::new(section_id, index),
+        Some(Op::CombineLines {
+            station: StationRefT::new(line_id, index),
             keep_b: self.rng.chance(30),
             swap_lr: self.rng.chance(50),
             pick: self.rng.below(3) as u8,
@@ -4528,11 +4528,11 @@ impl Fuzzer {
     /// `Command` variants and so never see `execute()`'s epilogue - which is
     /// exactly what finding 10 is about.
     fn gen_split_family(&mut self, targets: &Targets) -> Option<Op> {
-        let (section_id, shot_id) = self.pick_shot(targets)?;
+        let (line_id, shot_id) = self.pick_shot(targets)?;
         let shots = targets
-            .sections
+            .lines
             .iter()
-            .find(|(id, _)| *id == section_id)
+            .find(|(id, _)| *id == line_id)
             .map(|(_, shots)| shots.clone())
             .unwrap_or_default();
         match self.rng.below(7) {
@@ -4545,18 +4545,18 @@ impl Fuzzer {
                     self.rng.float(0.1, 8.0)
                 };
                 Some(Op::SplitShotAtDistance {
-                    shot: Self::shot_ref(targets, section_id, shot_id),
+                    shot: Self::shot_ref(targets, line_id, shot_id),
                     distance,
                 })
             }
             1 => Some(Op::DeleteShotAndSplit {
-                shot: Self::shot_ref(targets, section_id, shot_id),
+                shot: Self::shot_ref(targets, line_id, shot_id),
             }),
-            2 => Some(Op::DeleteLastShotAndSection {
-                shot: Self::shot_ref(targets, section_id, shot_id),
+            2 => Some(Op::DeleteLastShotAndLine {
+                shot: Self::shot_ref(targets, line_id, shot_id),
             }),
-            3 => Some(Op::SplitSection {
-                shot: Self::shot_ref(targets, section_id, shot_id),
+            3 => Some(Op::SplitLine {
+                shot: Self::shot_ref(targets, line_id, shot_id),
                 along: self.rng.chance(50),
                 distance: if self.rng.chance(20) {
                     *self.rng.pick(&[0.0, 1e-9, 0.005])
@@ -4565,7 +4565,7 @@ impl Fuzzer {
                 },
                 side: self.rng.below(6) as u8,
             }),
-            4 => self.gen_combine_sections(targets),
+            4 => self.gen_combine_lines(targets),
             _ => {
                 if shots.len() < 2 {
                     return None;
@@ -4575,9 +4575,9 @@ impl Fuzzer {
                 let (lo, hi) = (first.min(second), first.max(second));
                 let split = self.rng.chance(50);
                 Some(Op::DeleteShotRange {
-                    section: section_id,
-                    from: Self::shot_ref(targets, section_id, shots[lo]),
-                    to: Self::shot_ref(targets, section_id, shots[hi]),
+                    line: line_id,
+                    from: Self::shot_ref(targets, line_id, shots[lo]),
+                    to: Self::shot_ref(targets, line_id, shots[hi]),
                     split,
                 })
             }
@@ -4594,30 +4594,30 @@ impl Fuzzer {
             let built = match self.rng.below(4) {
                 0 => {
                     self.pick_shot(targets)
-                        .map(|(section_id, shot_id)| BatchOp::UpdateShotLength {
-                            shot: Self::shot_ref(targets, section_id, shot_id),
+                        .map(|(line_id, shot_id)| BatchOp::UpdateShotLength {
+                            shot: Self::shot_ref(targets, line_id, shot_id),
                             length: self.rng.float(1.0, 15.0),
                         })
                 }
-                1 => (!targets.sections.is_empty()).then(|| {
-                    let index = self.rng.below(targets.sections.len());
-                    BatchOp::MoveSection {
-                        section: targets.sections[index].0,
+                1 => (!targets.lines.is_empty()).then(|| {
+                    let index = self.rng.below(targets.lines.len());
+                    BatchOp::MoveLine {
+                        line: targets.lines[index].0,
                         offset: random_offset(&mut self.rng),
                     }
                 }),
                 2 => (!targets.stations.is_empty()).then(|| {
                     let index = self.rng.below(targets.stations.len());
-                    let (section_id, station) = targets.stations[index];
+                    let (line_id, station) = targets.stations[index];
                     BatchOp::MoveStation {
-                        station: StationRefT::new(section_id, station),
+                        station: StationRefT::new(line_id, station),
                         offset: random_offset(&mut self.rng),
                     }
                 }),
-                _ => (!targets.sections.is_empty()).then(|| {
-                    let index = self.rng.below(targets.sections.len());
-                    BatchOp::ReverseSection {
-                        section: targets.sections[index].0,
+                _ => (!targets.lines.is_empty()).then(|| {
+                    let index = self.rng.below(targets.lines.len());
+                    BatchOp::ReverseLine {
+                        line: targets.lines[index].0,
                         swap_left_right: self.rng.chance(50),
                     }
                 }),
@@ -4629,7 +4629,7 @@ impl Fuzzer {
         if commands.is_empty() {
             return None;
         }
-        // The case the rollback exists for: the last sub-command names a section
+        // The case the rollback exists for: the last sub-command names a line
         // id that cannot exist, so the batch must fail, leave state untouched and
         // push nothing.
         let poisoned = self.rng.chance(20);
@@ -4655,18 +4655,18 @@ impl Fuzzer {
     /// that reproduced the bug.
     fn apply_op(&mut self, op: &Op, refs: &mut Refs, targets: &Targets) -> Option<Drawn> {
         match op {
-            Op::CreateSection {
+            Op::CreateLine {
                 name,
                 surveyor,
                 color,
                 shots,
             } => Some(Drawn::new(
                 format!(
-                    "createSection(shots={},nullMeta={})",
+                    "createLine(shots={},nullMeta={})",
                     shots.len(),
                     name.is_none()
                 ),
-                self.state.execute(Command::CreateSection {
+                self.state.execute(Command::CreateLine {
                     name: name.clone(),
                     surveyor: surveyor.clone(),
                     date: None,
@@ -4676,12 +4676,12 @@ impl Fuzzer {
                 }),
             )),
             Op::CreateShot {
-                section,
+                line,
                 shot,
                 after,
                 before,
             } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 let anchor = match (after, before) {
@@ -4696,7 +4696,7 @@ impl Fuzzer {
                 } else {
                     (None, anchor)
                 };
-                let live = targets.shots_of(section_id).unwrap_or_default();
+                let live = targets.shots_of(line_id).unwrap_or_default();
                 let how = if after_shot_id.is_some() {
                     "after"
                 } else if before_shot_id.is_some() {
@@ -4709,11 +4709,11 @@ impl Fuzzer {
                 // means. After a reload the same id may address a different one -
                 // which is what makes the REDO re-insert somewhere else.
                 let anchor_target =
-                    anchor.and_then(|shot_id| self.shot_target(section_id, shot_id));
+                    anchor.and_then(|shot_id| self.shot_target(line_id, shot_id));
                 let mut drawn = Drawn::new(
-                    format!("createShot(s={section_id},n={},{how})", live.len()),
+                    format!("createShot(s={line_id},n={},{how})", live.len()),
                     self.state.execute(Command::CreateShot {
-                        section_id,
+                        line_id,
                         shot: (**shot).clone(),
                         after_shot_id,
                         before_shot_id,
@@ -4724,23 +4724,23 @@ impl Fuzzer {
                 drawn.target = drawn
                     .result
                     .shot_id
-                    .and_then(|shot_id| self.shot_target(section_id, shot_id));
+                    .and_then(|shot_id| self.shot_target(line_id, shot_id));
                 Some(drawn)
             }
             Op::UpdateShot { shot, updates } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
-                let target = self.shot_target(section_id, shot_id);
+                let target = self.shot_target(line_id, shot_id);
                 let mut drawn = Drawn::new(
-                    format!("updateShot(s={section_id},shot={shot_id})"),
+                    format!("updateShot(s={line_id},shot={shot_id})"),
                     self.state.execute(Command::UpdateShot {
-                        section_id,
+                        line_id,
                         shot_id,
                         updates: (**updates).clone(),
                     }),
                 );
-                // `UndoData::PreviousValues { section_id, shot_id, .. }` - the
+                // `UndoData::PreviousValues { line_id, shot_id, .. }` - the
                 // undo calls `update_shot` with this id, and `redo_inner`'s
                 // catch-all re-executes the command with it too. Finding 12's
                 // two halves.
@@ -4748,14 +4748,14 @@ impl Fuzzer {
                 Some(drawn)
             }
             Op::SetShotKind { shot, kind } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
-                let target = self.shot_target(section_id, shot_id);
+                let target = self.shot_target(line_id, shot_id);
                 let mut drawn = Drawn::new(
-                    format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
+                    format!("setShotKind(s={line_id},shot={shot_id},{kind:?})"),
                     self.state.execute(Command::SetShotKind {
-                        section_id,
+                        line_id,
                         shot_id,
                         kind: *kind,
                     }),
@@ -4766,104 +4766,104 @@ impl Fuzzer {
                 drawn.target = target;
                 Some(drawn)
             }
-            Op::UpdateSection { section, updates } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+            Op::UpdateLine { line, updates } => {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("updateSection(s={section_id})"),
-                    self.state.execute(Command::UpdateSectionMetadata {
-                        section_id,
+                    format!("updateLine(s={line_id})"),
+                    self.state.execute(Command::UpdateLineMetadata {
+                        line_id,
                         updates: (**updates).clone(),
                     }),
                 ))
             }
             Op::DeleteShot { shot } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("deleteShot(s={section_id},shot={shot_id})"),
+                    format!("deleteShot(s={line_id},shot={shot_id})"),
                     self.state.execute(Command::DeleteShot {
-                        section_id,
+                        line_id,
                         shot_id,
                     }),
                 ))
             }
-            Op::DeleteSection { section } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+            Op::DeleteLine { line } => {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("deleteSection(s={section_id})"),
-                    self.state.execute(Command::DeleteSection { section_id }),
+                    format!("deleteLine(s={line_id})"),
+                    self.state.execute(Command::DeleteLine { line_id }),
                 ))
             }
-            Op::ReverseSection {
-                section,
+            Op::ReverseLine {
+                line,
                 swap_left_right,
             } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("reverseSection(s={section_id},swapLR={swap_left_right})"),
-                    self.state.execute(Command::ReverseSection {
-                        section_id,
+                    format!("reverseLine(s={line_id},swapLR={swap_left_right})"),
+                    self.state.execute(Command::ReverseLine {
+                        line_id,
                         swap_left_right: *swap_left_right,
                     }),
                 ))
             }
             Op::Move {
-                section,
+                line,
                 offset,
                 segment,
             } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
                     format!(
-                        "{}(s={section_id})",
+                        "{}(s={line_id})",
                         if *segment {
                             "moveSegment"
                         } else {
-                            "moveSection"
+                            "moveLine"
                         }
                     ),
                     self.state.execute(if *segment {
                         Command::MoveSegment {
-                            section_id,
+                            line_id,
                             offset: *offset,
                         }
                     } else {
-                        Command::MoveSection {
-                            section_id,
+                        Command::MoveLine {
+                            line_id,
                             offset: *offset,
                         }
                     }),
                 ))
             }
             Op::MoveStation { station, offset } => {
-                let Some((section_id, index)) = refs.station(*station, targets) else {
+                let Some((line_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("moveStation({section_id}/{index})"),
+                    format!("moveStation({line_id}/{index})"),
                     self.state.execute(Command::MoveStation {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         offset: *offset,
                     }),
                 ))
             }
             Op::StationComment { station, comment } => {
-                let Some((section_id, index)) = refs.station(*station, targets) else {
+                let Some((line_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("stationComment({section_id}/{index},{})", comment.is_some()),
+                    format!("stationComment({line_id}/{index},{})", comment.is_some()),
                     self.state.execute(Command::SetStationComment {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         comment: comment.clone(),
                     }),
                 ))
@@ -4931,13 +4931,13 @@ impl Fuzzer {
                 station,
                 coordinates,
             } => {
-                let Some((section_id, index)) = refs.station(*station, targets) else {
+                let Some((line_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("setZeroDatum({section_id}/{index})"),
+                    format!("setZeroDatum({line_id}/{index})"),
                     self.state.execute(Command::SetZeroDatum {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         coordinates: *coordinates,
                         accuracy_m: None,
                         entrance: None,
@@ -4945,47 +4945,47 @@ impl Fuzzer {
                 ))
             }
             Op::RemoveZeroDatum { station } => {
-                let Some((section_id, index)) = refs.station(*station, targets) else {
+                let Some((line_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("removeZeroDatum({section_id}/{index})"),
+                    format!("removeZeroDatum({line_id}/{index})"),
                     self.state.execute(Command::RemoveZeroDatum {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                     }),
                 ))
             }
             Op::SplitShotAtDistance { shot, distance } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("splitShotAtDistance(s={section_id},shot={shot_id})"),
+                    format!("splitShotAtDistance(s={line_id},shot={shot_id})"),
                     self.state
-                        .execute_split_shot_at_distance(section_id, shot_id, *distance),
+                        .execute_split_shot_at_distance(line_id, shot_id, *distance),
                 ))
             }
             Op::DeleteShotAndSplit { shot } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("deleteShotAndSplit(s={section_id},shot={shot_id})"),
+                    format!("deleteShotAndSplit(s={line_id},shot={shot_id})"),
                     self.state.execute_delete_shot_and_split(
-                        section_id,
+                        line_id,
                         shot_id,
                         "split-a".to_string(),
                         "split-b".to_string(),
                     ),
                 ))
             }
-            Op::SplitSection {
+            Op::SplitLine {
                 shot,
                 along,
                 distance,
                 side,
             } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
                 let at = if *along {
@@ -4998,7 +4998,7 @@ impl Fuzzer {
                         .state
                         .get_project_state()
                         .and_then(|p| {
-                            p.get_section(section_id)?
+                            p.get_line(line_id)?
                                 .shots
                                 .iter()
                                 .position(|s| s.id == shot_id)
@@ -5013,7 +5013,7 @@ impl Fuzzer {
                     1 => crate::models::SplitSide::B,
                     _ => crate::models::SplitSide::Both,
                 };
-                let options = crate::models::SplitSectionOptions {
+                let options = crate::models::SplitLineOptions {
                     name_a: "split-a".to_string(),
                     name_b: "split-b".to_string(),
                     color_a: "#111111".to_string(),
@@ -5021,47 +5021,47 @@ impl Fuzzer {
                     comment_side: pick(side % 3),
                     datum_side: pick(side % 2),
                 };
-                let result = self.state.execute_split_section(section_id, at, options);
+                let result = self.state.execute_split_line(line_id, at, options);
                 if result.success {
                     self.last_split_join = self.state.get_project_state().and_then(|p| {
-                        let first = p.get_section(section_id)?;
-                        Some((section_id, first.shots.len() as u32))
+                        let first = p.get_line(line_id)?;
+                        Some((line_id, first.shots.len() as u32))
                     });
                 }
                 Some(Drawn::new(
-                    format!("splitSection(s={section_id},at={at:?})"),
+                    format!("splitLine(s={line_id},at={at:?})"),
                     result,
                 ))
             }
-            Op::CombineSections {
+            Op::CombineLines {
                 station,
                 keep_b,
                 swap_lr,
                 pick,
             } => {
-                let Some((section_id, index)) = refs.station(*station, targets) else {
+                let Some((line_id, index)) = refs.station(*station, targets) else {
                     return refs.skip(&op.describe());
                 };
                 // At a junction, any partner: the fuzz picks the first.
                 let Some(candidate) = self
                     .state
-                    .combine_candidates(StationRef::new(section_id, index))
+                    .combine_candidates(StationRef::new(line_id, index))
                     .ok()
                     .and_then(|candidates| candidates.into_iter().next())
                 else {
                     return refs.skip(&op.describe());
                 };
                 let (kept, other) = if *keep_b {
-                    (candidate.section_b, candidate.section_a)
+                    (candidate.line_b, candidate.line_a)
                 } else {
-                    (candidate.section_a, candidate.section_b)
+                    (candidate.line_a, candidate.line_b)
                 };
                 let pick = match pick % 3 {
                     0 => crate::models::CombinePick::Kept,
                     1 => crate::models::CombinePick::Other,
                     _ => crate::models::CombinePick::Both,
                 };
-                let options = crate::models::CombineSectionsOptions {
+                let options = crate::models::CombineLinesOptions {
                     name: "combined".to_string(),
                     color: "#333333".to_string(),
                     swap_lr: *swap_lr,
@@ -5070,27 +5070,27 @@ impl Fuzzer {
                     join: None,
                 };
                 Some(Drawn::new(
-                    format!("combineSections(kept={kept},other={other})"),
-                    self.state.execute_combine_sections(kept, other, options),
+                    format!("combineLines(kept={kept},other={other})"),
+                    self.state.execute_combine_lines(kept, other, options),
                 ))
             }
-            Op::DeleteLastShotAndSection { shot } => {
-                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+            Op::DeleteLastShotAndLine { shot } => {
+                let Some((line_id, shot_id)) = refs.shot(shot, targets) else {
                     return refs.skip(&op.describe());
                 };
                 Some(Drawn::new(
-                    format!("deleteLastShotAndSection(s={section_id},shot={shot_id})"),
+                    format!("deleteLastShotAndLine(s={line_id},shot={shot_id})"),
                     self.state
-                        .execute_delete_last_shot_and_section(section_id, shot_id),
+                        .execute_delete_last_shot_and_line(line_id, shot_id),
                 ))
             }
             Op::DeleteShotRange {
-                section,
+                line,
                 from,
                 to,
                 split,
             } => {
-                let Some(section_id) = refs.section(*section, targets) else {
+                let Some(line_id) = refs.line(*line, targets) else {
                     return refs.skip(&op.describe());
                 };
                 let (Some((_, lo)), Some((_, hi))) =
@@ -5100,7 +5100,7 @@ impl Fuzzer {
                 };
                 Some(Drawn::new(
                     format!(
-                        "{}(s={section_id},{lo}..{hi})",
+                        "{}(s={line_id},{lo}..{hi})",
                         if *split {
                             "deleteShotRangeSplit"
                         } else {
@@ -5109,7 +5109,7 @@ impl Fuzzer {
                     ),
                     if *split {
                         self.state.execute_delete_shot_range_split(
-                            section_id,
+                            line_id,
                             lo,
                             hi,
                             "range-a".to_string(),
@@ -5117,7 +5117,7 @@ impl Fuzzer {
                         )
                     } else {
                         self.state
-                            .execute_delete_shot_range_shift(section_id, lo, hi)
+                            .execute_delete_shot_range_shift(line_id, lo, hi)
                     },
                 ))
             }
@@ -5130,9 +5130,9 @@ impl Fuzzer {
                 for command in commands {
                     match command {
                         BatchOp::UpdateShotLength { shot, length } => {
-                            if let Some((section_id, shot_id)) = refs.shot(shot, targets) {
+                            if let Some((line_id, shot_id)) = refs.shot(shot, targets) {
                                 built.push(Command::UpdateShot {
-                                    section_id,
+                                    line_id,
                                     shot_id,
                                     updates: ShotUpdates {
                                         length: Some(*length),
@@ -5141,29 +5141,29 @@ impl Fuzzer {
                                 });
                             }
                         }
-                        BatchOp::MoveSection { section, offset } => {
-                            if let Some(section_id) = refs.section(*section, targets) {
-                                built.push(Command::MoveSection {
-                                    section_id,
+                        BatchOp::MoveLine { line, offset } => {
+                            if let Some(line_id) = refs.line(*line, targets) {
+                                built.push(Command::MoveLine {
+                                    line_id,
                                     offset: *offset,
                                 });
                             }
                         }
                         BatchOp::MoveStation { station, offset } => {
-                            if let Some((section_id, index)) = refs.station(*station, targets) {
+                            if let Some((line_id, index)) = refs.station(*station, targets) {
                                 built.push(Command::MoveStation {
-                                    station_ref: StationRef::new(section_id, index),
+                                    station_ref: StationRef::new(line_id, index),
                                     offset: *offset,
                                 });
                             }
                         }
-                        BatchOp::ReverseSection {
-                            section,
+                        BatchOp::ReverseLine {
+                            line,
                             swap_left_right,
                         } => {
-                            if let Some(section_id) = refs.section(*section, targets) {
-                                built.push(Command::ReverseSection {
-                                    section_id,
+                            if let Some(line_id) = refs.line(*line, targets) {
+                                built.push(Command::ReverseLine {
+                                    line_id,
                                     swap_left_right: *swap_left_right,
                                 });
                             }
@@ -5174,8 +5174,8 @@ impl Fuzzer {
                     return refs.skip(&op.describe());
                 }
                 if *poisoned {
-                    built.push(Command::MoveSection {
-                        section_id: 999_999,
+                    built.push(Command::MoveLine {
+                        line_id: 999_999,
                         offset: Coordinates::new(1.0, 1.0, 1.0),
                     });
                 }
@@ -5245,20 +5245,20 @@ impl Fuzzer {
         StepOutcome::Applied
     }
 
-    /// Every section, its shots' uuids in project order, and every closure id.
+    /// Every line, its shots' uuids in project order, and every closure id.
     /// Built only while recording or replaying - see [`Inventory`].
     fn inventory(&self) -> Inventory {
         let Some(project) = self.state.get_project_state() else {
             return Inventory::default();
         };
         Inventory {
-            sections: project
-                .sections
+            lines: project
+                .lines
                 .iter()
-                .map(|section| {
+                .map(|line| {
                     (
-                        section.id,
-                        section
+                        line.id,
+                        line
                             .shots
                             .iter()
                             .filter_map(|shot| shot.uuid.clone())
@@ -5467,7 +5467,7 @@ impl Fuzzer {
     /// The three defects all require a shot id that means something DIFFERENT
     /// after a reload, and an entry carrying such an id that a walk actually
     /// reaches. A random stream reaches both by luck: it has to insert
-    /// mid-section (so the ids stop matching positional order), then push an
+    /// mid-line (so the ids stop matching positional order), then push an
     /// id-bearing entry, then save, then unwind to it without crossing a
     /// `ProjectSnapshotPair` on the way - and a snapshot-pair entry is a WALL,
     /// because `Shot::id` is serialized inside a project snapshot, so restoring
@@ -5477,17 +5477,17 @@ impl Fuzzer {
     /// So this builds the shape directly, in the order the harness's
     /// `undo-persistence-fuzz` arrived at for the same reason
     /// (`e2e/agent/scenarios/undoPersistenceCoverage.ts`, "why a
-    /// ProjectSnapshotPair entry is a wall"): a fresh section, the insert that
+    /// ProjectSnapshotPair entry is a wall"): a fresh line, the insert that
     /// makes ids diverge, then EVERY id-bearing entry contiguous at the top, so
     /// the reload lands inside that block and the unwind starts on it.
     ///
-    /// The section is FRESH - disconnected, no datum, in no loop - on purpose:
+    /// The line is FRESH - disconnected, no datum, in no loop - on purpose:
     /// `delete_shot`'s loop guard would otherwise refuse the undo of the insert
     /// (finding 6) and wedge the history before any of this could be observed.
     fn expose_stale_ids(&mut self) {
         let shots: Vec<ShotData> = (0..3).map(|_| random_shot(&mut self.rng)).collect();
         let before = self.stacks();
-        let created = self.state.execute(Command::CreateSection {
+        let created = self.state.execute(Command::CreateLine {
             name: Some("exposed".to_string()),
             surveyor: None,
             date: None,
@@ -5495,15 +5495,15 @@ impl Fuzzer {
             direction: None,
             shots,
         });
-        let Some(section_id) = created.section_id else {
+        let Some(line_id) = created.line_id else {
             self.fail(
-                "the exposure prologue could not create its section",
+                "the exposure prologue could not create its line",
                 &format!("  error: {:?}", created.error),
             );
         };
         self.forced(
             Drawn::new(
-                format!("exposure:createSection(s={section_id},shots=3)"),
+                format!("exposure:createLine(s={line_id},shots=3)"),
                 created,
             ),
             before,
@@ -5511,48 +5511,48 @@ impl Fuzzer {
 
         // The insert that makes ids diverge from positional order. BEFORE the
         // first shot, so every id moves by one slot when the loader renumbers.
-        let first = self.live_shot_ids(section_id);
+        let first = self.live_shot_ids(line_id);
         let Some(&first_shot) = first.first() else {
-            self.fail("the exposure prologue's section has no shots", "");
+            self.fail("the exposure prologue's line has no shots", "");
         };
-        let anchor = self.shot_target(section_id, first_shot);
+        let anchor = self.shot_target(line_id, first_shot);
         let shot = random_shot(&mut self.rng);
         let before = self.stacks();
         let inserted = self.state.execute(Command::CreateShot {
-            section_id,
+            line_id,
             shot,
             after_shot_id: None,
             before_shot_id: Some(first_shot),
         });
         let mut drawn = Drawn::new(
-            format!("exposure:createShot(s={section_id},before)"),
+            format!("exposure:createShot(s={line_id},before)"),
             inserted,
         );
         drawn.anchor = anchor;
         drawn.target = drawn
             .result
             .shot_id
-            .and_then(|shot_id| self.shot_target(section_id, shot_id));
+            .and_then(|shot_id| self.shot_target(line_id, shot_id));
         self.forced(drawn, before);
 
         // The divergence is the whole precondition, so it is CHECKED rather than
-        // assumed: a section whose ids still equal `section * STRIDE + position`
+        // assumed: a line whose ids still equal `line * STRIDE + position`
         // survives the reload unchanged and none of this proves anything.
-        let colliding = self.colliding_shots(section_id);
+        let colliding = self.colliding_shots(line_id);
         assert!(
             !colliding.is_empty(),
-            "the exposure prologue produced no colliding shot id in section {section_id}: ids {:?}",
-            self.live_shot_ids(section_id)
+            "the exposure prologue produced no colliding shot id in line {line_id}: ids {:?}",
+            self.live_shot_ids(line_id)
         );
 
         // Every id-bearing edit variant, contiguous, on top: `PreviousValues`
         // (update_shot) and `InverseCommand` (set_shot_kind), each aimed at a
         // shot whose id will address a DIFFERENT one after the renumbering.
         for &shot_id in colliding.iter().take(2) {
-            let target = self.shot_target(section_id, shot_id);
+            let target = self.shot_target(line_id, shot_id);
             let before = self.stacks();
             let edited = self.state.execute(Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     length: Some(self.rng.float(20.0, 40.0)),
@@ -5560,17 +5560,17 @@ impl Fuzzer {
                 },
             });
             let mut drawn = Drawn::new(
-                format!("exposure:updateShot(s={section_id},shot={shot_id})"),
+                format!("exposure:updateShot(s={line_id},shot={shot_id})"),
                 edited,
             );
             drawn.target = target;
             self.forced(drawn, before);
         }
         for &shot_id in colliding.iter().take(2) {
-            let target = self.shot_target(section_id, shot_id);
+            let target = self.shot_target(line_id, shot_id);
             let before = self.stacks();
             let marked = self.state.execute(Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 // Never `Normal`: every shot here starts Normal, so setting it
                 // would be a forward no-op with a no-op inverse, and an undo
@@ -5578,7 +5578,7 @@ impl Fuzzer {
                 kind: ShotKind::Jump,
             });
             let mut drawn = Drawn::new(
-                format!("exposure:setShotKind(s={section_id},shot={shot_id})"),
+                format!("exposure:setShotKind(s={line_id},shot={shot_id})"),
                 marked,
             );
             drawn.target = target;
@@ -5592,10 +5592,10 @@ impl Fuzzer {
     /// reachable in practice: a 30-seed x 60-move sweep with `closures` on
     /// produced no `RemoveLoopClosure` of a non-last closure at all, because a
     /// second closure needs a second independent path between the same two
-    /// sections and `create_loop_closure` refuses everything else. So the shapes
+    /// lines and `create_loop_closure` refuses everything else. So the shapes
     /// are constructed, and then left to the ordinary walk to exercise.
     ///
-    /// GROUP 1, finding 4: two sections joined by a merge, two closures between
+    /// GROUP 1, finding 4: two lines joined by a merge, two closures between
     /// them, and the FIRST one removed. Its undo is `loop_closures.push()`
     /// (core/state/undo.rs) rather than an insert at the recorded index, so the
     /// order the walk restores is not the order it recorded - and that order is
@@ -5603,7 +5603,7 @@ impl Fuzzer {
     ///
     /// GROUP 2, finding 10: A - bridge - B chained by two merges plus a closure
     /// straight from A to B, with the bridge then deleted through
-    /// `execute_delete_last_shot_and_section` - one of the two delete entry
+    /// `execute_delete_last_shot_and_line` - one of the two delete entry
     /// points that never calls `convert_orphan_closures_to_merges`. The closure
     /// is now the sole connection, so it is "really" a merge; memory keeps it as
     /// a closure, the save persists that, and the LOADER converts it.
@@ -5661,9 +5661,9 @@ impl Fuzzer {
     /// `execute()`'s epilogue and heals it, which is what made this fire in 1
     /// seed out of 10 when it was built up front.
     fn expose_orphan_closure(&mut self) {
-        let a = self.forced_section("orphan-a", 1);
-        let bridge = self.forced_section("orphan-bridge", 1);
-        let b = self.forced_section("orphan-b", 1);
+        let a = self.forced_line("orphan-a", 1);
+        let bridge = self.forced_line("orphan-bridge", 1);
+        let b = self.forced_line("orphan-b", 1);
         let (Some(a), Some(bridge), Some(b)) = (a, bridge, b) else {
             return;
         };
@@ -5703,7 +5703,7 @@ impl Fuzzer {
         if !closed {
             return;
         }
-        // The delete path that does NOT convert. `execute_delete_last_shot_and_section`
+        // The delete path that does NOT convert. `execute_delete_last_shot_and_line`
         // is an `AppState` entry point rather than a `Command`, so it never sees
         // `execute()`'s `can_orphan_closures` epilogue either.
         let Some(&bridge_shot) = self.live_shot_ids(bridge).first() else {
@@ -5712,21 +5712,21 @@ impl Fuzzer {
         let before = self.stacks();
         let deleted = self
             .state
-            .execute_delete_last_shot_and_section(bridge, bridge_shot);
+            .execute_delete_last_shot_and_line(bridge, bridge_shot);
         self.forced(
             Drawn::new(
-                format!("closures:deleteLastShotAndSection(s={bridge})"),
+                format!("closures:deleteLastShotAndLine(s={bridge})"),
                 deleted,
             ),
             before,
         );
     }
 
-    /// A section with `shots` random shots, run through the model. Returns its id.
-    fn forced_section(&mut self, name: &str, shots: usize) -> Option<SectionId> {
+    /// A line with `shots` random shots, run through the model. Returns its id.
+    fn forced_line(&mut self, name: &str, shots: usize) -> Option<LineId> {
         let shots: Vec<ShotData> = (0..shots).map(|_| random_shot(&mut self.rng)).collect();
         let before = self.stacks();
-        let created = self.state.execute(Command::CreateSection {
+        let created = self.state.execute(Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -5734,24 +5734,24 @@ impl Fuzzer {
             direction: None,
             shots,
         });
-        let section_id = created.section_id;
+        let line_id = created.line_id;
         self.forced(
-            Drawn::new(format!("closures:createSection({name})"), created),
+            Drawn::new(format!("closures:createLine({name})"), created),
             before,
         );
-        section_id
+        line_id
     }
 
-    /// Two sections joined by a merge, with a zero datum on the first so a loop
+    /// Two lines joined by a merge, with a zero datum on the first so a loop
     /// closure between them is legal. Returns `(a, b)`.
     fn build_merged_pair(
         &mut self,
         name_a: &str,
         name_b: &str,
         shots_a: usize,
-    ) -> Option<(SectionId, SectionId)> {
-        let a = self.forced_section(name_a, shots_a)?;
-        let b = self.forced_section(name_b, 1)?;
+    ) -> Option<(LineId, LineId)> {
+        let a = self.forced_line(name_a, shots_a)?;
+        let b = self.forced_line(name_b, 1)?;
         let before = self.stacks();
         let datum = self.state.execute(Command::SetZeroDatum {
             station_ref: StationRef::new(a, 0),
@@ -5776,32 +5776,32 @@ impl Fuzzer {
         ok.then_some((a, b))
     }
 
-    /// Live shot ids of one section, in positional order.
-    fn live_shot_ids(&self, section_id: SectionId) -> Vec<ShotId> {
+    /// Live shot ids of one line, in positional order.
+    fn live_shot_ids(&self, line_id: LineId) -> Vec<ShotId> {
         self.state
             .get_project_state()
             .map(|project| {
                 project
-                    .sections
+                    .lines
                     .iter()
-                    .find(|section| section.id == section_id)
-                    .map(|section| section.shots.iter().map(|shot| shot.id).collect())
+                    .find(|line| line.id == line_id)
+                    .map(|line| line.shots.iter().map(|shot| shot.id).collect())
                     .unwrap_or_default()
             })
             .unwrap_or_default()
     }
 
     /// Shots whose id will address a DIFFERENT, still-valid position once the
-    /// loader has renumbered the section.
+    /// loader has renumbered the line.
     ///
-    /// The loader rewrites position `i` to `section_id * FEATURE_ID_STRIDE + i`
+    /// The loader rewrites position `i` to `line_id * FEATURE_ID_STRIDE + i`
     /// (persistence/sqlite/read.rs), so a persisted id `ids[i]` will address
-    /// position `ids[i] - section_id * STRIDE` after a reload. It is a COLLISION
+    /// position `ids[i] - line_id * STRIDE` after a reload. It is a COLLISION
     /// exactly when that number is a different, still-valid position - which is
     /// findings 8 and 12's regime, as opposed to finding 13's (out of range).
-    fn colliding_shots(&self, section_id: SectionId) -> Vec<ShotId> {
-        let ids = self.live_shot_ids(section_id);
-        let base = section_id * crate::models::FEATURE_ID_STRIDE;
+    fn colliding_shots(&self, line_id: LineId) -> Vec<ShotId> {
+        let ids = self.live_shot_ids(line_id);
+        let base = line_id * crate::models::FEATURE_ID_STRIDE;
         ids.iter()
             .enumerate()
             .filter(|(position, id)| {
@@ -5940,15 +5940,15 @@ impl Fuzzer {
         let Some(project) = self.state.get_project_state() else {
             return out;
         };
-        out.insert("next_section_id".to_string(), project.next_section_id);
+        out.insert("next_line_id".to_string(), project.next_line_id);
         out.insert(
             "next_closure_id".to_string(),
             u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
         );
-        for section in &project.sections {
+        for line in &project.lines {
             out.insert(
-                format!("section {}.next_shot_id", section.id),
-                section.next_shot_id,
+                format!("line {}.next_shot_id", line.id),
+                line.next_shot_id,
             );
         }
         out
@@ -5961,14 +5961,14 @@ impl Fuzzer {
             return;
         };
         let stations: usize = project
-            .sections
+            .lines
             .iter()
-            .map(|section| section.shots.len() + 1)
+            .map(|line| line.shots.len() + 1)
             .sum();
         let peak = &mut self.outcome.peak;
-        peak.sections = peak.sections.max(project.sections.len());
+        peak.lines = peak.lines.max(project.lines.len());
         peak.stations = peak.stations.max(stations);
-        peak.section_offsets = peak.section_offsets.max(project.section_offsets.len());
+        peak.line_offsets = peak.line_offsets.max(project.line_offsets.len());
         peak.station_offsets = peak.station_offsets.max(project.station_offsets.len());
         peak.station_comments = peak.station_comments.max(project.station_comments.len());
         peak.merges = peak.merges.max(project.station_merges.len());
@@ -6010,7 +6010,7 @@ impl Fuzzer {
             let Some(target) = target else {
                 return Staleness::Absent;
             };
-            match self.uuid_of(target.section_id, target.shot_id) {
+            match self.uuid_of(target.line_id, target.shot_id) {
                 None => Staleness::Missing,
                 Some(uuid) if uuid == target.uuid => Staleness::Fresh,
                 Some(_) => Staleness::Collides,
@@ -6035,17 +6035,17 @@ impl Fuzzer {
     /// `failure_signature` buckets every firing of it as ONE defect however deep
     /// it happens - which is what the shrinker's signature matching needs.
     fn check_injected_fault(&mut self, fault: Fault) {
-        let sections = self
+        let lines = self
             .state
             .get_project_state()
-            .map_or(0, |project| project.sections.len());
-        if sections >= fault.at_sections {
+            .map_or(0, |project| project.lines.len());
+        if lines >= fault.at_lines {
             self.fail(
-                "INJECTED FAULT: the project reached the section count this trace fails at",
+                "INJECTED FAULT: the project reached the line count this trace fails at",
                 &format!(
-                    "  sections={sections}, at_sections={}\n  this is the shrinker's own \
+                    "  lines={lines}, at_lines={}\n  this is the shrinker's own \
                      fault injection, not a defect in the app",
-                    fault.at_sections
+                    fault.at_lines
                 ),
             );
         }
@@ -6858,7 +6858,7 @@ pub(super) const GATE_ITERATIONS: usize = 60;
 ///
 /// The one normalization every part of a signature goes through: it is what
 /// keeps "at depth 23" and "at depth 7" one bucket rather than twenty, and it is
-/// why a distance, a coordinate or a section id cannot split a bucket even where
+/// why a distance, a coordinate or a line id cannot split a bucket even where
 /// one reaches the signature.
 fn collapse_digits(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -8326,10 +8326,10 @@ fn measure_adjusted_solve_determinism() {
             .success
     );
     let mut rng = Rng::new(1);
-    let section = |name: &str, count: usize, rng: &mut Rng| -> SectionId {
+    let line = |name: &str, count: usize, rng: &mut Rng| -> LineId {
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
         state
-            .execute(Command::CreateSection {
+            .execute(Command::CreateLine {
                 name: Some(name.to_string()),
                 surveyor: None,
                 date: None,
@@ -8337,11 +8337,11 @@ fn measure_adjusted_solve_determinism() {
                 direction: None,
                 shots,
             })
-            .section_id
-            .expect("CreateSection returned no id")
+            .line_id
+            .expect("CreateLine returned no id")
     };
-    let a = section("lsq-a", 3, &mut rng);
-    let b = section("lsq-b", 2, &mut rng);
+    let a = line("lsq-a", 3, &mut rng);
+    let b = line("lsq-b", 2, &mut rng);
     assert!(
         state
             .execute(Command::SetZeroDatum {

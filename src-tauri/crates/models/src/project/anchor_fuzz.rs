@@ -16,13 +16,13 @@
 //! they cover:
 //!
 //! - ZERO DATUM anchor, in `core/state/reverse_tests.rs`:
-//!   `reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place`.
-//!   Reverses through the full `Command::ReverseSection` and asserts every
+//!   `reverse_works_on_a_datum_anchored_line_and_keeps_the_datum_in_place`.
+//!   Reverses through the full `Command::ReverseLine` and asserts every
 //!   station kept its absolute position and that
 //!   `resolve_key(zero_datums[0].station_ref)` follows the physical station to
 //!   its mirrored index rather than staying on index 0.
 //! - STATION MERGE anchor, same file:
-//!   `reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute`.
+//!   `reversing_a_merge_anchored_line_moves_nothing_through_the_full_execute`.
 //!   Also through the full `execute`, the only level at which the reconcile
 //!   epilogue's `realign_merges` can run. Asserts the merge followed the
 //!   physical station, that the untouched side was not dragged, and that
@@ -31,11 +31,11 @@
 //! - LOOP CLOSURE anchor with no datum, in `reverse.rs` itself:
 //!   `reverse_preserves_adjusted_coordinates_of_a_datum_less_component`, checked
 //!   on the CLOSURE-ADJUSTED coordinates that Plan/Export mode force. It pinned
-//!   a real bug: the gauge anchor was the lex-min `(section_id, station_index)`,
+//!   a real bug: the gauge anchor was the lex-min `(line_id, station_index)`,
 //!   which a reverse moves to the other physical end, sliding the whole adjusted
 //!   component.
 //!
-//! `reverse.rs`'s own `reverse_refreshes_the_sections_shot_uuid_index` and
+//! `reverse.rs`'s own `reverse_refreshes_the_lines_shot_uuid_index` and
 //! `reverse_keeps_external_refs_on_their_physical_station` are about the
 //! `shot_uuid_index` cache and `station_comments` respectively - neither builds
 //! a datum, merge or closure anchor, and neither calls
@@ -47,7 +47,7 @@
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use crate::{Project, SectionData, ShotData, StationMerge, StationRef};
+use crate::{Project, LineData, ShotData, StationMerge, StationRef};
 
 /// SplitMix64 - deterministic and reproducible from a seed.
 struct Rng(u64);
@@ -83,7 +83,7 @@ fn iters() -> u64 {
         .unwrap_or(64)
 }
 
-/// Depth-continuous shot run starting at `depth`, with within-section distinct
+/// Depth-continuous shot run starting at `depth`, with within-line distinct
 /// azimuths. Returns the shots and the final station depth.
 fn gen_run(rng: &mut Rng, n: usize, start_depth: f64) -> (Vec<ShotData>, f64) {
     let mut shots = Vec::with_capacity(n);
@@ -107,8 +107,8 @@ fn gen_run(rng: &mut Rng, n: usize, start_depth: f64) -> (Vec<ShotData>, f64) {
     (shots, depth)
 }
 
-fn section(name: &str, shots: Vec<ShotData>) -> SectionData {
-    SectionData {
+fn line(name: &str, shots: Vec<ShotData>) -> LineData {
+    LineData {
         name: Some(name.to_string()),
         surveyor: None,
         date: None,
@@ -119,14 +119,14 @@ fn section(name: &str, shots: Vec<ShotData>) -> SectionData {
     }
 }
 
-/// Root section plus a child merged into its station 1 - the shape the property
-/// needs, since it puts an external ref on the section being edited.
+/// Root line plus a child merged into its station 1 - the shape the property
+/// needs, since it puts an external ref on the line being edited.
 fn gen_merged_project(rng: &mut Rng) -> Project {
     let mut p = Project::new("Fuzz".into(), None);
     let root_n = rng.range(1, 5);
     let (root_shots, _) = gen_run(rng, root_n, 0.0);
     let root_station1_depth = root_shots[0].depth_out;
-    p.add_section(section("Main", root_shots));
+    p.add_line(line("Main", root_shots));
 
     // The child's merge station has to sit at the parent depth (continuity), so
     // flatten its shot 0 and re-base the rest from there.
@@ -141,10 +141,10 @@ fn gen_merged_project(rng: &mut Rng) -> Project {
         s.depth_out = d + dz;
         d += dz;
     }
-    p.add_section(section("Branch", child_shots));
+    p.add_line(line("Branch", child_shots));
 
-    let root_id = p.sections[0].id;
-    let child_id = p.sections[1].id;
+    let root_id = p.lines[0].id;
+    let child_id = p.lines[1].id;
     p.station_merges.push(StationMerge {
         station_a: StationRef::new(root_id, 1).into(),
         station_b: StationRef::new(child_id, 1).into(),
@@ -175,17 +175,17 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
         "seed={seed}: project starts with a dangling ref"
     );
 
-    let root_id = p.sections[0].id;
+    let root_id = p.lines[0].id;
     let ops = rng.range(3, 12);
     for _ in 0..ops {
-        let Some(shots_len) = p.get_section(root_id).map(|s| s.shots.len()) else {
+        let Some(shots_len) = p.get_line(root_id).map(|s| s.shots.len()) else {
             break;
         };
         if shots_len == 0 {
             break;
         }
         let pick = rng.below(shots_len);
-        let shot_id = p.get_section(root_id).unwrap().shots[pick].id;
+        let shot_id = p.get_line(root_id).unwrap().shots[pick].id;
         if shots_len > 1 && rng.below(2) == 0 {
             // Delete the picked shot (rewires/removes any ref on its station).
             let _ = p.remove_shot_with_rewire(root_id, shot_id);

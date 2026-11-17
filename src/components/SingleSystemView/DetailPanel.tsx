@@ -15,7 +15,7 @@ import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, C
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
+import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../../utils/formatters';
 import { findStation } from '../../utils/findStation';
@@ -26,8 +26,8 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind, surveyedLength } from '../../utils/shotKind';
 import { countUnresolvedErrors } from '../../utils/validation';
-import { shotCredit } from '../../utils/sectionCredit';
-import { CreditDetail, MultiShotDetail, sectionCredits, useSelectedShots } from './CreditDetail';
+import { shotCredit } from '../../utils/lineCredit';
+import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './CreditDetail';
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
 import { StationDatumDetail } from './StationDatumDetail';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
@@ -84,7 +84,7 @@ export default function DetailPanel() {
               setSource('detail-panel');
               setSelection({
                 type: 'shot',
-                sectionId: warning.sectionId,
+                lineId: warning.lineId,
                 shotId: warning.shotId,
               });
             }}
@@ -151,29 +151,29 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   }
 
   if (selection.type === 'station' && selection.stationRef) {
-    const station = findStation(stations, selection.stationRef.section_id, selection.stationRef.station_index);
+    const station = findStation(stations, selection.stationRef.line_id, selection.stationRef.station_index);
 
     if (station) {
       return <StationDetail station={station} />;
     }
   }
 
-  if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
-    const section = project?.sections.find((s) => s.id === selection.sectionId);
-    const shot = section?.shots.find((s) => s.id === selection.shotId);
+  if (selection.type === 'shot' && selection.lineId !== undefined && selection.shotId !== undefined) {
+    const line = project?.lines.find((s) => s.id === selection.lineId);
+    const shot = line?.shots.find((s) => s.id === selection.shotId);
 
-    if (section && shot) {
-      return <ShotDetail section={section} shot={shot} stations={stations} />;
+    if (line && shot) {
+      return <ShotDetail line={line} shot={shot} stations={stations} />;
     }
   }
 
-  if (selection.type === 'section' && selection.sectionId !== undefined) {
-    const section = project?.sections.find((s) => s.id === selection.sectionId);
+  if (selection.type === 'line' && selection.lineId !== undefined) {
+    const line = project?.lines.find((s) => s.id === selection.lineId);
 
-    if (section) {
+    if (line) {
       return (
-        <SectionDetail
-          section={section}
+        <LineDetail
+          line={line}
           stations={stations}
           totalProjectLength={stats?.total_length ?? 0}
         />
@@ -202,7 +202,7 @@ type WarningFlow =
 // Identity of a warning for queue stepping + live-set rehydration. Include the
 // datum index for datum warnings (`datum_gps_gap`, #741): two GPS fixes can map to
 // the SAME shot (e.g. stations 0 and 1 both map to shot 0), sharing
-// sectionId/shotId/code but differing by datum - without this they collapse and
+// lineId/shotId/code but differing by datum - without this they collapse and
 // the resolve flow would act on the wrong datum (issue #57 / Codex).
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
@@ -220,7 +220,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
       clearResolveWarningRequest: s.clearResolveWarningRequest,
     })),
   );
-  // At the Full level the location subtitle is shown as entity pills (section +
+  // At the Full level the location subtitle is shown as entity pills (line +
   // shot), matching the rest of the detail panel; otherwise it stays plain text.
   const showPills = syntacticLevelAtLeast(useUIStore((s) => s.syntacticLevel), 'full');
   const [showResolved, setShowResolved] = useState(false);
@@ -253,21 +253,21 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     const key = warningKey(queuedWarning);
     return warnings.find((w) => warningKey(w) === key) ?? queuedWarning;
   }, [queuedWarning, warnings]);
-  const activeSection = activeWarning ? project?.sections.find((s) => s.id === activeWarning.sectionId) : undefined;
-  const activeShot = activeWarning && activeSection ? activeSection.shots.find((s) => s.id === activeWarning.shotId) : undefined;
+  const activeLine = activeWarning ? project?.lines.find((s) => s.id === activeWarning.lineId) : undefined;
+  const activeShot = activeWarning && activeLine ? activeLine.shots.find((s) => s.id === activeWarning.shotId) : undefined;
 
   // Full focus on the shot under resolution (issue #57), for both a single
   // Resolve and every step of Resolve all. Selecting it does what clicking its
   // geometry link does anywhere else (highlight on the map + focus the details,
-  // sections and data panels); centering brings it into view on the map. Keyed
+  // lines and data panels); centering brings it into view on the map. Keyed
   // on the warning identity so it re-fires as the queue steps. (The zoom button
   // lets the user close in further.)
   const activeKey = activeWarning ? warningKey(activeWarning) : undefined;
   useEffect(() => {
     if (activeWarning) {
       setSource('detail-panel');
-      setSelection({ type: 'shot', sectionId: activeWarning.sectionId, shotId: activeWarning.shotId });
-      triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
+      setSelection({ type: 'shot', lineId: activeWarning.lineId, shotId: activeWarning.shotId });
+      triggerCenterOnShot(activeWarning.lineId, activeWarning.shotId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey]);
@@ -277,22 +277,22 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   // that shot's first outstanding issue).
   useEffect(() => {
     if (!requestResolveWarning) return;
-    const { sectionId, shotId } = requestResolveWarning;
+    const { lineId, shotId } = requestResolveWarning;
     clearResolveWarningRequest();
-    const target = warnings.find((w) => w.sectionId === sectionId && w.shotId === shotId && !w.isResolved);
+    const target = warnings.find((w) => w.lineId === lineId && w.shotId === shotId && !w.isResolved);
     if (target) {
       setFlow({ kind: 'resolve', queue: [target], index: 0, resolveAll: false, resolved: 0, skipped: 0 });
     }
   }, [requestResolveWarning, warnings, clearResolveWarningRequest]);
 
-  const getSectionName = (sectionId: number) => {
-    const section = project?.sections.find((s) => s.id === sectionId);
-    return section?.name ?? t('sections.defaultName', { id: sectionId });
+  const getLineName = (lineId: number) => {
+    const line = project?.lines.find((s) => s.id === lineId);
+    return line?.name ?? t('sections.defaultName', { id: lineId });
   };
 
   const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
     e.stopPropagation();
-    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
+    unresolveWarning(warning.lineId, warning.shotId, warning.code);
   };
 
   const startResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
@@ -363,7 +363,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     return (
       <WarningResolution
         warning={activeWarning}
-        section={activeSection}
+        line={activeLine}
         shot={activeShot}
         position={flow.resolveAll ? { index: flow.index, total: flow.queue.length } : undefined}
         onExit={exitFlow}
@@ -526,7 +526,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                     },
                   })}
               onClick={() => onWarningClick(warning)}
-              onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
+              onDoubleClick={() => triggerPanToShot(warning.lineId, warning.shotId)}
               className={`text-left cursor-pointer rounded${showPills ? '' : ' focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset'}`}
               data-testid={warningMessageTestId(warning)}
             >
@@ -537,7 +537,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </span>
               <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                 {(() => {
-                  // Messages start with "Shot <sectionId>:<position> …"; at the
+                  // Messages start with "Shot <lineId>:<position> …"; at the
                   // Full level swap that leading reference for the shot pill.
                   const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
                   if (!m) return warning.message;
@@ -550,17 +550,17 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         onClick={(e) => {
                           e.stopPropagation();
                           setSource('detail-panel');
-                          setSelection({ type: 'shot', sectionId: warning.sectionId, shotId: warning.shotId });
+                          setSelection({ type: 'shot', lineId: warning.lineId, shotId: warning.shotId });
                           setDetailPanelTab('details');
                         }}
                         className="inline align-middle p-0 cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
                         aria-label={t('detailPanel.warnings.openShotDetails', {
-                          shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                          shot: formatShotId(warning.lineId, warning.shotIndex + 1),
                         })}
                         data-testid={warningOpenShotTestId(warning)}
                       >
                         <EntityBlob entity="shot">
-                          {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                          {formatShotId(warning.lineId, warning.shotIndex + 1)}
                         </EntityBlob>
                       </button>
                       {' '}
@@ -572,8 +572,8 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               {!showPills && (
                 <div className="text-xs text-text-secondary mt-0.5">
                   {t('detailPanel.warnings.location', {
-                    section: getSectionName(warning.sectionId),
-                    shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                    line: getLineName(warning.lineId),
+                    shot: formatShotId(warning.lineId, warning.shotIndex + 1),
                   })}
                 </div>
               )}
@@ -581,12 +581,12 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             {showPills && (
               <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both">
                 <DetailLink
-                  type="section"
-                  target={{ sectionId: warning.sectionId }}
-                  displayText={getSectionName(warning.sectionId)}
-                  pillLabel={getSectionName(warning.sectionId)}
+                  type="line"
+                  target={{ lineId: warning.lineId }}
+                  displayText={getLineName(warning.lineId)}
+                  pillLabel={getLineName(warning.lineId)}
                   onSelect={() => {
-                    setSelection({ type: 'section', sectionId: warning.sectionId });
+                    setSelection({ type: 'line', lineId: warning.lineId });
                     setDetailPanelTab('details');
                   }}
                   onAnnounce={announceSelection}
@@ -606,8 +606,8 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
   const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
-  const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore(
-    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
+  const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredLineId } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredLineId: s.setHoveredLineId }))
   );
   const precision = useDecimalPrecision();
   // Closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB project are
@@ -619,40 +619,40 @@ function StationDetail({ station }: { station: Station }) {
   // back to the passed (measured) station before the adjusted set is fetched.
   const activeStations = useActiveStations();
   const displayStation =
-    findStation(activeStations, station.station_ref.section_id, station.station_ref.station_index) ?? station;
+    findStation(activeStations, station.station_ref.line_id, station.station_ref.station_index) ?? station;
   const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
-  const section = project?.sections.find(
-    (s) => s.id === station.station_ref.section_id
+  const line = project?.lines.find(
+    (s) => s.id === station.station_ref.line_id
   );
 
   // Station position is 0-indexed for display
   const stationIndex = station.station_ref.station_index;
   const stationPosition = stationIndex;
-  const sectionId = station.station_ref.section_id;
+  const lineId = station.station_ref.line_id;
 
   // Distance-gradient origin (#34): flag this station when it's the chosen root.
   const isDistanceGradientRoot =
     showDistanceGradient &&
     distanceGradientOrigin != null &&
-    distanceGradientOrigin.section_id === station.station_ref.section_id &&
+    distanceGradientOrigin.line_id === station.station_ref.line_id &&
     distanceGradientOrigin.station_index === station.station_ref.station_index;
 
   // Station-to-Shot mapping:
   // Station at station_index has:
-  // - Previous shot: section.shots[station_index - 1] (display position = station_index)
-  // - Next shot: section.shots[station_index] (display position = station_index + 1)
+  // - Previous shot: line.shots[station_index - 1] (display position = station_index)
+  // - Next shot: line.shots[station_index] (display position = station_index + 1)
   const prevShotIndex = stationIndex - 1;
   const nextShotIndex = stationIndex;
   const prevShotPosition = stationIndex; // station_index for display
   const nextShotPosition = stationIndex + 1; // station_index + 1 for display
 
   // Check if shots exist
-  const prevShotExists = section ? prevShotIndex >= 0 && prevShotIndex < section.shots.length : false;
-  const nextShotExists = section ? nextShotIndex >= 0 && nextShotIndex < section.shots.length : false;
+  const prevShotExists = line ? prevShotIndex >= 0 && prevShotIndex < line.shots.length : false;
+  const nextShotExists = line ? nextShotIndex >= 0 && nextShotIndex < line.shots.length : false;
 
   // Determine if we should show prev/next shot links
   const isFirstStation = stationIndex === 0;
-  const isLastStation = section ? stationIndex >= section.shots.length : true;
+  const isLastStation = line ? stationIndex >= line.shots.length : true;
 
   const handleEdit = () => {
     setSource('detail-panel');
@@ -660,35 +660,35 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const handleSelectPrevShot = () => {
-    if (section && prevShotExists) {
-      const shot = section.shots[prevShotIndex];
+    if (line && prevShotExists) {
+      const shot = line.shots[prevShotIndex];
       if (shot) {
         setSource('detail-panel');
-        setSelection({ type: 'shot', sectionId, shotId: shot.id });
+        setSelection({ type: 'shot', lineId, shotId: shot.id });
       }
     }
   };
 
   const handleSelectNextShot = () => {
-    if (section && nextShotExists) {
-      const shot = section.shots[nextShotIndex];
+    if (line && nextShotExists) {
+      const shot = line.shots[nextShotIndex];
       if (shot) {
         setSource('detail-panel');
-        setSelection({ type: 'shot', sectionId, shotId: shot.id });
+        setSelection({ type: 'shot', lineId, shotId: shot.id });
       }
     }
   };
 
-  const handleSelectSection = () => {
+  const handleSelectLine = () => {
     setSource('detail-panel');
-    setSelection({ type: 'section', sectionId });
+    setSelection({ type: 'line', lineId });
   };
 
-  const handleSelectMergedStation = (ref: { section_id: number; station_index: number }) => {
+  const handleSelectMergedStation = (ref: { line_id: number; station_index: number }) => {
     setSource('detail-panel');
     setSelection({
       type: 'station',
-      stationRef: { section_id: ref.section_id, station_index: ref.station_index },
+      stationRef: { line_id: ref.line_id, station_index: ref.station_index },
     });
   };
 
@@ -697,11 +697,11 @@ function StationDetail({ station }: { station: Station }) {
     triggerCenterOnStation(station.station_ref);
   };
 
-  const sameStationRef = (a: { section_id: number; station_index: number }, b: { section_id: number; station_index: number }): boolean => {
-    return a.section_id === b.section_id && a.station_index === b.station_index;
+  const sameStationRef = (a: { line_id: number; station_index: number }, b: { line_id: number; station_index: number }): boolean => {
+    return a.line_id === b.line_id && a.station_index === b.station_index;
   };
 
-  const isDirectMerge = (ref: { section_id: number; station_index: number }): boolean => {
+  const isDirectMerge = (ref: { line_id: number; station_index: number }): boolean => {
     return project?.station_merges.some((merge) => {
       const direct = sameStationRef(merge.station_a, station.station_ref) && sameStationRef(merge.station_b, ref);
       const reverse = sameStationRef(merge.station_a, ref) && sameStationRef(merge.station_b, station.station_ref);
@@ -709,9 +709,9 @@ function StationDetail({ station }: { station: Station }) {
     }) ?? false;
   };
 
-  const handleUnmergeFromStation = async (ref: { section_id: number; station_index: number }) => {
+  const handleUnmergeFromStation = async (ref: { line_id: number; station_index: number }) => {
     trackContextMenuAction('unmerge', 'detail-panel');
-    const targetKey = `${ref.section_id}:${ref.station_index}`;
+    const targetKey = `${ref.line_id}:${ref.station_index}`;
     setUnmergeTargetKey(targetKey);
     try {
       if (isDirectMerge(ref)) {
@@ -725,16 +725,16 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   // Validate merged station targets exist
-  const mergedStationExists = (ref: { section_id: number; station_index: number }): boolean =>
-    findStation(stations, ref.section_id, ref.station_index) !== undefined;
-  // A merge is where two sections' numbering meets, so name both ends.
-  const stationName = (ref: { section_id: number; station_index: number }): string | undefined =>
-    findStation(stations, ref.section_id, ref.station_index)?.name;
+  const mergedStationExists = (ref: { line_id: number; station_index: number }): boolean =>
+    findStation(stations, ref.line_id, ref.station_index) !== undefined;
+  // A merge is where two lines' numbering meets, so name both ends.
+  const stationName = (ref: { line_id: number; station_index: number }): string | undefined =>
+    findStation(stations, ref.line_id, ref.station_index)?.name;
 
-  const sectionName = section?.name ?? t('detailPanel.section.unnamed');
-  const sectionDisplayText = t('detailPanel.section.display', {
-    id: sectionId,
-    name: sectionName,
+  const lineName = line?.name ?? t('detailPanel.section.unnamed');
+  const lineDisplayText = t('detailPanel.section.display', {
+    id: lineId,
+    name: lineName,
   });
 
   const centerButton = (
@@ -743,7 +743,7 @@ function StationDetail({ station }: { station: Station }) {
       onClick={handleCenterOnStation}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.station.center', {
-        id: formatStationId(sectionId, stationPosition),
+        id: formatStationId(lineId, stationPosition),
       })}
       data-testid="center-station-button"
     >
@@ -757,12 +757,12 @@ function StationDetail({ station }: { station: Station }) {
         <div className="space-y-3">
           <DetailRow
             label={t('detailPanel.labels.id')}
-            value={formatStationId(sectionId, stationPosition)}
+            value={formatStationId(lineId, stationPosition)}
           />
           {station.name && (
             <DetailRow label={t('detailPanel.labels.name')} value={displayStationName(station.name)} testId="station-detail-name" />
           )}
-          <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
+          <DetailRow label={t('detailPanel.labels.section')} value={line?.name ?? t('sections.defaultName', { id: lineId })} />
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
@@ -799,12 +799,12 @@ function StationDetail({ station }: { station: Station }) {
                     <div>
                       <DetailLink
                         type="station"
-                        target={{ sectionId: ref.section_id, position: ref.station_index }}
-                        displayText={formatStationIdWithName(ref.section_id, ref.station_index, stationName(ref))}
+                        target={{ lineId: ref.line_id, position: ref.station_index }}
+                        displayText={formatStationIdWithName(ref.line_id, ref.station_index, stationName(ref))}
                         onSelect={() => handleSelectMergedStation(ref)}
                         isMissing={!mergedStationExists(ref)}
                         onAnnounce={announceSelection}
-                        onHoverStart={() => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
+                        onHoverStart={() => setHoveredStation({ line_id: ref.line_id, station_index: ref.station_index })}
                         onHoverEnd={() => setHoveredStation(null)}
                       />
                     </div>
@@ -815,9 +815,9 @@ function StationDetail({ station }: { station: Station }) {
                       }}
                       className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Unmerge Stations"
-                      aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
-                      data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
-                      disabled={editingBlocked || unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
+                      aria-label={`Unmerge station ${formatStationId(ref.line_id, ref.station_index)}`}
+                      data-testid={`detail-unmerge-${ref.line_id}-${ref.station_index}`}
+                      disabled={editingBlocked || unmergeTargetKey === `${ref.line_id}:${ref.station_index}`}
                     >
                       <LinkOffIcon size={14} />
                     </button>
@@ -834,12 +834,12 @@ function StationDetail({ station }: { station: Station }) {
               stations={stations}
               onSelectStation={handleSelectMergedStation}
               onAnnounce={announceSelection}
-              onHoverStart={(ref) => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
+              onHoverStart={(ref) => setHoveredStation({ line_id: ref.line_id, station_index: ref.station_index })}
               onHoverEnd={() => setHoveredStation(null)}
             />
           )}
 
-          {/* Connected section with hyperlinks */}
+          {/* Connected line with hyperlinks */}
           <div className="pt-2 border-t border-border">
             <span className="text-sm text-text-secondary">{t('detailPanel.station.connected')}:</span>
             <div className="mt-1 space-y-1 text-sm">
@@ -848,14 +848,14 @@ function StationDetail({ station }: { station: Station }) {
                   <span className="text-text-secondary">{t('detailPanel.station.previousShot')}:</span>
                   <DetailLink
                     type="shot"
-                    target={{ sectionId, position: prevShotPosition }}
-                    displayText={`${sectionId}:${prevShotPosition}`}
+                    target={{ lineId, position: prevShotPosition }}
+                    displayText={`${lineId}:${prevShotPosition}`}
                     onSelect={handleSelectPrevShot}
                     isMissing={!prevShotExists}
                     onAnnounce={announceSelection}
                     onHoverStart={() => {
-                      const shot = section?.shots[prevShotIndex];
-                      if (shot) setHoveredShot({ sectionId, shotId: shot.id });
+                      const shot = line?.shots[prevShotIndex];
+                      if (shot) setHoveredShot({ lineId, shotId: shot.id });
                     }}
                     onHoverEnd={() => setHoveredShot(null)}
                   />
@@ -866,14 +866,14 @@ function StationDetail({ station }: { station: Station }) {
                   <span className="text-text-secondary">{t('detailPanel.station.nextShot')}:</span>
                   <DetailLink
                     type="shot"
-                    target={{ sectionId, position: nextShotPosition }}
-                    displayText={`${sectionId}:${nextShotPosition}`}
+                    target={{ lineId, position: nextShotPosition }}
+                    displayText={`${lineId}:${nextShotPosition}`}
                     onSelect={handleSelectNextShot}
                     isMissing={!nextShotExists}
                     onAnnounce={announceSelection}
                     onHoverStart={() => {
-                      const shot = section?.shots[nextShotIndex];
-                      if (shot) setHoveredShot({ sectionId, shotId: shot.id });
+                      const shot = line?.shots[nextShotIndex];
+                      if (shot) setHoveredShot({ lineId, shotId: shot.id });
                     }}
                     onHoverEnd={() => setHoveredShot(null)}
                   />
@@ -882,14 +882,14 @@ function StationDetail({ station }: { station: Station }) {
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('detailPanel.labels.section')}:</span>
                 <DetailLink
-                  type="section"
-                  target={{ sectionId }}
-                  displayText={sectionDisplayText}
-                  pillLabel={sectionName}
-                  onSelect={handleSelectSection}
+                  type="line"
+                  target={{ lineId }}
+                  displayText={lineDisplayText}
+                  pillLabel={lineName}
+                  onSelect={handleSelectLine}
                   onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredSectionId(sectionId)}
-                  onHoverEnd={() => setHoveredSectionId(null)}
+                  onHoverStart={() => setHoveredLineId(lineId)}
+                  onHoverEnd={() => setHoveredLineId(null)}
                 />
               </div>
             </div>
@@ -920,17 +920,17 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
   return (Math.asin(clamped) * 180) / Math.PI;
 }
 
-function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
+function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotKind } = useProjectStore();
   const editingBlocked = useEditingBlocked();
-  const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
-    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
+  const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredLineId } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredLineId: s.setHoveredLineId }))
   );
   const precision = useDecimalPrecision();
 
   // Calculate shot index (0-indexed) and positions (1-indexed for display)
-  const shotIndex = section.shots.indexOf(shot);
+  const shotIndex = line.shots.indexOf(shot);
   const shotPosition = shotIndex + 1;
 
   // Shot-to-Station mapping:
@@ -943,32 +943,32 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   const endStationPosition = endStationIndex;
 
   // Validate station targets exist (and read their names)
-  const startStation = findStation(stations, section.id, startStationIndex);
-  const endStation = findStation(stations, section.id, endStationIndex);
+  const startStation = findStation(stations, line.id, startStationIndex);
+  const endStation = findStation(stations, line.id, endStationIndex);
   const startStationExists = startStation !== undefined;
   const endStationExists = endStation !== undefined;
 
   const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
-  const shotTargets = useMemo(() => ({ type: 'shots' as const, shots: [[section.id, shot.id] as [number, number]] }), [section.id, shot.id]);
+  const shotTargets = useMemo(() => ({ type: 'shots' as const, shots: [[line.id, shot.id] as [number, number]] }), [line.id, shot.id]);
   const shotCredits = useMemo(() => [shotCredit(shot)], [shot]);
 
   const handleCycleShotKind = async () => {
     trackContextMenuAction('cycle-shot-kind', 'detail-panel');
-    await setShotKind(section.id, shot.id, nextShotKind(shot.kind));
+    await setShotKind(line.id, shot.id, nextShotKind(shot.kind));
   };
 
   const handleDelete = () => {
     setSource('detail-panel');
-    const totalShots = section.shots.length;
+    const totalShots = line.shots.length;
     const isFirst = shotIndex === 0;
     const isLast = shotIndex === totalShots - 1;
     const { dialog, data } = getDeleteShotDialog(
-      section.id,
+      line.id,
       shot.id,
       isFirst,
       isLast,
       totalShots,
-      section.name ?? t('sections.defaultName', { id: section.id }),
+      line.name ?? t('sections.defaultName', { id: line.id }),
     );
     openDialog(dialog, data);
   };
@@ -977,7 +977,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     setSource('detail-panel');
     setSelection({
       type: 'station',
-      stationRef: { section_id: section.id, station_index: startStationIndex },
+      stationRef: { line_id: line.id, station_index: startStationIndex },
     });
   };
 
@@ -985,24 +985,24 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     setSource('detail-panel');
     setSelection({
       type: 'station',
-      stationRef: { section_id: section.id, station_index: endStationIndex },
+      stationRef: { line_id: line.id, station_index: endStationIndex },
     });
   };
 
-  const handleSelectSection = () => {
+  const handleSelectLine = () => {
     setSource('detail-panel');
-    setSelection({ type: 'section', sectionId: section.id });
+    setSelection({ type: 'line', lineId: line.id });
   };
 
   const handleCenterOnShot = () => {
     setSource('detail-panel');
-    triggerCenterOnShot(section.id, shot.id);
+    triggerCenterOnShot(line.id, shot.id);
   };
 
-  const sectionName = section.name ?? t('detailPanel.section.unnamed');
-  const sectionDisplayText = t('detailPanel.section.display', {
-    id: section.id,
-    name: sectionName,
+  const lineName = line.name ?? t('detailPanel.section.unnamed');
+  const lineDisplayText = t('detailPanel.section.display', {
+    id: line.id,
+    name: lineName,
   });
 
   const centerButton = (
@@ -1011,7 +1011,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       onClick={handleCenterOnShot}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.shot.center', {
-        id: formatShotId(section.id, shotPosition),
+        id: formatShotId(line.id, shotPosition),
       })}
       data-testid="center-shot-button"
     >
@@ -1023,8 +1023,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     <div className="h-full bg-panel overflow-auto">
       <Panel bare title={t('detailPanel.shot.title')} headerActions={centerButton}>
         <div className="space-y-3">
-          <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
-          <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
+          <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(line.id, shotPosition)} />
+          <DetailRow label={t('detailPanel.labels.section')} value={line.name ?? t('sections.defaultName', { id: line.id })} />
           <DetailRow label={t('detailPanel.labels.length')} value={`${formatFixed(shot.length, undefined, precision.length)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.azimuthIn')} value={`${formatFixed(shot.azimuth_in, undefined, precision.azimuth)}°`} />
           <DetailRow label={t('detailPanel.labels.azimuthOut')} value={`${formatFixed(shot.azimuth_out, undefined, precision.azimuth)}°`} />
@@ -1063,7 +1063,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
             </div>
           )}
 
-          {/* Connected section with hyperlinks */}
+          {/* Connected line with hyperlinks */}
           <div className="pt-2 border-t border-border">
             <span className="text-sm text-text-secondary">{t('detailPanel.shot.connected')}:</span>
             <div className="mt-1 space-y-1 text-sm">
@@ -1071,12 +1071,12 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <span className="text-text-secondary">{t('detailPanel.shot.startStation')}:</span>
                 <DetailLink
                   type="station"
-                  target={{ sectionId: section.id, position: startStationPosition }}
-                  displayText={formatStationIdWithName(section.id, startStationPosition, startStation?.name)}
+                  target={{ lineId: line.id, position: startStationPosition }}
+                  displayText={formatStationIdWithName(line.id, startStationPosition, startStation?.name)}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: startStationIndex })}
+                  onHoverStart={() => setHoveredStation({ line_id: line.id, station_index: startStationIndex })}
                   onHoverEnd={() => setHoveredStation(null)}
                 />
               </div>
@@ -1084,26 +1084,26 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <span className="text-text-secondary">{t('detailPanel.shot.endStation')}:</span>
                 <DetailLink
                   type="station"
-                  target={{ sectionId: section.id, position: endStationPosition }}
-                  displayText={formatStationIdWithName(section.id, endStationPosition, endStation?.name)}
+                  target={{ lineId: line.id, position: endStationPosition }}
+                  displayText={formatStationIdWithName(line.id, endStationPosition, endStation?.name)}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: endStationIndex })}
+                  onHoverStart={() => setHoveredStation({ line_id: line.id, station_index: endStationIndex })}
                   onHoverEnd={() => setHoveredStation(null)}
                 />
               </div>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('detailPanel.labels.section')}:</span>
                 <DetailLink
-                  type="section"
-                  target={{ sectionId: section.id }}
-                  displayText={sectionDisplayText}
-                  pillLabel={sectionName}
-                  onSelect={handleSelectSection}
+                  type="line"
+                  target={{ lineId: line.id }}
+                  displayText={lineDisplayText}
+                  pillLabel={lineName}
+                  onSelect={handleSelectLine}
                   onAnnounce={announceSelection}
-                  onHoverStart={() => setHoveredSectionId(section.id)}
-                  onHoverEnd={() => setHoveredSectionId(null)}
+                  onHoverStart={() => setHoveredLineId(line.id)}
+                  onHoverEnd={() => setHoveredLineId(null)}
                 />
               </div>
             </div>
@@ -1142,42 +1142,42 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   );
 }
 
-interface SectionDetailProps {
-  section: Section;
+interface LineDetailProps {
+  line: Line;
   stations: Station[];
   totalProjectLength: number;
 }
 
-function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
+function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
   const { t } = useTranslation();
   const editingBlocked = useEditingBlocked();
-  const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
-    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
+  const { openDialog, setSelection, triggerZoomToLine, announceSelection, setHoveredStation } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToLine: s.triggerZoomToLine, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
   const precision = useDecimalPrecision();
 
-  // Who surveyed the section and when: the aggregate over its shots, editable.
-  const credits = useMemo(() => sectionCredits(section), [section]);
+  // Who surveyed the line and when: the aggregate over its shots, editable.
+  const credits = useMemo(() => lineCredits(line), [line]);
 
-  // Calculate section statistics
+  // Calculate line statistics
   // Length leaves out Reference shots, matching the project total it is a
   // share of (#689); the average is over the same shots.
-  const { length: sectionLength, shotCount: lengthShotCount } = surveyedLength(section.shots);
-  const shotCount = section.shots.length;
-  const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
-  const avgShotLength = lengthShotCount > 0 ? sectionLength / lengthShotCount : null;
-  // Reference length is left out of the section length; say so, or a section of
+  const { length: lineLength, shotCount: lengthShotCount } = surveyedLength(line.shots);
+  const shotCount = line.shots.length;
+  const referenceCount = line.shots.filter((s) => s.kind !== 'Normal').length;
+  const avgShotLength = lengthShotCount > 0 ? lineLength / lengthShotCount : null;
+  // Reference length is left out of the line length; say so, or a line of
   // Reference shots reads "0.0 m" with no reason next to a table of real lengths.
-  const referenceLength = section.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
+  const referenceLength = line.shots.reduce((sum, s) => (s.kind === 'Reference' ? sum + s.length : sum), 0);
   const contributionPercent = totalProjectLength > 0
-    ? (sectionLength / totalProjectLength) * 100
+    ? (lineLength / totalProjectLength) * 100
     : 0;
 
-  // Get stations for this section and calculate depth range
-  const sectionStations = stations.filter(
-    (s) => s.station_ref.section_id === section.id
+  // Get stations for this line and calculate depth range
+  const lineStations = stations.filter(
+    (s) => s.station_ref.line_id === line.id
   );
-  const depths = sectionStations.map((s) => s.coordinates.z);
+  const depths = lineStations.map((s) => s.coordinates.z);
   const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
@@ -1186,21 +1186,21 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   // Last station: index = shots.length, position = shots.length (0-indexed)
   const firstStationIndex = 0;
   const firstStationPosition = 0;
-  const lastStationIndex = section.shots.length; // Number of shots = last station index
+  const lastStationIndex = line.shots.length; // Number of shots = last station index
   const lastStationPosition = lastStationIndex;
 
   // Single station case: when there are 0 shots, there's only station 0 (position 1)
-  const hasSingleStation = section.shots.length === 0;
+  const hasSingleStation = line.shots.length === 0;
 
   // Validate station targets exist
-  const firstStationExists = findStation(stations, section.id, firstStationIndex) !== undefined;
-  const lastStationExists = findStation(stations, section.id, lastStationIndex) !== undefined;
+  const firstStationExists = findStation(stations, line.id, firstStationIndex) !== undefined;
+  const lastStationExists = findStation(stations, line.id, lastStationIndex) !== undefined;
 
   const handleSelectFirstStation = () => {
     setSource('detail-panel');
     setSelection({
       type: 'station',
-      stationRef: { section_id: section.id, station_index: firstStationIndex },
+      stationRef: { line_id: line.id, station_index: firstStationIndex },
     });
   };
 
@@ -1208,55 +1208,55 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     setSource('detail-panel');
     setSelection({
       type: 'station',
-      stationRef: { section_id: section.id, station_index: lastStationIndex },
+      stationRef: { line_id: line.id, station_index: lastStationIndex },
     });
   };
 
-  const handleCenterOnSection = () => {
+  const handleCenterOnLine = () => {
     setSource('detail-panel');
-    triggerZoomToSection(section.id);
+    triggerZoomToLine(line.id);
   };
 
-  const handleEditSection = () => {
+  const handleEditLine = () => {
     setSource('detail-panel');
-    openDialog('edit-section', { sectionId: section.id });
+    openDialog('edit-line', { lineId: line.id });
   };
 
-  const sectionDisplayName = section.name ?? t('detailPanel.section.unnamed');
+  const lineDisplayName = line.name ?? t('detailPanel.section.unnamed');
 
   const centerButton = (
     <button
       type="button"
-      onClick={handleCenterOnSection}
+      onClick={handleCenterOnLine}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
-      aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
-      data-testid="center-section-button"
+      aria-label={t('detailPanel.section.center', { id: line.id, name: lineDisplayName })}
+      data-testid="center-line-button"
     >
       <CenterLocateIcon />
     </button>
   );
 
   return (
-    <div className="h-full bg-panel overflow-auto" data-testid="section-detail">
+    <div className="h-full bg-panel overflow-auto" data-testid="line-detail">
       <Panel bare title={t('detailPanel.section.title')} headerActions={centerButton}>
         <div className="space-y-4">
-          {/* Section info */}
+          {/* Line info */}
           <div className="space-y-2">
-            <DetailRow label={t('common.labels.name')} value={section.name ?? t('detailPanel.section.unnamed')} />
+            <DetailRow label={t('common.labels.name')} value={line.name ?? t('detailPanel.section.unnamed')} />
             <DetailRow label={t('detailPanel.labels.color')} value={
               <div className="flex items-center gap-2">
                 <span
                   className="w-4 h-4 rounded"
-                  style={{ backgroundColor: section.color }}
+                  style={{ backgroundColor: line.color }}
                 />
-                <span>{section.color}</span>
+                <span>{line.color}</span>
               </div>
             } />
           </div>
 
-          {/* Survey credit of every shot of the section */}
+          {/* Survey credit of every shot of the line */}
           <div className="pt-2 border-t border-border">
-            <CreditDetail targets={{ type: 'section', section_id: section.id }} credits={credits} scope="section" />
+            <CreditDetail targets={{ type: 'line', line_id: line.id }} credits={credits} scope="line" />
           </div>
 
           {/* Survey statistics */}
@@ -1265,7 +1265,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               {t('detailPanel.section.statsTitle')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(lineLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
               <StatCard label={t('detailPanel.section.avgShot')} value={avgShotLength === null ? '-' : `${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {referenceCount > 0 && (
@@ -1273,7 +1273,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               )}
             </div>
             {referenceLength > 0 && (
-              <p className="text-xs text-text-secondary" data-testid="section-reference-length-note">
+              <p className="text-xs text-text-secondary" data-testid="line-reference-length-note">
                 {t('detailPanel.section.referenceLengthNote', {
                   length: `${formatFixed(referenceLength, undefined, precision.length)} ${t('common.units.meters')}`,
                 })}
@@ -1282,7 +1282,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           </div>
 
           {/* Depth range */}
-          {sectionStations.length > 0 && (
+          {lineStations.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-border">
               <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
                 {t('detailPanel.section.depthRange')}
@@ -1295,7 +1295,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           )}
 
           {/* Endpoints - first and last station links */}
-          {sectionStations.length > 0 && (
+          {lineStations.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-border">
               <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
                 {t('detailPanel.section.endpoints')}
@@ -1307,12 +1307,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                     <span className="text-text-secondary">{t('detailPanel.section.onlyStation')}:</span>
                     <DetailLink
                       type="station"
-                      target={{ sectionId: section.id, position: firstStationPosition }}
-                      displayText={formatStationId(section.id, firstStationPosition)}
+                      target={{ lineId: line.id, position: firstStationPosition }}
+                      displayText={formatStationId(line.id, firstStationPosition)}
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
-                      onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: firstStationIndex })}
+                      onHoverStart={() => setHoveredStation({ line_id: line.id, station_index: firstStationIndex })}
                       onHoverEnd={() => setHoveredStation(null)}
                     />
                   </div>
@@ -1323,12 +1323,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       <span className="text-text-secondary">{t('detailPanel.section.firstStation')}:</span>
                       <DetailLink
                         type="station"
-                        target={{ sectionId: section.id, position: firstStationPosition }}
-                        displayText={formatStationId(section.id, firstStationPosition)}
+                        target={{ lineId: line.id, position: firstStationPosition }}
+                        displayText={formatStationId(line.id, firstStationPosition)}
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
-                        onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: firstStationIndex })}
+                        onHoverStart={() => setHoveredStation({ line_id: line.id, station_index: firstStationIndex })}
                         onHoverEnd={() => setHoveredStation(null)}
                       />
                     </div>
@@ -1336,12 +1336,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       <span className="text-text-secondary">{t('detailPanel.section.lastStation')}:</span>
                       <DetailLink
                         type="station"
-                        target={{ sectionId: section.id, position: lastStationPosition }}
-                        displayText={formatStationId(section.id, lastStationPosition)}
+                        target={{ lineId: line.id, position: lastStationPosition }}
+                        displayText={formatStationId(line.id, lastStationPosition)}
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}
-                        onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: lastStationIndex })}
+                        onHoverStart={() => setHoveredStation({ line_id: line.id, station_index: lastStationIndex })}
                         onHoverEnd={() => setHoveredStation(null)}
                       />
                     </div>
@@ -1372,7 +1372,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked} data-testid="section-edit-button">
+        <Button size="sm" className="w-full" onClick={handleEditLine} disabled={editingBlocked} data-testid="line-edit-button">
           {t('detailPanel.section.edit')}
         </Button>
       </div>
@@ -1403,7 +1403,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
   // The survey date range over every shot, computed by the backend so a
-  // binary-loaded project's lazy sections are not materialized for it.
+  // binary-loaded project's lazy lines are not materialized for it.
   const earliestDate = stats.first_survey_date ?? null;
   const latestDate = stats.last_survey_date ?? null;
 
@@ -1451,7 +1451,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label={t('detailPanel.projectStats.totalLength')} value={`${formatFixed(stats.total_length, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, precision.length)} ${t('common.units.meters')}`} />
-              <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.section_count)} />
+              <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.line_count)} />
               <StatCard label={t('detailPanel.projectStats.shots')} value={formatNumber(stats.shot_count)} />
               <StatCard label={t('detailPanel.projectStats.stations')} value={formatNumber(stats.station_count)} />
               {stats.loop_count > 0 && (
@@ -1518,9 +1518,9 @@ interface ClosuresSectionProps {
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
-  onSelectStation: (ref: { section_id: number; station_index: number }) => void;
+  onSelectStation: (ref: { line_id: number; station_index: number }) => void;
   onAnnounce: (message: string) => void;
-  onHoverStart: (ref: { section_id: number; station_index: number }) => void;
+  onHoverStart: (ref: { line_id: number; station_index: number }) => void;
   onHoverEnd: () => void;
 }
 
@@ -1539,19 +1539,19 @@ function ClosuresSection({
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
-  const contentId = 'closures-section-content';
+  const contentId = 'closures-line-content';
 
   // Precompute station existence set for O(1) lookups
   const stationKeySet = useMemo(() => {
     const keys = new Set<string>();
     for (const s of stations) {
-      keys.add(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
+      keys.add(`${s.station_ref.line_id}:${s.station_ref.station_index}`);
     }
     return keys;
   }, [stations]);
 
-  const stationExists = (ref: { section_id: number; station_index: number }): boolean => {
-    return stationKeySet.has(`${ref.section_id}:${ref.station_index}`);
+  const stationExists = (ref: { line_id: number; station_index: number }): boolean => {
+    return stationKeySet.has(`${ref.line_id}:${ref.station_index}`);
   };
 
   // Precompute loop closures map for O(1) lookups
@@ -1598,12 +1598,12 @@ function ClosuresSection({
   };
 
   return (
-    <div className="pt-2 border-t border-border" data-testid="closures-section">
+    <div className="pt-2 border-t border-border" data-testid="closures-line">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
-        data-testid="closures-section-toggle"
+        data-testid="closures-line-toggle"
         aria-expanded={expanded}
         aria-controls={contentId}
       >
@@ -1613,7 +1613,7 @@ function ClosuresSection({
         <span>{t('detailPanel.closures.title')}</span>
       </button>
       {expanded && (
-        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
+        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-line-content">
           {sortedGroups.map(([closureId, refs]) => {
             const closureIdLabel = closureId.toString();
             const closure = closureMap.get(closureId);
@@ -1634,8 +1634,8 @@ function ClosuresSection({
                             {i > 0 && ', '}
                             <DetailLink
                               type="station"
-                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                              target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
+                              displayText={formatStationId(ref.station_ref.line_id, ref.station_ref.station_index)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
                               onAnnounce={onAnnounce}
@@ -1654,8 +1654,8 @@ function ClosuresSection({
                             {i > 0 && ', '}
                             <DetailLink
                               type="station"
-                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                              target={{ lineId: ref.station_ref.line_id, position: ref.station_ref.station_index }}
+                              displayText={formatStationId(ref.station_ref.line_id, ref.station_ref.station_index)}
                               onSelect={() => onSelectStation(ref.station_ref)}
                               isMissing={!stationExists(ref.station_ref)}
                               onAnnounce={onAnnounce}
@@ -1667,8 +1667,8 @@ function ClosuresSection({
                                 {t('detailPanel.closures.viaPrefix')}
                                 <DetailLink
                                   type="station"
-                                  target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
-                                  displayText={formatStationId(ref.via_station.section_id, ref.via_station.station_index)}
+                                  target={{ lineId: ref.via_station.line_id, position: ref.via_station.station_index }}
+                                  displayText={formatStationId(ref.via_station.line_id, ref.via_station.station_index)}
                                   onSelect={() => onSelectStation(ref.via_station!)}
                                   isMissing={!stationExists(ref.via_station)}
                                   onAnnounce={onAnnounce}

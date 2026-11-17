@@ -194,7 +194,7 @@ beforeAll(() => {
       seq: 16,
       ts: ts(17),
       tool: 'map_feature_click',
-      params: { featureType: 'shot', sectionId: 7, shotId: 42, verifySelection: true },
+      params: { featureType: 'shot', lineId: 7, shotId: 42, verifySelection: true },
       resolved: { point: { x: 888, y: 666 }, clearancePx: 12 },
       outcome: { ok: true, durationMs: 20 },
     }),
@@ -250,7 +250,7 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('999, 777');
     // Semantic feature clicks resolve the current geometry again during replay.
     expect(spec).toContain(
-      `await mapFeatureClick(browser, {"featureType":"shot","sectionId":7,"shotId":42,"verifySelection":true});`,
+      `await mapFeatureClick(browser, {"featureType":"shot","lineId":7,"shotId":42,"verifySelection":true});`,
     );
     expect(spec).not.toContain('888, 666');
     // Semantic waits remain semantic and keep their recorded arguments.
@@ -373,7 +373,7 @@ describe('generate-repro-report.mjs', () => {
         }),
         record({
           type: 'action', v: 1, seq: 5, ts: ts(5), tool: 'map_feature_click', mutating: true,
-          params: { featureType: 'shot', sectionId: 2, shotId: 17 },
+          params: { featureType: 'shot', lineId: 2, shotId: 17 },
           outcome: { ok: true, durationMs: 10 },
         }),
         // A mutation that THREW is still the step that reproduces the bug.
@@ -444,7 +444,7 @@ describe('generate-repro-report.mjs', () => {
       expect(md).toContain('open dialog answered <file.dmp>');
       expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
       expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
-      expect(md).toContain('`map_feature_click` shot id=17 in section 2');
+      expect(md).toContain('`map_feature_click` shot id=17 in line 2');
       // A failed mutation stays, flagged.
       expect(md).toContain('`hover` testid=toolbar-undo-button **(failed)**');
     });

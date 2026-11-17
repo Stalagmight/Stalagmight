@@ -1,14 +1,14 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForMapIdle,
   getDrawnGeometry,
   waitForDrawnStations,
   countCanvasInk,
   readCanvasPixel,
-  type SectionSeed,
+  type LineSeed,
   type ScreenPoint,
   type StationScreenPos,
   type ShotScreenPos,
@@ -29,11 +29,11 @@ import {
  * NOTE (#customRender): the survey is now drawn by a custom WebGL layer, so the
  * stock survey-shots / survey-stations layers are gone too. There is nothing left
  * for queryRenderedFeatures to return, and hit-test candidates come from the SoA
- * geometry index instead (SurveyLayer.hitCandidateSections -> geometryIndex).
+ * geometry index instead (SurveyLayer.hitCandidateLines -> geometryIndex).
  * Screen positions therefore come from the app's drawn-geometry hook (helpers/app
  * getDrawnGeometry), which reads that same SoA index, so a test's coordinates are
  * exactly what the renderer painted and what the hit test will resolve. As a
- * bonus the hook carries identity ({sectionId, stationIndex} / {sectionId,
+ * bonus the hook carries identity ({lineId, stationIndex} / {lineId,
  * shotId}), so the assertions below name the exact expected feature instead of
  * discovering it behaviorally.
  *
@@ -67,21 +67,21 @@ async function waitForAppReady(page: Page): Promise<void> {
 /**
  * Helper to create a new project with the given name.
  */
-async function createProject(page: Page, name: string, seeds = sectionSeeds): Promise<void> {
+async function createProject(page: Page, name: string, seeds = lineSeeds): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
   await newProjectBtn.click();
   await page.waitForSelector('.fixed.inset-0');
   await page.locator('.fixed.inset-0 input').first().fill(name);
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await waitForAppReady(page);
-  await seedProjectWithSections(page, seeds);
+  await seedProjectWithLines(page, seeds);
   // The drawn geometry is what hit-testing resolves against, so waiting for it
   // replaces the old "survey-stations returns rendered features" poll.
   await waitForDrawnStations(page, 1);
   await zoomToWorkableScale(page);
 }
 
-const mainSection: SectionSeed = {
+const mainLine: LineSeed = {
   name: 'Hitbox Main',
   direction: 'in',
   shots: [
@@ -90,8 +90,8 @@ const mainSection: SectionSeed = {
   ],
 };
 
-const sectionSeeds: SectionSeed[] = [
-  mainSection,
+const lineSeeds: LineSeed[] = [
+  mainLine,
   {
     name: 'Hitbox Branch',
     direction: 'out',
@@ -101,11 +101,11 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-// The IPC mock lays every section's stations out at `x = stationIndex * 10, y = 0`
-// (see mocks/tauri-ipc.ts get_project_state), so with more than one section the
-// stations of section N sit exactly on top of the stations of section 1. Tests that
-// must name ONE expected station out of a nearby pair seed a single section.
-const singleSectionSeed: SectionSeed[] = [mainSection];
+// The IPC mock lays every line's stations out at `x = stationIndex * 10, y = 0`
+// (see mocks/tauri-ipc.ts get_project_state), so with more than one line the
+// stations of line N sit exactly on top of the stations of line 1. Tests that
+// must name ONE expected station out of a nearby pair seed a single line.
+const singleLineSeed: LineSeed[] = [mainLine];
 
 // ---------------------------------------------------------------------------
 // Screen-space geometry helpers (local: only this spec needs them)
@@ -142,9 +142,9 @@ function nearestOtherStationDist(
 }
 
 /**
- * Stations that are the only station drawn at their spot. Sections seeded without
- * a zero datum all start at the map origin, so the first station of each section
- * lands on the first station of every other section: a click there is genuinely
+ * Stations that are the only station drawn at their spot. Lines seeded without
+ * a zero datum all start at the map origin, so the first station of each line
+ * lands on the first station of every other line: a click there is genuinely
  * ambiguous (two stations at distance 0 from the cursor), so any assertion that
  * names ONE expected station has to avoid that cluster.
  */
@@ -322,8 +322,8 @@ function pickIsolatedShotProbe(
  */
 async function getSelectionState(page: Page): Promise<{
   type: string;
-  stationRef?: { section_id: number; station_index: number };
-  sectionId?: number;
+  stationRef?: { line_id: number; station_index: number };
+  lineId?: number;
   shotId?: number;
 } | null> {
   return page.evaluate(() => {
@@ -336,8 +336,8 @@ async function getSelectionState(page: Page): Promise<{
     if (!stores) return null;
     return stores.uiStore.getState().selection as {
       type: string;
-      stationRef?: { section_id: number; station_index: number };
-      sectionId?: number;
+      stationRef?: { line_id: number; station_index: number };
+      lineId?: number;
       shotId?: number;
     } | null;
   });
@@ -369,11 +369,11 @@ async function pollSelectionState(
 /** True when the selection is exactly the given station. */
 function isStationSelected(
   sel: Awaited<ReturnType<typeof getSelectionState>>,
-  station: { sectionId: number; stationIndex: number }
+  station: { lineId: number; stationIndex: number }
 ): boolean {
   return (
     sel?.type === 'station' &&
-    sel.stationRef?.section_id === station.sectionId &&
+    sel.stationRef?.line_id === station.lineId &&
     sel.stationRef?.station_index === station.stationIndex
   );
 }
@@ -381,9 +381,9 @@ function isStationSelected(
 /** True when the selection is exactly the given shot. */
 function isShotSelected(
   sel: Awaited<ReturnType<typeof getSelectionState>>,
-  shot: { sectionId: number; shotId: number }
+  shot: { lineId: number; shotId: number }
 ): boolean {
-  return sel?.type === 'shot' && sel.sectionId === shot.sectionId && sel.shotId === shot.shotId;
+  return sel?.type === 'shot' && sel.lineId === shot.lineId && sel.shotId === shot.shotId;
 }
 
 /**
@@ -635,10 +635,10 @@ test.describe('Hitbox Detection', () => {
   });
 
   test('overlapping hitboxes select nearest to click', async ({ page }) => {
-    // Single section: the mock stacks every section's stations on the same
+    // Single line: the mock stacks every line's stations on the same
     // coordinates, and "nearest wins" cannot name one of two stations drawn at the
     // exact same point.
-    await createProject(page, 'Overlap Test Project', singleSectionSeed);
+    await createProject(page, 'Overlap Test Project', singleLineSeed);
 
     const stations = await waitForDrawnStations(page, 2);
 

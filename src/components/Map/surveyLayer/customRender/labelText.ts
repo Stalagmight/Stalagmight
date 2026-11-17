@@ -4,8 +4,8 @@
  *
  * `features.ts` (the stock vector-tile feature builder) and the custom label
  * tessellator both need the exact same strings ("312° 4.2m 1.8m", a station
- * index, a section name, a comment) and the exact same per-label color (depth
- * ramp vs `labelColor`, section color, comment palette). Reimplementing either
+ * index, a line name, a comment) and the exact same per-label color (depth
+ * ramp vs `labelColor`, line color, comment palette). Reimplementing either
  * on the custom path would risk a subtle A/B mismatch (precision, the
  * depth-vs-flat fallback), so both paths call THESE helpers - parity by
  * construction, the same pattern `colorResolvers.ts` uses for shot/station
@@ -66,9 +66,9 @@ export function formatStationNameLabel(name: string | null | undefined): string 
   return `${chars.slice(0, STATION_NAME_LABEL_MAX_CHARS - 1).join('').trimEnd()}\u2026`;
 }
 
-/** Section-name text. `name` is nullable (a section may be unnamed); the stock
+/** Line-name text. `name` is nullable (a line may be unnamed); the stock
  *  `['get','name']` text-field renders empty for null, so this returns `''`. */
-export function formatSectionLabel(name: string | null): string {
+export function formatLineLabel(name: string | null): string {
   return name ?? '';
 }
 
@@ -122,10 +122,10 @@ export function resolveStationLabelColor(z: number, ctx: LabelColorContext): str
   return labelDepthColor(z, ctx) ?? ctx.labelColor;
 }
 
-/** Section-name color: the section's own color (never depth-ramped), matching
- *  the stock `survey-labels` `['get','color']` = `section.color`. */
-export function resolveSectionLabelColor(sectionColor: string): string {
-  return sectionColor;
+/** Line-name color: the line's own color (never depth-ramped), matching
+ *  the stock `survey-labels` `['get','color']` = `line.color`. */
+export function resolveLineLabelColor(lineColor: string): string {
+  return lineColor;
 }
 
 /**

@@ -31,14 +31,14 @@ const RIG: DpvRig = {
 /** A station a zero datum's `station_ref` can resolve against (#480: the entrance-no-warning
  *  guard checks a zero datum's `station_ref` for a matching entry in `stations`, not
  *  `zero_datums.length` - a dangling datum can leave a stale entry in the latter). */
-const RESOLVABLE_STATION_REF = { section_id: 1, station_index: 0 };
+const RESOLVABLE_STATION_REF = { line_id: 1, station_index: 0 };
 /** A ref that never appears in `stations` - simulates a zero datum whose station was deleted. */
-const DANGLING_STATION_REF = { section_id: 99, station_index: 99 };
+const DANGLING_STATION_REF = { line_id: 99, station_index: 99 };
 
 /** A full GasReachField with a real turnaround (satisfies `hasRoute`), overridable per test. */
 function makeReachField(overrides: Partial<GasReachField> = {}): GasReachField {
-  const origin = { section_id: 1, station_index: 0 };
-  const turn = { section_id: 1, station_index: 1 };
+  const origin = { line_id: 1, station_index: 0 };
+  const turn = { line_id: 1, station_index: 1 };
   return {
     station_refs: [origin, turn],
     gas_to_reach: [0, 100],
@@ -100,7 +100,7 @@ beforeEach(async () => {
     // (#480) get their own describe block below with their own project + stations state.
     project: { zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }] } as never,
     stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
-    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], line_ids: [] })),
   });
 });
 
@@ -459,7 +459,7 @@ describe('GasPlanPanel entrance requires a zero datum (#480)', () => {
   it('does not warn on the origin readout once a real station origin is picked', () => {
     useGasPlanStore.setState({
       originChosen: true,
-      origin: { section_id: 1, station_index: 0 },
+      origin: { line_id: 1, station_index: 0 },
     });
     useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
 

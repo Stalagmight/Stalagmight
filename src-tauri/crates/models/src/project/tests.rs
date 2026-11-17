@@ -17,12 +17,12 @@ fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out
 /// error state; now it means a component carries GPS fixes. Tests use it to
 /// say which datums a merge brought together.
 fn datums_sharing_a_merge_component(project: &Project) -> Vec<Vec<StationRef>> {
-    let mut groups: Vec<(HashSet<SectionId>, Vec<StationRef>)> = Vec::new();
+    let mut groups: Vec<(HashSet<LineId>, Vec<StationRef>)> = Vec::new();
     for sr in project.all_datum_refs() {
-        if let Some(group) = groups.iter_mut().find(|(s, _)| s.contains(&sr.section_id)) {
+        if let Some(group) = groups.iter_mut().find(|(s, _)| s.contains(&sr.line_id)) {
             group.1.push(sr);
         } else {
-            groups.push((project.get_merged_section_ids(sr.section_id), vec![sr]));
+            groups.push((project.get_merged_line_ids(sr.line_id), vec![sr]));
         }
     }
     groups
@@ -46,22 +46,22 @@ fn forge_first_merge(project: &mut Project, f: impl FnOnce(&mut StationMerge)) {
 }
 
 #[test]
-fn get_connected_section_ids_traverses_merges() {
+fn get_connected_line_ids_traverses_merges() {
     let mut project = Project::new("Merged".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -78,7 +78,7 @@ fn get_connected_section_ids_traverses_merges() {
         merged_at: Utc::now(),
     });
 
-    let connected = project.get_connected_section_ids(a);
+    let connected = project.get_connected_line_ids(a);
     assert!(connected.contains(&a));
     assert!(connected.contains(&b));
     assert!(connected.contains(&c));
@@ -93,7 +93,7 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
     // refactor delete shift_station_refs.
     let mut project = Project::new("Keys".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -110,15 +110,15 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
         "key_for_ref/resolve_key round-trip"
     );
 
-    // SectionStart round-trips too.
+    // LineStart round-trips too.
     let start = StationRef::new(a, 0);
     let start_key = project.key_for_ref(start).unwrap();
-    assert_eq!(start_key.anchor, StationAnchor::SectionStart);
+    assert_eq!(start_key.anchor, StationAnchor::LineStart);
     assert_eq!(project.resolve_key(&start_key), Some(start));
 
     // Insert a shot at the front: the physical station that was index 2 is now
     // index 3, and the key (anchored to the original shot's UUID) resolves there.
-    let first_id = project.get_section(a).unwrap().shots[0].id;
+    let first_id = project.get_line(a).unwrap().shots[0].id;
     project.insert_shot_before(a, first_id, shot(0.0, 0.0, 5.0, 0.0, 0.0), None, None);
     assert_eq!(
         project.resolve_key(&key),
@@ -133,26 +133,26 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
 #[test]
 fn station_key_deserializes_legacy_positional_shape() {
     // Persisted undo snapshots (and offset/comment keys) written by pre-anchor
-    // builds embed station refs in the old positional `{section_id, station_index}`
+    // builds embed station refs in the old positional `{line_id, station_index}`
     // shape. The current StationKey must still deserialize them - mapping the index
     // to a transitional anchor - so opening an old project after upgrading does not
     // silently drop its undo history (the old blob would fail to parse otherwise).
-    // Legacy index 0 -> SectionStart.
-    let start: StationKey = serde_json::from_str(r#"{"section_id":3,"station_index":0}"#).unwrap();
-    assert_eq!(start, StationKey::new(3, StationAnchor::SectionStart));
+    // Legacy index 0 -> LineStart.
+    let start: StationKey = serde_json::from_str(r#"{"line_id":3,"station_index":0}"#).unwrap();
+    assert_eq!(start, StationKey::new(3, StationAnchor::LineStart));
 
     // Legacy positive index -> transitional Index anchor (the load re-anchor pass
     // later canonicalizes it; resolve_key tolerates it in the meantime).
-    let mid: StationKey = serde_json::from_str(r#"{"section_id":3,"station_index":2}"#).unwrap();
+    let mid: StationKey = serde_json::from_str(r#"{"line_id":3,"station_index":2}"#).unwrap();
     assert_eq!(mid, StationKey::new(3, StationAnchor::Index(2)));
 
-    // The current `{section_id, anchor}` shape still round-trips.
+    // The current `{line_id, anchor}` shape still round-trips.
     let modern = StationKey::new(7, StationAnchor::AfterShot("uuid-1".to_string()));
     let json = serde_json::to_string(&modern).unwrap();
     assert_eq!(serde_json::from_str::<StationKey>(&json).unwrap(), modern);
 
     // A payload with neither field is still rejected.
-    assert!(serde_json::from_str::<StationKey>(r#"{"section_id":3}"#).is_err());
+    assert!(serde_json::from_str::<StationKey>(r#"{"line_id":3}"#).is_err());
 }
 
 #[test]
@@ -163,14 +163,14 @@ fn project_serialization_is_key_ordered_and_state_determined() {
     // undo snapshot (`serde_json::to_string(project)`, regenerated on every
     // undo/redo) differed from the one taken at the state it had returned to, and a
     // re-save of an untouched project rewrote permuted keys and re-rolled the
-    // save/load fixpoint. Ten sections, three maps, keys inserted in DESCENDING
+    // save/load fixpoint. Ten lines, three maps, keys inserted in DESCENDING
     // order so "ascending output" cannot be insertion order leaking through.
     let mut project = Project::new("Deterministic".to_string(), None);
     let mut ids = Vec::new();
     for _ in 0..10 {
         ids.push(
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
                     ..Default::default()
                 })
@@ -179,7 +179,7 @@ fn project_serialization_is_key_ordered_and_state_determined() {
     }
     project.ensure_shot_uuids();
     for (i, &id) in ids.iter().enumerate().rev() {
-        project.set_section_offset(id, (i as f64 + 1.0, -(i as f64) - 1.0));
+        project.set_line_offset(id, (i as f64 + 1.0, -(i as f64) - 1.0));
         let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
         let after = project.key_for_ref(StationRef::new(id, 1)).unwrap();
         project.station_offsets.insert(after, (0.4, 0.5, 0.6));
@@ -191,7 +191,7 @@ fn project_serialization_is_key_ordered_and_state_determined() {
             .insert(start.clone(), format!("comment {i}"));
         project.station_names.insert(start, format!("{i}"));
     }
-    assert_eq!(project.section_offsets.len(), 10);
+    assert_eq!(project.line_offsets.len(), 10);
     assert_eq!(project.station_offsets.len(), 20);
 
     // Every round trip rebuilds all three maps from scratch - a fresh RandomState
@@ -208,28 +208,28 @@ fn project_serialization_is_key_ordered_and_state_determined() {
         previous = again;
     }
 
-    // Stable AND ascending: `section_offsets` keeps its object shape, so check the
+    // Stable AND ascending: `line_offsets` keeps its object shape, so check the
     // key order in the raw text (its values are arrays, so the object ends at the
     // first closing brace).
     let head = previous
-        .find("\"section_offsets\":{")
-        .expect("section_offsets in the payload");
+        .find("\"line_offsets\":{")
+        .expect("line_offsets in the payload");
     let object = &previous[head..head + previous[head..].find('}').expect("object end")];
     let mut last = 0;
     for &id in &ids {
         let at = object
             .find(&format!("\"{id}\":"))
-            .unwrap_or_else(|| panic!("section {id} missing from {object}"));
+            .unwrap_or_else(|| panic!("line {id} missing from {object}"));
         assert!(
             at > last,
-            "section_offsets keys must ascend; {id} came out at {at} after {last} in {object}"
+            "line_offsets keys must ascend; {id} came out at {at} after {last} in {object}"
         );
         last = at;
     }
 
     // The two StationKey-keyed maps are emitted as arrays of pairs (serde_json
-    // cannot key an object by a struct), ordered by section then anchor - and
-    // `SectionStart` sorts before `AfterShot`, so each section's station 0 leads.
+    // cannot key an object by a struct), ordered by line then anchor - and
+    // `LineStart` sorts before `AfterShot`, so each line's station 0 leads.
     let value: serde_json::Value = serde_json::from_str(&previous).unwrap();
     for field in ["station_offsets", "station_comments", "station_names"] {
         let entries = value[field].as_array().expect("array of pairs");
@@ -237,10 +237,10 @@ fn project_serialization_is_key_ordered_and_state_determined() {
             .iter()
             .map(|entry| {
                 let key = &entry[0];
-                let section = key["section_id"].as_u64().expect("section id");
-                // `SectionStart` is a bare string, `AfterShot(uuid)` an object.
+                let line = key["section_id"].as_u64().expect("line id");
+                // `LineStart` is a bare string, `AfterShot(uuid)` an object.
                 let rank = u8::from(!key["anchor"].is_string());
-                (section, rank)
+                (line, rank)
             })
             .collect();
         let mut ascending = order.clone();
@@ -250,50 +250,50 @@ fn project_serialization_is_key_ordered_and_state_determined() {
 }
 
 #[test]
-fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
-    // A section with non-finite (NaN/inf) geometry must be treated like a dangling
+fn cascade_bfs_does_not_propagate_through_a_non_finite_line() {
+    // A line with non-finite (NaN/inf) geometry must be treated like a dangling
     // edge: cascade_bfs must NOT mark it - nor anything reachable ONLY through it -
-    // authoritative, or it would seed propagation from an unpositioned section and
-    // mis-locate that section's other merge partners. (Regression guard: the bug
+    // authoritative, or it would seed propagation from an unpositioned line and
+    // mis-locate that line's other merge partners. (Regression guard: the bug
     // anchored + enqueued the neighbour unconditionally, skipping only the offset
     // adjustment.)
     use std::collections::{HashMap, HashSet};
 
     let mut project = Project::new("NaN".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let n = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let x = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Per-station local coords. Section N is NaN-poisoned at every station.
-    let local: HashMap<SectionId, Vec<(f64, f64)>> = HashMap::from([
+    // Per-station local coords. Line N is NaN-poisoned at every station.
+    let local: HashMap<LineId, Vec<(f64, f64)>> = HashMap::from([
         (a, vec![(0.0, 0.0), (1.0, 0.0)]),
         (n, vec![(f64::NAN, 0.0), (f64::NAN, 0.0)]),
         (x, vec![(5.0, 0.0), (6.0, 0.0)]),
     ]);
     let station_offsets: HashMap<StationRef, (f64, f64, f64)> = HashMap::new();
     // A:0 merges to N:0 (the only path to N), and N:1 merges to X:0 (the only path
-    // to X), so X is reachable solely through the NaN section N.
-    let adjacency: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::from([
+    // to X), so X is reachable solely through the NaN line N.
+    let adjacency: HashMap<LineId, Vec<(StationRef, StationRef)>> = HashMap::from([
         (a, vec![(StationRef::new(a, 0), StationRef::new(n, 0))]),
         (n, vec![(StationRef::new(n, 1), StationRef::new(x, 0))]),
     ]);
 
-    let mut authoritative: HashSet<SectionId> = HashSet::from([a]);
+    let mut authoritative: HashSet<LineId> = HashSet::from([a]);
     project.cascade_bfs(
         &adjacency,
         &local,
@@ -306,11 +306,11 @@ fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
     // anchored), and X is reachable only through N (never reached).
     assert!(
         !authoritative.contains(&n),
-        "a NaN-poisoned section must not be anchored"
+        "a NaN-poisoned line must not be anchored"
     );
     assert!(
         !authoritative.contains(&x),
-        "a section reachable only through a NaN section must not be anchored"
+        "a line reachable only through a NaN line must not be anchored"
     );
     assert_eq!(
         authoritative.len(),
@@ -327,13 +327,13 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     // traversal) won't see it - the failure that motivates centralizing them.
     let mut project = Project::new("Refs".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -445,28 +445,28 @@ fn station_ref_traversals_cover_every_bearing_collection() {
 }
 
 #[test]
-fn section_has_zero_datum_with_connected_merges() {
+fn line_has_zero_datum_with_connected_merges() {
     let mut project = Project::new("Zero".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let d = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -490,8 +490,8 @@ fn section_has_zero_datum_with_connected_merges() {
         entrance: None,
     });
 
-    assert!(project.section_has_zero_datum(a));
-    assert!(!project.section_has_zero_datum(d));
+    assert!(project.line_has_zero_datum(a));
+    assert!(!project.line_has_zero_datum(d));
 }
 
 #[test]
@@ -499,17 +499,17 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
     let mut project = Project::new("Coords".to_string(), None);
     let shot_a = shot(0.0, 0.0, 10.0, 0.0, 0.0);
     let shot_b = shot(90.0, 90.0, 5.0, 0.0, 2.0);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot_a.clone(), shot_b.clone()],
             ..Default::default()
         })
         .id;
 
-    project.section_offsets.insert(section_id, (2.0, -3.0));
+    project.line_offsets.insert(line_id, (2.0, -3.0));
 
     let coords = project
-        .compute_station_raw_coords(StationRef::new(section_id, 2))
+        .compute_station_raw_coords(StationRef::new(line_id, 2))
         .expect("coords");
     let expected_x = 2.0 + shot_b.horizontal_length();
     let expected_y = -3.0 + shot_a.horizontal_length();
@@ -517,31 +517,31 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
     assert!((coords.y - expected_y).abs() < 1e-6);
     assert!((coords.z - 2.0).abs() < 1e-6);
 
-    let invalid = project.compute_station_raw_coords(StationRef::new(section_id, 5));
+    let invalid = project.compute_station_raw_coords(StationRef::new(line_id, 5));
     assert!(invalid.is_none());
 }
 
 #[test]
 fn set_zero_datum_first_datum_positions_station_at_origin() {
     let mut project = Project::new("FirstDatum".to_string(), None);
-    // Create a section with a shot going north (azimuth 0)
+    // Create a line with a shot going north (azimuth 0)
     let shot_a = shot(0.0, 0.0, 10.0, 0.0, 1.0);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot_a.clone()],
             ..Default::default()
         })
         .id;
 
     // Station 1 is at (0, 10, 1) before datum is set
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(line_id, 1);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
 
     // Set first datum on station 1
     project.set_zero_datum(station_ref, gps).unwrap();
 
     // Check that offset was applied to move station to origin
-    let offset = project.section_offsets.get(&section_id).unwrap();
+    let offset = project.line_offsets.get(&line_id).unwrap();
     // Station was at (0, horizontal), needs offset (-0, -horizontal) to be at origin
     assert!(
         (offset.0 - 0.0).abs() < 1e-6,
@@ -577,12 +577,12 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
 /// own merge group is the one answer that destroys exactly that: every other
 /// component stays where it was and the whole survey silently re-arranges
 /// itself. `renormalize_frame` gives the other answer - one translation applied
-/// to every section - which lands the datum on the origin AND leaves every
+/// to every line - which lands the datum on the origin AND leaves every
 /// inter-component vector bit-for-bit intact.
 ///
-/// Non-vacuous by construction, on both halves. The two sections are separate
+/// Non-vacuous by construction, on both halves. The two lines are separate
 /// components (no merge, no closure, so `adjust_rigid_group_offsets` on `a`
-/// cannot reach `b`), and the datum's station sits 10 m north of its section's
+/// cannot reach `b`), and the datum's station sits 10 m north of its line's
 /// start, so establishing the frame is a real (0, -10) translation rather than
 /// nothing at all. Under the pre-fix rule `b` keeps its coordinates and the
 /// vector between the components changes by the full 10 m.
@@ -593,7 +593,7 @@ fn set_zero_datum_first_datum_translates_every_component() {
     // the origin, which is what gives the establishing translation something to
     // do.
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -601,15 +601,15 @@ fn set_zero_datum_first_datum_translates_every_component() {
     // Component B: unconnected to A and deliberately parked away from the
     // origin, so "B did not move" and "B moved with A" are different answers.
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 4.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    project.set_section_offset(b, (25.0, -13.0));
+    project.set_line_offset(b, (25.0, -13.0));
     assert!(
         project.station_merges.is_empty() && project.loop_closures.is_empty(),
-        "setup: the two sections have to be independent components, or the datum's rigid group \
+        "setup: the two lines have to be independent components, or the datum's rigid group \
          would reach B and the test would prove nothing"
     );
 
@@ -695,21 +695,21 @@ fn set_zero_datum_first_datum_translates_every_component() {
 #[test]
 fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
     let mut project = Project::new("DanglingFrame".to_string(), None);
-    // The section the dangling datum claims to be anchored in, and a second,
+    // The line the dangling datum claims to be anchored in, and a second,
     // unconnected component that will carry the real datum.
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 7.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    project.set_section_offset(b, (12.0, 30.0));
+    project.set_line_offset(b, (12.0, 30.0));
 
     // The dangling datum, pushed straight onto the vector: no mutator will
     // create one, it is what a project reaches when the anchoring shot is
@@ -752,7 +752,7 @@ fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
     );
 
     // And, as with any establishing add, nothing moved relative to anything
-    // else - the dangling-datum section rode along.
+    // else - the dangling-datum line rode along.
     let a0_after = project
         .compute_station_raw_coords(StationRef::new(a, 0))
         .unwrap();
@@ -767,26 +767,26 @@ fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
 }
 
 #[test]
-fn set_zero_datum_connected_sections_move_together() {
+fn set_zero_datum_connected_lines_move_together() {
     let mut project = Project::new("Connected".to_string(), None);
-    // Create two sections
+    // Create two lines
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Align b:0 to a:1 (a:1 is at (0, 10) since shot goes north 10m)
-    project.set_section_offset(b, (0.0, 10.0));
+    project.set_line_offset(b, (0.0, 10.0));
 
-    // Merge section b's station 0 to section a's station 1
+    // Merge line b's station 0 to line a's station 1
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
         station_b: StationRef::new(b, 0).into(),
@@ -794,9 +794,9 @@ fn set_zero_datum_connected_sections_move_together() {
     });
 
     // Record positions before setting datum
-    // Section a station 1 is at (0, 10) before datum (shot goes north)
-    // Section b station 0 is at (0, 10) before datum (aligned to a:1)
-    // Section b station 1 is at (5, 10) before datum (shot goes east from b:0)
+    // Line a station 1 is at (0, 10) before datum (shot goes north)
+    // Line b station 0 is at (0, 10) before datum (aligned to a:1)
+    // Line b station 1 is at (5, 10) before datum (shot goes east from b:0)
     let coords_b1_before = project
         .compute_station_raw_coords(StationRef::new(b, 1))
         .unwrap();
@@ -809,24 +809,24 @@ fn set_zero_datum_connected_sections_move_together() {
         "Pre-datum b.1 y should be 10"
     );
 
-    // Set datum on section a, station 1 (which is at y=10 before datum)
-    // This should move all connected sections so a.1 lands at origin
+    // Set datum on line a, station 1 (which is at y=10 before datum)
+    // This should move all connected lines so a.1 lands at origin
     let station_ref = StationRef::new(a, 1);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(station_ref, gps).unwrap();
 
-    // Both sections should have the datum shift applied. Asserted on the
+    // Both lines should have the datum shift applied. Asserted on the
     // RESOLVED offset rather than on key presence: `b` was aligned to `a:1` by
     // an offset of (0, 10) and the datum shifts everything by (0, -10), which
-    // cancels EXACTLY - and `section_offsets` means "sections that are actually
+    // cancels EXACTLY - and `line_offsets` means "lines that are actually
     // displaced", so a value of exactly (0, 0) is dropped rather than stored
     // (#413 finding 2). Comparing the values is strictly stronger than the
     // `contains_key` pair this replaced, which never checked what was in them.
-    assert_eq!(project.section_offset(a), (0.0, -10.0));
-    assert_eq!(project.section_offset(b), (0.0, 0.0));
-    assert!(!project.section_offsets.contains_key(&b));
+    assert_eq!(project.line_offset(a), (0.0, -10.0));
+    assert_eq!(project.line_offset(b), (0.0, 0.0));
+    assert!(!project.line_offsets.contains_key(&b));
 
-    // Section a station 1 (datum station) should be at origin
+    // Line a station 1 (datum station) should be at origin
     let coords_a1 = project
         .compute_station_raw_coords(StationRef::new(a, 1))
         .unwrap();
@@ -841,7 +841,7 @@ fn set_zero_datum_connected_sections_move_together() {
         coords_a1.y
     );
 
-    // Section a station 0 should be at (0, -10) since it's 10m south of the datum
+    // Line a station 0 should be at (0, -10) since it's 10m south of the datum
     let coords_a0 = project
         .compute_station_raw_coords(StationRef::new(a, 0))
         .unwrap();
@@ -856,7 +856,7 @@ fn set_zero_datum_connected_sections_move_together() {
         coords_a0.y
     );
 
-    // Section b should have moved by the same delta as section a
+    // Line b should have moved by the same delta as line a
     // Before: b.1 was at (5, 10). After: b.1 should be at (5, 0)
     // (The offset delta was (0, -10) to move a.1 from (0, 10) to (0, 0))
     let coords_b1_after = project
@@ -869,7 +869,7 @@ fn set_zero_datum_connected_sections_move_together() {
     );
     assert!(
         (coords_b1_after.y - 0.0).abs() < 1e-6,
-        "b.1 y should be 0 (moved with connected sections), got {}",
+        "b.1 y should be 0 (moved with connected lines), got {}",
         coords_b1_after.y
     );
 }
@@ -877,41 +877,41 @@ fn set_zero_datum_connected_sections_move_together() {
 #[test]
 fn set_zero_datum_subsequent_datum_uses_gps_offset() {
     let mut project = Project::new("SubsequentDatum".to_string(), None);
-    // Create two unconnected sections
+    // Create two unconnected lines
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Set first datum on section a, station 0
+    // Set first datum on line a, station 0
     let gps_a = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
     project
         .set_zero_datum(StationRef::new(a, 0), gps_a)
         .unwrap();
 
-    // Section a station 0 should be at origin
+    // Line a station 0 should be at origin
     let coords_a0 = project
         .compute_station_raw_coords(StationRef::new(a, 0))
         .unwrap();
     assert!((coords_a0.x).abs() < 1e-6);
     assert!((coords_a0.y).abs() < 1e-6);
 
-    // Set second datum on section b with GPS offset
+    // Set second datum on line b with GPS offset
     // At equator, 0.01 degree longitude ~ 1113 meters east
     let gps_b = GpsCoordinates::new(0.0, 0.01, 0.0).unwrap();
     project
         .set_zero_datum(StationRef::new(b, 0), gps_b)
         .unwrap();
 
-    // Section b station 0 should be at approximately (1113, 0)
+    // Line b station 0 should be at approximately (1113, 0)
     let coords_b0 = project
         .compute_station_raw_coords(StationRef::new(b, 0))
         .unwrap();
@@ -930,8 +930,8 @@ fn set_zero_datum_subsequent_datum_uses_gps_offset() {
 #[test]
 fn set_zero_datum_z_coordinates_preserved() {
     let mut project = Project::new("PreserveZ".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 5.0),
                 shot(0.0, 0.0, 10.0, 5.0, 12.0),
@@ -941,19 +941,19 @@ fn set_zero_datum_z_coordinates_preserved() {
         .id;
 
     // Set datum on station 1 (which has z=5)
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(line_id, 1);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(station_ref, gps).unwrap();
 
     // Check all stations have preserved z coordinates
     let coords_0 = project
-        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .compute_station_raw_coords(StationRef::new(line_id, 0))
         .unwrap();
     let coords_1 = project
-        .compute_station_raw_coords(StationRef::new(section_id, 1))
+        .compute_station_raw_coords(StationRef::new(line_id, 1))
         .unwrap();
     let coords_2 = project
-        .compute_station_raw_coords(StationRef::new(section_id, 2))
+        .compute_station_raw_coords(StationRef::new(line_id, 2))
         .unwrap();
 
     assert!((coords_0.z - 0.0).abs() < 1e-6, "Station 0 z should be 0");
@@ -964,26 +964,26 @@ fn set_zero_datum_z_coordinates_preserved() {
 #[test]
 fn remove_zero_datum_keeps_positions_unchanged() {
     let mut project = Project::new("RemoveDatum".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Set datum
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(line_id, 1);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(station_ref, gps).unwrap();
 
     // Record offset after setting datum
-    let offset_before = project.section_offsets.get(&section_id).copied();
+    let offset_before = project.line_offsets.get(&line_id).copied();
 
     // Remove datum
     project.remove_zero_datum(station_ref);
 
     // Offset should be unchanged
-    let offset_after = project.section_offsets.get(&section_id).copied();
+    let offset_after = project.line_offsets.get(&line_id).copied();
     assert_eq!(
         offset_before, offset_after,
         "Offset should not change when removing datum"
@@ -994,15 +994,15 @@ fn remove_zero_datum_keeps_positions_unchanged() {
 fn update_first_datum_gps_keeps_station_at_origin() {
     // Issue: Re-setting the first datum should not move it away from origin
     let mut project = Project::new("UpdateFirstDatum".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Set first datum on station 1 (which is at y=10 before datum)
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(line_id, 1);
     let gps1 = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(station_ref, gps1).unwrap();
 
@@ -1016,7 +1016,7 @@ fn update_first_datum_gps_keeps_station_at_origin() {
         (coords_after_first.y).abs() < 1e-6,
         "First datum: y should be 0"
     );
-    let offset_after_first = project.section_offsets.get(&section_id).copied().unwrap();
+    let offset_after_first = project.line_offsets.get(&line_id).copied().unwrap();
 
     // Update the first datum with different GPS coordinates
     let gps2 = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
@@ -1036,7 +1036,7 @@ fn update_first_datum_gps_keeps_station_at_origin() {
     );
 
     // Offset should be unchanged (no repositioning happened)
-    let offset_after_update = project.section_offsets.get(&section_id).copied().unwrap();
+    let offset_after_update = project.line_offsets.get(&line_id).copied().unwrap();
     assert_eq!(
         offset_after_first, offset_after_update,
         "Offset should not change when updating first datum GPS"
@@ -1050,25 +1050,25 @@ fn update_first_datum_gps_keeps_station_at_origin() {
 #[test]
 fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
     let mut project = Project::new("StoreOnly".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Pre-set an offset manually (simulating merged project scenario)
-    project.section_offsets.insert(section_id, (100.0, 200.0));
+    project.line_offsets.insert(line_id, (100.0, 200.0));
 
     // Store datum without repositioning
-    let station_ref = StationRef::new(section_id, 0);
+    let station_ref = StationRef::new(line_id, 0);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project
         .store_zero_datum_without_repositioning(station_ref, gps, None)
         .unwrap();
 
     // Offset should remain unchanged
-    let offset = project.section_offsets.get(&section_id).unwrap();
+    let offset = project.line_offsets.get(&line_id).unwrap();
     assert_eq!(*offset, (100.0, 200.0), "Offset should not be modified");
 
     // But datum should be stored
@@ -1080,8 +1080,8 @@ fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
 fn coordinate_computation_no_global_datum_subtraction() {
     // Verify that compute_station_coordinates no longer subtracts primary datum
     let mut project = Project::new("NoGlobalSubtract".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1089,7 +1089,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
 
     // Add a datum directly to zero_datums (bypassing set_zero_datum to avoid offset computation)
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 1).into(),
+        station_ref: StationRef::new(line_id, 1).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -1101,7 +1101,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
     // Station 0 should be at (0, 0) - no global subtraction
     let station_0 = stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(section_id, 0))
+        .find(|s| s.station_ref == StationRef::new(line_id, 0))
         .unwrap();
     assert!((station_0.coordinates.x).abs() < 1e-6);
     assert!((station_0.coordinates.y).abs() < 1e-6);
@@ -1109,7 +1109,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
     // Station 1 should be at (0, 10) - no global subtraction
     let station_1 = stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(section_id, 1))
+        .find(|s| s.station_ref == StationRef::new(line_id, 1))
         .unwrap();
     assert!((station_1.coordinates.x).abs() < 1e-6);
     assert!((station_1.coordinates.y - 10.0).abs() < 1e-6);
@@ -1117,13 +1117,13 @@ fn coordinate_computation_no_global_datum_subtraction() {
 
 #[test]
 fn merge_stations_propagates_datum_positioning_a_into_b() {
-    // Test: Section without datum merges into section group with datum
-    // The merged section should be repositioned relative to the datum
+    // Test: Line without datum merges into line group with datum
+    // The merged line should be repositioned relative to the datum
     let mut project = Project::new("MergeDatumA".to_string(), None);
 
-    // Section A: has datum, shot goes north 10m
+    // Line A: has datum, shot goes north 10m
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1148,9 +1148,9 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
         .unwrap();
     assert!((a1_coords.y - 10.0).abs() < 1e-6, "A.1 y should be 10");
 
-    // Section B: no datum, shot goes east 5m
+    // Line B: no datum, shot goes east 5m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1202,21 +1202,21 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
 
 #[test]
 fn merge_stations_propagates_datum_positioning_b_into_a() {
-    // Test: Section with datum merges with section without datum
-    // The non-datum section should be repositioned
+    // Test: Line with datum merges with line without datum
+    // The non-datum line should be repositioned
     let mut project = Project::new("MergeDatumB".to_string(), None);
 
-    // Section A: no datum, shot goes north 10m
+    // Line A: no datum, shot goes north 10m
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Section B: has datum, shot goes east 5m
+    // Line B: has datum, shot goes east 5m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1283,18 +1283,18 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
 }
 
 #[test]
-fn merge_stations_without_datum_aligns_first_section_to_second() {
-    // Test: No datum present; the first section should move to align with the second.
+fn merge_stations_without_datum_aligns_first_line_to_second() {
+    // Test: No datum present; the first line should move to align with the second.
     let mut project = Project::new("MergeNoDatum".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1324,7 +1324,7 @@ fn merge_stations_without_datum_aligns_first_section_to_second() {
     assert!((a1_after.y - b0_after.y).abs() < 1e-6);
 
     let offset_a = project
-        .section_offsets
+        .line_offsets
         .get(&a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -1332,7 +1332,7 @@ fn merge_stations_without_datum_aligns_first_section_to_second() {
     assert!((offset_a.1 + 10.0).abs() < 1e-6);
 
     let offset_b = project
-        .section_offsets
+        .line_offsets
         .get(&b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -1342,13 +1342,13 @@ fn merge_stations_without_datum_aligns_first_section_to_second() {
 
 #[test]
 fn merge_stations_transitive_datum_propagation() {
-    // Test: Merge into a section that's connected to a datum group through another merge
+    // Test: Merge into a line that's connected to a datum group through another merge
     // C merges into B, which is already merged with datum-holding A
     let mut project = Project::new("TransitiveDatum".to_string(), None);
 
-    // Section A: has datum, shot goes north 10m
+    // Line A: has datum, shot goes north 10m
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1362,9 +1362,9 @@ fn merge_stations_transitive_datum_propagation() {
         )
         .unwrap();
 
-    // Section B: shot goes east 5m (will be connected to A)
+    // Line B: shot goes east 5m (will be connected to A)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1375,9 +1375,9 @@ fn merge_stations_transitive_datum_propagation() {
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
 
-    // Section C: shot goes south 3m
+    // Line C: shot goes south 3m
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1432,12 +1432,12 @@ fn merge_stations_transitive_datum_propagation() {
 #[test]
 fn a_second_datum_in_a_merge_connected_group_is_a_gps_fix() {
     // Since #741 a second datum in a placed merge group is stored as a GPS fix,
-    // in the same section, through a direct merge, or three merges away, and it
+    // in the same line, through a direct merge, or three merges away, and it
     // never moves raw geometry. (This replaces the old refusal.)
     let mut project = Project::new("FixInGroup".to_string(), None);
     let mk = |project: &mut Project| {
         project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -1461,7 +1461,7 @@ fn a_second_datum_in_a_merge_connected_group_is_a_gps_fix() {
     }
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
-    let offsets = project.section_offsets.clone();
+    let offsets = project.line_offsets.clone();
 
     for station in [
         StationRef::new(a, 1),
@@ -1471,7 +1471,7 @@ fn a_second_datum_in_a_merge_connected_group_is_a_gps_fix() {
         project
             .set_zero_datum(station, GpsCoordinates::new(45.001, -90.0, 0.0).unwrap())
             .expect("a datum in a placed group is a GPS fix");
-        assert_eq!(project.section_offsets, offsets, "nothing moves");
+        assert_eq!(project.line_offsets, offsets, "nothing moves");
         assert_eq!(
             project.datum_role(project.zero_datums.last().unwrap()),
             Some(DatumRole::GpsFix)
@@ -1483,30 +1483,30 @@ fn a_second_datum_in_a_merge_connected_group_is_a_gps_fix() {
 
 #[test]
 fn set_zero_datum_allows_disconnected_groups() {
-    // Disconnected section groups can each have their own datum
+    // Disconnected line groups can each have their own datum
     let mut project = Project::new("DisconnectedGroups".to_string(), None);
 
-    // Create two unconnected sections
+    // Create two unconnected lines
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Set datum on section A
+    // Set datum on line A
     let gps_a = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project
         .set_zero_datum(StationRef::new(a, 0), gps_a)
         .unwrap();
 
-    // Set datum on section B (disconnected) - should succeed
+    // Set datum on line B (disconnected) - should succeed
     let gps_b = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
     let result = project.set_zero_datum(StationRef::new(b, 0), gps_b);
     assert!(
@@ -1524,13 +1524,13 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
     // reported failure mode - so the conversion must leave it as a (soft) closure.
     let mut project = Project::new("DoubleAnchorBridge".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1607,13 +1607,13 @@ fn two_datums_in_one_merge_component_are_a_placement_and_a_fix() {
     // flagged, and removing the placement datum promotes the fix.
     let mut project = Project::new("TwoDatums".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1659,15 +1659,15 @@ fn two_datums_in_one_merge_component_are_a_placement_and_a_fix() {
 /// endpoints sit 40 m apart. `resolve_offsets` can never satisfy it - each half
 /// is pinned to its own datum - so it stays torn open forever.
 ///
-/// Fully synthetic: three 2-shot sections running due north, placed by hand.
+/// Fully synthetic: three 2-shot lines running due north, placed by hand.
 ///   A:0 (0,0)  A:1 (0,10)  A:2 (0,20)   <- datum on A:0
 ///   B:0 (0,20) B:1 (0,30)  B:2 (0,40)   <- merged A:2 = B:0, correctly aligned
 ///   C:0 (0,0)  C:1 (0,10)  C:2 (0,20)   <- datum on C:0
 /// plus the bogus merge B:2 <-> C:0, i.e. (0,40) welded to (0,0).
-fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId) {
+fn double_anchored_bridge_project() -> (Project, LineId, LineId, LineId) {
     let mut project = Project::new("DoubleAnchoredBridge".to_string(), None);
     let add = |p: &mut Project| {
-        p.add_section(SectionData {
+        p.add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -1685,7 +1685,7 @@ fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId
         station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
-    project.set_section_offset(b, (0.0, 20.0));
+    project.set_line_offset(b, (0.0, 20.0));
 
     // One datum per component - legal on its own, which is why the interactive
     // guards never fired.
@@ -1722,10 +1722,10 @@ fn unmeasurable_geometry_is_never_flagged() {
     // decision - unmeasurable means hands off - so the poisoned project is
     // described by the `non_finite_geometry` violation and by nothing else.
     let (mut project, a, b, c) = double_anchored_bridge_project();
-    // Poison ONLY the far end of the bogus bridge: section B's second shot puts
+    // Poison ONLY the far end of the bogus bridge: line B's second shot puts
     // B:2 at NaN while B:0 and B:1 stay finite, so the legitimate A:2 = B:0 merge
     // is still measurable and this is a test about the unmeasurable pair alone.
-    project.get_section_mut(b).unwrap().shots[1].length = f64::NAN;
+    project.get_line_mut(b).unwrap().shots[1].length = f64::NAN;
     // The third consumer needs an ALIGNED closure over a poisoned pair.
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -1772,7 +1772,7 @@ fn a_closure_is_born_with_a_measured_claim() {
     let mut project = Project::new("Square".to_string(), None);
     let lap = [0.0, 90.0, 180.0, 270.0];
     let s = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: lap
                 .iter()
                 .chain(lap.iter())
@@ -1877,8 +1877,8 @@ fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
 fn set_zero_datum_allows_resetting_same_station() {
     // Re-setting datum on the same station (updating GPS) should succeed
     let mut project = Project::new("ResetSame".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1887,12 +1887,12 @@ fn set_zero_datum_allows_resetting_same_station() {
     // Set datum
     let gps1 = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project
-        .set_zero_datum(StationRef::new(section_id, 0), gps1)
+        .set_zero_datum(StationRef::new(line_id, 0), gps1)
         .unwrap();
 
     // Re-set on same station with different GPS - should succeed
     let gps2 = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
-    let result = project.set_zero_datum(StationRef::new(section_id, 0), gps2);
+    let result = project.set_zero_datum(StationRef::new(line_id, 0), gps2);
     assert!(result.is_ok(), "Resetting same station should succeed");
 
     // Should still have only one datum
@@ -1904,17 +1904,17 @@ fn set_zero_datum_allows_resetting_same_station() {
 fn create_loop_closure_creates_correct_values() {
     let mut project = Project::new("ClosureTest".to_string(), None);
 
-    // Section A: shot goes north 10m
+    // Line A: shot goes north 10m
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
             ..Default::default()
         })
         .id;
 
-    // Section B: shot goes east 5m
+    // Line B: shot goes east 5m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1925,7 +1925,7 @@ fn create_loop_closure_creates_correct_values() {
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
 
-    // Create closure between A.0 and B.1 (same-section closures require same connected group)
+    // Create closure between A.0 and B.1 (same-line closures require same connected group)
     let closure = project
         .create_loop_closure(
             StationRef::new(a, 0),
@@ -1980,7 +1980,7 @@ fn create_loop_closures_batch_matches_sequential() {
     fn build() -> (Project, Vec<(StationRef, StationRef)>) {
         let mut p = Project::new("Batch".to_string(), None);
         let a = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -1989,24 +1989,24 @@ fn create_loop_closures_batch_matches_sequential() {
             })
             .id;
         let b = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
         let c = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(180.0, 180.0, 8.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
         let d = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(270.0, 270.0, 3.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
-        // Tree of merges connecting all four sections.
+        // Tree of merges connecting all four lines.
         p.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
             .unwrap();
         p.merge_stations(StationRef::new(a, 2), StationRef::new(c, 0))
@@ -2023,7 +2023,7 @@ fn create_loop_closures_batch_matches_sequential() {
     }
 
     let (mut seq, pairs) = build();
-    // Clone so both runs share identical shot UUIDs (Section::new mints random
+    // Clone so both runs share identical shot UUIDs (Line::new mints random
     // ones), making the stored AfterShot(uuid) keys directly comparable.
     let mut bat = seq.clone();
     let seq_results: Vec<_> = pairs
@@ -2074,14 +2074,14 @@ fn create_loop_closures_batch_matches_sequential() {
 #[test]
 fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
     // Covers the order-dependent branch the main equivalence test omits: two
-    // sections that are NOT merge-connected but BOTH carry a zero datum. That is
+    // lines that are NOT merge-connected but BOTH carry a zero datum. That is
     // the only path that accepts a closure between an unconnected pair
     // (`!connected && a_has_zd && b_has_zd`), and it must stay byte-for-byte
     // equivalent between the sequential and batch paths.
     fn build() -> (Project, Vec<(StationRef, StationRef)>) {
         let mut p = Project::new("BatchZD".to_string(), None);
         let a = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -2090,12 +2090,12 @@ fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
             })
             .id;
         let b = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
-        // Two disconnected sections (no merge between them), each with its own
+        // Two disconnected lines (no merge between them), each with its own
         // zero datum - the only setup that accepts an unconnected closure pair.
         p.set_zero_datum(
             StationRef::new(a, 0),
@@ -2115,7 +2115,7 @@ fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
     }
 
     let (mut seq, pairs) = build();
-    // Clone so both runs share identical shot UUIDs (Section::new mints random
+    // Clone so both runs share identical shot UUIDs (Line::new mints random
     // ones), making the stored AfterShot(uuid) keys directly comparable.
     let mut bat = seq.clone();
     let seq_results: Vec<_> = pairs
@@ -2167,8 +2167,8 @@ fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
 fn create_loop_closure_proportional_is_deferred() {
     let mut project = Project::new("ClosureDist".to_string(), None);
 
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
@@ -2177,8 +2177,8 @@ fn create_loop_closure_proportional_is_deferred() {
         })
         .id;
 
-    let station_a = StationRef::new(section_id, 0);
-    let station_b = StationRef::new(section_id, 2);
+    let station_a = StationRef::new(line_id, 0);
+    let station_b = StationRef::new(line_id, 2);
 
     let coords_a_before = project.compute_station_raw_coords(station_a).unwrap();
     let coords_b_before = project.compute_station_raw_coords(station_b).unwrap();
@@ -2199,8 +2199,8 @@ fn create_loop_closure_proportional_is_deferred() {
 fn create_loop_closure_equal_distribution_is_deferred() {
     let mut project = Project::new("ClosureFallback".to_string(), None);
 
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -2209,8 +2209,8 @@ fn create_loop_closure_equal_distribution_is_deferred() {
         })
         .id;
 
-    let station_a = StationRef::new(section_id, 0);
-    let station_b = StationRef::new(section_id, 2);
+    let station_a = StationRef::new(line_id, 0);
+    let station_b = StationRef::new(line_id, 2);
 
     let result =
         project.create_loop_closure(station_a, station_b, ClosureStrategy::EqualDistribution);
@@ -2224,13 +2224,13 @@ fn create_loop_closure_rejects_duplicate() {
     let mut project = Project::new("DupClosure".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2271,12 +2271,12 @@ fn create_loop_closure_rejects_duplicate() {
 }
 
 #[test]
-fn create_loop_closure_allows_same_section() {
-    let mut project = Project::new("SameSectionClosure".to_string(), None);
+fn create_loop_closure_allows_same_line() {
+    let mut project = Project::new("SameLineClosure".to_string(), None);
 
-    // A section with 3 shots - all stations are connected within the section
+    // A line with 3 shots - all stations are connected within the line
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
@@ -2286,7 +2286,7 @@ fn create_loop_closure_allows_same_section() {
         })
         .id;
 
-    // Stations 0 and 3 are in the same section and connected through shots
+    // Stations 0 and 3 are in the same line and connected through shots
     let result = project.create_loop_closure(
         StationRef::new(a, 0),
         StationRef::new(a, 3),
@@ -2294,7 +2294,7 @@ fn create_loop_closure_allows_same_section() {
     );
     assert!(
         result.is_ok(),
-        "Same-section closure should be allowed: {:?}",
+        "Same-line closure should be allowed: {:?}",
         result.err()
     );
     assert_eq!(project.loop_closures.len(), 1);
@@ -2305,13 +2305,13 @@ fn create_loop_closure_rejects_unconnected_stations() {
     let mut project = Project::new("UnconnectedClosure".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2332,13 +2332,13 @@ fn merge_stations_rejects_already_connected() {
     let mut project = Project::new("ConnectedMerge".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2349,7 +2349,7 @@ fn merge_stations_rejects_already_connected() {
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
 
-    // Second merge between connected sections should fail
+    // Second merge between connected lines should fail
     let result = project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 1));
     assert!(
         result.is_err(),
@@ -2363,19 +2363,19 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     let mut project = Project::new("UnmergePair".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2442,19 +2442,19 @@ fn unmerge_stations_preserves_unrelated_closures() {
     let mut project = Project::new("UnmergePreserve".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2500,24 +2500,24 @@ fn unmerge_stations_preserves_unrelated_closures() {
 }
 
 #[test]
-fn closure_expands_connected_sections_with_existing_merges() {
-    // Test: A closure between stations in different sections makes those sections
+fn closure_expands_connected_lines_with_existing_merges() {
+    // Test: A closure between stations in different lines makes those lines
     // connected (just like a merge). Existing merges are also traversed.
     let mut project = Project::new("ClosureExpands".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2546,7 +2546,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
     project.next_closure_id += 1;
 
     // Merge-only connectivity: A and B are merged, C is NOT in the merge group
-    let merged = project.get_merged_section_ids(a);
+    let merged = project.get_merged_line_ids(a);
     assert!(merged.contains(&a), "A should be in merge group");
     assert!(merged.contains(&b), "B should be in merge group");
     assert!(
@@ -2555,8 +2555,8 @@ fn closure_expands_connected_sections_with_existing_merges() {
     );
     assert_eq!(merged.len(), 2);
 
-    // Full connectivity (merges + closures): all three sections are connected
-    let reachable = project.get_connected_section_ids(a);
+    // Full connectivity (merges + closures): all three lines are connected
+    let reachable = project.get_connected_line_ids(a);
     assert!(reachable.contains(&a), "A should be reachable");
     assert!(reachable.contains(&b), "B should be reachable");
     assert!(reachable.contains(&c), "C should be reachable via closure");
@@ -2571,14 +2571,14 @@ fn closure_expands_connected_sections_with_existing_merges() {
     );
 
     // Merge-only path length: cannot reach C.1 from A.0 without closures
-    // Falls back to sum of merged section lengths
+    // Falls back to sum of merged line lengths
     let merge_only_path =
         project.calculate_merge_only_path_length(StationRef::new(a, 0), StationRef::new(c, 1));
     // A and B are merge-connected (total 2m), C is not reachable without closures
     // Fallback returns sum of A+B shots = 2.0
     assert!(
         (merge_only_path - 2.0).abs() < 1e-6,
-        "Merge-only path should fall back to merged section sum (2.0m), got {merge_only_path}"
+        "Merge-only path should fall back to merged line sum (2.0m), got {merge_only_path}"
     );
 
     // are_stations_in_closure should detect the closure
@@ -2596,13 +2596,13 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
     // 2) Merge to B.0, two shots of length 1, merge back at B.2 (total 2)
     let mut project = Project::new("ShortestPath".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 1.0, 0.0, 0.0),
                 shot(90.0, 90.0, 1.0, 0.0, 0.0),
@@ -2633,18 +2633,18 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
 // along_line_between (#26 ruler: direct + along-cave-line distance + path shots)
 // ---------------------------------------------------------------------------
 
-fn ep_station(section_id: SectionId, station_index: u32) -> RulerEndpoint {
+fn ep_station(line_id: LineId, station_index: u32) -> RulerEndpoint {
     RulerEndpoint {
-        section_id,
+        line_id,
         station_index: Some(station_index),
         shot_id: None,
         t: None,
     }
 }
 
-fn ep_shot(section_id: SectionId, shot_id: ShotId, t: f64) -> RulerEndpoint {
+fn ep_shot(line_id: LineId, shot_id: ShotId, t: f64) -> RulerEndpoint {
     RulerEndpoint {
-        section_id,
+        line_id,
         station_index: None,
         shot_id: Some(shot_id),
         t: Some(t),
@@ -2652,10 +2652,10 @@ fn ep_shot(section_id: SectionId, shot_id: ShotId, t: f64) -> RulerEndpoint {
 }
 
 #[test]
-fn along_line_simple_linear_section() {
+fn along_line_simple_linear_line() {
     let mut project = Project::new("Linear".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -2665,7 +2665,7 @@ fn along_line_simple_linear_section() {
         })
         .id;
     let shots: Vec<ShotId> = project
-        .get_section(a)
+        .get_line(a)
         .unwrap()
         .shots
         .iter()
@@ -2683,15 +2683,15 @@ fn along_line_simple_linear_section() {
         r.path_shots,
         vec![
             PathShot {
-                section_id: a,
+                line_id: a,
                 shot_id: shots[0]
             },
             PathShot {
-                section_id: a,
+                line_id: a,
                 shot_id: shots[1]
             },
             PathShot {
-                section_id: a,
+                line_id: a,
                 shot_id: shots[2]
             },
         ],
@@ -2708,16 +2708,16 @@ fn along_line_simple_linear_section() {
 }
 
 #[test]
-fn along_line_cross_section_merge_skips_merge_edge() {
+fn along_line_cross_line_merge_skips_merge_edge() {
     let mut project = Project::new("Merge".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2727,8 +2727,8 @@ fn along_line_cross_section_merge_skips_merge_edge() {
         station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
-    let a_shot = project.get_section(a).unwrap().shots[0].id;
-    let b_shot = project.get_section(b).unwrap().shots[0].id;
+    let a_shot = project.get_line(a).unwrap().shots[0].id;
+    let b_shot = project.get_line(b).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(b, 1));
@@ -2742,11 +2742,11 @@ fn along_line_cross_section_merge_skips_merge_edge() {
         r.path_shots,
         vec![
             PathShot {
-                section_id: a,
+                line_id: a,
                 shot_id: a_shot
             },
             PathShot {
-                section_id: b,
+                line_id: b,
                 shot_id: b_shot
             },
         ],
@@ -2759,13 +2759,13 @@ fn along_line_routes_through_loop_closure() {
     // edges, so a closed loop gives a shorter route than the direct long shot.
     let mut project = Project::new("Closure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 1.0, 0.0, 0.0),
                 shot(90.0, 90.0, 1.0, 0.0, 0.0),
@@ -2793,13 +2793,13 @@ fn along_line_routes_through_loop_closure() {
         project.next_closure_id += 1;
     }
     let b_shots: Vec<ShotId> = project
-        .get_section(b)
+        .get_line(b)
         .unwrap()
         .shots
         .iter()
         .map(|s| s.id)
         .collect();
-    let a_shot = project.get_section(a).unwrap().shots[0].id;
+    let a_shot = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
@@ -2812,11 +2812,11 @@ fn along_line_routes_through_loop_closure() {
         r.path_shots,
         vec![
             PathShot {
-                section_id: b,
+                line_id: b,
                 shot_id: b_shots[0]
             },
             PathShot {
-                section_id: b,
+                line_id: b,
                 shot_id: b_shots[1]
             },
         ],
@@ -2831,12 +2831,12 @@ fn along_line_routes_through_loop_closure() {
 fn along_line_shot_point_partial_length() {
     let mut project = Project::new("ShotPoint".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     // Station 0 to a point 25% along shot 0 → 2.5 m; whole shot tinted.
@@ -2849,7 +2849,7 @@ fn along_line_shot_point_partial_length() {
     assert_eq!(
         r.path_shots,
         vec![PathShot {
-            section_id: a,
+            line_id: a,
             shot_id: s0
         }]
     );
@@ -2861,12 +2861,12 @@ fn along_line_shot_point_partial_length() {
 fn along_line_same_shot_endpoints() {
     let mut project = Project::new("SameShot".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.2), ep_shot(a, s0, 0.7));
@@ -2878,7 +2878,7 @@ fn along_line_same_shot_endpoints() {
     assert_eq!(
         r.path_shots,
         vec![PathShot {
-            section_id: a,
+            line_id: a,
             shot_id: s0
         }]
     );
@@ -2894,7 +2894,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
     // to the direct segment - Dijkstra picks the genuine shortest path (#26, Codex).
     let mut project = Project::new("SameShotRoute".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2912,7 +2912,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
         is_aligned: false,
     });
     project.next_closure_id += 1;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.1), ep_shot(a, s0, 0.9));
@@ -2926,7 +2926,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
     assert_eq!(
         r.path_shots,
         vec![PathShot {
-            section_id: a,
+            line_id: a,
             shot_id: s0
         }]
     );
@@ -2939,7 +2939,7 @@ fn along_line_parallel_closure_does_not_tint_shot() {
     // path did NOT traverse - must not be tinted (#26, Codex).
     let mut project = Project::new("ParallelClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2974,12 +2974,12 @@ fn along_line_zero_length_same_shot_has_empty_path() {
     // matching identical station endpoints (#26, Codex).
     let mut project = Project::new("ZeroLenShot".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.5), ep_shot(a, s0, 0.5));
@@ -2995,13 +2995,13 @@ fn along_line_zero_length_same_shot_has_empty_path() {
 fn along_line_disconnected_returns_none() {
     let mut project = Project::new("Disconnected".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3017,7 +3017,7 @@ fn along_line_disconnected_returns_none() {
 fn along_line_identical_and_degenerate_t() {
     let mut project = Project::new("Degenerate".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -3025,7 +3025,7 @@ fn along_line_identical_and_degenerate_t() {
             ..Default::default()
         })
         .id;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     // Identical endpoints → 0, empty path.
@@ -3046,19 +3046,19 @@ fn along_line_skips_merge_and_closure_phantoms() {
     // entries for the zero-cost merge/closure ties.
     let mut project = Project::new("NoPhantom".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3105,12 +3105,12 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
     let mut ref_shot = shot(0.0, 0.0, 7.0, 0.0, 0.0);
     ref_shot.kind = ShotKind::Jump;
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![ref_shot],
             ..Default::default()
         })
         .id;
-    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let s0 = project.get_line(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
@@ -3122,7 +3122,7 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
     assert_eq!(
         r.path_shots,
         vec![PathShot {
-            section_id: a,
+            line_id: a,
             shot_id: s0
         }]
     );
@@ -3137,7 +3137,7 @@ fn along_line_follows_passed_coordinates_not_measured_length() {
     // confirm the result follows the coordinates (3 + 25 = 28, not 10 + 10 = 20).
     let mut project = Project::new("AdjustedLengths".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -3145,7 +3145,7 @@ fn along_line_follows_passed_coordinates_not_measured_length() {
             ..Default::default()
         })
         .id;
-    let s1 = project.get_section(a).unwrap().shots[1].id;
+    let s1 = project.get_line(a).unwrap().shots[1].id;
     let mut stations = project.compute_station_coordinates();
     let set = |stations: &mut Vec<Station>, station_index: u32, y: f64| {
         let i = stations
@@ -3181,19 +3181,19 @@ fn new_merge_expands_existing_closure_connectivity() {
     // Setup: A-B closure, then merge B-C -> A should connect to C
     let mut project = Project::new("MergeExpandsClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3215,10 +3215,10 @@ fn new_merge_expands_existing_closure_connectivity() {
     project.next_closure_id += 1;
 
     // Before merge, A and B are reachable via closure (but not merge-connected)
-    let merged_before = project.get_merged_section_ids(a);
+    let merged_before = project.get_merged_line_ids(a);
     assert!(merged_before.contains(&a));
     assert!(!merged_before.contains(&b), "B not merge-connected to A");
-    let connected_before = project.get_connected_section_ids(a);
+    let connected_before = project.get_connected_line_ids(a);
     assert!(connected_before.contains(&a));
     assert!(connected_before.contains(&b), "B connected via closure");
     assert!(!connected_before.contains(&c), "C not yet connected");
@@ -3231,7 +3231,7 @@ fn new_merge_expands_existing_closure_connectivity() {
     });
 
     // After merge, A should reach C via closure(A-B) + merge(B-C)
-    let connected_after = project.get_connected_section_ids(a);
+    let connected_after = project.get_connected_line_ids(a);
     assert!(connected_after.contains(&a), "A connected");
     assert!(connected_after.contains(&b), "B connected via closure");
     assert!(
@@ -3241,9 +3241,9 @@ fn new_merge_expands_existing_closure_connectivity() {
     assert_eq!(connected_after.len(), 3);
 
     // Merge-only: A is alone (no merges from A), B and C are merge-connected
-    let merged_a = project.get_merged_section_ids(a);
+    let merged_a = project.get_merged_line_ids(a);
     assert_eq!(merged_a.len(), 1, "A has no merges");
-    let merged_b = project.get_merged_section_ids(b);
+    let merged_b = project.get_merged_line_ids(b);
     assert!(merged_b.contains(&b));
     assert!(merged_b.contains(&c));
     assert_eq!(merged_b.len(), 2, "B and C are merge-connected");
@@ -3265,19 +3265,19 @@ fn transitive_closure_computation_correct() {
     //           C.0 gets transitive closure to B.0 (via A.1)
     let mut project = Project::new("TransitiveClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3383,19 +3383,19 @@ fn transitive_closure_both_endpoints_merged() {
     //           C.0 gets transitive to B.0 (via A.1) - B.0 is in A.1's group
     let mut project = Project::new("TransitiveBothMerged".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3565,24 +3565,24 @@ fn transitive_closure_both_endpoints_merged() {
 #[test]
 fn transitive_closure_through_create_loop_closure_api() {
     // Test: using the actual create_loop_closure API (not raw push)
-    // Setup: 3 sections, merge chain A.1↔B.0 and B.1↔C.0, closure A.0↔C.1
+    // Setup: 3 lines, merge chain A.1↔B.0 and B.1↔C.0, closure A.0↔C.1
     // Expected: A.0 and C.1 get direct closures to each other
     //           No transitive closures (endpoints not in any merge group)
     let mut project = Project::new("TransitiveAPI".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3658,12 +3658,12 @@ fn transitive_closure_through_create_loop_closure_api() {
 
     // Other stations (A.1, B.0, B.1, C.0) should NOT have any closure refs
     // because neither closure endpoint (A.0, C.1) is in a merge group
-    for (section_id, station_index, label) in
+    for (line_id, station_index, label) in
         [(a, 1, "A.1"), (b, 0, "B.0"), (b, 1, "B.1"), (c, 0, "C.0")]
     {
         let station = stations
             .iter()
-            .find(|s| s.station_ref == StationRef::new(section_id, station_index))
+            .find(|s| s.station_ref == StationRef::new(line_id, station_index))
             .unwrap();
         assert!(
             station.closures().is_empty(),
@@ -3677,7 +3677,7 @@ fn transitive_closure_through_create_loop_closure_api() {
 #[test]
 fn closure_chain_transitivity_two_closures_shared_endpoint() {
     // Test: closure-chain transitivity
-    // Setup: 3 sections A, B, C. Merge chain: A.1↔B.0, B.1↔C.0
+    // Setup: 3 lines A, B, C. Merge chain: A.1↔B.0, B.1↔C.0
     //   Closure 1: A.0 ↔ B.1 (between A start and B end)
     //   Closure 2: B.1 ↔ C.2 (between B end and C end)
     //
@@ -3691,19 +3691,19 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
     let mut project = Project::new("ChainTransitive".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 3.0, 0.0, 0.0),
                 shot(270.0, 270.0, 3.0, 0.0, 0.0),
@@ -3844,7 +3844,7 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
 #[test]
 fn closure_chain_transitivity_three_closures_shared_endpoint() {
     // Test: station with 3 closures creates transitive refs for all pairs
-    // Setup: 4 sections, all connected through merges
+    // Setup: 4 lines, all connected through merges
     //   Station X has closures to A, B, and C
     //   A should see transitive to B (via X) and transitive to C (via X)
     //   B should see transitive to A (via X) and transitive to C (via X)
@@ -3852,7 +3852,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
     let mut project = Project::new("ChainTriple".to_string(), None);
 
     let sec_main = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -3863,19 +3863,19 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .id;
 
     let sec_a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let sec_b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let sec_c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(270.0, 270.0, 4.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3888,7 +3888,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         )
         .unwrap();
 
-    // Connect all sections to main: main.1↔A.0, main.2↔B.0, main.3↔C.0
+    // Connect all lines to main: main.1↔A.0, main.2↔B.0, main.3↔C.0
     project
         .merge_stations(StationRef::new(sec_main, 1), StationRef::new(sec_a, 0))
         .unwrap();
@@ -4018,30 +4018,30 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
     );
 }
 
-// === Section cleanup tests (fn-47-ok1.7) ===
+// === Line cleanup tests (fn-47-ok1.7) ===
 
-/// Helper: build a project with 3 sections (a, b, c) where:
+/// Helper: build a project with 3 lines (a, b, c) where:
 /// - a is merged to b (station a:1 -> b:0)
 /// - b has a loop closure to c (b:1 -> c:0)
-/// - a has a section offset
+/// - a has a line offset
 /// - a has a station offset on station 0
 /// - a has a zero datum on station 0
-fn build_project_with_relationships() -> (Project, SectionId, SectionId, SectionId) {
+fn build_project_with_relationships() -> (Project, LineId, LineId, LineId) {
     let mut project = Project::new("Cleanup Test".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 2.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -4069,8 +4069,8 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
     });
     project.next_closure_id = 2;
 
-    // Section offset for a
-    project.section_offsets.insert(a, (10.0, 20.0));
+    // Line offset for a
+    project.line_offsets.insert(a, (10.0, 20.0));
 
     // Station offset for a:0
     project
@@ -4093,12 +4093,12 @@ fn test_cleanup_removes_merges() {
     let (mut project, a, _b, _c) = build_project_with_relationships();
     assert_eq!(project.station_merges.len(), 1);
 
-    project.cleanup_section_references(a);
+    project.cleanup_line_references(a);
 
     assert_eq!(
         project.station_merges.len(),
         0,
-        "Merge referencing section A should be removed"
+        "Merge referencing line A should be removed"
     );
 }
 
@@ -4107,26 +4107,26 @@ fn test_cleanup_removes_closures() {
     let (mut project, _a, b, _c) = build_project_with_relationships();
     assert_eq!(project.loop_closures.len(), 1);
 
-    project.cleanup_section_references(b);
+    project.cleanup_line_references(b);
 
     assert_eq!(
         project.loop_closures.len(),
         0,
-        "Closure referencing section B should be removed"
+        "Closure referencing line B should be removed"
     );
 }
 
 #[test]
 fn test_cleanup_removes_offsets() {
     let (mut project, a, _b, _c) = build_project_with_relationships();
-    assert!(project.section_offsets.contains_key(&a));
+    assert!(project.line_offsets.contains_key(&a));
     assert_eq!(project.station_offsets.len(), 1);
 
-    project.cleanup_section_references(a);
+    project.cleanup_line_references(a);
 
     assert!(
-        !project.section_offsets.contains_key(&a),
-        "Section offset for A should be removed"
+        !project.line_offsets.contains_key(&a),
+        "Line offset for A should be removed"
     );
     assert_eq!(
         project.station_offsets.len(),
@@ -4140,7 +4140,7 @@ fn test_cleanup_removes_zero_datums() {
     let (mut project, a, _b, _c) = build_project_with_relationships();
     assert_eq!(project.zero_datums.len(), 1);
 
-    project.cleanup_section_references(a);
+    project.cleanup_line_references(a);
 
     assert_eq!(
         project.zero_datums.len(),
@@ -4151,20 +4151,20 @@ fn test_cleanup_removes_zero_datums() {
 
 #[test]
 fn test_cleanup_guarded_by_existence() {
-    // Cleanup on a non-existent section should not mutate anything
+    // Cleanup on a non-existent line should not mutate anything
     let (mut project, _a, _b, _c) = build_project_with_relationships();
     let orig_merges = project.station_merges.len();
     let orig_closures = project.loop_closures.len();
-    let orig_offsets = project.section_offsets.len();
+    let orig_offsets = project.line_offsets.len();
     let orig_station_offsets = project.station_offsets.len();
     let orig_datums = project.zero_datums.len();
 
-    // Section 999 doesn't exist - cleanup should be a no-op
-    project.cleanup_section_references(999);
+    // Line 999 doesn't exist - cleanup should be a no-op
+    project.cleanup_line_references(999);
 
     assert_eq!(project.station_merges.len(), orig_merges);
     assert_eq!(project.loop_closures.len(), orig_closures);
-    assert_eq!(project.section_offsets.len(), orig_offsets);
+    assert_eq!(project.line_offsets.len(), orig_offsets);
     assert_eq!(project.station_offsets.len(), orig_station_offsets);
     assert_eq!(project.zero_datums.len(), orig_datums);
 }
@@ -4182,43 +4182,43 @@ fn test_cleanup_preserves_unrelated_relationships() {
     assert_eq!(project.station_merges.len(), 2);
     assert_eq!(project.loop_closures.len(), 1);
 
-    project.cleanup_section_references(a);
+    project.cleanup_line_references(a);
 
     assert_eq!(project.station_merges.len(), 1);
     assert!(project.station_merges.iter().any(|m| {
-        (m.station_a.section_id == b && m.station_b.section_id == c)
-            || (m.station_a.section_id == c && m.station_b.section_id == b)
+        (m.station_a.line_id == b && m.station_b.line_id == c)
+            || (m.station_a.line_id == c && m.station_b.line_id == b)
     }));
 
     assert_eq!(project.loop_closures.len(), 1);
     let closure = &project.loop_closures[0];
-    assert_eq!(closure.station_a.section_id, b);
-    assert_eq!(closure.station_b.section_id, c);
+    assert_eq!(closure.station_a.line_id, b);
+    assert_eq!(closure.station_b.line_id, c);
 }
 
 #[test]
-fn test_get_section_relationships() {
+fn test_get_line_relationships() {
     let (project, a, b, _c) = build_project_with_relationships();
 
-    let rel_a = project.get_section_relationships(a);
-    assert_eq!(rel_a.merges.len(), 1, "Section A has one merge");
-    assert_eq!(rel_a.closures.len(), 0, "Section A has no closures");
-    assert!(rel_a.has_section_offset, "Section A has a section offset");
+    let rel_a = project.get_line_relationships(a);
+    assert_eq!(rel_a.merges.len(), 1, "Line A has one merge");
+    assert_eq!(rel_a.closures.len(), 0, "Line A has no closures");
+    assert!(rel_a.has_line_offset, "Line A has a line offset");
     assert_eq!(
         rel_a.station_offset_count, 1,
-        "Section A has one station offset"
+        "Line A has one station offset"
     );
-    assert_eq!(rel_a.zero_datum_count, 1, "Section A has one zero datum");
+    assert_eq!(rel_a.zero_datum_count, 1, "Line A has one zero datum");
 
-    let rel_b = project.get_section_relationships(b);
-    assert_eq!(rel_b.merges.len(), 1, "Section B has one merge");
-    assert_eq!(rel_b.closures.len(), 1, "Section B has one closure");
-    assert!(!rel_b.has_section_offset, "Section B has no section offset");
+    let rel_b = project.get_line_relationships(b);
+    assert_eq!(rel_b.merges.len(), 1, "Line B has one merge");
+    assert_eq!(rel_b.closures.len(), 1, "Line B has one closure");
+    assert!(!rel_b.has_line_offset, "Line B has no line offset");
     assert_eq!(
         rel_b.station_offset_count, 0,
-        "Section B has no station offsets"
+        "Line B has no station offsets"
     );
-    assert_eq!(rel_b.zero_datum_count, 0, "Section B has no zero datums");
+    assert_eq!(rel_b.zero_datum_count, 0, "Line B has no zero datums");
 }
 
 // (Removed `shift_station_refs_updates_related_collections`: the positional
@@ -4230,14 +4230,14 @@ fn test_get_section_relationships() {
 #[test]
 fn preview_delete_shot_basic() {
     let mut project = Project::new("PreviewDelete".to_string(), None);
-    let section_a = project
-        .add_section(SectionData {
+    let line_a = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let section_b = project
-        .add_section(SectionData {
+    let line_b = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -4245,77 +4245,77 @@ fn preview_delete_shot_basic() {
 
     // Merge station_a:1 with station_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 1).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
-    // Preview deleting section_a shot at position 1 (second shot)
-    // removed_station = (section_a, 2)
-    let shot1_id = project.get_section(section_a).unwrap().shots[1].id;
-    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
-    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    // Preview deleting line_a shot at position 1 (second shot)
+    // removed_station = (line_a, 2)
+    let shot1_id = project.get_line(line_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(line_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(line_a, 2));
     // Merge is at station_a:1, not station_a:2 => removed_merges empty
     assert!(impact.removed_merges.is_empty());
 
-    // Preview deleting section_a shot at position 0 (first shot)
-    // removed_station = (section_a, 0)
-    let shot0_id = project.get_section(section_a).unwrap().shots[0].id;
-    let impact = project.preview_delete_shot(section_a, shot0_id).unwrap();
-    assert_eq!(impact.removed_station, StationRef::new(section_a, 0));
+    // Preview deleting line_a shot at position 0 (first shot)
+    // removed_station = (line_a, 0)
+    let shot0_id = project.get_line(line_a).unwrap().shots[0].id;
+    let impact = project.preview_delete_shot(line_a, shot0_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(line_a, 0));
     // Merge is at station_a:1, not station_a:0 => removed_merges empty
     assert!(impact.removed_merges.is_empty());
 
     // Add a merge at station_a:2 with station_b:1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2).into(),
-        station_b: StationRef::new(section_b, 1).into(),
+        station_a: StationRef::new(line_a, 2).into(),
+        station_b: StationRef::new(line_b, 1).into(),
         merged_at: Utc::now(),
     });
 
-    // Preview deleting section_a's second shot again
-    // removed_station = (section_a, 2), which matches the new merge
-    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
-    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    // Preview deleting line_a's second shot again
+    // removed_station = (line_a, 2), which matches the new merge
+    let impact = project.preview_delete_shot(line_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(line_a, 2));
     assert_eq!(impact.removed_merges.len(), 1);
     assert_eq!(
         impact.removed_merges[0].station_a,
-        StationRef::new(section_a, 2)
+        StationRef::new(line_a, 2)
     );
     assert_eq!(
         impact.removed_merges[0].station_b,
-        StationRef::new(section_b, 1)
+        StationRef::new(line_b, 1)
     );
 }
 
 #[test]
 fn preview_delete_shot_with_closure_rewire() {
     let mut project = Project::new("ClosureRewire".to_string(), None);
-    let section_a = project
-        .add_section(SectionData {
+    let line_a = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let section_b = project
-        .add_section(SectionData {
+    let line_b = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Merge section_a:1 with section_b:0
+    // Merge line_a:1 with line_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 1).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
-    // Add a loop closure between section_a:1 and section_b:1
+    // Add a loop closure between line_a:1 and line_b:1
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 1).into(),
-        station_b: StationRef::new(section_b, 1).into(),
+        station_a: StationRef::new(line_a, 1).into(),
+        station_b: StationRef::new(line_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -4325,18 +4325,18 @@ fn preview_delete_shot_with_closure_rewire() {
         is_aligned: false,
     });
 
-    // Preview deleting section_a's second shot (position 1)
-    // removed_station = (section_a, 2), but closure is on station_a:1 which is NOT removed
-    let shot1_id = project.get_section(section_a).unwrap().shots[1].id;
-    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
-    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    // Preview deleting line_a's second shot (position 1)
+    // removed_station = (line_a, 2), but closure is on station_a:1 which is NOT removed
+    let shot1_id = project.get_line(line_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(line_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(line_a, 2));
     assert!(impact.removed_closures.is_empty());
 
-    // Now add a closure with section_a:2 and section_b:1
+    // Now add a closure with line_a:2 and line_b:1
     project.loop_closures.push(LoopClosure {
         id: 2,
-        station_a: StationRef::new(section_a, 2).into(),
-        station_b: StationRef::new(section_b, 1).into(),
+        station_a: StationRef::new(line_a, 2).into(),
+        station_b: StationRef::new(line_b, 1).into(),
         path_length: 3.0,
         misclosure_distance: 0.2,
         error_percentage: 6.7,
@@ -4346,10 +4346,10 @@ fn preview_delete_shot_with_closure_rewire() {
         is_aligned: false,
     });
 
-    // Preview delete of section_a's second shot => removed_station = (section_a, 2)
+    // Preview delete of line_a's second shot => removed_station = (line_a, 2)
     // The closure IS on the removed station
-    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
-    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    let impact = project.preview_delete_shot(line_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(line_a, 2));
     assert_eq!(impact.removed_closures.len(), 1);
     assert_eq!(impact.removed_closures[0].closure_id, 2);
 
@@ -4363,9 +4363,9 @@ fn preview_delete_shot_with_closure_rewire() {
 fn preview_delete_shot_mid_shot_loop_blocks_shift() {
     let mut project = Project::new("MidShotLoop".to_string(), None);
 
-    // Section A with 3 shots: stations 0,1,2,3
-    let section_a = project
-        .add_section(SectionData {
+    // Line A with 3 shots: stations 0,1,2,3
+    let line_a = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 0.0),
                 shot(0.0, 0.0, 1.0, 0.0, 0.0),
@@ -4375,9 +4375,9 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
         })
         .id;
 
-    // Section B with 1 shot: stations 0,1
-    let section_b = project
-        .add_section(SectionData {
+    // Line B with 1 shot: stations 0,1
+    let line_b = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -4385,15 +4385,15 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
 
     // Merge A:0 with B:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 0).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 0).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Merge A:3 with B:1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 3).into(),
-        station_b: StationRef::new(section_b, 1).into(),
+        station_a: StationRef::new(line_a, 3).into(),
+        station_b: StationRef::new(line_b, 1).into(),
         merged_at: Utc::now(),
     });
 
@@ -4402,8 +4402,8 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
     // Path: A:1 -> (shot 0 backward) -> A:0 -> (merge) -> B:0 -> (shot 0) -> B:1
     //   -> (merge) -> A:3 -> (shot 2 backward) -> A:2
     // This connects them excluding shot at pos 1, so shift_blocked should be true.
-    let mid_shot_id = project.get_section(section_a).unwrap().shots[1].id;
-    let impact = project.preview_delete_shot(section_a, mid_shot_id).unwrap();
+    let mid_shot_id = project.get_line(line_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(line_a, mid_shot_id).unwrap();
     assert!(
         impact.shift_blocked,
         "Expected shift_blocked to be true for loop"
@@ -4424,8 +4424,8 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
     let mut project = Project::new("OffsetAdjust".to_string(), None);
 
     // First shot going east (azimuth 90), second shot going north
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -4434,19 +4434,19 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
         })
         .id;
 
-    let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
+    let first_shot_id = project.get_line(line_id).unwrap().shots[0].id;
 
     // Offset before should be (0, 0) by default
     let offset_before = project
-        .section_offsets
-        .get(&section_id)
+        .line_offsets
+        .get(&line_id)
         .copied()
         .unwrap_or((0.0, 0.0));
     assert!((offset_before.0).abs() < 1e-6);
     assert!((offset_before.1).abs() < 1e-6);
 
     // Remove the first shot
-    let result = project.remove_shot_with_rewire(section_id, first_shot_id);
+    let result = project.remove_shot_with_rewire(line_id, first_shot_id);
     assert!(result.is_ok());
 
     // Displacement of shot going east at 90°:
@@ -4454,8 +4454,8 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
     // horizontal_length * cos(90°) = 10.0 * 0.0 = ~0.0   (y)
     // After removing, offset = (0.0 + 10.0, 0.0 + ~0.0) = (~10.0, ~0.0)
     let offset_after = project
-        .section_offsets
-        .get(&section_id)
+        .line_offsets
+        .get(&line_id)
         .copied()
         .unwrap_or((0.0, 0.0));
     assert!(
@@ -4474,60 +4474,60 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
 fn remove_shot_with_rewire_replaces_merges() {
     let mut project = Project::new("ReplaceMerges".to_string(), None);
 
-    let section_a = project
-        .add_section(SectionData {
+    let line_a = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let section_b = project
-        .add_section(SectionData {
+    let line_b = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let section_c = project
-        .add_section(SectionData {
+    let line_c = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Align merge points: a:1 is at (0,1), so b:0 and c:0 need offset (0,1)
-    project.set_section_offset(section_b, (0.0, 1.0));
-    project.set_section_offset(section_c, (0.0, 1.0));
+    project.set_line_offset(line_b, (0.0, 1.0));
+    project.set_line_offset(line_c, (0.0, 1.0));
 
-    // Merge section_a:1 with section_b:0
+    // Merge line_a:1 with line_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 1).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
-    // Merge section_b:0 with section_c:0
+    // Merge line_b:0 with line_c:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_b, 0).into(),
-        station_b: StationRef::new(section_c, 0).into(),
+        station_a: StationRef::new(line_b, 0).into(),
+        station_b: StationRef::new(line_c, 0).into(),
         merged_at: Utc::now(),
     });
 
-    // Delete section_b's first shot (pos=0) => removed_station = section_b:0
-    let shot_id = project.get_section(section_b).unwrap().shots[0].id;
-    let (_, impact) = project.remove_shot_with_rewire(section_b, shot_id).unwrap();
+    // Delete line_b's first shot (pos=0) => removed_station = line_b:0
+    let shot_id = project.get_line(line_b).unwrap().shots[0].id;
+    let (_, impact) = project.remove_shot_with_rewire(line_b, shot_id).unwrap();
 
-    // removed_merges should include both merges involving section_b:0
+    // removed_merges should include both merges involving line_b:0
     assert_eq!(impact.removed_merges.len(), 2);
 
-    // After removal, there should be a replacement merge between section_a:1 and section_c:0
+    // After removal, there should be a replacement merge between line_a:1 and line_c:0
     let has_replacement = project.station_merges.iter().any(|m| {
-        (project.key_is_ref(&m.station_a, StationRef::new(section_a, 1))
-            && project.key_is_ref(&m.station_b, StationRef::new(section_c, 0)))
-            || (project.key_is_ref(&m.station_a, StationRef::new(section_c, 0))
-                && project.key_is_ref(&m.station_b, StationRef::new(section_a, 1)))
+        (project.key_is_ref(&m.station_a, StationRef::new(line_a, 1))
+            && project.key_is_ref(&m.station_b, StationRef::new(line_c, 0)))
+            || (project.key_is_ref(&m.station_a, StationRef::new(line_c, 0))
+                && project.key_is_ref(&m.station_b, StationRef::new(line_a, 1)))
     });
     assert!(
         has_replacement,
-        "Expected replacement merge between section_a:1 and section_c:0"
+        "Expected replacement merge between line_a:1 and line_c:0"
     );
 }
 
@@ -4535,19 +4535,19 @@ fn remove_shot_with_rewire_replaces_merges() {
 fn insert_shot_before_at_position_zero_adjusts_offset() {
     let mut project = Project::new("InsertBefore".to_string(), None);
 
-    // Section with 1 shot going north
-    let section_id = project
-        .add_section(SectionData {
+    // Line with 1 shot going north
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
+    let first_shot_id = project.get_line(line_id).unwrap().shots[0].id;
 
     // Insert a shot going east before the first shot
     let inserted = project.insert_shot_before(
-        section_id,
+        line_id,
         first_shot_id,
         shot(90.0, 90.0, 5.0, 0.0, 0.0),
         None,
@@ -4559,8 +4559,8 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
     // (horizontal * sin(90°), horizontal * cos(90°)) = (5.0, ~0.0)
     // Offset adjusted by (-5.0, ~0.0) to keep existing stations in place
     let offset = project
-        .section_offsets
-        .get(&section_id)
+        .line_offsets
+        .get(&line_id)
         .copied()
         .unwrap_or((0.0, 0.0));
     assert!(
@@ -4579,31 +4579,31 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
 fn insert_shot_after_shifts_station_refs() {
     let mut project = Project::new("InsertAfterShift".to_string(), None);
 
-    let section_a = project
-        .add_section(SectionData {
+    let line_a = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let section_b = project
-        .add_section(SectionData {
+    let line_b = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Add a merge between section_a:2 (after second shot) and section_b:0
+    // Add a merge between line_a:2 (after second shot) and line_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2).into(),
-        station_b: StationRef::new(section_b, 0).into(),
+        station_a: StationRef::new(line_a, 2).into(),
+        station_b: StationRef::new(line_b, 0).into(),
         merged_at: Utc::now(),
     });
 
-    // Add a loop closure between section_a:2 and section_b:1
+    // Add a loop closure between line_a:2 and line_b:1
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 2).into(),
-        station_b: StationRef::new(section_b, 1).into(),
+        station_a: StationRef::new(line_a, 2).into(),
+        station_b: StationRef::new(line_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -4619,10 +4619,10 @@ fn insert_shot_after_shifts_station_refs() {
     // that position-independence is exactly what C1 verifies here.
     project.reanchor_station_refs();
 
-    // Insert a shot after section_a's first shot (position 0)
-    let first_shot_id = project.get_section(section_a).unwrap().shots[0].id;
+    // Insert a shot after line_a's first shot (position 0)
+    let first_shot_id = project.get_line(line_a).unwrap().shots[0].id;
     let inserted = project.insert_shot_after(
-        section_a,
+        line_a,
         first_shot_id,
         shot(0.0, 0.0, 1.0, 0.0, 0.0),
         None,
@@ -4631,22 +4631,22 @@ fn insert_shot_after_shifts_station_refs() {
     assert!(inserted.is_some());
 
     // The new shot goes at position 1. Old stations at index >= 2 shift to index+1.
-    // So section_a:2 becomes section_a:3.
-    // The merge should now reference section_a:3.
+    // So line_a:2 becomes line_a:3.
+    // The merge should now reference line_a:3.
     let merge = &project.station_merges[0];
     assert!(
-        project.key_is_ref(&merge.station_a, StationRef::new(section_a, 3)),
+        project.key_is_ref(&merge.station_a, StationRef::new(line_a, 3)),
         "Merge station_a should have shifted from 2 to 3"
     );
-    assert!(project.key_is_ref(&merge.station_b, StationRef::new(section_b, 0)));
+    assert!(project.key_is_ref(&merge.station_b, StationRef::new(line_b, 0)));
 
-    // The closure should reference section_a:3 (was section_a:2).
+    // The closure should reference line_a:3 (was line_a:2).
     let closure = &project.loop_closures[0];
     assert!(
-        project.key_is_ref(&closure.station_a, StationRef::new(section_a, 3)),
+        project.key_is_ref(&closure.station_a, StationRef::new(line_a, 3)),
         "Closure station_a should have shifted from 2 to 3"
     );
-    assert!(project.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
+    assert!(project.key_is_ref(&closure.station_b, StationRef::new(line_b, 1)));
 }
 
 /// C1 regression: inserting a shot UPSTREAM of a merge must keep the merge on
@@ -4658,7 +4658,7 @@ fn insert_shot_after_shifts_station_refs() {
 fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
     let mut project = Project::new("StableId".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -4667,7 +4667,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -4684,7 +4684,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
 
     let a_endpoint = |p: &Project| -> StationKey {
         let m = &p.station_merges[0];
-        if m.station_a.section_id == a {
+        if m.station_a.line_id == a {
             m.station_a.clone()
         } else {
             m.station_b.clone()
@@ -4694,7 +4694,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
 
     // Insert a shot at the FRONT of A. The merge's physical station (old A:1) is
     // now A:2; B:0 is untouched.
-    let first = project.get_section(a).unwrap().shots[0].id;
+    let first = project.get_line(a).unwrap().shots[0].id;
     project
         .insert_shot_before(a, first, shot(45.0, 45.0, 3.0, 0.0, 0.0), None, None)
         .expect("insert at front of A");
@@ -4721,7 +4721,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
 fn dangling_anchor_flagged_by_integrity() {
     let mut project = Project::new("Dangling".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -4730,7 +4730,7 @@ fn dangling_anchor_flagged_by_integrity() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -4744,7 +4744,7 @@ fn dangling_anchor_flagged_by_integrity() {
         "sound to start"
     );
 
-    // Forge a merge endpoint onto a shot UUID that doesn't exist in the section.
+    // Forge a merge endpoint onto a shot UUID that doesn't exist in the line.
     forge_first_merge(&mut project, |m| {
         m.station_a = StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
     });
@@ -4759,8 +4759,8 @@ fn dangling_anchor_flagged_by_integrity() {
 fn calculate_penetration_with_zero_datum() {
     let mut project = Project::new("Penetration".to_string(), None);
 
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -4771,7 +4771,7 @@ fn calculate_penetration_with_zero_datum() {
 
     // Set a zero datum on station 0
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 0).into(),
+        station_ref: StationRef::new(line_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -4793,7 +4793,7 @@ fn calculate_penetration_with_zero_datum() {
 fn calculate_penetration_no_datums_returns_zero() {
     let mut project = Project::new("NoDatums".to_string(), None);
 
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
         ..Default::default()
     });
@@ -4812,8 +4812,8 @@ fn compute_distances_from_chosen_station() {
     // Generalized API rooted at an arbitrary (non-datum) station: the gradient's
     // click-to-pick case. Chain of 3 stations at y = 0, 10, 15.
     let mut project = Project::new("DistFromStation".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -4826,7 +4826,7 @@ fn compute_distances_from_chosen_station() {
     let idx = |i: u32| {
         stations
             .iter()
-            .position(|s| s.station_ref == StationRef::new(section_id, i))
+            .position(|s| s.station_ref == StationRef::new(line_id, i))
             .unwrap()
     };
 
@@ -4841,7 +4841,7 @@ fn compute_distances_from_chosen_station() {
 #[test]
 fn compute_distances_from_empty_roots_all_infinity() {
     let mut project = Project::new("DistNoRoots".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
         ..Default::default()
     });
@@ -4856,8 +4856,8 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
     // The generalized API, seeded with the zero-datum indices, must reproduce
     // compute_penetration_distances exactly (penetration is the default origin).
     let mut project = Project::new("DistMatchesPen".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -4866,7 +4866,7 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
         })
         .id;
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 0).into(),
+        station_ref: StationRef::new(line_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
@@ -4875,7 +4875,7 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
     let stations = project.compute_station_coordinates();
     let datum_idx = stations
         .iter()
-        .position(|s| s.station_ref == StationRef::new(section_id, 0))
+        .position(|s| s.station_ref == StationRef::new(line_id, 0))
         .unwrap();
 
     let pen = project.compute_penetration_distances(&stations);
@@ -4895,8 +4895,8 @@ fn reachability_keeps_jump_reference_shots() {
     // the only link to a tail station keeps it reachable (it's included in the
     // graph like any other shot).
     let mut project = Project::new("JumpKept".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // permanent A0->A1
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),  // marked reference A1->A2
@@ -4905,9 +4905,9 @@ fn reachability_keeps_jump_reference_shots() {
         })
         .id;
     project
-        .sections
+        .lines
         .iter_mut()
-        .find(|s| s.id == section_id)
+        .find(|s| s.id == line_id)
         .unwrap()
         .shots[1]
         .kind = ShotKind::Jump;
@@ -4916,7 +4916,7 @@ fn reachability_keeps_jump_reference_shots() {
     let idx = |i: u32| {
         stations
             .iter()
-            .position(|s| s.station_ref == StationRef::new(section_id, i))
+            .position(|s| s.station_ref == StationRef::new(line_id, i))
             .unwrap()
     };
     // Root at A0: A2 is reachable only across the reference shot → kept as a jump.
@@ -4932,13 +4932,13 @@ fn reachability_keeps_jump_reference_shots() {
 fn reachability_uses_jump_shot_shortcut() {
     // A JUMP is a swum connection, so it stays in the graph: B's jump links
     // B0-B1 (len 5). Even though B0/B1 are ALSO connected the long way through
-    // section A (A0-A1-A2 = 20), shortest-path takes the direct jump (5). This
+    // line A (A0-A1-A2 = 20), shortest-path takes the direct jump (5). This
     // is 88ccbaff's regression guard (#34); #27 narrowed it from "every virtual
     // shot" to "jumps only", and the Reference half is pinned by the companion
     // test below.
     let mut project = Project::new("JumpShortcut".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // A0->A1
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // A1->A2
@@ -4947,13 +4947,13 @@ fn reachability_uses_jump_shot_shortcut() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], // B0->B1
             ..Default::default()
         })
         .id;
     project
-        .sections
+        .lines
         .iter_mut()
         .find(|s| s.id == b)
         .unwrap()
@@ -4997,7 +4997,7 @@ fn reachability_uses_jump_shot_shortcut() {
     // a reference tie is a tape measurement, not a swimmable passage. This is
     // the false-shortcut risk #77 left open, now closed by #27.
     project
-        .sections
+        .lines
         .iter_mut()
         .find(|s| s.id == b)
         .unwrap()
@@ -5024,17 +5024,17 @@ fn reachability_uses_jump_shot_shortcut() {
 #[test]
 fn reachability_includes_non_aligned_closures() {
     // A non-aligned (e.g. Batch) loop closure is still a real physical connection.
-    // Section B is reachable from A's zero datum ONLY across a non-aligned closure
+    // Line B is reachable from A's zero datum ONLY across a non-aligned closure
     // - it must NOT show as unreachable. (#34: areas connected via closure)
     let mut project = Project::new("NonAlignedClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], // A0->A1
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)], // B0->B1, disconnected from A
             ..Default::default()
         })
@@ -5087,7 +5087,7 @@ fn distance_field_uses_coordinate_distances() {
     // not the raw measured shot length.
     let mut project = Project::new("DistCoords".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5126,13 +5126,13 @@ fn create_loop_closure_rejects_merged_stations() {
     let mut project = Project::new("ClosureRejectMerged".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5157,19 +5157,19 @@ fn create_loop_closure_allows_disconnected_with_both_datums() {
     let mut project = Project::new("ClosureDisconnectedDatums".to_string(), None);
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Each section gets its own zero datum (disconnected but GPS-anchored)
+    // Each line gets its own zero datum (disconnected but GPS-anchored)
     project
         .set_zero_datum(
             StationRef::new(a, 0),
@@ -5201,9 +5201,9 @@ fn create_loop_closure_allows_disconnected_with_both_datums() {
 fn compute_closure_metrics_known_geometry() {
     let mut project = Project::new("ClosureMetrics".to_string(), None);
 
-    // Section A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
+    // Line A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5212,9 +5212,9 @@ fn compute_closure_metrics_known_geometry() {
         })
         .id;
 
-    // Section B: 1 shot going east (90°), 5m → B:0=(0,0), B:1=(5,0)
+    // Line B: 1 shot going east (90°), 5m → B:0=(0,0), B:1=(5,0)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5271,18 +5271,18 @@ fn compute_closure_metrics_known_geometry() {
 fn compute_closure_metrics_zero_misclosure() {
     let mut project = Project::new("ClosureZeroMisclosure".to_string(), None);
 
-    // Two sections that arrive at the same point: a perfect loop
-    // Section A: 1 shot going north (0°), 10m → A:0=(0,0), A:1=(0,10)
+    // Two lines that arrive at the same point: a perfect loop
+    // Line A: 1 shot going north (0°), 10m → A:0=(0,0), A:1=(0,10)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Section B: 1 shot going north (0°), 10m → B:0=(0,0), B:1=(0,10)
+    // Line B: 1 shot going north (0°), 10m → B:0=(0,0), B:1=(0,10)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5313,12 +5313,12 @@ fn compute_closure_metrics_zero_misclosure() {
 // Group C: distribute_closure_error_internal (core algorithm)
 
 #[test]
-fn distribute_closure_simple_two_section_loop() {
+fn distribute_closure_simple_two_line_loop() {
     let mut project = Project::new("DistributeSimple".to_string(), None);
 
-    // Section A: 3 shots going north (0°), 10m each → A:3=(0,30)
+    // Line A: 3 shots going north (0°), 10m each → A:3=(0,30)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5328,9 +5328,9 @@ fn distribute_closure_simple_two_section_loop() {
         })
         .id;
 
-    // Section B: 1 shot going south (180°), 29m → B:1=(0,-29)
+    // Line B: 1 shot going south (180°), 29m → B:1=(0,-29)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5378,9 +5378,9 @@ fn distribute_closure_simple_two_section_loop() {
 fn distribute_closure_with_zero_datum_at_endpoint() {
     let mut project = Project::new("DistributeDatumEndpoint".to_string(), None);
 
-    // Section A: 3 shots going north (0°), 10m each
+    // Line A: 3 shots going north (0°), 10m each
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5390,9 +5390,9 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
         })
         .id;
 
-    // Section B: 1 shot going south (180°), 29m
+    // Line B: 1 shot going south (180°), 29m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5452,9 +5452,9 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
 fn distribute_closure_with_zero_datum_mid_path() {
     let mut project = Project::new("DistributeDatumMid".to_string(), None);
 
-    // Section A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
+    // Line A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5463,9 +5463,9 @@ fn distribute_closure_with_zero_datum_mid_path() {
         })
         .id;
 
-    // Section B: 1 shot going south (180°), 19m → B:1=(0,-19)
+    // Line B: 1 shot going south (180°), 19m → B:1=(0,-19)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5528,13 +5528,13 @@ fn distribute_closure_both_anchored_fails() {
     // survey between them: both endpoints are anchored, so nothing may move.
     let mut project = Project::new("DistributeBothAnchored".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5570,13 +5570,13 @@ fn distribute_closure_ignores_a_gps_fix_endpoint() {
     // (settled for #741), so the loop is distributed from the placement datum.
     let mut project = Project::new("DistributeFix".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5621,9 +5621,9 @@ fn distribute_closure_ignores_a_gps_fix_endpoint() {
 fn distribute_closure_equal_distribution() {
     let mut project = Project::new("DistributeEqual".to_string(), None);
 
-    // Section A: 3 shots going north, different lengths
+    // Line A: 3 shots going north, different lengths
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5633,9 +5633,9 @@ fn distribute_closure_equal_distribution() {
         })
         .id;
 
-    // Section B: 1 shot going south, 29m
+    // Line B: 1 shot going south, 29m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5671,9 +5671,9 @@ fn distribute_closure_equal_distribution() {
 fn distribute_closure_fallback_separate_datums() {
     let mut project = Project::new("DistributeFallbackDatums".to_string(), None);
 
-    // Section A: 2 shots going north → A:2=(0,20)
+    // Line A: 2 shots going north → A:2=(0,20)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5682,9 +5682,9 @@ fn distribute_closure_fallback_separate_datums() {
         })
         .id;
 
-    // Section B: 1 shot going east → B:1=(5+offset,0+offset)
+    // Line B: 1 shot going east → B:1=(5+offset,0+offset)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5727,23 +5727,23 @@ fn distribute_closure_fallback_separate_datums() {
     );
 }
 
-/// Stress test: 50-section ring network with closure.
+/// Stress test: 50-line ring network with closure.
 /// Verifies the sparse PCG solver produces correct results for a
 /// non-trivial graph (all endpoints align, zero datums preserved).
 #[test]
 fn distribute_closure_large_ring_network() {
     let mut project = Project::new("LargeRingNetwork".to_string(), None);
 
-    // Create 50 sections, each with 5 shots going at slightly different azimuths.
+    // Create 50 lines, each with 5 shots going at slightly different azimuths.
     // This creates a network where the union-find produces many distinct groups,
     // exercising the sparse solver with a matrix larger than trivial test cases.
-    let num_sections = 50;
-    let mut section_ids = Vec::new();
-    for i in 0..num_sections {
-        // Each section goes at a slightly different heading to create a ring
-        let azimuth = (i as f64 * 360.0 / num_sections as f64) % 360.0;
+    let num_lines = 50;
+    let mut line_ids = Vec::new();
+    for i in 0..num_lines {
+        // Each line goes at a slightly different heading to create a ring
+        let azimuth = (i as f64 * 360.0 / num_lines as f64) % 360.0;
         let id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(azimuth, azimuth, 10.0, 0.0, 0.0),
                     shot(azimuth, azimuth, 10.0, 0.0, 0.0),
@@ -5754,15 +5754,15 @@ fn distribute_closure_large_ring_network() {
                 ..Default::default()
             })
             .id;
-        section_ids.push(id);
+        line_ids.push(id);
     }
 
-    // Chain sections: merge end of section i with start of section i+1
-    for i in 0..(num_sections - 1) {
+    // Chain lines: merge end of line i with start of line i+1
+    for i in 0..(num_lines - 1) {
         project
             .merge_stations(
-                StationRef::new(section_ids[i], 5),     // end of section i
-                StationRef::new(section_ids[i + 1], 0), // start of section i+1
+                StationRef::new(line_ids[i], 5),     // end of line i
+                StationRef::new(line_ids[i + 1], 0), // start of line i+1
             )
             .unwrap();
     }
@@ -5770,14 +5770,14 @@ fn distribute_closure_large_ring_network() {
     // Set zero datum on the first station
     project
         .set_zero_datum(
-            StationRef::new(section_ids[0], 0),
+            StationRef::new(line_ids[0], 0),
             GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         )
         .unwrap();
 
     // Record positions before closure
-    let first_station = StationRef::new(section_ids[0], 0);
-    let last_station = StationRef::new(section_ids[num_sections - 1], 5);
+    let first_station = StationRef::new(line_ids[0], 0);
+    let last_station = StationRef::new(line_ids[num_lines - 1], 5);
     let coords_first_before = project.compute_station_raw_coords(first_station).unwrap();
 
     // Create a closure between last station and first station (closing the ring)
@@ -5807,12 +5807,12 @@ fn distribute_closure_large_ring_network() {
     );
 
     // All merge points should remain consistent (merged stations should coincide)
-    for i in 0..(num_sections - 1) {
+    for i in 0..(num_lines - 1) {
         let end_i = project
-            .compute_station_raw_coords(StationRef::new(section_ids[i], 5))
+            .compute_station_raw_coords(StationRef::new(line_ids[i], 5))
             .unwrap();
         let start_next = project
-            .compute_station_raw_coords(StationRef::new(section_ids[i + 1], 0))
+            .compute_station_raw_coords(StationRef::new(line_ids[i + 1], 0))
             .unwrap();
         let merge_residual = end_i.distance_to(&start_next);
         assert!(
@@ -5828,9 +5828,9 @@ fn distribute_closure_large_ring_network() {
 fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
     let mut project = Project::new("StationMoveMiddle".to_string(), None);
 
-    // Section with 3 shots: stations at (0,0), (0,10), (0,20), (0,30)
+    // Line with 3 shots: stations at (0,0), (0,10), (0,20), (0,30)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5840,9 +5840,9 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
         })
         .id;
 
-    // Section B: 1 shot, same geometry to create a closure path
+    // Line B: 1 shot, same geometry to create a closure path
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 29.5, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5905,20 +5905,20 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
 }
 
 #[test]
-fn apply_station_move_station_zero_uses_section_offset() {
+fn apply_station_move_station_zero_uses_line_offset() {
     let mut project = Project::new("StationMoveZero".to_string(), None);
 
-    // Section A: 1 shot going north
+    // Line A: 1 shot going north
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Section B: 1 shot going south, slightly short - creates misclosure at station 0
+    // Line B: 1 shot going south, slightly short - creates misclosure at station 0
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5928,9 +5928,9 @@ fn apply_station_move_station_zero_uses_section_offset() {
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
 
-    // Record section offset before
+    // Record line offset before
     let _offset_before = project
-        .section_offsets
+        .line_offsets
         .get(&a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -5940,7 +5940,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
     // Let's modify B to create a gap:
     // Actually, let's use a more direct test - just set up the closure so station 0 needs to move
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -5951,9 +5951,9 @@ fn apply_station_move_station_zero_uses_section_offset() {
 
     // Now we have A:0 merged to chain, create a closure between A:0's group and C:1
     // A:0=(0,0), C:1 = some other position - distribute will move stations
-    // The test verifies that if station 0 needs an XY move, section_offsets is used
+    // The test verifies that if station 0 needs an XY move, line_offsets is used
     let _offset_a_before = project
-        .section_offsets
+        .line_offsets
         .get(&a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -5968,7 +5968,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
         .unwrap();
 
     // The test passes if no panic/error occurs - the internal logic correctly
-    // routes station 0 XY moves through section_offsets
+    // routes station 0 XY moves through line_offsets
     let coords_a0 = project
         .compute_station_raw_coords(StationRef::new(a, 0))
         .unwrap();
@@ -5987,7 +5987,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
 
     // 2 shots: stations 0, 1, 2
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -5998,7 +5998,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
 
     // B: connect to create closure path
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -6046,12 +6046,12 @@ fn apply_station_move_last_station_only_modifies_incoming() {
 // Group E: conflicting merge-station translations, resolved through adjust_loop_closures
 
 #[test]
-fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
+fn enforce_merge_alignment_conflicted_line_applies_segment_correction() {
     let mut project = Project::new("EnforceMergeAlignment".to_string(), None);
 
-    // Section A: 3 shots going north, 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20), A:3=(0,30)
+    // Line A: 3 shots going north, 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20), A:3=(0,30)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -6061,17 +6061,17 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         })
         .id;
 
-    // Section B: 1 shot going east, 5m → B:0=(0,0), B:1=(5,0)
+    // Line B: 1 shot going east, 5m → B:0=(0,0), B:1=(5,0)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Section C: 1 shot going west, 5m → C:0=(0,0), C:1=(-5,0)
+    // Line C: 1 shot going west, 5m → C:0=(0,0), C:1=(-5,0)
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -6093,7 +6093,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         .merge_stations(StationRef::new(a, 3), StationRef::new(c, 0))
         .unwrap();
 
-    // Create closures between B:1 and C:1 - they form a loop through section A
+    // Create closures between B:1 and C:1 - they form a loop through line A
     project
         .create_loop_closure(
             StationRef::new(b, 1),
@@ -6153,12 +6153,12 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
 /// Build a project with two paths from a shared, datum-anchored origin to a
 /// near-shared endpoint that disagree by ~0.2 m, joined by a loop closure.
 /// Measured: the loop is open. Adjusted: it should close.
-fn looped_project_with_misclosure() -> (Project, SectionId, SectionId) {
+fn looped_project_with_misclosure() -> (Project, LineId, LineId) {
     let mut project = Project::new("AdjustedView".to_string(), None);
 
     // Path A: origin → east 10 → north 10  (A:2 = (10, 10))
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -6168,7 +6168,7 @@ fn looped_project_with_misclosure() -> (Project, SectionId, SectionId) {
         .id;
     // Path B: origin → north 10 → east 10.2  (B:2 = (10.2, 10))
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.2, 0.0, 0.0),
@@ -6207,7 +6207,7 @@ fn station_coords(stations: &[Station], sr: StationRef) -> Coordinates {
 
 fn shot_geometry(project: &Project) -> Vec<(f64, f64, f64)> {
     project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| {
             s.shots
@@ -6576,7 +6576,7 @@ fn solve_reduced_laplacian_floating_loop_varied_weights_no_shift() {
 fn adjust_line_loop_matches_hand_computed_optimum() {
     let mut project = Project::new("LineLoop".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -6585,7 +6585,7 @@ fn adjust_line_loop_matches_hand_computed_optimum() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.1, 0.0, 0.0),
                 shot(90.0, 90.0, 5.1, 0.0, 0.0),
@@ -6670,9 +6670,9 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
 
     for _trial in 0..60 {
         let mut project = Project::new("Fuzz".to_string(), None);
-        let n_sections = 2 + (next(&mut seed) * 4.0) as usize; // 2..=5
+        let n_lines = 2 + (next(&mut seed) * 4.0) as usize; // 2..=5
         let mut sids = Vec::new();
-        for _ in 0..n_sections {
+        for _ in 0..n_lines {
             let n_shots = 1 + (next(&mut seed) * 6.0) as usize; // 1..=6
             let shots: Vec<ShotData> = (0..n_shots)
                 .map(|_| {
@@ -6683,7 +6683,7 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
                 .collect();
             sids.push(
                 project
-                    .add_section(SectionData {
+                    .add_line(LineData {
                         shots,
                         ..Default::default()
                     })
@@ -6691,7 +6691,7 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
             );
         }
 
-        // Datum anchors the first section.
+        // Datum anchors the first line.
         project
             .set_zero_datum(
                 StationRef::new(sids[0], 0),
@@ -6699,16 +6699,16 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
             )
             .unwrap();
 
-        // Connect every later section to an earlier one with a merge → a connected
+        // Connect every later line to an earlier one with a merge → a connected
         // tree (no loops yet).
         let station_count = |p: &Project, sid| {
-            p.sections
+            p.lines
                 .iter()
                 .find(|s| s.id == sid)
                 .map(|s| s.shots.len())
                 .unwrap_or(0)
         };
-        for s in 1..n_sections {
+        for s in 1..n_lines {
             let earlier = sids[(next(&mut seed) * s as f64) as usize];
             let tgt_idx = (next(&mut seed) * (station_count(&project, earlier) + 1) as f64) as u32;
             let _ = project.merge_stations(
@@ -6717,14 +6717,14 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
             );
         }
 
-        // Add 1..=2 closures between stations in different sections → loops.
+        // Add 1..=2 closures between stations in different lines → loops.
         let mut closures: Vec<(StationRef, StationRef)> = Vec::new();
         let n_closures = 1 + (next(&mut seed) * 2.0) as usize;
         for _ in 0..n_closures {
-            let si = (next(&mut seed) * n_sections as f64) as usize;
-            let mut sj = (next(&mut seed) * n_sections as f64) as usize;
+            let si = (next(&mut seed) * n_lines as f64) as usize;
+            let mut sj = (next(&mut seed) * n_lines as f64) as usize;
             if sj == si {
-                sj = (sj + 1) % n_sections;
+                sj = (sj + 1) % n_lines;
             }
             let pi = StationRef::new(
                 sids[si],
@@ -6811,7 +6811,7 @@ fn profile_closure_solve_large() {
 
         // Path A: eastward shots of length 5.0.
         let a = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: (0..n_shots)
                     .map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0))
                     .collect(),
@@ -6821,7 +6821,7 @@ fn profile_closure_solve_large() {
         // Path B: same count, slightly longer so the far ends disagree (a real
         // misclosure for the solve to distribute).
         let b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: (0..n_shots)
                     .map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0))
                     .collect(),
@@ -6866,7 +6866,7 @@ fn profile_closure_solve_large() {
 #[test]
 fn compute_adjusted_equals_measured_without_closures() {
     let mut project = Project::new("NoClosures".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 10.0, 0.0, 0.0),
             shot(90.0, 90.0, 10.0, 0.0, 0.0),
@@ -6893,7 +6893,7 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
     // the deterministic default anchor (`default_anchor_for_component`) instead.
     let mut project = Project::new("DatumlessLoop".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -6902,7 +6902,7 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.2, 0.0, 0.0),
@@ -6958,16 +6958,16 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
 /// a failed component on measured geometry rather than leaking a partial solve.
 ///
 /// The failure is forced by tying two PLACEMENT datum stations together with a
-/// loop closure: a third section placed by its own datum, closed onto the first
+/// loop closure: a third line placed by its own datum, closed onto the first
 /// component's datum station. One constraint group then holds two fixed
 /// positions, which makes `adjust_loop_closures` return `Err`. (Before #741 a
 /// second datum in one merge group did this; that is a GPS fix now, and valid.)
 #[test]
 fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
-    // Helper: a misclosing two-section loop (origin merged, ~0.2 m open at the far end).
-    fn looped(project: &mut Project) -> (SectionId, SectionId) {
+    // Helper: a misclosing two-line loop (origin merged, ~0.2 m open at the far end).
+    fn looped(project: &mut Project) -> (LineId, LineId) {
         let x = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(90.0, 90.0, 10.0, 0.0, 0.0),
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -6976,7 +6976,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
             })
             .id;
         let y = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(0.0, 0.0, 10.0, 0.0, 0.0),
                     shot(90.0, 90.0, 10.2, 0.0, 0.0),
@@ -7008,7 +7008,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
         )
         .unwrap();
     let e = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7079,11 +7079,11 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
 
 #[test]
 fn is_shot_frozen_single_datum_dead_end() {
-    // Section with datum on station 0, shots going one direction.
+    // Line with datum on station 0, shots going one direction.
     // No shot is frozen (dead end, no datum reachable on far side).
     let mut project = Project::new("Frozen".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 1.0),
                 shot(0.0, 0.0, 1.0, 1.0, 2.0),
@@ -7106,21 +7106,21 @@ fn is_shot_frozen_single_datum_dead_end() {
 
 #[test]
 fn is_shot_frozen_loop_with_two_datums() {
-    // Two sections each with a datum, connected by merges at both ends.
+    // Two lines each with a datum, connected by merges at both ends.
     // All shots between the datums are frozen.
     //
-    // Section A: station 0 (datum) --shot0--> station 1 --shot1--> station 2
-    // Section B: station 0 (datum) --shot0--> station 1 --shot1--> station 2
+    // Line A: station 0 (datum) --shot0--> station 1 --shot1--> station 2
+    // Line B: station 0 (datum) --shot0--> station 1 --shot1--> station 2
     // Merges: A:0 <-> B:0, A:2 <-> B:2
     let mut project = Project::new("TwoDatums".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 1.0, 0.0, 1.0),
                 shot(180.0, 180.0, 1.0, 1.0, 2.0),
@@ -7154,12 +7154,12 @@ fn is_shot_frozen_loop_with_two_datums() {
     });
 
     let frozen = project.compute_frozen_shots();
-    // All 4 shots (2 per section) should be frozen
+    // All 4 shots (2 per line) should be frozen
     assert_eq!(frozen.len(), 4, "All shots in the loop should be frozen");
 
-    // Verify both sections' shots are present
-    let a_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == a).collect();
-    let b_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == b).collect();
+    // Verify both lines' shots are present
+    let a_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == a).collect();
+    let b_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == b).collect();
     assert_eq!(a_frozen.len(), 2);
     assert_eq!(b_frozen.len(), 2);
 }
@@ -7167,21 +7167,21 @@ fn is_shot_frozen_loop_with_two_datums() {
 #[test]
 fn is_shot_frozen_loop_with_aligned_closure() {
     // Single datum, loop closed by an aligned closure.
-    // Section A: station 0 (datum) --shot0--> station 1 --shot1--> station 2
-    // Section B: station 0 --shot0--> station 1 --shot1--> station 2 --shot2--> station 3 (dead end branch)
+    // Line A: station 0 (datum) --shot0--> station 1 --shot1--> station 2
+    // Line B: station 0 --shot0--> station 1 --shot1--> station 2 --shot2--> station 3 (dead end branch)
     // Merge: A:0 <-> B:0
     // Aligned closure: A:2 <-> B:2
     // Shots A:0, A:1, B:0, B:1 should be frozen (in the loop).
     // Shot B:2 is NOT frozen (dead-end branch past the closure point).
     let mut project = Project::new("AlignedClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 1.0, 0.0, 1.0),
                 shot(180.0, 180.0, 1.0, 1.0, 2.0),
@@ -7222,23 +7222,23 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     let frozen = project.compute_frozen_shots();
 
     // A:0, A:1, B:0, B:1 should be frozen
-    let a_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == a).collect();
-    let b_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == b).collect();
+    let a_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == a).collect();
+    let b_frozen: Vec<_> = frozen.iter().filter(|f| f.line_id == b).collect();
     assert_eq!(
         a_frozen.len(),
         2,
-        "Both shots in section A should be frozen"
+        "Both shots in line A should be frozen"
     );
     assert_eq!(
         b_frozen.len(),
         2,
-        "Only shots 0,1 in section B should be frozen"
+        "Only shots 0,1 in line B should be frozen"
     );
 
     // Verify B:2 (dead-end branch) is NOT frozen
     let b2_frozen = frozen
         .iter()
-        .any(|f| f.section_id == b && f.shot_index == 2);
+        .any(|f| f.line_id == b && f.shot_index == 2);
     assert!(!b2_frozen, "Dead-end shot B:2 should NOT be frozen");
 }
 
@@ -7247,13 +7247,13 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
     // Same topology as above but closure is NOT aligned. No shots should be frozen.
     let mut project = Project::new("UnalignedClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 1.0, 0.0, 1.0),
                 shot(180.0, 180.0, 1.0, 1.0, 2.0),
@@ -7349,13 +7349,13 @@ fn update_shot_rejects_frozen_geometry() {
     // Create a loop with two datums so all shots are frozen
     let mut project = Project::new("FrozenUpdate".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 1.0, 0.0, 1.0)],
             ..Default::default()
         })
@@ -7394,7 +7394,7 @@ fn update_shot_rejects_frozen_geometry() {
 
     // The update_shot validation is in the command handler, not on Project directly.
     // But we can verify the frozen status and touches_geometry independently.
-    let shot_id = project.sections.iter().find(|s| s.id == a).unwrap().shots[0].id;
+    let shot_id = project.lines.iter().find(|s| s.id == a).unwrap().shots[0].id;
     let geo_update = ShotUpdates {
         length: Some(5.0),
         ..Default::default()
@@ -7402,9 +7402,9 @@ fn update_shot_rejects_frozen_geometry() {
     assert!(geo_update.touches_geometry());
 
     // Verify the shot IS frozen
-    let section_lookup = project.build_section_lookup();
-    let merge_adj = project.build_merge_adjacency(&section_lookup);
-    let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
+    let line_lookup = project.build_line_lookup();
+    let merge_adj = project.build_merge_adjacency(&line_lookup);
+    let closure_adj = project.build_aligned_closure_adjacency(&line_lookup);
     let datum_stations: HashSet<StationRef> = project
         .zero_datums
         .iter()
@@ -7413,7 +7413,7 @@ fn update_shot_rejects_frozen_geometry() {
     assert!(project.is_shot_frozen(
         a,
         0,
-        &section_lookup,
+        &line_lookup,
         &merge_adj,
         &closure_adj,
         &datum_stations
@@ -7433,7 +7433,7 @@ fn update_shot_rejects_frozen_geometry() {
         "Non-geometry update on frozen shot should succeed"
     );
     assert_eq!(
-        project.get_section(a).unwrap().shots[0].comment.as_deref(),
+        project.get_line(a).unwrap().shots[0].comment.as_deref(),
         Some("hello")
     );
 }
@@ -7447,7 +7447,7 @@ fn stats_empty_project() {
     let project = Project::new("Empty".to_string(), None);
     let stats = project.stats();
 
-    assert_eq!(stats.section_count, 0);
+    assert_eq!(stats.line_count, 0);
     assert_eq!(stats.shot_count, 0);
     assert_eq!(stats.station_count, 0);
     assert_eq!(stats.loop_count, 0);
@@ -7460,9 +7460,9 @@ fn stats_empty_project() {
 }
 
 #[test]
-fn stats_single_section() {
+fn stats_single_line() {
     let mut project = Project::new("Single".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 10.0, 0.0, 5.0),
             shot(90.0, 90.0, 8.0, 5.0, 12.0),
@@ -7471,7 +7471,7 @@ fn stats_single_section() {
     });
 
     let stats = project.stats();
-    assert_eq!(stats.section_count, 1);
+    assert_eq!(stats.line_count, 1);
     assert_eq!(stats.shot_count, 2);
     assert_eq!(stats.station_count, 3); // 2 shots + 1 first station
     assert!((stats.total_length - 18.0).abs() < 1e-6);
@@ -7485,15 +7485,15 @@ fn stats_single_section() {
 }
 
 #[test]
-fn stats_multiple_sections() {
+fn stats_multiple_lines() {
     let mut project = Project::new("Multi".to_string(), None);
-    // Section 1 stations: -2, -5
-    project.add_section(SectionData {
+    // Line 1 stations: -2, -5
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 10.0, -2.0, -5.0)],
         ..Default::default()
     });
-    // Section 2 stations: 0, (1+1)/2 = 1, 3
-    project.add_section(SectionData {
+    // Line 2 stations: 0, (1+1)/2 = 1, 3
+    project.add_line(LineData {
         shots: vec![
             shot(90.0, 90.0, 5.0, 0.0, 1.0),
             shot(90.0, 90.0, 7.0, 1.0, 3.0),
@@ -7502,18 +7502,18 @@ fn stats_multiple_sections() {
     });
 
     let stats = project.stats();
-    assert_eq!(stats.section_count, 2);
+    assert_eq!(stats.line_count, 2);
     assert_eq!(stats.shot_count, 3);
     assert_eq!(stats.station_count, 5); // 3 shots + 2 first stations
     assert!((stats.total_length - 22.0).abs() < 1e-6);
-    // Absolute over both sections, not per-section excursions (#481).
+    // Absolute over both lines, not per-line excursions (#481).
     let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
     assert!((min_depth - (-5.0)).abs() < 1e-6);
     assert!((max_depth - 3.0).abs() < 1e-6);
 }
 
 /// A Reference shot repeats passage already surveyed, so the project length sums
-/// each section's surveyed length and never counts a Reference again (#689). The
+/// each line's surveyed length and never counts a Reference again (#689). The
 /// shot count still includes it.
 #[test]
 fn stats_total_length_excludes_reference_shots() {
@@ -7526,16 +7526,16 @@ fn stats_total_length_excludes_reference_shots() {
         ..shot(0.0, 0.0, 3.0, 0.0, 0.0)
     };
     let mut project = Project::new("With references".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), reference(4.0), jump],
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![reference(6.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
         ..Default::default()
     });
-    // A section made only of References adds nothing to the length.
-    project.add_section(SectionData {
+    // A line made only of References adds nothing to the length.
+    project.add_line(LineData {
         shots: vec![reference(9.0)],
         ..Default::default()
     });
@@ -7549,13 +7549,13 @@ fn stats_total_length_excludes_reference_shots() {
 fn stats_with_loop_closures() {
     let mut project = Project::new("Loops".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7578,13 +7578,13 @@ fn stats_with_loop_closures() {
     assert_eq!(stats.loop_count, 1);
 }
 
-/// A section that never comes back up: every station is deep, and the old
-/// per-section delta walk would have reported the 0..5 excursion instead of the
+/// A line that never comes back up: every station is deep, and the old
+/// per-line delta walk would have reported the 0..5 excursion instead of the
 /// 30..35 the stations actually sit at (#481).
 #[test]
 fn depth_range_is_absolute_not_a_delta_walk() {
     let mut project = Project::new("Deep".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 10.0, 30.0, 32.0),
             shot(0.0, 0.0, 10.0, 32.0, 35.0),
@@ -7614,8 +7614,8 @@ fn calculate_penetration_empty_stations_no_datum() {
 #[test]
 fn calculate_penetration_single_datum_measures_max_distance() {
     let mut project = Project::new("Penetration".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 15.0, 0.0, 0.0),
@@ -7627,7 +7627,7 @@ fn calculate_penetration_single_datum_measures_max_distance() {
     // Set datum on station 0
     let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
     project
-        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .set_zero_datum(StationRef::new(line_id, 0), gps)
         .unwrap();
 
     let stations = project.compute_station_coordinates();
@@ -7652,7 +7652,7 @@ fn calculate_penetration_single_datum_measures_max_distance() {
 fn merge_stations_rejects_nonexistent_station() {
     let mut project = Project::new("MergeInvalid".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7660,7 +7660,7 @@ fn merge_stations_rejects_nonexistent_station() {
 
     let result = project.merge_stations(
         StationRef::new(a, 0),
-        StationRef::new(999, 0), // nonexistent section
+        StationRef::new(999, 0), // nonexistent line
     );
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("do not exist"));
@@ -7670,13 +7670,13 @@ fn merge_stations_rejects_nonexistent_station() {
 fn merge_stations_rejects_already_merged_pair() {
     let mut project = Project::new("MergeDupe".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7697,13 +7697,13 @@ fn merge_stations_rejects_already_merged_pair() {
 fn merge_stations_between_two_placed_groups_moves_the_later_one() {
     let mut project = Project::new("MergeBothDatums".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7721,13 +7721,13 @@ fn merge_stations_between_two_placed_groups_moves_the_later_one() {
             GpsCoordinates::new(0.0001, 0.0001, 0.0).unwrap(),
         )
         .unwrap();
-    let a_offset = project.section_offset(a);
+    let a_offset = project.line_offset(a);
 
     project
         .merge_stations(StationRef::new(b, 1), StationRef::new(a, 1))
         .expect("two placed groups may merge (#741)");
     assert_eq!(
-        project.section_offset(a),
+        project.line_offset(a),
         a_offset,
         "the earlier datum's group stays"
     );
@@ -7745,15 +7745,15 @@ fn merge_stations_between_two_placed_groups_moves_the_later_one() {
 #[test]
 fn compute_station_raw_coords_with_individual_station_offset() {
     let mut project = Project::new("StationOffset".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
     // Station 1 is at (0, 10, 0) without offset
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(line_id, 1);
     let coords_before = project.compute_station_raw_coords(station_ref).unwrap();
     assert!((coords_before.x - 0.0).abs() < 1e-6);
     assert!((coords_before.y - 10.0).abs() < 1e-6);
@@ -7770,20 +7770,20 @@ fn compute_station_raw_coords_with_individual_station_offset() {
 }
 
 #[test]
-fn compute_station_raw_coords_station_zero_with_section_offset() {
-    let mut project = Project::new("SectionOffset".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
+fn compute_station_raw_coords_station_zero_with_line_offset() {
+    let mut project = Project::new("LineOffset".to_string(), None);
+    let line_id = project
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    project.section_offsets.insert(section_id, (100.0, 200.0));
+    project.line_offsets.insert(line_id, (100.0, 200.0));
 
-    // Station 0 should be at the section offset
+    // Station 0 should be at the line offset
     let coords = project
-        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .compute_station_raw_coords(StationRef::new(line_id, 0))
         .unwrap();
     assert!((coords.x - 100.0).abs() < 1e-6);
     assert!((coords.y - 200.0).abs() < 1e-6);
@@ -7794,10 +7794,10 @@ fn compute_station_raw_coords_station_zero_with_section_offset() {
 // =====================================================================
 
 #[test]
-fn path_length_simple_linear_section() {
+fn path_length_simple_linear_line() {
     let mut project = Project::new("PathLen".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 15.0, 0.0, 0.0),
@@ -7816,10 +7816,10 @@ fn path_length_simple_linear_section() {
 }
 
 #[test]
-fn path_length_partial_section() {
+fn path_length_partial_line() {
     let mut project = Project::new("PartialPath".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 15.0, 0.0, 0.0),
@@ -7842,13 +7842,13 @@ fn path_length_partial_section() {
 fn path_length_through_merge() {
     let mut project = Project::new("PathThroughMerge".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7886,7 +7886,7 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
     // builders - so a corrupt/deserialized negative leg doesn't under-count (#176).
     let mut project = Project::new("NegFallback".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, -5.0, 0.0, 0.0),
@@ -7894,10 +7894,10 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
             ..Default::default()
         })
         .id;
-    // A disconnected second section so the target station exists yet is unreachable
+    // A disconnected second line so the target station exists yet is unreachable
     // from A - this forces the fallback-sum branch, not the early not-found return.
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -7917,11 +7917,11 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
 // =====================================================================
 
 #[test]
-fn compute_station_coordinates_basic_section() {
+fn compute_station_coordinates_basic_line() {
     let mut project = Project::new("StationCoords".to_string(), None);
     // Use zero depth change so horizontal_length == length
-    let section_id = project
-        .add_section(SectionData {
+    let line_id = project
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -7933,14 +7933,14 @@ fn compute_station_coordinates_basic_section() {
     let stations = project.compute_station_coordinates();
 
     // 3 stations: station 0, 1, 2
-    let section_stations: Vec<_> = stations
+    let line_stations: Vec<_> = stations
         .iter()
-        .filter(|s| s.station_ref.section_id == section_id)
+        .filter(|s| s.station_ref.line_id == line_id)
         .collect();
-    assert_eq!(section_stations.len(), 3);
+    assert_eq!(line_stations.len(), 3);
 
-    // Station 0 at origin (no section offset)
-    let s0 = section_stations
+    // Station 0 at origin (no line offset)
+    let s0 = line_stations
         .iter()
         .find(|s| s.station_ref.station_index == 0)
         .unwrap();
@@ -7948,7 +7948,7 @@ fn compute_station_coordinates_basic_section() {
     assert!((s0.coordinates.y).abs() < 1e-6);
 
     // Station 1: north 10m (azimuth 0), z = 0 (no depth change)
-    let s1 = section_stations
+    let s1 = line_stations
         .iter()
         .find(|s| s.station_ref.station_index == 1)
         .unwrap();
@@ -7969,7 +7969,7 @@ fn compute_station_coordinates_basic_section() {
     );
 
     // Station 2: north 10m then east 5m
-    let s2 = section_stations
+    let s2 = line_stations
         .iter()
         .find(|s| s.station_ref.station_index == 2)
         .unwrap();
@@ -7991,16 +7991,16 @@ fn compute_station_coordinates_basic_section() {
 }
 
 #[test]
-fn compute_station_coordinates_merged_sections_have_merged_with() {
+fn compute_station_coordinates_merged_lines_have_merged_with() {
     let mut project = Project::new("MergedCoords".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -8038,11 +8038,11 @@ fn compute_station_coordinates_merged_sections_have_merged_with() {
 // === realign_after_shot_edit tests ===
 
 #[test]
-fn realign_datum_section_keeps_datum_pinned() {
-    // Single section with datum on station 3. Edit shot before datum → datum stays at origin.
+fn realign_datum_line_keeps_datum_pinned() {
+    // Single line with datum on station 3. Edit shot before datum → datum stays at origin.
     let mut project = Project::new("DatumPin".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // north 10m
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),  // north 5m (will be edited)
@@ -8061,7 +8061,7 @@ fn realign_datum_section_keeps_datum_pinned() {
     assert!((coords.y).abs() < 1e-6);
 
     // Edit shot[1]: 5m → 8m
-    let shot_id = project.sections.iter().find(|s| s.id == sec).unwrap().shots[1].id;
+    let shot_id = project.lines.iter().find(|s| s.id == sec).unwrap().shots[1].id;
     project.update_shot(
         sec,
         shot_id,
@@ -8108,36 +8108,36 @@ fn realign_datum_section_keeps_datum_pinned() {
 }
 
 #[test]
-fn realign_merged_section_keeps_merge_point_aligned() {
-    // Section 1 has datum at 1:0. Section 2 merged at 1:2 <-> 2:0.
+fn realign_merged_line_keeps_merge_point_aligned() {
+    // Line 1 has datum at 1:0. Line 2 merged at 1:2 <-> 2:0.
     // Edit shot 2:1 → 2:0 should stay aligned with 1:2, station 2:0 shifts.
     // Wait, 2:0 IS the merge point. Let me restructure:
     //
-    // Section 1: 3 shots north (10m each). Datum at 1:0.
+    // Line 1: 3 shots north (10m each). Datum at 1:0.
     //   Stations: 1:0(datum, origin), 1:1(y=10), 1:2(y=20), 1:3(y=30)
-    // Section 2: 3 shots east (5m each). Merged at 1:3 <-> 2:0.
+    // Line 2: 3 shots east (5m each). Merged at 1:3 <-> 2:0.
     //   Before merge alignment: 2:0(0,0), 2:1(5,0), 2:2(10,0), 2:3(15,0)
     //   After merge alignment: 2:0(0,30), 2:1(5,30), 2:2(10,30), 2:3(15,30)
     //
-    // Edit shot 2:0 (first shot in section 2): length 5m → 15m.
+    // Edit shot 2:0 (first shot in line 2): length 5m → 15m.
     //   Without realign: 2:0(0,30), 2:1(15,30), 2:2(20,30), 2:3(25,30)
     //   2:0 is the merge point and should stay at (0,30) matching 1:3.
     //   With realign: same, because 2:0 is station_index 0 and the edit is shot[0]
     //   which shifts 2:1+ but NOT 2:0. Station 2:0 stays put.
     //
-    // Better test: edit shot that's BEFORE the merge point within section 2.
+    // Better test: edit shot that's BEFORE the merge point within line 2.
     // But 2:0 is the merge point (station_index 0) so all shots are after it.
     // Let's make the merge at a middle station instead.
 
-    // Section 1: shots north. Datum at 1:0.
-    // Section 2: 5 shots east (5m each). Merged at 1:3 <-> 2:3.
+    // Line 1: shots north. Datum at 1:0.
+    // Line 2: 5 shots east (5m each). Merged at 1:3 <-> 2:3.
     //   Edit shot 2:1 → stations 2:2, 2:3 shift. 2:3 is the merge point.
     //   Realign should keep 2:3 aligned with 1:3.
 
     let mut project = Project::new("MergeAlign".to_string(), None);
 
     let sec1 = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // north 10m
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // north 10m
@@ -8148,7 +8148,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
         .id;
 
     let sec2 = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0), // east 5m
                 shot(90.0, 90.0, 5.0, 0.0, 0.0), // east 5m (will be edited)
@@ -8170,7 +8170,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
         merged_at: Utc::now(),
     });
 
-    // Align section 2 offset so 2:3 matches 1:3
+    // Align line 2 offset so 2:3 matches 1:3
     // 1:3 is at (0, 30). 2:3 without offset is at (15, 0).
     // Need offset: (0-15, 30-0) = (-15, 30)
     let pos_1_3 = project
@@ -8180,7 +8180,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
         .compute_station_raw_coords(StationRef::new(sec2, 3))
         .unwrap();
     project
-        .section_offsets
+        .line_offsets
         .insert(sec2, (pos_1_3.x - pos_2_3_raw.x, pos_1_3.y - pos_2_3_raw.y));
 
     // Verify merge alignment
@@ -8203,7 +8203,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
 
     // Edit shot 2:1 (between 2:1 and 2:2): length 5m → 15m (+10m)
     let shot_id = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == sec2)
         .unwrap()
@@ -8272,19 +8272,19 @@ fn realign_merged_section_keeps_merge_point_aligned() {
 
 #[test]
 fn realign_noop_without_datums() {
-    // Section without any datums → realign should not change anything.
+    // Line without any datums → realign should not change anything.
     let mut project = Project::new("NoDatum".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    let offsets_before = project.section_offsets.clone();
+    let offsets_before = project.line_offsets.clone();
     project.realign_after_shot_edit(sec, None);
     assert_eq!(
-        project.section_offsets, offsets_before,
+        project.line_offsets, offsets_before,
         "Offsets should not change when no datums exist"
     );
 }
@@ -8293,7 +8293,7 @@ fn realign_noop_without_datums() {
 /// datum that anchors nothing.
 ///
 /// `zero_datums[0]` here DANGLES - its anchor key no longer resolves, which the
-/// app reaches by deleting the shot or section a datum was anchored to - so the
+/// app reaches by deleting the shot or line a datum was anchored to - so the
 /// survey is laid out against `zero_datums[1]`. That is what
 /// [`Project::frame_datum`] names, what `frame_datum_key` gates the
 /// renormalisation on, and the only one of the two the wire hands the frontend.
@@ -8307,7 +8307,7 @@ fn realign_noop_without_datums() {
 ///
 /// The realign's only production caller is
 /// `src-tauri/src/core/state/command_shot.rs:251`, which passes
-/// `hold_anchor_at = project.datum_anchor_position(section_id)` - computed at
+/// `hold_anchor_at = project.datum_anchor_position(line_id)` - computed at
 /// `:243`, BEFORE the edit - whenever `updates.touches_geometry()`, and does not
 /// call the realign at all otherwise. `datum_anchor_position` and the realign's
 /// own datum lookup use the SAME predicate (first datum in the merge group that
@@ -8325,13 +8325,13 @@ fn realign_noop_without_datums() {
 fn realign_without_a_hold_ignores_a_dangling_first_datum() {
     let mut project = Project::new("DanglingFrame".to_string(), None);
     let dangling_sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let framed_sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 7.0, 0.0, 0.0),
@@ -8339,7 +8339,7 @@ fn realign_without_a_hold_ignores_a_dangling_first_datum() {
             ..Default::default()
         })
         .id;
-    // No merges: the two sections are separate rigid groups, so the realign on
+    // No merges: the two lines are separate rigid groups, so the realign on
     // one of them can only be reasoning about that group's own datum.
 
     // zero_datums[0], anchored on a shot uuid that is not in this project. Pushed
@@ -8409,7 +8409,7 @@ fn realign_is_idempotent() {
     // Edit shot, realign twice → same result.
     let mut project = Project::new("Idempotent".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -8423,7 +8423,7 @@ fn realign_is_idempotent() {
     project.set_zero_datum(datum_station, gps).unwrap();
 
     // Edit shot[0]
-    let shot_id = project.sections.iter().find(|s| s.id == sec).unwrap().shots[0].id;
+    let shot_id = project.lines.iter().find(|s| s.id == sec).unwrap().shots[0].id;
     project.update_shot(
         sec,
         shot_id,
@@ -8434,10 +8434,10 @@ fn realign_is_idempotent() {
     );
 
     project.realign_after_shot_edit(sec, None);
-    let offsets_first = project.section_offsets.clone();
+    let offsets_first = project.line_offsets.clone();
 
     project.realign_after_shot_edit(sec, None);
-    let offsets_second = project.section_offsets.clone();
+    let offsets_second = project.line_offsets.clone();
 
     assert_eq!(offsets_first, offsets_second, "Should be idempotent");
 
@@ -8448,15 +8448,15 @@ fn realign_is_idempotent() {
 }
 
 #[test]
-fn realign_edit_in_datum_section_propagates_to_merged() {
-    // Edit a shot in the datum section (after datum) → merged partner follows.
-    // Section 1: 3 shots north (10m each). Datum at 1:0.
-    // Section 2: merged at 1:3 <-> 2:0.
-    // Edit shot 1:1 → 1:3 moves → section 2 must follow.
+fn realign_edit_in_datum_line_propagates_to_merged() {
+    // Edit a shot in the datum line (after datum) → merged partner follows.
+    // Line 1: 3 shots north (10m each). Datum at 1:0.
+    // Line 2: merged at 1:3 <-> 2:0.
+    // Edit shot 1:1 → 1:3 moves → line 2 must follow.
     let mut project = Project::new("DatumPropagate".to_string(), None);
 
     let sec1 = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0), // will be edited
@@ -8467,7 +8467,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
         .id;
 
     let sec2 = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -8488,7 +8488,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
         merged_at: Utc::now(),
     });
 
-    // Align section 2 to merge point
+    // Align line 2 to merge point
     let pos_1_3 = project
         .compute_station_raw_coords(StationRef::new(sec1, 3))
         .unwrap();
@@ -8496,7 +8496,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
         .compute_station_raw_coords(StationRef::new(sec2, 0))
         .unwrap();
     project
-        .section_offsets
+        .line_offsets
         .insert(sec2, (pos_1_3.x - pos_2_0.x, pos_1_3.y - pos_2_0.y));
 
     // Record 2:1's position before edit
@@ -8506,7 +8506,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
 
     // Edit shot 1:1 (between 1:1 and 1:2): 10m → 20m
     let shot_id = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == sec1)
         .unwrap()
@@ -8522,7 +8522,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
     );
 
     // 1:3 has shifted north by 10m. 1:0 (datum) is before the edit, unchanged.
-    // Realign from sec1 (the edited section)
+    // Realign from sec1 (the edited line)
     project.realign_after_shot_edit(sec1, None);
 
     // 1:0 still at origin (datum, before edited shot)
@@ -8573,10 +8573,10 @@ fn penetration_no_zero_datum_returns_zero() {
 }
 
 #[test]
-fn penetration_single_section_with_datum() {
+fn penetration_single_line_with_datum() {
     let mut project = Project::new("Pen".to_string(), None);
     let sec_id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             // Northward shot: azimuth 0 means north
             shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
@@ -8598,13 +8598,13 @@ fn penetration_single_section_with_datum() {
 fn penetration_datum_at_end_station() {
     let mut project = Project::new("PenEnd".to_string(), None);
     let sec_id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Datum at end of section (station 1)
+    // Datum at end of line (station 1)
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
     project
         .set_zero_datum(StationRef::new(sec_id, 1), gps)
@@ -8617,26 +8617,26 @@ fn penetration_datum_at_end_station() {
 }
 
 // ============================================================================
-// cleanup_section_references cascade tests
+// cleanup_line_references cascade tests
 // ============================================================================
 
 #[test]
-fn cleanup_removes_merges_referencing_section() {
+fn cleanup_removes_merges_referencing_line() {
     let mut project = Project::new("Cleanup".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -8654,26 +8654,26 @@ fn cleanup_removes_merges_referencing_section() {
     });
 
     assert_eq!(project.station_merges.len(), 2);
-    project.cleanup_section_references(b);
-    // Both merges involve section b, so both should be removed
+    project.cleanup_line_references(b);
+    // Both merges involve line b, so both should be removed
     assert_eq!(
         project.station_merges.len(),
         0,
-        "all merges involving section b should be removed"
+        "all merges involving line b should be removed"
     );
 }
 
 #[test]
-fn cleanup_removes_closures_referencing_section() {
+fn cleanup_removes_closures_referencing_line() {
     let mut project = Project::new("ClosureCleanup".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -8704,7 +8704,7 @@ fn cleanup_removes_closures_referencing_section() {
         is_aligned: false,
     });
 
-    project.cleanup_section_references(b);
+    project.cleanup_line_references(b);
     // Only the a↔b closure should be removed; a↔a stays
     assert_eq!(project.loop_closures.len(), 1);
     assert_eq!(project.loop_closures[0].id, 2);
@@ -8714,20 +8714,20 @@ fn cleanup_removes_closures_referencing_section() {
 fn cleanup_removes_offsets_and_datums() {
     let mut project = Project::new("OffsetCleanup".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    project.section_offsets.insert(a, (1.0, 2.0));
-    project.section_offsets.insert(b, (3.0, 4.0));
+    project.line_offsets.insert(a, (1.0, 2.0));
+    project.line_offsets.insert(b, (3.0, 4.0));
     project
         .station_offsets
         .insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
@@ -8739,15 +8739,15 @@ fn cleanup_removes_offsets_and_datums() {
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
     project.set_zero_datum(StationRef::new(b, 0), gps).unwrap();
 
-    project.cleanup_section_references(a);
+    project.cleanup_line_references(a);
 
     assert!(
-        !project.section_offsets.contains_key(&a),
-        "section a offset should be removed"
+        !project.line_offsets.contains_key(&a),
+        "line a offset should be removed"
     );
     assert!(
-        project.section_offsets.contains_key(&b),
-        "section b offset should remain"
+        project.line_offsets.contains_key(&b),
+        "line b offset should remain"
     );
     assert_eq!(
         project.station_offsets.len(),
@@ -8759,26 +8759,26 @@ fn cleanup_removes_offsets_and_datums() {
         1,
         "only b's zero datum should remain"
     );
-    assert_eq!(project.zero_datums[0].station_ref.section_id, b);
+    assert_eq!(project.zero_datums[0].station_ref.line_id, b);
 }
 
 #[test]
 fn cleanup_preserves_unrelated_merges() {
     let mut project = Project::new("PreserveUnrelated".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -8795,10 +8795,10 @@ fn cleanup_preserves_unrelated_merges() {
         merged_at: Utc::now(),
     });
 
-    // Remove section b - only the a↔b merge goes away
-    project.cleanup_section_references(b);
+    // Remove line b - only the a↔b merge goes away
+    project.cleanup_line_references(b);
     assert_eq!(project.station_merges.len(), 1);
-    assert_eq!(project.station_merges[0].station_b.section_id, c);
+    assert_eq!(project.station_merges[0].station_b.line_id, c);
 }
 
 // ============================================================================
@@ -8886,7 +8886,7 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
     assert_eq!(project.loop_closures[0].id, 6);
     // Second closure keeps id=5. Its `Move` strategy used to FORCE `is_aligned`
     // on every open; it is MEASURED now (#469 item 2), and this project has no
-    // sections at all - so neither endpoint resolves, there is no coincidence to
+    // lines at all - so neither endpoint resolves, there is no coincidence to
     // measure, and the claim stays false. (An open that re-asserted the flag
     // would put memory and disk permanently at odds about what the closure is.)
     assert_eq!(project.loop_closures[1].id, 5);
@@ -8912,14 +8912,14 @@ fn compute_station_depth_from_surrounding_shots() {
     // Station 1 has an incoming shot (depth_out=5.0) and outgoing shot (depth_in=6.0).
     // Average = (5 + 6) / 2 = 5.5
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 1.0, 0.0, 5.0),  // shot 0: depth_in=0, depth_out=5
             shot(0.0, 0.0, 1.0, 6.0, 10.0), // shot 1: depth_in=6, depth_out=10
         ],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     // Station 1 is between the two shots
     let coords = project
@@ -8937,11 +8937,11 @@ fn compute_station_depth_from_surrounding_shots() {
 fn compute_station_depth_first_station() {
     // Station 0 has only an outgoing shot - depth = shot[0].depth_in
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 1.0, 3.0, 7.0)],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     let coords = project
         .compute_station_raw_coords(StationRef::new(sec_id, 0))
@@ -8957,14 +8957,14 @@ fn compute_station_depth_first_station() {
 fn compute_station_depth_last_station() {
     // Station 2 (last) has only an incoming shot - depth = shot[1].depth_out
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 1.0, 0.0, 5.0),
             shot(0.0, 0.0, 1.0, 5.0, 12.0),
         ],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     let coords = project
         .compute_station_raw_coords(StationRef::new(sec_id, 2))
@@ -8977,11 +8977,11 @@ fn compute_station_depth_last_station() {
 }
 
 #[test]
-fn compute_station_depth_with_merge_averages_both_sections() {
-    // Two sections merged at a station - depth should average across all colocated readings
+fn compute_station_depth_with_merge_averages_both_lines() {
+    // Two lines merged at a station - depth should average across all colocated readings
     let mut project = Project::new("MergeDepth".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 8.0), // shot 0: depth_out=8
             ],
@@ -8989,7 +8989,7 @@ fn compute_station_depth_with_merge_averages_both_sections() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 1.0, 10.0, 20.0), // shot 0: depth_in=10
             ],
@@ -9030,11 +9030,11 @@ fn compute_station_depth_with_merge_averages_both_sections() {
 #[test]
 fn the_two_coordinate_apis_average_a_colocated_group_identically() {
     let mut project = Project::new("AverageOrder".to_string(), None);
-    // Section A first, so it sorts first AND comes first in `self.sections` - the
+    // Line A first, so it sorts first AND comes first in `self.lines` - the
     // component API's order. The BFS order is whatever station is asked about, which
     // below is B's.
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 33.29),
                 shot(0.0, 0.0, 1.0, 40.99, 0.0),
@@ -9043,7 +9043,7 @@ fn the_two_coordinate_apis_average_a_colocated_group_identically() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 1.0, 0.0, 6.58),
                 shot(90.0, 90.0, 1.0, 6.35, 0.0),
@@ -9057,7 +9057,7 @@ fn the_two_coordinate_apis_average_a_colocated_group_identically() {
         merged_at: Utc::now(),
     });
 
-    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let component: HashSet<LineId> = [a, b].into_iter().collect();
     let by_component = project.compute_component_raw_coords(&component);
     for station in [StationRef::new(a, 1), StationRef::new(b, 1)] {
         let single = project.compute_station_raw_coords(station).unwrap();
@@ -9074,20 +9074,20 @@ fn the_two_coordinate_apis_average_a_colocated_group_identically() {
 
 #[test]
 fn compute_station_depth_no_shots_returns_zero() {
-    // Edge case: section with no shots, station 0 has no surrounding shots
+    // Edge case: line with no shots, station 0 has no surrounding shots
     let mut project = Project::new("Empty".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     let coords = project
         .compute_station_raw_coords(StationRef::new(sec_id, 0))
         .unwrap();
     assert!(
         (coords.z).abs() < 1e-9,
-        "depth should be 0.0 for empty section, got {}",
+        "depth should be 0.0 for empty line, got {}",
         coords.z
     );
 }
@@ -9098,11 +9098,11 @@ fn compute_raw_coords_xy_walk_north() {
     // horizontal_length = sqrt(5^2 - 0^2) = 5
     // dx = 5 * sin(0) = 0, dy = 5 * cos(0) = 5
     let mut project = Project::new("Walk".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     let c0 = project
         .compute_station_raw_coords(StationRef::new(sec_id, 0))
@@ -9125,11 +9125,11 @@ fn compute_raw_coords_xy_walk_north() {
 fn compute_raw_coords_xy_walk_east() {
     // A shot due east (azimuth=90) with length 3m, flat
     let mut project = Project::new("Walk".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot(90.0, 90.0, 3.0, 5.0, 5.0)],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     let c1 = project
         .compute_station_raw_coords(StationRef::new(sec_id, 1))
@@ -9151,14 +9151,14 @@ fn compute_raw_coords_depth_independent_of_xy() {
     // Z is computed from absolute depth values, not from XY walk
     // Two shots: shot 0 goes north 10m at depth 5→8, shot 1 goes east 10m at depth 7→12
     let mut project = Project::new("IndepZ".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![
             shot(0.0, 0.0, 10.0, 5.0, 8.0),
             shot(90.0, 90.0, 10.0, 7.0, 12.0),
         ],
         ..Default::default()
     });
-    let sec_id = project.sections[0].id;
+    let sec_id = project.lines[0].id;
 
     // Station 0: only outgoing shot → depth_in = 5.0
     let c0 = project
@@ -9192,27 +9192,27 @@ fn compute_raw_coords_depth_independent_of_xy() {
 }
 
 #[test]
-fn compute_raw_coords_with_section_offset() {
+fn compute_raw_coords_with_line_offset() {
     let mut project = Project::new("Offset".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
             ..Default::default()
         })
         .id;
 
-    project.section_offsets.insert(sec, (100.0, 200.0));
+    project.line_offsets.insert(sec, (100.0, 200.0));
 
     let c0 = project
         .compute_station_raw_coords(StationRef::new(sec, 0))
         .unwrap();
     assert!(
         (c0.x - 100.0).abs() < 1e-9,
-        "x should include section offset"
+        "x should include line offset"
     );
     assert!(
         (c0.y - 200.0).abs() < 1e-9,
-        "y should include section offset"
+        "y should include line offset"
     );
 }
 
@@ -9220,7 +9220,7 @@ fn compute_raw_coords_with_section_offset() {
 fn compute_raw_coords_with_station_offset() {
     let mut project = Project::new("StaOff".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
             ..Default::default()
         })
@@ -9248,7 +9248,7 @@ fn lsq_no_closures_is_noop() {
     // With no closures, there are no constraints to adjust - should return Ok
     let mut project = Project::new("LSQ".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 5.0, 5.0),
                 shot(90.0, 90.0, 10.0, 5.0, 5.0),
@@ -9258,7 +9258,7 @@ fn lsq_no_closures_is_noop() {
         .id;
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [sec].into_iter().collect();
+    let component: HashSet<LineId> = [sec].into_iter().collect();
     let result = project.adjust_least_squares(&component, &[], StationRef::new(sec, 0), &config);
     assert!(result.is_ok(), "No closures should succeed: {:?}", result);
 }
@@ -9268,21 +9268,21 @@ fn lsq_preserves_depth_values() {
     // Key test: LSQ should adjust XY but NOT touch depth_in/depth_out
     let mut project = Project::new("LSQDepth".to_string(), None);
 
-    // Create a triangle: section A (north 10m), section B (east 10m), section C (south-west ~14m)
+    // Create a triangle: line A (north 10m), line B (east 10m), line C (south-west ~14m)
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 5.0, 8.0)], // north, depth 5→8
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 10.0, 8.0, 12.0)], // east, depth 8→12
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(225.0, 225.0, 14.5, 12.0, 5.5)], // south-west back, depth 12→5.5
             ..Default::default()
         })
@@ -9316,20 +9316,20 @@ fn lsq_preserves_depth_values() {
 
     // Save original depths
     let orig_depths: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
         .collect();
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let component: HashSet<LineId> = [a, b, c].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify depths are unchanged
     let new_depths: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
         .collect();
@@ -9344,7 +9344,7 @@ fn lsq_anchor_station_stays_fixed() {
     // The anchor station (or its group) should not move
     let mut project = Project::new("LSQAnchor".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 5.0, 5.0),
                 shot(0.0, 0.0, 10.0, 5.0, 5.0),
@@ -9353,7 +9353,7 @@ fn lsq_anchor_station_stays_fixed() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 20.5, 5.0, 5.0)], // slight error for closure
             ..Default::default()
         })
@@ -9382,7 +9382,7 @@ fn lsq_anchor_station_stays_fixed() {
     let coords_before = project.compute_station_raw_coords(anchor).unwrap();
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let component: HashSet<LineId> = [a, b].into_iter().collect();
     let result = project.adjust_least_squares(&component, &[closure], anchor, &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
@@ -9403,7 +9403,7 @@ fn lsq_produces_finite_coordinates() {
     // After adjustment, all station coordinates should be finite
     let mut project = Project::new("LSQFinite".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 5.0, 5.0),
                 shot(90.0, 90.0, 10.0, 5.0, 5.0),
@@ -9412,7 +9412,7 @@ fn lsq_produces_finite_coordinates() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(225.0, 225.0, 14.0, 5.0, 5.0)],
             ..Default::default()
         })
@@ -9438,32 +9438,32 @@ fn lsq_produces_finite_coordinates() {
     };
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let component: HashSet<LineId> = [a, b].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
-    for section in &project.sections {
-        for idx in 0..=section.shots.len() {
+    for line in &project.lines {
+        for idx in 0..=line.shots.len() {
             let coords = project
-                .compute_station_raw_coords(StationRef::new(section.id, idx as u32))
+                .compute_station_raw_coords(StationRef::new(line.id, idx as u32))
                 .unwrap();
             assert!(
                 coords.x.is_finite(),
                 "x should be finite for {}:{}",
-                section.id,
+                line.id,
                 idx
             );
             assert!(
                 coords.y.is_finite(),
                 "y should be finite for {}:{}",
-                section.id,
+                line.id,
                 idx
             );
             assert!(
                 coords.z.is_finite(),
                 "z should be finite for {}:{}",
-                section.id,
+                line.id,
                 idx
             );
         }
@@ -9475,19 +9475,19 @@ fn lsq_with_zero_datum_fixes_that_group() {
     // When a zero datum exists, its group should be fixed and not move
     let mut project = Project::new("LSQDatum".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 10.0, 5.0, 5.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 10.0, 5.0, 5.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(225.0, 225.0, 14.5, 5.0, 5.0)],
             ..Default::default()
         })
@@ -9529,7 +9529,7 @@ fn lsq_with_zero_datum_fixes_that_group() {
         .unwrap();
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let component: HashSet<LineId> = [a, b, c].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
@@ -9656,8 +9656,8 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     // per-shot geometry changes must be small (proportional to misclosure /
     // shot_count), not massive due to solver non-convergence.
     //
-    // Topology: section A (200 shots north, each 5m) with zero datum at A:200.
-    //           section B (1 shot, 10m east) with zero datum at B:0.
+    // Topology: line A (200 shots north, each 5m) with zero datum at A:200.
+    //           line B (1 shot, 10m east) with zero datum at B:0.
     //           Closure: A:100 ↔ B:1
     //
     // This creates an asymmetric loop where B:1 is 1 shot from a fixed point
@@ -9665,18 +9665,18 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     // each shot should change by at most misclosure/num_shots ≈ 0.01m.
     let mut project = Project::new("LSQLongChain".to_string(), None);
 
-    // Section A: 200 shots heading north, each 5m
+    // Line A: 200 shots heading north, each 5m
     let shots_a: Vec<ShotData> = (0..200).map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0)).collect();
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: shots_a,
             ..Default::default()
         })
         .id;
 
-    // Section B: 1 shot heading east, 10m
+    // Line B: 1 shot heading east, 10m
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -9698,8 +9698,8 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
     // Large offsets stress-test the solver: absolute coordinates are 500-1800m
     // from origin, which triggers convergence issues if starting from x=0.
-    project.section_offsets.insert(a, (500.0, 800.0));
-    project.section_offsets.insert(b, (500.0, 1300.0));
+    project.line_offsets.insert(a, (500.0, 800.0));
+    project.line_offsets.insert(b, (500.0, 1300.0));
     // A:0 at (500, 800), A:100 at (500, 1300), A:200 at (500, 1800)
     // B:0 at (500, 1300), B:1 at (510, 1300)
     // misclosure distance((500, 1300), (510, 1300)) = 10m
@@ -9707,7 +9707,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
     // Save original shot data
     let orig_shots_a: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == a)
         .unwrap()
@@ -9730,7 +9730,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     };
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let component: HashSet<LineId> = [a, b].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
@@ -9739,7 +9739,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     // With 201 shots and 10m misclosure, max per-shot change ≈ 0.05m per shot.
     // We allow up to 0.5m per shot to be safe (10x margin).
     let new_shots_a: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == a)
         .unwrap()
@@ -9787,16 +9787,16 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 #[test]
 fn lsq_realistic_topology_preserves_geometry() {
     // Mimics the user's topology from kbd.stalx:
-    // - Section A: 364 shots with varying azimuths (real-world cave)
-    // - Section B: 1 shot (anchor section)
-    // - Section C: 105 shots (branch)
+    // - Line A: 364 shots with varying azimuths (real-world cave)
+    // - Line B: 1 shot (anchor line)
+    // - Line C: 105 shots (branch)
     // - Two zero datums at A:364 and B:0
     // - Merge: C:105 ↔ A:180
     // - Closure: A:73 ↔ B:1
-    // - Large section offsets (700-900m range)
+    // - Large line offsets (700-900m range)
     let mut project = Project::new("RealisticLSQ".to_string(), None);
 
-    // Section A: 364 shots with varying azimuths (zigzag pattern)
+    // Line A: 364 shots with varying azimuths (zigzag pattern)
     let shots_a: Vec<ShotData> = (0..364)
         .map(|i| {
             let az = match i % 4 {
@@ -9811,30 +9811,30 @@ fn lsq_realistic_topology_preserves_geometry() {
         })
         .collect();
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: shots_a,
             ..Default::default()
         })
         .id;
 
-    // Section B: 1 shot (anchor)
+    // Line B: 1 shot (anchor)
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(120.0, 120.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Set section A offset (large, like real data)
+    // Set line A offset (large, like real data)
     let offset_a = (761.5, -1284.6);
-    project.section_offsets.insert(a, offset_a);
+    project.line_offsets.insert(a, offset_a);
 
     // Compute A:73 absolute position = offset_a + cumulative shot vectors 0..72
-    let a_section = project.sections.iter().find(|s| s.id == a).unwrap();
+    let a_line = project.lines.iter().find(|s| s.id == a).unwrap();
     let mut a73_x = 0.0_f64;
     let mut a73_y = 0.0_f64;
     for i in 0..73 {
-        let s = &a_section.shots[i];
+        let s = &a_line.shots[i];
         let az = s.azimuth_in.to_radians();
         let h = s.horizontal_length();
         a73_x += h * az.sin();
@@ -9846,7 +9846,7 @@ fn lsq_realistic_topology_preserves_geometry() {
     let b_shot_dx = 10.0 * 120.0_f64.to_radians().sin();
     let b_shot_dy = 10.0 * 120.0_f64.to_radians().cos();
     // Set B offset so B:1 is near A:73 with a small misclosure (~2m)
-    project.section_offsets.insert(
+    project.line_offsets.insert(
         b,
         (a73_abs_x - b_shot_dx + 1.5, a73_abs_y - b_shot_dy + 1.3),
     );
@@ -9865,9 +9865,9 @@ fn lsq_realistic_topology_preserves_geometry() {
         entrance: None,
     });
 
-    // Save original shots for section A
+    // Save original shots for line A
     let orig_a: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == a)
         .unwrap()
@@ -9902,7 +9902,7 @@ fn lsq_realistic_topology_preserves_geometry() {
     .sqrt();
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let component: HashSet<LineId> = [a, b].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
@@ -9922,9 +9922,9 @@ fn lsq_realistic_topology_preserves_geometry() {
         "residual misclosure {residual_misc:.6}m should be near zero"
     );
 
-    // Verify per-shot changes in section A are bounded.
+    // Verify per-shot changes in line A are bounded.
     let new_a: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == a)
         .unwrap()
@@ -9956,9 +9956,9 @@ fn lsq_spur_shots_are_not_modified() {
     // Spur (branch) shots have no loop redundancy and must remain untouched.
     //
     // Topology:
-    //   Section A: 100 shots north (5m each), zero datum at A:100.
-    //   Section B: 1 shot east (10m), zero datum at B:0.
-    //   Section C: 20 shots east (3m each), merged to A:50 via C:0↔A:50.
+    //   Line A: 100 shots north (5m each), zero datum at A:100.
+    //   Line B: 1 shot east (10m), zero datum at B:0.
+    //   Line C: 20 shots east (3m each), merged to A:50 via C:0↔A:50.
     //   Closure: A:30 ↔ B:1.
     //
     // Spur stations: A:0-A:29 (before closure), C:1-C:20 (branch beyond merge).
@@ -9967,14 +9967,14 @@ fn lsq_spur_shots_are_not_modified() {
 
     let shots_a: Vec<ShotData> = (0..100).map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0)).collect();
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: shots_a,
             ..Default::default()
         })
         .id;
 
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -9982,7 +9982,7 @@ fn lsq_spur_shots_are_not_modified() {
 
     let shots_c: Vec<ShotData> = (0..20).map(|_| shot(90.0, 90.0, 3.0, 0.0, 0.0)).collect();
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: shots_c,
             ..Default::default()
         })
@@ -10010,19 +10010,19 @@ fn lsq_spur_shots_are_not_modified() {
     });
 
     // Large offsets to stress the solver
-    project.section_offsets.insert(a, (500.0, 800.0));
-    project.section_offsets.insert(b, (500.0, 950.0));
-    project.section_offsets.insert(c, (500.0, 1050.0));
+    project.line_offsets.insert(a, (500.0, 800.0));
+    project.line_offsets.insert(b, (500.0, 950.0));
+    project.line_offsets.insert(c, (500.0, 1050.0));
 
-    // Save original shot data for spur sections
-    let orig_a_spur: Vec<(f64, f64)> = project.sections.iter().find(|s| s.id == a).unwrap().shots
+    // Save original shot data for spur lines
+    let orig_a_spur: Vec<(f64, f64)> = project.lines.iter().find(|s| s.id == a).unwrap().shots
         [..30] // A:0-A:29 are spur shots (before closure at A:30)
         .iter()
         .map(|s| (s.azimuth_in, s.length))
         .collect();
 
     let orig_c: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == c)
         .unwrap()
@@ -10045,13 +10045,13 @@ fn lsq_spur_shots_are_not_modified() {
     };
 
     let config = ClosureAdjustmentConfig::default();
-    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let component: HashSet<LineId> = [a, b, c].into_iter().collect();
     let result =
         project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify spur shots in A (indices 0..29) are exactly unchanged.
-    let new_a_spur: Vec<(f64, f64)> = project.sections.iter().find(|s| s.id == a).unwrap().shots
+    let new_a_spur: Vec<(f64, f64)> = project.lines.iter().find(|s| s.id == a).unwrap().shots
         [..30]
         .iter()
         .map(|s| (s.azimuth_in, s.length))
@@ -10067,9 +10067,9 @@ fn lsq_spur_shots_are_not_modified() {
         );
     }
 
-    // Verify all shots in section C are exactly unchanged.
+    // Verify all shots in line C are exactly unchanged.
     let new_c: Vec<(f64, f64)> = project
-        .sections
+        .lines
         .iter()
         .find(|s| s.id == c)
         .unwrap()
@@ -10111,37 +10111,37 @@ fn lsq_spur_shots_are_not_modified() {
 fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
     // The half-populated-memo trap: a structural removal drops merges while
     // others survive, and the NEXT recorded merge must land on a whole base, not
-    // on a map holding only its own edge (which `get_merged_section_ids` would
+    // on a map holding only its own edge (which `get_merged_line_ids` would
     // then treat as the entire merge graph, hiding every surviving merge).
     let mut project = Project::new("Cache".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let d = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    // An extra, merge-free section: cleaning up ITS references is the structural
+    // An extra, merge-free line: cleaning up ITS references is the structural
     // removal that invalidates the adjacency below.
     let e = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10159,10 +10159,10 @@ fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
         station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
-    assert_eq!(project.get_merged_section_ids(a).len(), 3);
+    assert_eq!(project.get_merged_line_ids(a).len(), 3);
 
-    // The `delete_section` cleanup: a merge retain that keeps A↔B and B↔C.
-    project.cleanup_section_references(e);
+    // The `delete_line` cleanup: a merge retain that keeps A↔B and B↔C.
+    project.cleanup_line_references(e);
 
     // Now record a NEW merge (e.g. the user merges D into the group). It must
     // land on the whole surviving graph, not on a map holding only {C, D}.
@@ -10171,7 +10171,7 @@ fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
         station_b: StationRef::new(d, 0).into(),
         merged_at: Utc::now(),
     });
-    let merged = project.get_merged_section_ids(a);
+    let merged = project.get_merged_line_ids(a);
     assert!(
         merged.contains(&a) && merged.contains(&b) && merged.contains(&c) && merged.contains(&d),
         "expected the surviving A-B-C merges to still propagate after a structural \
@@ -10182,7 +10182,7 @@ fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
 
 #[test]
 fn map_station_refs_invalidates_the_merge_adjacency_memo() {
-    // `map_station_refs` can move a merge endpoint to a different SECTION - that
+    // `map_station_refs` can move a merge endpoint to a different LINE - that
     // is what the delete-shot split does - so it rewrites the very graph the
     // merge-adjacency memo describes. Answering a later query from the pre-remap
     // memo reports the wrong rigid group, which is how a bridge closure got
@@ -10190,7 +10190,7 @@ fn map_station_refs_invalidates_the_merge_adjacency_memo() {
     let mut project = Project::new("Remap".to_string(), None);
     let mk = |project: &mut Project| {
         project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
                 ..Default::default()
             })
@@ -10204,11 +10204,11 @@ fn map_station_refs_invalidates_the_merge_adjacency_memo() {
         merged_at: Utc::now(),
     });
     // Warm the memo on the pre-remap shape.
-    assert_eq!(project.get_merged_section_ids(a), HashSet::from([a, b]));
+    assert_eq!(project.get_merged_line_ids(a), HashSet::from([a, b]));
 
-    // The split's remap: the B endpoint now lives in section C.
+    // The split's remap: the B endpoint now lives in line C.
     project.map_station_refs(|key| {
-        if key.section_id == b {
+        if key.line_id == b {
             StationRef::new(c, 0).into()
         } else {
             key
@@ -10216,14 +10216,14 @@ fn map_station_refs_invalidates_the_merge_adjacency_memo() {
     });
 
     assert_eq!(
-        project.get_merged_section_ids(a),
+        project.get_merged_line_ids(a),
         HashSet::from([a, c]),
-        "the rigid group must follow the rewritten endpoint into section C"
+        "the rigid group must follow the rewritten endpoint into line C"
     );
     assert_eq!(
-        project.get_merged_section_ids(b),
+        project.get_merged_line_ids(b),
         HashSet::from([b]),
-        "section B no longer carries a merge endpoint, so it stands alone"
+        "line B no longer carries a merge endpoint, so it stands alone"
     );
 }
 
@@ -10231,21 +10231,21 @@ fn map_station_refs_invalidates_the_merge_adjacency_memo() {
 fn integrity_flags_non_finite_geometry() {
     let mut p = Project::new("NaN".to_string(), None);
     let a = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     assert!(p.check_structural_integrity().is_empty());
     // Poison a shot the way a corrupt/older file or unguarded import could.
-    p.get_section_mut(a).unwrap().shots[0].length = f64::NAN;
+    p.get_line_mut(a).unwrap().shots[0].length = f64::NAN;
     let v = p.check_structural_integrity();
     assert!(
         v.iter().any(|x| x.category == "non_finite_geometry"),
         "non-finite geometry must be flagged: {v:?}"
     );
     // And the live edit path rejects it.
-    assert!(!p.get_section(a).unwrap().shots[0].all_finite());
+    assert!(!p.get_line(a).unwrap().shots[0].all_finite());
 }
 
 #[test]
@@ -10255,13 +10255,13 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     // is fine, only the (redundant) closure is stale.
     let mut project = Project::new("StaleClosure".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10308,7 +10308,7 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
 
 #[test]
 fn cascade_solves_deep_chain_past_old_iteration_cap() {
-    // A 40-section chain merged end-to-end, anchored at the datum on the FAR
+    // A 40-line chain merged end-to-end, anchored at the datum on the FAR
     // end so propagation must traverse all 40 hops in the worst (backward) edge
     // order. The old 20-iteration fixpoint could silently stop halfway; the
     // single-pass BFS solver must align every merge regardless of depth.
@@ -10316,14 +10316,14 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
     let mut ids = Vec::new();
     for _ in 0..40 {
         let id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(90.0, 90.0, 3.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
         ids.push(id);
     }
-    // Chain: section[i] station 1 merged to section[i+1] station 0.
+    // Chain: line[i] station 1 merged to line[i+1] station 0.
     for w in ids.windows(2) {
         project.record_station_merge(StationMerge {
             station_a: StationRef::new(w[0], 1).into(),
@@ -10331,7 +10331,7 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
             merged_at: Utc::now(),
         });
     }
-    // Datum on the LAST section (far end from section[0]).
+    // Datum on the LAST line (far end from line[0]).
     let last = *ids.last().unwrap();
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(last, 0).into(),
@@ -10339,9 +10339,9 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
         accuracy_m: None,
         entrance: None,
     });
-    // Knock every section out of alignment, then re-solve from scratch.
+    // Knock every line out of alignment, then re-solve from scratch.
     for &id in &ids {
-        project.adjust_section_offset(id, 7.0, -3.0);
+        project.adjust_line_offset(id, 7.0, -3.0);
     }
     project.realign_merges();
     assert!(
@@ -10351,16 +10351,16 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
 }
 
 #[test]
-fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
+fn an_adjustment_that_lands_on_dust_leaves_no_line_offset_key() {
     // #413 finding 2, dust half. An adjustment is not exactly invertible, so
     // "move it and move it back" lands a femtometre from where it started
-    // rather than on it. On a section with NO offset that femtometre is enough
-    // to CREATE a `section_offsets` key - and the key, unlike the value, is
+    // rather than on it. On a line with NO offset that femtometre is enough
+    // to CREATE a `line_offsets` key - and the key, unlike the value, is
     // structural: it is saved, and the route that never moved has no such key,
     // so two routes to the same geometry stop comparing equal.
     let mut project = Project::new("Dust".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10368,51 +10368,51 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
 
     // A round trip whose two halves do not cancel exactly: 0.1 + 0.2 - 0.3 is
     // 5.55e-17, not 0, in IEEE double.
-    project.adjust_section_offset(a, 0.1, 0.0);
-    project.adjust_section_offset(a, 0.2, 0.0);
-    project.adjust_section_offset(a, -0.3, 0.0);
+    project.adjust_line_offset(a, 0.1, 0.0);
+    project.adjust_line_offset(a, 0.2, 0.0);
+    project.adjust_line_offset(a, -0.3, 0.0);
     assert!(
-        !project.section_offsets.contains_key(&a),
+        !project.line_offsets.contains_key(&a),
         "an adjust-and-adjust-back must leave no key, not a dust one: {:?}",
-        project.section_offsets.get(&a)
+        project.line_offsets.get(&a)
     );
 
     // Real geometry is untouched: a millimetre is three decades above the bound
     // (#469 re-measured it up from a picometre - see `Project::OFFSET_DUST_M`).
-    project.adjust_section_offset(a, 0.001, 0.0);
-    assert_eq!(project.section_offsets.get(&a).copied(), Some((0.001, 0.0)));
+    project.adjust_line_offset(a, 0.001, 0.0);
+    assert_eq!(project.line_offsets.get(&a).copied(), Some((0.001, 0.0)));
 
     // The bound is a normalization on WRITES, and it binds EVERY writer - a
     // restore included. It used to be the other way round (a restore reproduced
     // what it was handed, dust and all, so an undo stayed the exact inverse of
     // what it undid), and that exception is exactly what made a present all-zero
-    // key representable: `MoveSection(+d)` then `MoveSection(-d)` then had to end
+    // key representable: `MoveLine(+d)` then `MoveLine(-d)` then had to end
     // ABSENT from an absent key and PRESENT from an all-zero one, which no writer
     // can decide from its own arguments. The state is gone instead - see the
-    // invariant on `Project::write_section_offset` - so a dust value handed to a
+    // invariant on `Project::write_line_offset` - so a dust value handed to a
     // restore lands ABSENT, which is the only spelling of what it meant.
-    project.set_section_offset(a, (1e-15, 0.0));
+    project.set_line_offset(a, (1e-15, 0.0));
     assert_eq!(
-        project.section_offsets.get(&a).copied(),
+        project.line_offsets.get(&a).copied(),
         None,
-        "set_section_offset must hold the invariant: a dust value is not a position"
+        "set_line_offset must hold the invariant: a dust value is not a position"
     );
-    project.set_section_offset(a, (0.002, 0.0));
+    project.set_line_offset(a, (0.002, 0.0));
     let mut captured = HashMap::new();
     captured.insert(a, Some((3e-14, -2e-14)));
-    project.restore_section_offsets(&captured);
+    project.restore_line_offsets(&captured);
     assert_eq!(
-        project.section_offsets.get(&a).copied(),
+        project.line_offsets.get(&a).copied(),
         None,
-        "restore_section_offsets must hold it too: an entry recorded by a build that predates \
+        "restore_line_offsets must hold it too: an entry recorded by a build that predates \
          the invariant may not reinstate the state the invariant removed"
     );
     // And a restore of a REAL value is untouched by any of it.
     let mut captured = HashMap::new();
     captured.insert(a, Some((0.25, -0.5)));
-    project.restore_section_offsets(&captured);
+    project.restore_line_offsets(&captured);
     assert_eq!(
-        project.section_offsets.get(&a).copied(),
+        project.line_offsets.get(&a).copied(),
         Some((0.25, -0.5)),
         "a restore of a real displacement must still reproduce it verbatim"
     );
@@ -10432,7 +10432,7 @@ fn the_dust_gate_is_decades_clear_of_both_ends() {
     //
     // From BELOW: it has to sit clear of the float residue two routes to the
     // same geometry differ by, or a residue lands on either side of it and one
-    // route writes a `section_offsets` key the other does not (#469, the
+    // route writes a `line_offsets` key the other does not (#469, the
     // `CLOSURE_SHAPES=1` seed 18 failure). Two decades of clearance over the
     // worst residue ever measured is the floor.
     assert!(
@@ -10478,18 +10478,18 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
     // promoted - rather than by injecting a large offset.
     let mut project = Project::new("Ceiling".to_string(), None);
 
-    // A chain of merged sections, deep enough that the cascade BFS sums a real
+    // A chain of merged lines, deep enough that the cascade BFS sums a real
     // chain of adjustments rather than one hop.
     const CHAIN: usize = 12;
-    let chain: Vec<SectionId> = (0..CHAIN)
+    let chain: Vec<LineId> = (0..CHAIN)
         .map(|i| {
             #[expect(
                 clippy::cast_precision_loss,
-                reason = "12 section indices, exact in f64"
+                reason = "12 line indices, exact in f64"
             )]
             let turn = (i as f64) * 17.0;
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     shots: vec![
                         shot(turn, turn + 3.0, 13.7, 0.0, 1.1),
                         shot(turn + 41.0, turn + 44.0, 7.3, 1.1, 2.9),
@@ -10511,7 +10511,7 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
     // first one goes. Nothing merges the two, so the translation below is the
     // only thing that moves the chain.
     let far = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 9.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10551,12 +10551,12 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
     // A zero-trust re-solve, the route the loader and Repair take.
     project.resolve_offsets();
 
-    let local = project.section_local_coords();
+    let local = project.line_local_coords();
     let station_offsets = project.resolved_station_offsets();
     let reached = chain
         .iter()
         .flat_map(|&id| {
-            let (ox, oy) = project.section_offset(id);
+            let (ox, oy) = project.line_offset(id);
             [ox.abs(), oy.abs()]
         })
         .fold(0.0_f64, f64::max);
@@ -10586,34 +10586,34 @@ fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
 
     // And the consequence, which is the defect itself rather than the number
     // behind it: a SECOND cascade over the same geometry, seeded from one
-    // section of the chain instead of from every datum-bearing section, must
+    // line of the chain instead of from every datum-bearing line, must
     // leave the map alone. Those two seed sets sum the same chains in different
     // orders and are entitled to differ in the last bits - what they are not
-    // entitled to do is disagree about whether a section HAS a key, which is
+    // entitled to do is disagree about whether a line HAS a key, which is
     // structural, survives into the `.stalx`, and is exactly what #469's
     // `CLOSURE_SHAPES=1` seed 18 caught the picometre gate doing. Compared as a
-    // whole map, so a key appearing on a section the first route left alone
+    // whole map, so a key appearing on a line the first route left alone
     // fails even where the value is dust.
-    let before = project.section_offsets.clone();
+    let before = project.line_offsets.clone();
     project.cascade_connection_offsets(&[chain[CHAIN / 2]]);
     assert_eq!(
-        before, project.section_offsets,
+        before, project.line_offsets,
         "a second cascade over one solved geometry, seeded differently, rewrote the offset map \
          at {reached:e} m from the frame origin. Two routes to one geometry must agree on which \
-         sections have a key (#469)"
+         lines have a key (#469)"
     );
 }
 
 #[test]
-fn reversing_a_section_twice_leaves_no_section_offset_key() {
+fn reversing_a_line_twice_leaves_no_line_offset_key() {
     // The dust half's headline route (#413 finding 2, and the metamorphic
-    // `reverse-twice-is-identity` pair): the reverse compensates the section
+    // `reverse-twice-is-identity` pair): the reverse compensates the line
     // offset by the shot run's displacement, and the second reverse sums the
     // negated vectors in the OPPOSITE order, so the round trip lands near zero
     // rather than on it. An un-normalized write kept that femtometre as a key.
     let mut project = Project::new("ReverseTwice".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(37.0, 37.0, 13.7, 0.0, 1.1),
                 shot(122.0, 122.0, 7.3, 1.1, 2.9),
@@ -10624,14 +10624,14 @@ fn reversing_a_section_twice_leaves_no_section_offset_key() {
         })
         .id;
     project.ensure_shot_uuids();
-    assert!(!project.section_offsets.contains_key(&a));
+    assert!(!project.line_offsets.contains_key(&a));
 
-    assert!(project.reverse_section(a, false));
-    assert!(project.reverse_section(a, false));
+    assert!(project.reverse_line(a, false));
+    assert!(project.reverse_line(a, false));
     assert!(
-        !project.section_offsets.contains_key(&a),
+        !project.line_offsets.contains_key(&a),
         "reverse twice is the identity, so it must leave the map as it found it: {:?}",
-        project.section_offsets.get(&a)
+        project.line_offsets.get(&a)
     );
 }
 
@@ -10641,10 +10641,10 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
     // (a new shot in the array slot between s0 and s1), so a merge anchored
     // exactly on the boundary station must end up referencing the same station
     // index either way. A divergence is an off-by-one in one of the shifts.
-    fn build() -> (Project, SectionId, ShotId, ShotId) {
+    fn build() -> (Project, LineId, ShotId, ShotId) {
         let mut p = Project::new("Boundary".to_string(), None);
         let a = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(0.0, 0.0, 5.0, 0.0, 0.0),
                     shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -10653,7 +10653,7 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
             })
             .id;
         let b = p
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
@@ -10664,18 +10664,18 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
             station_b: StationRef::new(b, 0).into(),
             merged_at: Utc::now(),
         });
-        let s0 = p.get_section(a).unwrap().shots[0].id;
-        let s1 = p.get_section(a).unwrap().shots[1].id;
+        let s0 = p.get_line(a).unwrap().shots[0].id;
+        let s1 = p.get_line(a).unwrap().shots[1].id;
         (p, a, s0, s1)
     }
 
-    let a_side_index = |p: &Project, a: SectionId| -> u32 {
+    let a_side_index = |p: &Project, a: LineId| -> u32 {
         let m = p
             .station_merges
             .iter()
-            .find(|m| m.station_a.section_id == a || m.station_b.section_id == a)
+            .find(|m| m.station_a.line_id == a || m.station_b.line_id == a)
             .expect("merge");
-        let key = if m.station_a.section_id == a {
+        let key = if m.station_a.line_id == a {
             &m.station_a
         } else {
             &m.station_b
@@ -10718,13 +10718,13 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     // empty transient caches (as after deserialization).
     let mut project = Project::new("Loaded".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10738,9 +10738,9 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    // Persisted drift + an empty section index (as after deserialization).
-    project.adjust_section_offset(b, 31.0, -9.0);
-    project.section_index_cache.clear();
+    // Persisted drift + an empty line index (as after deserialization).
+    project.adjust_line_offset(b, 31.0, -9.0);
+    project.line_index_cache.clear();
     assert!(!project.check_merge_alignment().is_empty());
 
     let healed = project.redrive_offsets_after_load();
@@ -10753,7 +10753,7 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
 
 #[test]
 fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
-    // Regression: when a loaded section already has two shots sharing a UUID, the
+    // Regression: when a loaded line already has two shots sharing a UUID, the
     // load-time canonicalization of positional Index anchors to AfterShot(uuid)
     // MUST run after de-duplicating UUIDs. Otherwise a ref at the station after the
     // SECOND duplicate canonicalizes to AfterShot(dup), which resolve_key resolves
@@ -10761,7 +10761,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     // defeating Repair.
     let mut project = Project::new("Dup".to_string(), None);
     let s = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 0.0),
                 shot(0.0, 0.0, 1.0, 0.0, 0.0),
@@ -10773,11 +10773,11 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     project.ensure_shot_uuids();
     // Force a duplicate: shots[0] and shots[1] share a UUID, as a corrupt/legacy
     // file could persist. (ensure_unique keeps the first and re-mints the second.)
-    let dup = project.get_section(s).unwrap().shots[0]
+    let dup = project.get_line(s).unwrap().shots[0]
         .uuid
         .clone()
         .unwrap();
-    project.get_section_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
+    project.get_line_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
 
     // A station offset stored in the legacy positional form at station 2 - the
     // station immediately AFTER the second duplicate shot.
@@ -10800,7 +10800,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     );
     // And the duplicate was actually repaired (no two shots share a UUID).
     let uuids: Vec<_> = project
-        .get_section(s)
+        .get_line(s)
         .unwrap()
         .shots
         .iter()
@@ -10823,13 +10823,13 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
     // bogus timestamp and a no-op integrity Repair looks like a real change.
     let mut project = Project::new("Clean".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10852,7 +10852,7 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
     );
 
     // And a genuine drift still touches (offsets change → modified_at advances).
-    project.adjust_section_offset(b, 10.0, -4.0);
+    project.adjust_line_offset(b, 10.0, -4.0);
     let pre = project.modified_at;
     let healed2 = project.resolve_offsets();
     assert_eq!(healed2, 1, "the injected drift is healed");
@@ -10860,14 +10860,14 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
 }
 
 #[test]
-fn section_has_zero_datum_ignores_dangling_datum() {
+fn line_has_zero_datum_ignores_dangling_datum() {
     // A corrupt project can be opened with a DANGLING zero datum (anchor shot
     // deleted) so the user can repair it. It must NOT count as a real anchor - else
-    // a merge picks the phantom-anchored section as the fixed group and shifts the
+    // a merge picks the phantom-anchored line as the fixed group and shifts the
     // world coordinate system around a station that doesn't resolve.
     let mut project = Project::new("DanglingDatum".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10882,7 +10882,7 @@ fn section_has_zero_datum_ignores_dangling_datum() {
     });
 
     assert!(
-        !project.section_has_zero_datum(a),
+        !project.line_has_zero_datum(a),
         "a dangling zero datum must not count as a merge anchor"
     );
     // Sanity: it is flagged as a dangling cross-reference.
@@ -10899,18 +10899,18 @@ fn section_has_zero_datum_ignores_dangling_datum() {
 fn has_datum_path_excluding_ignores_dangling_datum() {
     // A dangling datum (anchor key unresolvable) must NOT count as a reachable
     // anchor in has_datum_path_excluding - same resolve-aware invariant as
-    // section_has_zero_datum (#174). Without the resolve guard the BFS reports a
+    // line_has_zero_datum (#174). Without the resolve guard the BFS reports a
     // datum path that doesn't actually anchor anything.
     let mut project = Project::new("DanglingPath".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    // A second, datum-less section to use as `excluded` (≠ a, so `a` is visited).
+    // A second, datum-less line to use as `excluded` (≠ a, so `a` is visited).
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10931,21 +10931,21 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
 #[test]
 fn realign_after_shot_edit_ignores_dangling_datum() {
     // With only a dangling datum in the merge group, realign must treat the group
-    // as UNANCHORED - it must not pin the group to the phantom-anchor section
+    // as UNANCHORED - it must not pin the group to the phantom-anchor line
     // (#174). Unanchored no longer means "do nothing" (#413 finding 20: a group
     // with no absolute anchor still has relative merge constraints, and skipping
     // them left the merge drifted by exactly the edit): it means anchor on the
-    // EDITED section instead. So the edited section is the one that must not
+    // EDITED line instead. So the edited line is the one that must not
     // move, and the merge must come out aligned around it.
     let mut project = Project::new("DanglingRealign".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -10955,20 +10955,20 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    project.adjust_section_offset(b, 3.0, 4.0);
-    // Dangling datum on section A (anchor key unresolvable).
+    project.adjust_line_offset(b, 3.0, 4.0);
+    // Dangling datum on line A (anchor key unresolvable).
     project.zero_datums.push(ZeroDatum {
         station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
         accuracy_m: None,
         entrance: None,
     });
-    let before = project.section_offset(b);
+    let before = project.line_offset(b);
     project.realign_after_shot_edit(b, None);
-    let after = project.section_offset(b);
+    let after = project.line_offset(b);
     assert_eq!(
         before, after,
-        "the EDITED section must not move when the only datum in the group is \
+        "the EDITED line must not move when the only datum in the group is \
          dangling - realigning around a phantom anchor would move it"
     );
     // ...and the group is realigned around it rather than left broken.
@@ -10983,7 +10983,7 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
     let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
     assert!(
         gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
-        "an unanchored group must still be realigned against the edited section: \
+        "an unanchored group must still be realigned against the edited line: \
          the merged pair is {gap:.6} m apart"
     );
 }
@@ -10995,7 +10995,7 @@ fn rigid_group_has_datum_ignores_dangling_datum() {
     // guard sits at command_move's "merge group holds a zero datum" check).
     let mut project = Project::new("DanglingRigid".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11017,17 +11017,17 @@ fn rigid_group_has_datum_ignores_dangling_datum() {
 fn cascade_connection_offsets_ignores_dangling_datum() {
     // B holds a real datum; A holds a DANGLING datum, is merged to B, and is
     // drifted off the merge. Without the resolve guard A is wrongly frozen as
-    // authoritative, so the A=B merge (two "fixed" sections) can't be pulled back
+    // authoritative, so the A=B merge (two "fixed" lines) can't be pulled back
     // into alignment. With the guard only B anchors and A cascades onto it (#174).
     let mut project = Project::new("DanglingCascade".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11053,7 +11053,7 @@ fn cascade_connection_offsets_ignores_dangling_datum() {
         entrance: None,
     });
     // Drift A off the merge; precondition: misaligned.
-    project.adjust_section_offset(a, 7.0, -3.0);
+    project.adjust_line_offset(a, 7.0, -3.0);
     assert!(
         !project.check_merge_alignment().is_empty(),
         "precondition: the A=B merge starts misaligned"
@@ -11068,16 +11068,16 @@ fn cascade_connection_offsets_ignores_dangling_datum() {
 
 #[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
-    // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
+    // Two lines, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11098,8 +11098,8 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
         "merge should start aligned"
     );
 
-    // Corrupt section B's offset directly (simulating a missed cascade).
-    project.adjust_section_offset(b, 12.0, -7.0);
+    // Corrupt line B's offset directly (simulating a missed cascade).
+    project.adjust_line_offset(b, 12.0, -7.0);
     let drift = project.check_merge_alignment();
     assert_eq!(drift.len(), 1, "{drift:?}");
     assert_eq!(drift[0].category, "merge_misaligned");
@@ -11125,13 +11125,13 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     // panics on. The blind spot this test is about is smaller now, not gone.
     let mut project = Project::new("SubTol".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11145,16 +11145,16 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    let b_correct = project.section_offset(b);
+    let b_correct = project.line_offset(b);
 
     // Nudge B by 3 mm - under the 1 cm invariant the self-heal gates on.
-    project.adjust_section_offset(b, 0.003, 0.0);
+    project.adjust_line_offset(b, 0.003, 0.0);
     assert!(
         project.check_merge_alignment().is_empty(),
         "3 mm drift is under the 5 cm report tolerance (the early-return's blind spot)"
     );
     assert!(
-        (project.section_offset(b).0 - b_correct.0).abs() > 0.002,
+        (project.line_offset(b).0 - b_correct.0).abs() > 0.002,
         "precondition: B is actually drifted"
     );
     // The per-command self-heal still early-returns here (nothing past the
@@ -11165,13 +11165,13 @@ fn realign_corrects_sub_tolerance_offset_drift() {
         "realign_merges keeps the no-drift early-return"
     );
     assert!(
-        (project.section_offset(b).0 - b_correct.0).abs() > 0.002,
+        (project.line_offset(b).0 - b_correct.0).abs() > 0.002,
         "...so the sub-invariant drift survives the per-command path"
     );
 
     // ...but the zero-trust load/repair re-solve corrects it despite zero drifts.
     project.resolve_offsets();
-    let b_after = project.section_offset(b);
+    let b_after = project.line_offset(b);
     assert!(
         (b_after.0 - b_correct.0).abs() < 1e-9 && (b_after.1 - b_correct.1).abs() < 1e-9,
         "sub-tolerance drift must be corrected: correct={b_correct:?} after={b_after:?}"
@@ -11202,13 +11202,13 @@ fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
     // the old blind band must be healed by the per-command path.
     let mut project = Project::new("HealGate".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11218,7 +11218,7 @@ fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
     // 3 cm: past the invariant, under the reporting tolerance - the band.
-    project.adjust_section_offset(b, 0.03, 0.0);
+    project.adjust_line_offset(b, 0.03, 0.0);
     assert!(
         project.check_merge_alignment().is_empty(),
         "precondition: 3 cm is under the 5 cm the user is told about"
@@ -11250,16 +11250,16 @@ fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
 ///
 /// C hangs off the same component with no datum of its own, so it IS something
 /// the cascade moves - the bystander that shows whether a re-solve ran.
-fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId) {
+fn over_anchored_irreducible_gap() -> (Project, LineId, LineId, LineId) {
     let mut project = Project::new("Irreducible".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
                 // Back 2 cm short of where it started: past the 1 cm invariant
@@ -11270,7 +11270,7 @@ fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId)
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11335,8 +11335,8 @@ fn realign_merges_skips_a_residual_the_solver_has_proven_irreducible() {
 
     // Drift the bystander by less than the invariant, so the residual set and every
     // gap bit stay exactly as fingerprinted (and nothing structural changes).
-    project.adjust_section_offset(c, 0.003, 0.0);
-    let drifted = project.section_offset(c);
+    project.adjust_line_offset(c, 0.003, 0.0);
+    let drifted = project.line_offset(c);
     assert!(
         project
             .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
@@ -11347,7 +11347,7 @@ fn realign_merges_skips_a_residual_the_solver_has_proven_irreducible() {
 
     assert_eq!(project.realign_merges(), 0);
     assert_eq!(
-        project.section_offset(c),
+        project.line_offset(c),
         drifted,
         "the fingerprint matched, so the re-solve must have been skipped entirely"
     );
@@ -11356,9 +11356,9 @@ fn realign_merges_skips_a_residual_the_solver_has_proven_irreducible() {
     // back. That is what makes this a skip rather than a coincidence.
     project.resolve_offsets();
     assert!(
-        (project.section_offset(c).0 - drifted.0).abs() > 0.002,
+        (project.line_offset(c).0 - drifted.0).abs() > 0.002,
         "the solve the skip declined would have moved C: before={drifted:?} after={:?}",
-        project.section_offset(c)
+        project.line_offset(c)
     );
 }
 
@@ -11372,11 +11372,11 @@ fn realign_merges_re_solves_once_the_residual_becomes_healable() {
     let (mut project, a, b, c) = over_anchored_irreducible_gap();
     assert_eq!(project.realign_merges(), 0);
     assert!(project.realign_fixpoint.is_some());
-    project.adjust_section_offset(c, 0.003, 0.0);
-    let drifted = project.section_offset(c);
+    project.adjust_line_offset(c, 0.003, 0.0);
+    let drifted = project.line_offset(c);
     assert_eq!(project.realign_merges(), 0);
     assert_eq!(
-        project.section_offset(c),
+        project.line_offset(c),
         drifted,
         "precondition: the skip is armed"
     );
@@ -11392,9 +11392,9 @@ fn realign_merges_re_solves_once_the_residual_becomes_healable() {
          not be skipped for a fingerprint recorded while it could not"
     );
     assert!(
-        project.section_offset(c).0.abs() < 1e-9,
+        project.line_offset(c).0.abs() < 1e-9,
         "the re-solve ran in full, so the bystander drift is gone too: {:?}",
-        project.section_offset(c)
+        project.line_offset(c)
     );
 }
 
@@ -11410,18 +11410,18 @@ fn realign_merges_re_solves_once_drift_crosses_the_invariant() {
     let (mut project, _a, _b, c) = over_anchored_irreducible_gap();
     assert_eq!(project.realign_merges(), 0);
     assert!(project.realign_fixpoint.is_some(), "precondition: armed");
-    let anchored_x = project.section_offset(c).0;
-    project.adjust_section_offset(c, 0.003, 0.0);
+    let anchored_x = project.line_offset(c).0;
+    project.adjust_line_offset(c, 0.003, 0.0);
     assert_eq!(project.realign_merges(), 0);
     assert!(
-        (project.section_offset(c).0 - (anchored_x + 0.003)).abs() < 1e-12,
+        (project.line_offset(c).0 - (anchored_x + 0.003)).abs() < 1e-12,
         "precondition: 3 mm is under the invariant, so the skip holds it - C is at {:?}",
-        project.section_offset(c)
+        project.line_offset(c)
     );
 
     // Push the same bystander past the invariant - one edit, no structural
     // change, and every EXISTING residual gap still bit-identical.
-    project.adjust_section_offset(c, 0.017, 0.0);
+    project.adjust_line_offset(c, 0.017, 0.0);
     assert_eq!(
         project
             .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
@@ -11432,9 +11432,9 @@ fn realign_merges_re_solves_once_drift_crosses_the_invariant() {
 
     project.realign_merges();
     assert!(
-        (project.section_offset(c).0 - anchored_x).abs() < 1e-9,
+        (project.line_offset(c).0 - anchored_x).abs() < 1e-9,
         "a gap past the invariant must never be left to the skip: C is still at {:?}",
-        project.section_offset(c)
+        project.line_offset(c)
     );
     assert_eq!(
         project
@@ -11453,25 +11453,25 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
     // must still hit it.
     let (mut project, _a, _b, _c) = over_anchored_irreducible_gap();
     // A second, healthy component: D anchored by its own datum, E merged onto
-    // it. Built BEFORE the fixpoint is recorded - adding a section is a
+    // it. Built BEFORE the fixpoint is recorded - adding a line is a
     // structural change, and the structure hash would (correctly) reject a
     // fingerprint taken before it. The merge is recorded directly, already
     // aligned: `merge_stations` runs `debug_assert_merge_alignment`, which a
     // test build panics on for the very residual this project is about.
     let d = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let e = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     project.ensure_shot_uuids();
-    project.set_section_offset(e, (0.0, 5.0));
+    project.set_line_offset(e, (0.0, 5.0));
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(d, 1).into(),
         station_b: StationRef::new(e, 0).into(),
@@ -11487,11 +11487,11 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
     assert_eq!(project.realign_merges(), 0);
     assert!(project.realign_fixpoint.is_some(), "precondition: armed");
 
-    project.adjust_section_offset(e, 0.003, 0.0);
-    let drifted = project.section_offset(e);
+    project.adjust_line_offset(e, 0.003, 0.0);
+    let drifted = project.line_offset(e);
     assert_eq!(project.realign_merges(), 0);
     assert_eq!(
-        project.section_offset(e),
+        project.line_offset(e),
         drifted,
         "an edit two components away must still take the skip - that is the whole \
          optimization"
@@ -11500,9 +11500,9 @@ fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
     // something rather than agreeing with a no-op.
     project.resolve_offsets();
     assert!(
-        (project.section_offset(e).0 - drifted.0).abs() > 0.002,
+        (project.line_offset(e).0 - drifted.0).abs() > 0.002,
         "the solve the skip declined would have moved E: before={drifted:?} after={:?}",
-        project.section_offset(e)
+        project.line_offset(e)
     );
 }
 
@@ -11513,10 +11513,10 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
     // move leaves every residual gap and the structure hash bit-identical, so
     // the skip fires - and it hides nothing, because the solve it declines is
     // itself a no-op. `cascade_connection_offsets` derives each
-    // non-authoritative section from an authoritative one's STORED offset and
-    // never re-derives an authoritative section at all (a datum section is
+    // non-authoritative line from an authoritative one's STORED offset and
+    // never re-derives an authoritative line at all (a datum line is
     // pinned WHERE IT IS, not re-anchored onto its GPS), so translating every
-    // section of a component by one delta lands exactly where the cascade would
+    // line of a component by one delta lands exactly where the cascade would
     // put them.
     let (mut project, a, b, c) = over_anchored_irreducible_gap();
     assert_eq!(project.realign_merges(), 0);
@@ -11526,14 +11526,14 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
     project.adjust_rigid_group_offsets(a, 3.0, -2.0);
     let moved: Vec<(f64, f64)> = [a, b, c]
         .iter()
-        .map(|s| project.section_offset(*s))
+        .map(|s| project.line_offset(*s))
         .collect();
 
     let mut solved = project.clone();
     solved.resolve_offsets();
     let after_solve: Vec<(f64, f64)> = [a, b, c]
         .iter()
-        .map(|s| solved.section_offset(*s))
+        .map(|s| solved.line_offset(*s))
         .collect();
     assert_eq!(
         moved, after_solve,
@@ -11545,7 +11545,7 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
     project.realign_merges();
     let after_skip: Vec<(f64, f64)> = [a, b, c]
         .iter()
-        .map(|s| project.section_offset(*s))
+        .map(|s| project.line_offset(*s))
         .collect();
     assert_eq!(
         after_skip, after_solve,
@@ -11554,39 +11554,39 @@ fn a_whole_rigid_group_translation_is_a_solver_no_op() {
 }
 
 #[test]
-fn realign_preserves_floating_section_offset() {
-    // A datum-less, merge-less (floating) section's absolute position is
+fn realign_preserves_floating_line_offset() {
+    // A datum-less, merge-less (floating) line's absolute position is
     // non-derivable (free placement). The always-on re-solve must NOT zero it -
     // it's a cascade seed/anchor, never seed-adjusted.
     let mut project = Project::new("Float".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    project.adjust_section_offset(a, 12.0, 7.0);
+    project.adjust_line_offset(a, 12.0, 7.0);
     project.resolve_offsets(); // the unconditional re-solve
     assert_eq!(
-        project.section_offset(a),
+        project.line_offset(a),
         (12.0, 7.0),
-        "a free-placed floating section keeps its offset across an unconditional re-solve"
+        "a free-placed floating line keeps its offset across an unconditional re-solve"
     );
 }
 
 // === Structural integrity check ===
 
-/// A two-section project with one valid merge, zero datum, and loop closure.
-fn integrity_fixture() -> (Project, SectionId, SectionId) {
+/// A two-line project with one valid merge, zero datum, and loop closure.
+fn integrity_fixture() -> (Project, LineId, LineId) {
     let mut project = Project::new("Integrity".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11621,13 +11621,13 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
 fn check_orphan_closures_detects_sole_bridge_closure() {
     let mut p = Project::new("Orphan".to_string(), None);
     let a = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11649,7 +11649,7 @@ fn check_orphan_closures_detects_sole_bridge_closure() {
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].category, "orphan_closure");
 
-    // Once a merge connects the two sections, the closure is a genuine
+    // Once a merge connects the two lines, the closure is a genuine
     // (redundant) loop and is no longer flagged.
     p.record_station_merge(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -11665,10 +11665,10 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     // closure A0=B1 closes the loop. Now delete A's last shot (A1->A2): that
     // removes A2 and the A2=B0 merge, so A and B are connected ONLY through the
     // closure A0=B1. A closure that is the sole bridge is not a loop - it must
-    // become a merge (issue #8, the section-31 case).
+    // become a merge (issue #8, the line-31 case).
     let mut project = Project::new("Bridge".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -11677,7 +11677,7 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11706,7 +11706,7 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
         is_aligned: true,
     });
 
-    let last = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let last = project.get_line(a).unwrap().shots.last().unwrap().id;
     project.remove_shot_with_rewire(a, last).unwrap();
 
     // The bridge closure is gone and replaced by a merge between its endpoints.
@@ -11728,8 +11728,8 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
 
 #[test]
 fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
-    // A is a one-shot section, exactly as an `add_shot` append into an EMPTY
-    // section leaves it, so undoing that `CreateShot` takes
+    // A is a one-shot line, exactly as an `add_shot` append into an EMPTY
+    // line leaves it, so undoing that `CreateShot` takes
     // `remove_appended_first_shot`. That inverse drops every relationship anchored
     // on the station the append created (A1) - here the merge A1=C0 - and dropping
     // it leaves the B=C closure as the SOLE connection between B and C. A closure
@@ -11738,13 +11738,13 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
     // behind a state the app declares impossible and the save then persisted.
     let mut project = Project::new("OrphanOnUndo".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -11753,7 +11753,7 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 5.0, 0.0, 0.0),
                 shot(270.0, 270.0, 5.0, 0.0, 0.0),
@@ -11786,7 +11786,7 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
         is_aligned: false,
     });
 
-    let created = project.get_section(a).unwrap().shots[0].id;
+    let created = project.get_line(a).unwrap().shots[0].id;
     project.remove_appended_first_shot(a, created).unwrap();
 
     assert!(
@@ -11843,7 +11843,7 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
 /// Converting it is what the call exists for, and it is converted whether or not
 /// its endpoints are anywhere near the removed station.
 ///
-/// D1=E1 bridges two sections that nothing else connects, so it is ALREADY an
+/// D1=E1 bridges two lines that nothing else connects, so it is ALREADY an
 /// orphan when the removal starts. Nothing about this delete made it one (the
 /// fuzzer's route there is a `removeZeroDatum` two moves back, which orphans a
 /// closure and converts nothing), so it is part of the state the history
@@ -11854,13 +11854,13 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
 fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
     let mut project = Project::new("ScopedConversion".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -11869,7 +11869,7 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 5.0, 0.0, 0.0),
                 shot(270.0, 270.0, 5.0, 0.0, 0.0),
@@ -11879,13 +11879,13 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
         .id;
     // D and E touch nothing else in the project.
     let d = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(45.0, 45.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let e = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(135.0, 135.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -11917,7 +11917,7 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
         "setup: D1=E1 must already be an orphan and B2=C2 must not"
     );
 
-    let last = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let last = project.get_line(a).unwrap().shots.last().unwrap().id;
     project.remove_shot_with_rewire(a, last).unwrap();
 
     assert_eq!(
@@ -11946,10 +11946,10 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
     );
     assert!(
         !project.station_merges.iter().any(|m| {
-            m.station_a.section_id == d
-                || m.station_b.section_id == d
-                || m.station_a.section_id == e
-                || m.station_b.section_id == e
+            m.station_a.line_id == d
+                || m.station_b.line_id == d
+                || m.station_a.line_id == e
+                || m.station_b.line_id == e
         }),
         "the pre-existing orphan must not have become a merge: {:?}",
         project.station_merges
@@ -11965,13 +11965,13 @@ fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
 fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
     let mut project = Project::new("ScopedConversionOnUndo".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
                 shot(90.0, 90.0, 5.0, 0.0, 0.0),
@@ -11980,7 +11980,7 @@ fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_ol
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(180.0, 180.0, 5.0, 0.0, 0.0),
                 shot(270.0, 270.0, 5.0, 0.0, 0.0),
@@ -11989,13 +11989,13 @@ fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_ol
         })
         .id;
     let d = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(45.0, 45.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let e = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(135.0, 135.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12026,7 +12026,7 @@ fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_ol
         "setup: D1=E1 must already be an orphan and B2=C2 must not"
     );
 
-    let created = project.get_section(a).unwrap().shots[0].id;
+    let created = project.get_line(a).unwrap().shots[0].id;
     project.remove_appended_first_shot(a, created).unwrap();
 
     assert_eq!(
@@ -12042,10 +12042,10 @@ fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_ol
     );
     assert!(
         !project.station_merges.iter().any(|m| {
-            m.station_a.section_id == d
-                || m.station_b.section_id == d
-                || m.station_a.section_id == e
-                || m.station_b.section_id == e
+            m.station_a.line_id == d
+                || m.station_b.line_id == d
+                || m.station_a.line_id == e
+                || m.station_b.line_id == e
         }),
         "the pre-existing orphan must not have become a merge: {:?}",
         project.station_merges
@@ -12077,10 +12077,10 @@ fn push_closure(project: &mut Project, id: u64, station_a: StationRef, station_b
 
 #[test]
 fn deleting_shot_converts_broken_loop_closure_to_merge() {
-    // Section A: A0-A1-A2 (2 shots); Section B: B0-B1 (1 shot).
+    // Line A: A0-A1-A2 (2 shots); Line B: B0-B1 (1 shot).
     let mut project = Project::new("Loop".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 1.0, 0.0, 0.0),
                 shot(90.0, 90.0, 1.0, 0.0, 0.0),
@@ -12089,7 +12089,7 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12121,7 +12121,7 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
 
     // Delete A's last shot (A1->A2): removes station A2, a closure endpoint. The
     // surviving B segment is detached, so the closure must become a merge.
-    let last_shot_id = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let last_shot_id = project.get_line(a).unwrap().shots.last().unwrap().id;
     let (_, impact) = project.remove_shot_with_rewire(a, last_shot_id).unwrap();
 
     assert_eq!(impact.closure_to_merge.len(), 1, "impact: {impact:?}");
@@ -12146,17 +12146,17 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
 /// Two independently GPS-anchored components, bridged only by a loop closure,
 /// and the shot carrying the closure's endpoint deleted (#464 defect A).
 ///
-/// * component 1: section A (4 shots north) merged tail-to-head into section C,
+/// * component 1: line A (4 shots north) merged tail-to-head into line C,
 ///   whose station 0 carries the GPS datum;
-/// * component 2: section B, with its OWN GPS datum ~1.4 km away;
+/// * component 2: line B, with its OWN GPS datum ~1.4 km away;
 /// * a loop closure A4 <-> B0, which `create_loop_closure` legitimately allows
 ///   between two unconnected components when both are datum-anchored.
 ///
 /// Returns `(project, a, b, c)`.
-fn double_anchored_closure_fixture() -> (Project, SectionId, SectionId, SectionId) {
+fn double_anchored_closure_fixture() -> (Project, LineId, LineId, LineId) {
     let mut project = Project::new("DoubleAnchor".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -12167,13 +12167,13 @@ fn double_anchored_closure_fixture() -> (Project, SectionId, SectionId, SectionI
         })
         .id;
     let c = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12219,7 +12219,7 @@ fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
 
     // Delete A's last shot: that removes station A4, which is both the merge
     // partner of C0 and one end of the closure.
-    let last_shot = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let last_shot = project.get_line(a).unwrap().shots.last().unwrap().id;
     let (_, impact) = project.remove_shot_with_rewire(a, last_shot).unwrap();
 
     assert!(
@@ -12265,10 +12265,10 @@ fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
 /// One doomed station carrying TWO sole-bridge closures, each into its own
 /// independently GPS-anchored component (#464 defect A, chained).
 ///
-/// * section S: two shots north, GPS-anchored at S0, its tail S2 merged into
+/// * line S: two shots north, GPS-anchored at S0, its tail S2 merged into
 ///   T0 - so T is the station both closures rewire onto when S2 goes;
-/// * section T: one shot east, no datum of its own;
-/// * sections U and V: one shot each, each carrying its OWN GPS datum, about a
+/// * line T: one shot east, no datum of its own;
+/// * lines U and V: one shot each, each carrying its OWN GPS datum, about a
 ///   kilometre away in different directions;
 /// * closures S2 <-> U0 and S2 <-> V0 (legal to create: the pairs are
 ///   unconnected and both ends are datum-anchored).
@@ -12279,11 +12279,11 @@ fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
 /// carrying two GPS anchors, which is exactly the state defect A is about.
 ///
 /// Returns `(project, s, t, u, v)`.
-fn chained_double_anchor_closure_fixture() -> (Project, SectionId, SectionId, SectionId, SectionId)
+fn chained_double_anchor_closure_fixture() -> (Project, LineId, LineId, LineId, LineId)
 {
     let mut project = Project::new("ChainedDoubleAnchor".to_string(), None);
     let s = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -12292,19 +12292,19 @@ fn chained_double_anchor_closure_fixture() -> (Project, SectionId, SectionId, Se
         })
         .id;
     let t = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let u = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let v = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12392,7 +12392,7 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
         let (mut project, s, t, ..) = chained_double_anchor_closure_fixture();
         let kept = project.loop_closures[keep].id;
         project.loop_closures.retain(|c| c.id == kept);
-        let last_shot = project.get_section(s).unwrap().shots.last().unwrap().id;
+        let last_shot = project.get_line(s).unwrap().shots.last().unwrap().id;
         let (_, impact) = project.remove_shot_with_rewire(s, last_shot).unwrap();
         assert_eq!(
             impact.closure_to_merge.len(),
@@ -12407,7 +12407,7 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
     let (mut project, s, t, u, v) = chained_double_anchor_closure_fixture();
     let second_closure_id = project.loop_closures[1].id;
 
-    let last_shot = project.get_section(s).unwrap().shots.last().unwrap().id;
+    let last_shot = project.get_line(s).unwrap().shots.last().unwrap().id;
     let (_, impact) = project.remove_shot_with_rewire(s, last_shot).unwrap();
 
     // Exactly one promotion: the first closure is a legal merge, the second is
@@ -12472,19 +12472,19 @@ fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
     assert!(datums_sharing_a_merge_component(&project).is_empty());
 }
 
-/// A genuine loop over two sections, with a real misclosure, whose other leg is
+/// A genuine loop over two lines, with a real misclosure, whose other leg is
 /// about to be deleted (#464 defect C).
 ///
-/// * section P: two 10 m shots north, GPS-anchored at P0;
-/// * section Q: two 10 m shots east, merged P2 <-> Q0;
+/// * line P: two 10 m shots north, GPS-anchored at P0;
+/// * line Q: two 10 m shots east, merged P2 <-> Q0;
 /// * a loop closure P0 <-> Q2 - a true loop (P0-P1-P2=Q0-Q1-Q2) carrying the
 ///   28.28 m misclosure the survey actually measured.
 ///
 /// Returns `(project, p, q)`.
-fn misclosing_loop_fixture() -> (Project, SectionId, SectionId) {
+fn misclosing_loop_fixture() -> (Project, LineId, LineId) {
     let mut project = Project::new("Misclosure".to_string(), None);
     let p = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 10.0, 0.0, 0.0),
@@ -12493,7 +12493,7 @@ fn misclosing_loop_fixture() -> (Project, SectionId, SectionId) {
         })
         .id;
     let q = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
@@ -12527,18 +12527,18 @@ fn misclosing_loop_fixture() -> (Project, SectionId, SectionId) {
 
 /// #464 defect C: promoting an orphaned closure to a merge declares a
 /// coincidence the geometry does not have. The follow-up
-/// `cascade_connection_offsets(&[edited_section])` cannot pay for it - the
-/// edited section is a seed and the other end holds the datum, so both are
+/// `cascade_connection_offsets(&[edited_line])` cannot pay for it - the
+/// edited line is a seed and the other end holds the datum, so both are
 /// authoritative and `cascade_bfs` skips the freshly minted edge. The promotion
 /// itself has to translate the movable side.
 #[test]
 fn promoting_an_orphaned_closure_co_locates_the_side_that_may_move() {
     let (mut project, p, q) = misclosing_loop_fixture();
-    let q_before = project.section_offset(q);
+    let q_before = project.line_offset(q);
 
     // Delete Q's first shot: station Q0 goes, and with it the P2 <-> Q0 merge,
     // so the closure is the sole bridge left between P and Q.
-    let first_shot = project.get_section(q).unwrap().shots[0].id;
+    let first_shot = project.get_line(q).unwrap().shots[0].id;
     project.remove_shot_with_rewire(q, first_shot).unwrap();
 
     assert!(
@@ -12560,13 +12560,13 @@ fn promoting_an_orphaned_closure_co_locates_the_side_that_may_move() {
 
     // The DATUM side did not move; the free side did.
     assert!(
-        project.section_offset(p).0.abs() < 1e-9 && project.section_offset(p).1.abs() < 1e-9,
+        project.line_offset(p).0.abs() < 1e-9 && project.line_offset(p).1.abs() < 1e-9,
         "the anchored side must stay put, got {:?}",
-        project.section_offset(p)
+        project.line_offset(p)
     );
     assert!(
-        (project.section_offset(q).0 - q_before.0).abs() > 1.0
-            || (project.section_offset(q).1 - q_before.1).abs() > 1.0,
+        (project.line_offset(q).0 - q_before.0).abs() > 1.0
+            || (project.line_offset(q).1 - q_before.1).abs() > 1.0,
         "the free side must have been translated onto the anchor"
     );
 }
@@ -12578,10 +12578,10 @@ fn promoting_an_orphaned_closure_co_locates_the_side_that_may_move() {
 fn promoting_an_orphaned_closure_co_locates_even_with_no_datum() {
     let (mut project, p, q) = misclosing_loop_fixture();
     project.zero_datums.clear();
-    let p_before = project.section_offset(p);
-    let q_before = project.section_offset(q);
+    let p_before = project.line_offset(p);
+    let q_before = project.line_offset(q);
 
-    let first_shot = project.get_section(q).unwrap().shots[0].id;
+    let first_shot = project.get_line(q).unwrap().shots[0].id;
     project.remove_shot_with_rewire(q, first_shot).unwrap();
 
     assert!(project.loop_closures.is_empty());
@@ -12609,12 +12609,12 @@ fn promoting_an_orphaned_closure_co_locates_even_with_no_datum() {
         let (mut baseline, p, q) = misclosing_loop_fixture();
         baseline.zero_datums.clear();
         baseline.loop_closures.clear();
-        let first_shot = baseline.get_section(q).unwrap().shots[0].id;
+        let first_shot = baseline.get_line(q).unwrap().shots[0].id;
         baseline.remove_shot_with_rewire(q, first_shot).unwrap();
-        (baseline.section_offset(p), baseline.section_offset(q))
+        (baseline.line_offset(p), baseline.line_offset(q))
     };
-    let p_after = project.section_offset(p);
-    let q_after = project.section_offset(q);
+    let p_after = project.line_offset(p);
+    let q_after = project.line_offset(q);
     assert!(
         (p_after.0 - p_baseline.0).abs() > 1.0 || (p_after.1 - p_baseline.1).abs() > 1.0,
         "station_a's group is the movable side: p {p_before:?} -> {p_after:?} \
@@ -12642,7 +12642,7 @@ fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
         accuracy_m: None,
         entrance: None,
     });
-    project.section_offsets.insert(9999, (1.0, 1.0));
+    project.line_offsets.insert(9999, (1.0, 1.0));
 
     let valid_merges_before = project.station_merges.len();
     let repaired = project.repair_structural_integrity();
@@ -12654,7 +12654,7 @@ fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
     // The originally-valid merge/datum/closure survive (only the bad ones dropped).
     assert_eq!(project.station_merges.len(), valid_merges_before - 1);
     assert_eq!(project.loop_closures.len(), 1);
-    assert!(project.get_section(a).is_some() && project.get_section(b).is_some());
+    assert!(project.get_line(a).is_some() && project.get_line(b).is_some());
     // Repairing a clean project is a no-op.
     assert!(project.repair_structural_integrity().is_empty());
 }
@@ -12667,9 +12667,9 @@ fn integrity_clean_project_has_no_violations() {
 }
 
 #[test]
-fn integrity_flags_merge_to_missing_section() {
+fn integrity_flags_merge_to_missing_line() {
     let (mut project, a, _) = integrity_fixture();
-    // Point the merge at a section id that doesn't exist.
+    // Point the merge at a line id that doesn't exist.
     forge_first_merge(&mut project, |m| {
         m.station_b = StationRef::new(9999, 0).into();
     });
@@ -12678,14 +12678,14 @@ fn integrity_flags_merge_to_missing_section() {
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
     assert_eq!(v[0].category, "dangling_merge_ref");
     assert!(project.has_critical_integrity_violations());
-    // The valid endpoint (section a) is untouched.
-    assert!(project.get_section(a).is_some());
+    // The valid endpoint (line a) is untouched.
+    assert!(project.get_line(a).is_some());
 }
 
 #[test]
 fn integrity_flags_station_index_out_of_range() {
     let (mut project, a, _) = integrity_fixture();
-    // Section a has 1 shot → stations 0..=1; index 5 is out of range, so the
+    // Line a has 1 shot → stations 0..=1; index 5 is out of range, so the
     // transitional Index anchor no longer resolves → flagged as a dangling ref.
     forge_first_merge(&mut project, |m| {
         m.station_a = StationRef::new(a, 5).into();
@@ -12711,7 +12711,7 @@ fn integrity_flags_dangling_closure_and_zero_datum() {
 #[test]
 fn integrity_orphan_offsets_and_comments_are_warnings_only() {
     let (mut project, _, _) = integrity_fixture();
-    project.section_offsets.insert(9999, (1.0, 2.0));
+    project.line_offsets.insert(9999, (1.0, 2.0));
     project
         .station_offsets
         .insert(StationRef::new(9999, 0).into(), (1.0, 2.0, 3.0));
@@ -12727,24 +12727,24 @@ fn integrity_orphan_offsets_and_comments_are_warnings_only() {
 
 #[test]
 fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
-    // Two shots in one section sharing a UUID make AfterShot anchors mis-resolve
+    // Two shots in one line sharing a UUID make AfterShot anchors mis-resolve
     // (resolve_key takes the first match). It must be a Critical violation and
     // repair must re-mint the duplicate while KEEPING the first (so anchors that
     // resolved to it stay valid).
     let mut project = Project::new("Dup".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     project.ensure_shot_uuids();
-    let first_uuid = project.get_section(a).unwrap().shots[0]
+    let first_uuid = project.get_line(a).unwrap().shots[0]
         .uuid
         .clone()
         .unwrap();
     // Force shot 1 to collide with shot 0's UUID.
-    project.get_section_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
+    project.get_line_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
 
     // A merge anchored on the first station (a:1 == AfterShot(first_uuid)).
     let anchor = StationKey::new(a, StationAnchor::AfterShot(first_uuid.clone()));
@@ -12766,7 +12766,7 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
 
     // Repair: re-mint the duplicate, keep the first.
     project.repair_structural_integrity();
-    let shots = &project.get_section(a).unwrap().shots;
+    let shots = &project.get_line(a).unwrap().shots;
     assert_eq!(
         shots[0].uuid.as_deref(),
         Some(first_uuid.as_str()),
@@ -12789,7 +12789,7 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
 
 #[test]
 fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
-    // Under a duplicated within-section UUID, the warm `shot_uuid_index` must
+    // Under a duplicated within-line UUID, the warm `shot_uuid_index` must
     // resolve to the FIRST occurrence, matching the authoritative cold-path
     // `resolve_key` (which uses `shots.iter().position(...)`, i.e. first match).
     // Reachable by undoing a `duplicate_shot_uuid` integrity Repair: it restores
@@ -12798,23 +12798,23 @@ fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
     // scan resolves to station 1 - a silent divergence.
     let mut project = Project::new("DupWarm".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     project.ensure_shot_uuids();
-    let first_uuid = project.get_section(a).unwrap().shots[0]
+    let first_uuid = project.get_line(a).unwrap().shots[0]
         .uuid
         .clone()
         .unwrap();
     // Force shot 1 to collide with shot 0's UUID.
-    project.get_section_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
+    project.get_line_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
 
     // The cold-path answer: position() returns the first match (station 1).
     let cold = {
-        let section = project.get_section(a).unwrap();
-        let pos = section
+        let line = project.get_line(a).unwrap();
+        let pos = line
             .shots
             .iter()
             .position(|s| s.uuid.as_deref() == Some(first_uuid.as_str()))
@@ -12844,13 +12844,13 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
     // refs still round-trip to their positional index.
     let mut project = Project::new("Wire".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12879,8 +12879,8 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
         "dangling merge must NOT collapse to a phantom ref"
     );
 
-    // get_section_relationships excludes the dangling merge entirely.
-    let rel = project.get_section_relationships(a);
+    // get_line_relationships excludes the dangling merge entirely.
+    let rel = project.get_line_relationships(a);
     assert_eq!(
         rel.merges.len(),
         1,
@@ -12895,11 +12895,11 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
 #[test]
 fn has_unresolvable_cross_references_detects_dangling_offset() {
     // The save gate blocks on this. A dangling station offset is only
-    // Warning-severity, but it still collapses to (section, 0) on save and can
+    // Warning-severity, but it still collapses to (line, 0) on save and can
     // collide on the PRIMARY KEY - so it must count as unresolvable.
     let mut project = Project::new("Block".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -12938,7 +12938,7 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
 // Model (see docs/closures.md): a 2-D, horizontal-only, per-axis DECOUPLED
 // weighted least squares. Each shot contributes independent X/Y observations of
 // the measured Δ, weight w = 1/σ² with σ propagated from the base sigmas and
-// scaled by section quality:
+// scaled by line quality:
 //     σ_len' = σ_len·quality,   σ_az' = σ_az·quality
 //     σ_dx = √((sin·σ_len')² + (len·cos·σ_az')²)
 //     σ_dy = √((cos·σ_len')² + (len·sin·σ_az')²)
@@ -12946,7 +12946,7 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
 // to the classic Gauss weighted mean: the unknown lands at the weight-weighted
 // average of each neighbour's predicted position (fixed_pos + measured Δ).
 //
-// Default config → σ_len = 0.05 m, σ_az = 1.0°, section quality = 1.0.
+// Default config → σ_len = 0.05 m, σ_az = 1.0°, line quality = 1.0.
 
 /// Assert an adjusted station coordinate matches a closed-form `(x, y)` within
 /// `tol` metres (Z is not adjusted, so only the horizontal plane is checked).
@@ -12975,13 +12975,13 @@ fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
     // on σ_len / σ_az at all.
     let mut project = Project::new("GoldenSymV".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -13041,11 +13041,11 @@ fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
 /// solve.
 fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
     let mut project = Project::new("WeightedStar".to_string(), None);
-    let sids: Vec<SectionId> = legs
+    let sids: Vec<LineId> = legs
         .iter()
         .map(|&(az, len, quality)| {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     shots: vec![shot(az, az, len, 0.0, 0.0)],
                     quality,
                     ..Default::default()
@@ -13122,7 +13122,7 @@ fn golden_weight_model_star_matches_sigma_propagation() {
     // The closure-fused endpoint of a star is the Gauss weighted mean of each
     // leg's independent position fix, with weights from the σ→weight propagation.
     // Matching the production solve across diverse leg geometries - varied
-    // azimuths, lengths, and section qualities - pins the weight MODEL
+    // azimuths, lengths, and line qualities - pins the weight MODEL
     // independently of production's normal-equation assembly. This is the one
     // thing #86's optimality/dense checks structurally cannot verify: they reuse
     // the same assembly, so a wrong weight formula is self-consistent there.
@@ -13226,7 +13226,7 @@ fn rigorous_polar_reference(
     }
 
     let mut stations: Vec<StationRef> = Vec::new();
-    for s in &project.sections {
+    for s in &project.lines {
         for idx in 0..=s.shots.len() {
             stations.push(StationRef::new(s.id, idx as u32));
         }
@@ -13326,7 +13326,7 @@ fn rigorous_polar_reference(
         w_az: f64,
     }
     let mut obs: Vec<Obs> = Vec::new();
-    for s in &project.sections {
+    for s in &project.lines {
         let q = if s.quality.is_finite() && s.quality > 0.0 {
             s.quality
         } else {
@@ -13436,7 +13436,7 @@ fn rigorous_polar_reference(
 fn oblique_loop(len_b: f64) -> Project {
     let mut project = Project::new("Oblique".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(30.0, 30.0, 10.0, 0.0, 0.0),
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
@@ -13445,7 +13445,7 @@ fn oblique_loop(len_b: f64) -> Project {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(30.0, 30.0, len_b, 0.0, 0.0),
@@ -13481,7 +13481,7 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
     // (1) An already-closed network has nothing to adjust → measured unchanged.
     let mut zero = Project::new("RefZero".to_string(), None);
     let za = zero
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -13490,7 +13490,7 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
         })
         .id;
     let zb = zero
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 shot(90.0, 90.0, 10.0, 0.0, 0.0),
                 shot(0.0, 0.0, 5.0, 0.0, 0.0),
@@ -13528,13 +13528,13 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
     // oracle on a known answer and demonstrates the model gap is real and signed.
     let mut v = Project::new("RefSymV".to_string(), None);
     let va = v
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let vb = v
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -13630,7 +13630,7 @@ fn xorshift01(state: &mut u64) -> f64 {
     ((x >> 11) as f64) / ((1u64 << 53) as f64)
 }
 
-/// A fuzzed two-path loop: two sections of random oblique legs from a shared,
+/// A fuzzed two-path loop: two lines of random oblique legs from a shared,
 /// datum-anchored origin, joined at their far ends by a closure. Single-component,
 /// single-datum, no spurs - every station lies on the loop. Misclosure is whatever
 /// the random geometry produces (irrelevant to the per-axis levelling gold solve).
@@ -13649,13 +13649,13 @@ fn fuzz_loop(seed: u64) -> Project {
             .collect()
     };
     let a = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: mkshots(&mut st, na),
             ..Default::default()
         })
         .id;
     let b = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: mkshots(&mut st, nb),
             ..Default::default()
         })
@@ -13695,13 +13695,13 @@ fn big_loop(n: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("loop_{}", 2 * n + 1), None);
     let a = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: drift_shots(&mut st, n, 60.0),
             ..Default::default()
         })
         .id;
     let b = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: drift_shots(&mut st, n, 30.0),
             ..Default::default()
         })
@@ -13729,13 +13729,13 @@ fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("ladder_{}", 2 * n + 1), None);
     let a = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: drift_shots(&mut st, n, 90.0),
             ..Default::default()
         })
         .id;
     let b = p
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: drift_shots(&mut st, n, 90.0),
             ..Default::default()
         })
@@ -13759,15 +13759,15 @@ fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
     p
 }
 
-/// A 2-D grid mesh: `rows` row-sections (mostly-East shots) and `cols`
-/// column-sections (mostly-North shots), with every grid node (r,c) shared between
+/// A 2-D grid mesh: `rows` row-lines (mostly-East shots) and `cols`
+/// column-lines (mostly-North shots), with every grid node (r,c) shared between
 /// its row and column via a merge. A dense lattice of loops - one per cell.
 fn grid(rows: usize, cols: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("grid_{rows}x{cols}"), None);
     let row_sec: Vec<u32> = (0..rows)
         .map(|_| {
-            p.add_section(SectionData {
+            p.add_line(LineData {
                 shots: drift_shots(&mut st, cols - 1, 90.0),
                 ..Default::default()
             })
@@ -13776,7 +13776,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
         .collect();
     let col_sec: Vec<u32> = (0..cols)
         .map(|_| {
-            p.add_section(SectionData {
+            p.add_line(LineData {
                 shots: drift_shots(&mut st, rows - 1, 0.0),
                 ..Default::default()
             })
@@ -13789,7 +13789,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
     )
     .unwrap();
     // Spanning tree of identity merges: row 0 ties every column, column 0 ties every
-    // row. (Tree → each merge joins a new section, never an already-connected pair.)
+    // row. (Tree → each merge joins a new line, never an already-connected pair.)
     for c in 0..cols {
         p.merge_stations(
             StationRef::new(row_sec[0], c as u32),
@@ -13819,10 +13819,10 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
     p
 }
 
-/// `paths` independent random sections from a merged datum origin, all fused at
+/// `paths` independent random lines from a merged datum origin, all fused at
 /// their far ends by closures → `paths-1` independent loops, no spurs. Shots span
 /// the FULL azimuth circle and a wide length band `[len_min, len_max]`, plus a
-/// random per-section quality - deliberately harsher than the structured nets.
+/// random per-line quality - deliberately harsher than the structured nets.
 fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: f64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("wild_{seed:x}"), None);
@@ -13837,7 +13837,7 @@ fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: 
                 })
                 .collect();
             let q = 0.5 + xorshift01(&mut st) * 2.5;
-            p.add_section(SectionData {
+            p.add_line(LineData {
                 shots,
                 quality: q,
                 ..Default::default()
@@ -13856,7 +13856,7 @@ fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: 
     }
     let end_of = |p: &Project, sid: u32| {
         let n = p
-            .sections
+            .lines
             .iter()
             .find(|s| s.id == sid)
             .map(|s| s.shots.len())
@@ -13879,7 +13879,7 @@ fn build_star(name: &str, legs: &[(f64, f64, f64)]) -> Project {
     let sids: Vec<u32> = legs
         .iter()
         .map(|&(az, len, q)| {
-            p.add_section(SectionData {
+            p.add_line(LineData {
                 shots: vec![shot(az, az, len, 0.0, 0.0)],
                 quality: q,
                 ..Default::default()
@@ -13967,7 +13967,7 @@ fn station_groups(project: &Project) -> (HashMap<StationRef, usize>, Vec<Vec<Sta
         r
     }
     let mut stations: Vec<StationRef> = Vec::new();
-    for s in &project.sections {
+    for s in &project.lines {
         for idx in 0..=s.shots.len() {
             stations.push(StationRef::new(s.id, idx as u32));
         }
@@ -14013,7 +14013,7 @@ fn station_groups(project: &Project) -> (HashMap<StationRef, usize>, Vec<Vec<Sta
 }
 
 /// Reverse Cuthill-McKee ordering of the group graph. Gama's envelope solver cost
-/// is `O(n·bandwidth²)`, and emitting points in section order leaves a huge
+/// is `O(n·bandwidth²)`, and emitting points in line order leaves a huge
 /// bandwidth on big loops; RCM keeps it near-constant so the gold solve scales.
 /// Returns `rcm[k]` = the group emitted at position `k`.
 fn bandwidth_order(n: usize, edges: &[(usize, usize)], start: usize) -> Vec<usize> {
@@ -14090,7 +14090,7 @@ fn emit_leveling_gkf(
         }
     }
     s.push_str("<height-differences>\n");
-    for sec in &project.sections {
+    for sec in &project.lines {
         let q = if sec.quality.is_finite() && sec.quality > 0.0 {
             sec.quality
         } else {
@@ -14174,7 +14174,7 @@ fn generate_gama_golden_fixtures() {
         let datum_raw = project.compute_station_raw_coords(datum).unwrap();
         // Group adjacency from inter-group shots → reverse Cuthill-McKee point order.
         let mut edges: Vec<(usize, usize)> = Vec::new();
-        for sec in &project.sections {
+        for sec in &project.lines {
             for idx in 0..sec.shots.len() {
                 let gi = gidx[&StationRef::new(sec.id, idx as u32)];
                 let gj = gidx[&StationRef::new(sec.id, (idx + 1) as u32)];
@@ -14233,7 +14233,7 @@ fn generate_gama_golden_fixtures() {
                     .max((p.x - group_xy[g].0).abs())
                     .max((p.y - group_xy[g].1).abs());
                 rows.push(GoldStation {
-                    s: sr.section_id,
+                    s: sr.line_id,
                     i: sr.station_index,
                     x: group_xy[g].0,
                     y: group_xy[g].1,
@@ -14352,30 +14352,30 @@ fn project_ipc_serializes_validation_field() {
 // zero datum are NOT such a state since #741: the stitch keeps the group the
 // user merged, with a placement datum and a GPS fix.
 
-/// Build `a - middle - b`: two sections merged into ONE station of a middle
-/// section, each outer section carrying its own zero datum, every merged pair
+/// Build `a - middle - b`: two lines merged into ONE station of a middle
+/// line, each outer line carrying its own zero datum, every merged pair
 /// coincident (a:1 = middle:0 = b:0 at the origin). Returns the ids.
-fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionId, SectionId) {
+fn bridged_double_anchored_groups(project: &mut Project) -> (LineId, LineId, LineId) {
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let middle = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
 
-    // Both outer sections hang off the SAME middle station, so the three are one
+    // Both outer lines hang off the SAME middle station, so the three are one
     // station-level merge group and removing the middle splits it in two.
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -14388,7 +14388,7 @@ fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionI
         merged_at: Utc::now(),
     });
 
-    project.set_section_offset(a, (0.0, -1.0));
+    project.set_line_offset(a, (0.0, -1.0));
 
     // One datum per outer group: a placement datum (on a) and a GPS fix (on b).
     project.zero_datums.push(ZeroDatum {
@@ -14407,7 +14407,7 @@ fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionI
     (a, middle, b)
 }
 
-fn merge_exists_between_sections(project: &Project, x: SectionId, y: SectionId) -> bool {
+fn merge_exists_between_lines(project: &Project, x: LineId, y: LineId) -> bool {
     project.station_merges.iter().any(|m| {
         let (Some(sa), Some(sb)) = (
             project.resolve_key(&m.station_a),
@@ -14415,7 +14415,7 @@ fn merge_exists_between_sections(project: &Project, x: SectionId, y: SectionId) 
         ) else {
             return false;
         };
-        (sa.section_id == x && sb.section_id == y) || (sa.section_id == y && sb.section_id == x)
+        (sa.line_id == x && sb.line_id == y) || (sa.line_id == y && sb.line_id == x)
     })
 }
 
@@ -14433,13 +14433,13 @@ fn deleting_the_bridge_between_datum_holding_groups_restitches_them() {
         .map(|sr| project.compute_station_raw_coords(*sr).unwrap())
         .collect();
 
-    // The `delete_section` sequence (command_section.rs).
-    project.preserve_connections_for_section_deletion(middle);
-    project.cleanup_section_references(middle);
-    project.remove_section(middle);
+    // The `delete_line` sequence (command_line.rs).
+    project.preserve_connections_for_line_deletion(middle);
+    project.cleanup_line_references(middle);
+    project.remove_line(middle);
 
     assert!(
-        merge_exists_between_sections(&project, a, b),
+        merge_exists_between_lines(&project, a, b),
         "the coincident pair is re-stitched, keeping the group the user merged (#741): {:?}",
         project.station_merges
     );
@@ -14468,19 +14468,19 @@ fn deleting_the_bridge_between_datum_holding_groups_restitches_them() {
 fn replacement_stitch_skips_a_pair_already_in_closure() {
     let mut project = Project::new("ClosureOnPair".to_string(), None);
     let x = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let middle = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let y = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -14509,9 +14509,9 @@ fn replacement_stitch_skips_a_pair_already_in_closure() {
         is_aligned: false,
     });
 
-    project.preserve_connections_for_section_deletion(middle);
-    project.cleanup_section_references(middle);
-    project.remove_section(middle);
+    project.preserve_connections_for_line_deletion(middle);
+    project.cleanup_line_references(middle);
+    project.remove_line(middle);
 
     assert!(
         !project.are_stations_merged(StationRef::new(x, 0), StationRef::new(y, 0)),
@@ -14538,19 +14538,19 @@ fn replacement_stitch_skips_a_pair_already_in_closure() {
 fn replacement_stitch_skips_rigidly_connected_components() {
     let mut project = Project::new("AlreadyRigid".to_string(), None);
     let x = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let middle = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let y = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -14580,12 +14580,12 @@ fn replacement_stitch_skips_rigidly_connected_components() {
         is_aligned: true,
     });
 
-    project.preserve_connections_for_section_deletion(middle);
-    project.cleanup_section_references(middle);
-    project.remove_section(middle);
+    project.preserve_connections_for_line_deletion(middle);
+    project.cleanup_line_references(middle);
+    project.remove_line(middle);
 
     assert!(
-        !merge_exists_between_sections(&project, x, y),
+        !merge_exists_between_lines(&project, x, y),
         "X and Y are already rigidly connected through the aligned closure; a replacement \
          merge adds nothing but a rigid cycle: {:?}",
         project.station_merges
@@ -14608,7 +14608,7 @@ fn removed_station_stitch_restitches_datum_holding_groups() {
     project.cleanup_removed_station_references(&removed);
 
     assert!(
-        merge_exists_between_sections(&project, a, b),
+        merge_exists_between_lines(&project, a, b),
         "removing the bridging station re-stitches the two halves: {:?}",
         project.station_merges
     );
@@ -14627,19 +14627,19 @@ fn delete_shot_preview_and_execution_agree_on_the_stitch() {
     // make the dialog promise a merge the delete never creates.
     let mut project = Project::new("PreviewParity".to_string(), None);
     let bridge = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let p = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let q = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -14668,7 +14668,7 @@ fn delete_shot_preview_and_execution_agree_on_the_stitch() {
         entrance: None,
     });
 
-    let shot_id = project.get_section(bridge).unwrap().shots[0].id;
+    let shot_id = project.get_line(bridge).unwrap().shots[0].id;
     let preview = project.preview_delete_shot(bridge, shot_id).unwrap();
     assert_eq!(
         preview.removed_station,
@@ -14690,7 +14690,7 @@ fn delete_shot_preview_and_execution_agree_on_the_stitch() {
         "preview and execution must plan the same replacement merges"
     );
     assert!(
-        merge_exists_between_sections(&project, p, q),
+        merge_exists_between_lines(&project, p, q),
         "and the executed delete creates exactly that merge: {:?}",
         project.station_merges
     );
@@ -14735,19 +14735,19 @@ fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
     // #446: a first import into an EMPTY project used to suggest nothing even
     // when the imported file contained both an anchored component and a
     // floating (unanchored) one - `orphan_components` was computed only over
-    // PRE-EXISTING sections, and a first import has none. It must now
-    // consider the whole post-import project, so the floating section
+    // PRE-EXISTING lines, and a first import has none. It must now
+    // consider the whole post-import project, so the floating line
     // becomes a placement candidate against the anchored one from the SAME
     // import.
     let mut project = Project::new("FirstImport".to_string(), None);
     let anchored = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let floating = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14770,8 +14770,8 @@ fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
          file must get at least one placement suggestion (#446)"
     );
     assert!(
-        suggestions.iter().all(|s| s.orphan_section_id == floating),
-        "the only orphan in this project is the floating section: {suggestions:?}"
+        suggestions.iter().all(|s| s.orphan_line_id == floating),
+        "the only orphan in this project is the floating line: {suggestions:?}"
     );
 }
 
@@ -14779,23 +14779,23 @@ fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
 fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existing_anchor() {
     // #446: a pre-existing floating component that had its chance against its
     // own import must not start getting matched against a pre-existing
-    // anchored section just because SOME LATER, unrelated import happens.
+    // anchored line just because SOME LATER, unrelated import happens.
     // A pre-existing orphan's targets are drawn from the import alone, so a
     // pre-existing anchor is never ITS target (since #674 it can be the
-    // target of an orphan the import touched - the one-shot section below is
+    // target of an orphan the import touched - the one-shot line below is
     // too short to be a leaf, so it offers no such match). Both fixtures
     // are shot-IDENTICAL (`orphan_leaf_shots`), so a broken guard would match
     // them with a near-perfect score - the empty result is the guard, not an
     // accident of mismatched shot shapes.
     let mut project = Project::new("LaterImport".to_string(), None);
     let pre_anchor = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let pre_orphan = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14809,15 +14809,15 @@ fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existi
 
     // A later, unrelated import that offers no anchored target of its own -
     // the ONLY conceivable match left is the forbidden pre/pre pairing.
-    let new_section = project
-        .add_section(SectionData {
+    let new_line = project
+        .add_line(LineData {
             shots: vec![shot(200.0, 200.0, 20.0, 3.0, 3.0)],
             ..Default::default()
         })
         .id;
 
     let suggestions = project.suggest_orphan_placements(
-        &[new_section],
+        &[new_line],
         &crate::config::PlacementSuggestionConfig::default(),
     );
 
@@ -14839,13 +14839,13 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
     // empty).
     let mut project = Project::new("LaterImportAnchored".to_string(), None);
     let pre_orphan = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let new_target = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14865,7 +14865,7 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
     assert!(
         suggestions
             .iter()
-            .any(|s| s.orphan_section_id == pre_orphan && s.target_section_id == new_target),
+            .any(|s| s.orphan_line_id == pre_orphan && s.target_line_id == new_target),
         "a pre-existing orphan must still be suggested against a newly \
          imported, datum-anchored target (#446): {suggestions:?}"
     );
@@ -14874,20 +14874,20 @@ fn suggest_orphan_placements_still_suggests_a_pre_existing_orphan_against_a_newl
 #[test]
 fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_anchor() {
     // #674: adding a datum-less file into an anchored project left its
-    // sections floating with no suggestion, because targets were drawn from
-    // the import alone and a datum-less import has no anchored section. An
-    // orphan the import TOUCHED may now go onto any anchored section. In the
+    // lines floating with no suggestion, because targets were drawn from
+    // the import alone and a datum-less import has no anchored line. An
+    // orphan the import TOUCHED may now go onto any anchored line. In the
     // same project a pre-existing orphan, shot-identical to both, must still
     // get nothing: its only anchored candidate is pre-existing too (#446).
     let mut project = Project::new("AddIntoAnchored".to_string(), None);
     let pre_anchor = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let pre_orphan = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14899,7 +14899,7 @@ fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_
         entrance: None,
     });
     let new_orphan = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14913,22 +14913,22 @@ fn suggest_orphan_placements_places_a_newly_imported_orphan_onto_a_pre_existing_
     assert!(
         suggestions
             .iter()
-            .any(|s| s.orphan_section_id == new_orphan && s.target_section_id == pre_anchor),
+            .any(|s| s.orphan_line_id == new_orphan && s.target_line_id == pre_anchor),
         "a newly imported orphan must be suggested onto a pre-existing anchored \
-         section (#674): {suggestions:?}"
+         line (#674): {suggestions:?}"
     );
     assert!(
         suggestions
             .iter()
-            .all(|s| s.orphan_section_id == new_orphan),
+            .all(|s| s.orphan_line_id == new_orphan),
         "the pre-existing orphan {pre_orphan:?} must not be re-suggested onto \
          the pre-existing anchor (#446): {suggestions:?}"
     );
     assert!(
         suggestions
             .iter()
-            .all(|s| s.target_section_id == pre_anchor),
-        "only the anchored section is a target - never the other orphan: {suggestions:?}"
+            .all(|s| s.target_line_id == pre_anchor),
+        "only the anchored line is a target - never the other orphan: {suggestions:?}"
     );
 }
 
@@ -14937,14 +14937,14 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     // #446: a suggestion TARGET must itself be datum-anchored - otherwise two
     // floating components can be suggested onto each other, a "placement"
     // that is circular and anchors nothing. A datum exists ELSEWHERE in the
-    // project (on an unrelated section) so the project-wide
+    // project (on an unrelated line) so the project-wide
     // no-datum-at-all early-out does NOT short-circuit this case; only the
-    // per-target anchor check does. Since #674 that anchored section IS a
+    // per-target anchor check does. Since #674 that anchored line IS a
     // legal target for these newly imported orphans, so the assertion pins
     // what must never happen - a target that floats - rather than "nothing".
     let mut project = Project::new("Floating".to_string(), None);
     let elsewhere = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -14957,13 +14957,13 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     });
 
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -14975,7 +14975,7 @@ fn suggest_orphan_placements_never_suggests_two_floating_components_onto_each_ot
     );
 
     assert!(
-        suggestions.iter().all(|s| s.target_section_id == elsewhere),
+        suggestions.iter().all(|s| s.target_line_id == elsewhere),
         "two floating components must never be suggested onto each other - \
          neither is datum-anchored (#446): {a:?} {b:?} {suggestions:?}"
     );
@@ -14989,13 +14989,13 @@ fn suggest_orphan_placements_short_circuits_when_the_project_has_no_datum_at_all
     // `zero_datums`-resolve check must return empty before that walk starts.
     let mut project = Project::new("NoDatumAtAll".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: orphan_leaf_shots(),
             ..Default::default()
         })
@@ -15010,22 +15010,22 @@ fn suggest_orphan_placements_short_circuits_when_the_project_has_no_datum_at_all
 }
 
 #[test]
-fn count_unanchored_sections_is_zero_for_an_empty_project() {
+fn count_unanchored_lines_is_zero_for_an_empty_project() {
     let project = Project::new("Empty".to_string(), None);
-    assert_eq!(project.count_unanchored_sections(&[]), 0);
+    assert_eq!(project.count_unanchored_lines(&[]), 0);
 }
 
 #[test]
-fn count_unanchored_sections_counts_every_member_of_a_merged_orphan_component() {
+fn count_unanchored_lines_counts_every_member_of_a_merged_orphan_component() {
     let mut project = Project::new("Merged".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -15037,20 +15037,20 @@ fn count_unanchored_sections_counts_every_member_of_a_merged_orphan_component() 
     });
 
     // No datum anywhere - A and B form one orphan component of size 2.
-    assert_eq!(project.count_unanchored_sections(&[a]), 2);
+    assert_eq!(project.count_unanchored_lines(&[a]), 2);
 }
 
 #[test]
-fn count_unanchored_sections_treats_a_datum_reached_through_a_merge_as_anchored() {
+fn count_unanchored_lines_treats_a_datum_reached_through_a_merge_as_anchored() {
     let mut project = Project::new("MergedAnchored".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -15069,23 +15069,23 @@ fn count_unanchored_sections_treats_a_datum_reached_through_a_merge_as_anchored(
 
     // The datum lives on A alone, but the merge means B's rigid group is
     // anchored too - the component has a datum, so it is not orphaned.
-    assert_eq!(project.count_unanchored_sections(&[a, b]), 0);
+    assert_eq!(project.count_unanchored_lines(&[a, b]), 0);
 }
 
 #[test]
-fn count_unanchored_sections_is_scoped_to_the_newly_imported_component() {
+fn count_unanchored_lines_is_scoped_to_the_newly_imported_component() {
     // A clean import into a project with unrelated, pre-existing orphans
     // must not blame THIS import's receipt for orphans it didn't create
     // (#446).
     let mut project = Project::new("Scoped".to_string(), None);
     let _pre_existing_orphan = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let new_anchored = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -15098,25 +15098,25 @@ fn count_unanchored_sections_is_scoped_to_the_newly_imported_component() {
     });
 
     assert_eq!(
-        project.count_unanchored_sections(&[new_anchored]),
+        project.count_unanchored_lines(&[new_anchored]),
         0,
         "the pre-existing orphan sitting elsewhere in the project is not \
          this import's problem"
     );
 }
 
-/// Two zero-datum-anchored components of `n` one-shot sections each (chained by
+/// Two zero-datum-anchored components of `n` one-shot lines each (chained by
 /// merges), and `closures` cross-component loop closures between them. Every
 /// closure is an orphan whose promotion is refused (it would double-anchor), so
 /// the pre-#597 sweep ran a full walk per closure, rescanning every merge per
 /// visited station, on every pass.
 fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Project {
     let mut project = Project::new("Orphans".to_string(), None);
-    let component = |project: &mut Project| -> Vec<SectionId> {
-        let ids: Vec<SectionId> = (0..n)
+    let component = |project: &mut Project| -> Vec<LineId> {
+        let ids: Vec<LineId> = (0..n)
             .map(|_| {
                 project
-                    .add_section(SectionData {
+                    .add_line(LineData {
                         shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0)],
                         ..Default::default()
                     })
@@ -15128,13 +15128,13 @@ fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Pr
                 station_a: StationKey::new(
                     pair[0],
                     StationAnchor::AfterShot(
-                        project.get_section(pair[0]).unwrap().shots[0]
+                        project.get_line(pair[0]).unwrap().shots[0]
                             .uuid
                             .clone()
                             .unwrap(),
                     ),
                 ),
-                station_b: StationKey::new(pair[1], StationAnchor::SectionStart),
+                station_b: StationKey::new(pair[1], StationAnchor::LineStart),
                 merged_at: Utc::now(),
             });
         }
@@ -15144,7 +15144,7 @@ fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Pr
     let b = component(&mut project);
     for (ids, lat) in [(&a, 20.5), (&b, 20.6)] {
         project.zero_datums.push(ZeroDatum {
-            station_ref: StationKey::new(ids[0], StationAnchor::SectionStart),
+            station_ref: StationKey::new(ids[0], StationAnchor::LineStart),
             gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
             accuracy_m: None,
             entrance: None,
@@ -15154,8 +15154,8 @@ fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Pr
         let (sa, sb) = (a[i % n], b[(i * 7) % n]);
         project.loop_closures.push(LoopClosure {
             id: i as u64 + 1,
-            station_a: StationKey::new(sa, StationAnchor::SectionStart),
-            station_b: StationKey::new(sb, StationAnchor::SectionStart),
+            station_a: StationKey::new(sa, StationAnchor::LineStart),
+            station_b: StationKey::new(sb, StationAnchor::LineStart),
             path_length: 0.0,
             misclosure_distance: 0.0,
             error_percentage: 0.0,
@@ -15211,10 +15211,10 @@ fn closures_on_one_point(project: &mut Project, pairs: &[(StationKey, StationKey
 fn the_load_removes_fifty_thousand_closures_from_a_station_to_itself_fast() {
     let mut project = two_anchored_components_with_orphan_closures(1_000, 0);
     let stations: Vec<(StationKey, StationKey)> = project
-        .sections
+        .lines
         .iter()
         .map(|s| {
-            let key = StationKey::new(s.id, StationAnchor::SectionStart);
+            let key = StationKey::new(s.id, StationAnchor::LineStart);
             (key.clone(), key)
         })
         .collect();
@@ -15279,12 +15279,12 @@ fn the_orphan_sweep_still_promotes_in_order_and_removes_the_twin_it_merged() {
     // used to stay as a closure between merged stations).
     let mut project = two_anchored_components_with_orphan_closures(3, 0);
     project.zero_datums.pop();
-    let (a0, b0) = (project.sections[0].id, project.sections[3].id);
+    let (a0, b0) = (project.lines[0].id, project.lines[3].id);
     for id in [11, 12] {
         project.loop_closures.push(LoopClosure {
             id,
-            station_a: StationKey::new(a0, StationAnchor::SectionStart),
-            station_b: StationKey::new(b0, StationAnchor::SectionStart),
+            station_a: StationKey::new(a0, StationAnchor::LineStart),
+            station_b: StationKey::new(b0, StationAnchor::LineStart),
             path_length: 0.0,
             misclosure_distance: 0.0,
             error_percentage: 0.0,
@@ -15303,18 +15303,18 @@ fn the_orphan_sweep_still_promotes_in_order_and_removes_the_twin_it_merged() {
 }
 
 #[test]
-fn the_orphan_sweep_sees_merges_through_a_deleted_section() {
-    // Two anchored sections bridged only by merges through a section id that no
+fn the_orphan_sweep_sees_merges_through_a_deleted_line() {
+    // Two anchored lines bridged only by merges through a line id that no
     // longer exists. The merges do not connect them (they do not resolve), so the
     // closure is an orphan; but `merge_would_double_anchor` walks stored ids, sees
     // one merge component, and allows the promotion. The sweep must agree.
     let mut project = two_anchored_components_with_orphan_closures(1, 1);
-    let (a, b) = (project.sections[0].id, project.sections[1].id);
-    let gone: SectionId = project.sections.iter().map(|s| s.id).max().unwrap_or(0) + 100;
+    let (a, b) = (project.lines[0].id, project.lines[1].id);
+    let gone: LineId = project.lines.iter().map(|s| s.id).max().unwrap_or(0) + 100;
     for (x, y) in [(a, gone), (gone, b)] {
         project.station_merges.push(StationMerge {
-            station_a: StationKey::new(x, StationAnchor::SectionStart),
-            station_b: StationKey::new(y, StationAnchor::SectionStart),
+            station_a: StationKey::new(x, StationAnchor::LineStart),
+            station_b: StationKey::new(y, StationAnchor::LineStart),
             merged_at: Utc::now(),
         });
     }
@@ -15330,17 +15330,17 @@ fn the_orphan_sweep_examines_the_closure_right_after_a_converted_one() {
     let mut project = two_anchored_components_with_orphan_closures(3, 0);
     project.zero_datums.pop();
     let loose = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
-    let (a0, b0) = (project.sections[0].id, project.sections[3].id);
+    let (a0, b0) = (project.lines[0].id, project.lines[3].id);
     for (id, other) in [(11, b0), (12, loose)] {
         project.loop_closures.push(LoopClosure {
             id,
-            station_a: StationKey::new(a0, StationAnchor::SectionStart),
-            station_b: StationKey::new(other, StationAnchor::SectionStart),
+            station_a: StationKey::new(a0, StationAnchor::LineStart),
+            station_b: StationKey::new(other, StationAnchor::LineStart),
             path_length: 0.0,
             misclosure_distance: 0.0,
             error_percentage: 0.0,
@@ -15357,11 +15357,11 @@ fn the_orphan_sweep_examines_the_closure_right_after_a_converted_one() {
 
 #[test]
 fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_component() {
-    // One 4000-section merge chain, with a snap-to-merge closure doubling every
+    // One 4000-line merge chain, with a snap-to-merge closure doubling every
     // merge: each closure's gap is zero, so each reaches the double-anchor
     // question, which a per-closure merge walk made quadratic.
     let mut project = two_anchored_components_with_orphan_closures(4_000, 0);
-    // Place the sections first (untimed: the offset cascade's own cost is
+    // Place the lines first (untimed: the offset cascade's own cost is
     // tracked separately). After the closures go in it could not: a load
     // removes a closure between merged stations (#738), and every one of these
     // doubles a merge. The re-measure still meets them in memory - an undo can
@@ -15439,9 +15439,9 @@ fn double_every_merge_with_move_closures(project: &mut Project, is_aligned: bool
 
 #[test]
 fn resolving_offsets_is_fast_with_thousands_of_closures_doubling_merges() {
-    // Two 8000-section merge chains with a Move closure doubling every merge.
+    // Two 8000-line merge chains with a Move closure doubling every merge.
     // Seeding the solve walked each component rescanning every merge and closure
-    // per visited section, O(sections x edges) (#602).
+    // per visited line, O(lines x edges) (#602).
     let mut project = two_anchored_components_with_orphan_closures(8_000, 0);
     // Placed before the closures go in: a load would remove every one of them,
     // since each doubles a merge (#738). `resolve_offsets` still meets the
@@ -15464,37 +15464,37 @@ fn resolving_offsets_is_fast_with_thousands_of_closures_doubling_merges() {
 }
 
 /// `resolve_offsets` exactly as it was before #602, kept as the equivalence
-/// oracle: one `get_connected_section_ids` walk per component to pick seeds.
+/// oracle: one `get_connected_line_ids` walk per component to pick seeds.
 fn resolve_offsets_before_602(project: &mut Project) -> usize {
     let before = project.check_merge_alignment().len();
-    let offsets_before = project.section_offsets.clone();
+    let offsets_before = project.line_offsets.clone();
     let seeds = realign_seeds_before_602(project);
     let was_deferred = project.cascade_deferred;
     project.cascade_deferred = false;
     project.cascade_connection_offsets(&seeds);
     project.cascade_deferred = was_deferred;
-    if project.section_offsets != offsets_before {
+    if project.line_offsets != offsets_before {
         project.touch();
     }
     before.saturating_sub(project.check_merge_alignment().len())
 }
 
-/// The pre-#602 seed choice: one walk per unvisited section. Verbatim except
+/// The pre-#602 seed choice: one walk per unvisited line. Verbatim except
 /// for #741's rule, which changed WHICH datums seed (placement datums only, a
 /// GPS fix anchors nothing), not how the walk finds them.
-fn realign_seeds_before_602(project: &Project) -> Vec<SectionId> {
-    let datum_sections: HashSet<SectionId> = project.placement_datum_sections();
+fn realign_seeds_before_602(project: &Project) -> Vec<LineId> {
+    let datum_lines: HashSet<LineId> = project.placement_datum_lines();
     let mut seeds = Vec::new();
-    let mut visited: HashSet<SectionId> = HashSet::new();
-    for section in &project.sections {
-        if visited.contains(&section.id) {
+    let mut visited: HashSet<LineId> = HashSet::new();
+    for line in &project.lines {
+        if visited.contains(&line.id) {
             continue;
         }
-        let component = project.get_connected_section_ids(section.id);
+        let component = project.get_connected_line_ids(line.id);
         let anchor = component
             .iter()
             .copied()
-            .filter(|s| datum_sections.contains(s))
+            .filter(|s| datum_lines.contains(s))
             .min()
             .or_else(|| component.iter().copied().min());
         if let Some(a) = anchor {
@@ -15523,8 +15523,8 @@ fn assert_resolve_matches_oracle(project: &Project, label: &str) {
     let old_healed = resolve_offsets_before_602(&mut old);
     let new_healed = new.resolve_offsets();
     let bits = |p: &Project| {
-        let mut v: Vec<(SectionId, u64, u64)> = p
-            .section_offsets
+        let mut v: Vec<(LineId, u64, u64)> = p
+            .line_offsets
             .iter()
             .map(|(&id, &(x, y))| (id, x.to_bits(), y.to_bits()))
             .collect();
@@ -15532,7 +15532,7 @@ fn assert_resolve_matches_oracle(project: &Project, label: &str) {
         v
     };
     assert_eq!(new_healed, old_healed, "{label}: healed count");
-    assert_eq!(bits(&new), bits(&old), "{label}: section offsets");
+    assert_eq!(bits(&new), bits(&old), "{label}: line offsets");
     assert_eq!(
         new.modified_at == stamp,
         old.modified_at == stamp,
@@ -15544,12 +15544,12 @@ fn assert_resolve_matches_oracle(project: &Project, label: &str) {
     );
 }
 
-/// `n` one-shot sections on `azimuth`, each merged end-to-start onto the next.
-fn merge_chain(project: &mut Project, n: usize, azimuth: f64) -> Vec<SectionId> {
-    let ids: Vec<SectionId> = (0..n)
+/// `n` one-shot lines on `azimuth`, each merged end-to-start onto the next.
+fn merge_chain(project: &mut Project, n: usize, azimuth: f64) -> Vec<LineId> {
+    let ids: Vec<LineId> = (0..n)
         .map(|_| {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     shots: vec![shot(azimuth, azimuth, 3.0, 0.0, 0.0)],
                     ..Default::default()
                 })
@@ -15560,21 +15560,21 @@ fn merge_chain(project: &mut Project, n: usize, azimuth: f64) -> Vec<SectionId> 
         let end = end_key(project, pair[0]);
         project.station_merges.push(StationMerge {
             station_a: end,
-            station_b: StationKey::new(pair[1], StationAnchor::SectionStart),
+            station_b: StationKey::new(pair[1], StationAnchor::LineStart),
             merged_at: Utc::now(),
         });
     }
     ids
 }
 
-fn end_key(project: &Project, id: SectionId) -> StationKey {
-    let section = project.get_section(id).unwrap();
-    let uuid = section.shots.last().unwrap().uuid.clone().unwrap();
+fn end_key(project: &Project, id: LineId) -> StationKey {
+    let line = project.get_line(id).unwrap();
+    let uuid = line.shots.last().unwrap().uuid.clone().unwrap();
     StationKey::new(id, StationAnchor::AfterShot(uuid))
 }
 
-fn start_key(id: SectionId) -> StationKey {
-    StationKey::new(id, StationAnchor::SectionStart)
+fn start_key(id: LineId) -> StationKey {
+    StationKey::new(id, StationAnchor::LineStart)
 }
 
 fn datum_at(key: StationKey, lat: f64) -> ZeroDatum {
@@ -15592,21 +15592,21 @@ fn resolve_offsets_matches_the_pre_602_solve_on_named_shapes() {
     let mut p = Project::new("chain".to_string(), None);
     let c = merge_chain(&mut p, 5, 30.0);
     p.zero_datums.push(datum_at(start_key(c[2]), 20.5));
-    p.section_offsets.insert(c[0], (12.5, -3.0));
-    p.section_offsets.insert(c[4], (0.0, 0.0));
+    p.line_offsets.insert(c[0], (12.5, -3.0));
+    p.line_offsets.insert(c[4], (0.0, 0.0));
     assert_resolve_matches_oracle(&p, "anchored chain");
 
     // The same chain unanchored, with every merge doubled by a Move closure.
     let mut p = Project::new("unanchored doubled".to_string(), None);
     let c = merge_chain(&mut p, 6, 75.0);
-    p.section_offsets.insert(c[3], (4.0, 4.0));
+    p.line_offsets.insert(c[3], (4.0, 4.0));
     double_every_merge_with_move_closures(&mut p, true);
     assert_resolve_matches_oracle(&p, "unanchored doubled");
 
     // The #602 shape, before and after the closures are measured aligned.
     let mut p = two_anchored_components_with_orphan_closures(30, 0);
     double_every_merge_with_move_closures(&mut p, false);
-    p.section_offsets.insert(p.sections[7].id, (-9.0, 2.0));
+    p.line_offsets.insert(p.lines[7].id, (-9.0, 2.0));
     assert_resolve_matches_oracle(&p, "602 shape, unaligned");
     for closure in &mut p.loop_closures {
         closure.is_aligned = true;
@@ -15614,15 +15614,15 @@ fn resolve_offsets_matches_the_pre_602_solve_on_named_shapes() {
     assert_resolve_matches_oracle(&p, "602 shape, aligned");
 
     // Two unanchored merge groups bridged only by a misaligned Move closure
-    // still flagged aligned, plus one flagged unaligned; a ghost section id
+    // still flagged aligned, plus one flagged unaligned; a ghost line id
     // below every live one sits in the bridged component.
     let mut p = Project::new("bridged".to_string(), None);
-    p.next_section_id = 5;
+    p.next_line_id = 5;
     let a = merge_chain(&mut p, 3, 10.0);
     let b = merge_chain(&mut p, 3, 200.0);
     let d = merge_chain(&mut p, 2, 300.0);
-    p.section_offsets.insert(b[1], (40.0, -7.0));
-    p.section_offsets.insert(d[0], (-15.0, 1.0));
+    p.line_offsets.insert(b[1], (40.0, -7.0));
+    p.line_offsets.insert(d[0], (-15.0, 1.0));
     let e = end_key(&p, a[2]);
     p.loop_closures.push(test_closure(
         1,
@@ -15673,9 +15673,9 @@ impl Lcg {
 fn random_project(seed: u64) -> Project {
     let mut rng = Lcg(seed);
     let mut p = Project::new(format!("random {seed}"), None);
-    p.next_section_id = 3;
+    p.next_line_id = 3;
     let n = 2 + rng.below(11) as usize;
-    let ids: Vec<SectionId> = (0..n)
+    let ids: Vec<LineId> = (0..n)
         .map(|_| {
             let shots = (0..=rng.below(3))
                 .map(|_| {
@@ -15683,7 +15683,7 @@ fn random_project(seed: u64) -> Project {
                     shot(az, az, rng.real(0.5, 20.0), 0.0, 0.0)
                 })
                 .collect();
-            p.add_section(SectionData {
+            p.add_line(LineData {
                 shots,
                 ..Default::default()
             })
@@ -15692,16 +15692,16 @@ fn random_project(seed: u64) -> Project {
         .collect();
     let key = |rng: &mut Lcg, p: &Project| -> StationKey {
         if rng.below(10) == 0 {
-            return start_key(rng.below(3) as SectionId);
+            return start_key(rng.below(3) as LineId);
         }
         let id = ids[rng.below(ids.len() as u64) as usize];
-        let section = p.get_section(id).unwrap();
-        let pick = rng.below(section.shots.len() as u64 + 1) as usize;
+        let line = p.get_line(id).unwrap();
+        let pick = rng.below(line.shots.len() as u64 + 1) as usize;
         match pick {
             0 => start_key(id),
             k => StationKey::new(
                 id,
-                StationAnchor::AfterShot(section.shots[k - 1].uuid.clone().unwrap()),
+                StationAnchor::AfterShot(line.shots[k - 1].uuid.clone().unwrap()),
             ),
         }
     };
@@ -15732,7 +15732,7 @@ fn random_project(seed: u64) -> Project {
     for &id in &ids {
         if rng.below(3) == 0 {
             let v = (rng.real(-50.0, 50.0), rng.real(-50.0, 50.0));
-            p.section_offsets.insert(id, v);
+            p.line_offsets.insert(id, v);
         }
     }
     p.cascade_deferred = rng.below(10) == 0;

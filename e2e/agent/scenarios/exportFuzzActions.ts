@@ -176,10 +176,10 @@ export interface ImageOptionDraw {
   dpi: number;
   branching_threshold: number;
   show_penetration_labels: boolean;
-  color_mode: 'none' | 'section' | 'depth' | 'distance';
+  color_mode: 'none' | 'line' | 'depth' | 'distance';
   show_station_labels: boolean;
   show_station_names: boolean;
-  show_section_names: boolean;
+  show_line_names: boolean;
   show_station_comments: boolean;
   show_shot_comments: boolean;
   show_shot_data: boolean;
@@ -206,7 +206,7 @@ export interface ExportDraw {
 const DPI_VALUES: readonly number[] = [0, 1, 72, 150, 300, 600];
 /** `0` and `1` bracket the "everything is thin / everything is thick" ends. */
 const THRESHOLD_VALUES: readonly number[] = [0, 1, 2, 99];
-const COLOR_MODES: readonly ImageOptionDraw['color_mode'][] = ['none', 'section', 'depth', 'distance'];
+const COLOR_MODES: readonly ImageOptionDraw['color_mode'][] = ['none', 'line', 'depth', 'distance'];
 
 export function drawImageOptions(ctx: ScenarioContext, format: 'png' | 'svg' | 'pdf'): ImageOptionDraw {
   const cap = maxDpi();
@@ -217,7 +217,7 @@ export function drawImageOptions(ctx: ScenarioContext, format: 'png' | 'svg' | '
   const show_penetration_labels = ctx.rng() < 0.5;
   const color_mode = ctx.pick(COLOR_MODES);
   const show_station_labels = ctx.rng() < 0.5;
-  const show_section_names = ctx.rng() < 0.5;
+  const show_line_names = ctx.rng() < 0.5;
   return {
     format,
     dpi,
@@ -228,10 +228,10 @@ export function drawImageOptions(ctx: ScenarioContext, format: 'png' | 'svg' | '
     // Station names are derived, not drawn, so existing seeds keep their rng
     // sequence; and never together with the IDs, which the UI route cannot
     // reach (the two checkboxes are one choice). The XOR keeps them independent
-    // of each of those two draws, so names are fuzzed with and without section
+    // of each of those two draws, so names are fuzzed with and without line
     // names and penetration labels.
-    show_station_names: !show_station_labels && show_penetration_labels !== show_section_names,
-    show_section_names,
+    show_station_names: !show_station_labels && show_penetration_labels !== show_line_names,
+    show_line_names,
     show_station_comments: ctx.rng() < 0.5,
     show_shot_comments: ctx.rng() < 0.5,
     show_shot_data: ctx.rng() < 0.5,
@@ -304,7 +304,7 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   'resolution-select',
   'branching-threshold-slider',
   'export-labels-options-toggle',
-  'export-show-section-names',
+  'export-show-line-names',
   'export-show-station-labels',
   'export-show-station-names',
   'export-show-station-comments',
@@ -314,8 +314,8 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   'export-color-mode',
   'export-button',
   'export-cancel',
-  // the TML unanchored-sections notice, which sits between the button and the
-  // save dialog whenever any section is unanchored
+  // the TML unanchored-lines notice, which sits between the button and the
+  // save dialog whenever any line is unanchored
   'tml-unanchored-warning-continue',
   'tml-unanchored-warning-cancel',
 ]);
@@ -674,7 +674,7 @@ export interface SaveDialogOutcome {
   reason: ExportSkip | null;
   /** Did the app's save picker consume the queued answer? */
   consumed: boolean;
-  /** Did the TML unanchored-sections notice appear instead? */
+  /** Did the TML unanchored-lines notice appear instead? */
   sawUnanchoredNotice: boolean;
   /** `activeDialog` right after the move settled. */
   activeDialog: string | null;
@@ -696,7 +696,7 @@ export interface SaveDialogOutcome {
  * candidate after it.
  *
  * `sawUnanchoredNotice` is how the TML path is handled without a second code
- * path: `handleExport` RETURNS before opening the picker when any section is
+ * path: `handleExport` RETURNS before opening the picker when any line is
  * unanchored, so the answer is simply never consumed, and the caller re-arms it
  * on `tml-unanchored-warning-continue` - which is the same function called with
  * `skipTmlAnchorCheck`.

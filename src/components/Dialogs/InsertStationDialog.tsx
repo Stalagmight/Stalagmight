@@ -31,10 +31,10 @@ export default function InsertStationDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { splitShotAtDistance } = useProjectStore();
 
-  const sectionId = dialogData.sectionId as number | undefined;
+  const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const shotLength = (dialogData.shotLength as number | undefined) ?? 0;
-  const sectionName = dialogData.sectionName as string | undefined;
+  const lineName = dialogData.lineName as string | undefined;
   /**
    * Where along the shot the map right-click landed, 0..1 from the from-station.
    * Only present for a map context menu; the data-table menu has no position on
@@ -63,7 +63,7 @@ export default function InsertStationDialog() {
     setDistance(prefill === null ? '' : formatMeters(prefill));
     setPercent(prefill === null ? '' : formatPercent((prefill / shotLength) * 100));
     setError(null);
-  }, [sectionId, shotId, alongT, shotLength]);
+  }, [lineId, shotId, alongT, shotLength]);
 
   /** Distance typed (or prefilled): the percentage follows. */
   const handleDistanceChange = (raw: string) => {
@@ -105,7 +105,7 @@ export default function InsertStationDialog() {
   const isDirty = distance.trim().length > 0 && distance !== prefilledDistance;
 
   const handleConfirm = async () => {
-    if (isLoading || sectionId === undefined || shotId === undefined || !isValid) return;
+    if (isLoading || lineId === undefined || shotId === undefined || !isValid) return;
 
     // Read-only self-check at confirm time: a split has NO server backstop for
     // the local closure-adjusted / Plan / Export case (see useEditingBlocked's
@@ -121,21 +121,21 @@ export default function InsertStationDialog() {
     setError(null);
 
     try {
-      const result = await splitShotAtDistance(sectionId, shotId, parsedDistance);
+      const result = await splitShotAtDistance(lineId, shotId, parsedDistance);
       if (result.success) {
         // Re-derive the new station's index from the REFRESHED store state
         // rather than a pre-await snapshot (#59 fix D): the tail keeps its
         // shot id, and its post-split index IS the new station's index
-        // (station i sits between shots i-1 and i). If the section/shot is
+        // (station i sits between shots i-1 and i). If the line/shot is
         // gone by the time the split resolves (project switched, or a racing
         // mutation), skip the selection and just close.
         const refreshedProject = useProjectStore.getState().project;
-        const section = refreshedProject?.sections.find((s) => s.id === sectionId);
-        const newStationIndex = section?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
+        const line = refreshedProject?.lines.find((s) => s.id === lineId);
+        const newStationIndex = line?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
         if (newStationIndex >= 0) {
           setSelection({
             type: 'station',
-            stationRef: { section_id: sectionId, station_index: newStationIndex },
+            stationRef: { line_id: lineId, station_index: newStationIndex },
           });
         }
         trackDialogComplete('insert-station');
@@ -154,7 +154,7 @@ export default function InsertStationDialog() {
 
   return (
     <DialogWrapper
-      title={sectionName ? `Insert Station in ${sectionName}` : 'Insert Station'}
+      title={lineName ? `Insert Station in ${lineName}` : 'Insert Station'}
       onClose={handleClose}
       size="md"
       isDirty={isDirty}

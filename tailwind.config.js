@@ -44,15 +44,15 @@ export default {
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',
 
-        // Section palette colors (hardcoded - per-project display settings, not theme-dependent)
-        'section-teal': '#4ecdc4',
-        'section-coral': '#ff6b6b',
-        'section-mint': '#95e1d3',
-        'section-salmon': '#f38181',
-        'section-lavender': '#aa96da',
-        'section-pink': '#fcbad3',
-        'section-sky': '#a8d8ea',
-        'section-peach': '#ffcb77',
+        // Line palette colors (hardcoded - per-project display settings, not theme-dependent)
+        'line-teal': '#4ecdc4',
+        'line-coral': '#ff6b6b',
+        'line-mint': '#95e1d3',
+        'line-salmon': '#f38181',
+        'line-lavender': '#aa96da',
+        'line-pink': '#fcbad3',
+        'line-sky': '#a8d8ea',
+        'line-peach': '#ffcb77',
 
         // Map colors (CSS variable references)
         grid: 'var(--cc-grid-default)',

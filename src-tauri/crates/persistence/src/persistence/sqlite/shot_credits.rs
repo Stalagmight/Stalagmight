@@ -1,40 +1,40 @@
 //! Per-shot survey credit: `credit_people` and `shot_credits`.
 //!
 //! - `credit_people (id, name, email)` holds each distinct person once.
-//! - `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed
-//!   by `(section_id, shot_uuid)`, holds a shot's credit, the people columns as
+//! - `shot_credits (line_id, shot_uuid, date, surveyors, explorers)`, keyed
+//!   by `(line_id, shot_uuid)`, holds a shot's credit, the people columns as
 //!   comma-joined `credit_people` ids.
 //!
 //! Like `station_names`, the tables arrived WITHOUT a schema bump: SpeleoDB's
 //! Python reader (see `station_texts`) accepts exactly v18, ignores tables it
-//! does not know, and validates `sections.surveyor` as one string and
-//! `sections.date` as one ISO date. Those two legacy columns are still written,
-//! as the section aggregate: `sections.date` is the earliest shot date, and
-//! `sections.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
+//! does not know, and validates `lines.surveyor` as one string and
+//! `lines.date` as one ISO date. Those two legacy columns are still written,
+//! as the line aggregate: `lines.date` is the earliest shot date, and
+//! `lines.surveyor` is [`crate::models::legacy_credit_text`] - the distinct
 //! surveyor names joined with `", "` (the text it always held; `"; "` for two
 //! one-word names, which free text would read as one `Last, First` person),
-//! or, when anyone explored the section, the Ariane `"explorers / surveyors"`
+//! or, when anyone explored the line, the Ariane `"explorers / surveyors"`
 //! form, both halves name lists, and `"explorers /"` when nobody surveyed. Older Ariane imports stored only the
 //! first of those, and only with two distinct, non-empty halves: that importer
 //! dropped empty and placeholder halves and collapsed identical ones. A `/`
 //! next to a space inside a name is written `-` there, so the halves stay
 //! unambiguous. A stored text this build would not write the same way (longer
 //! than a role keeps, a name past the length clamp, another spelling) is
-//! written back verbatim while nobody's credit in the section has changed
-//! since it was read (`Section::legacy_surveyor_to_write`); the shots hold the
+//! written back verbatim while nobody's credit in the line has changed
+//! since it was read (`Line::legacy_surveyor_to_write`); the shots hold the
 //! clamped people.
 //!
-//! Rows are keyed by `(section_id, shot_uuid)`: `sections.id` is persisted,
+//! Rows are keyed by `(line_id, shot_uuid)`: `lines.id` is persisted,
 //! and a file written before shot uuids were project-unique can hold one uuid
-//! in several sections, each with its own credit.
+//! in several lines, each with its own credit.
 //!
 //! A released build (0.5.3 and older) does NOT keep these tables: it saves by
 //! writing a fresh database beside the project and renaming it over the file,
 //! so after one save there only the legacy columns are left, and every shot
 //! falls back to them. That is why the surveyor column carries both roles
-//! (#718): each section still lists who explored and who surveyed it. What
+//! (#718): each line still lists who explored and who surveyed it. What
 //! collapses is expected:
-//! - per-shot differences become the section aggregate, and the date the
+//! - per-shot differences become the line aggregate, and the date the
 //!   earliest one;
 //! - emails are gone, and same-named people become one name;
 //! - names come back as the legacy text spells them: a `/` next to a space as
@@ -48,17 +48,17 @@
 //!
 //! The tables can still end up next to a legacy pair this build did not write
 //! (a hand edit, another tool editing the file in place). So
-//! `credit_sections (section_id, surveyor, date)` records the pair THIS build
-//! wrote, and a section's rows apply only while its `sections` pair still
+//! `credit_lines (line_id, surveyor, date)` records the pair THIS build
+//! wrote, and a line's rows apply only while its `lines` pair still
 //! matches that record: once something else has retyped it, the typed text is
-//! the newer truth and every shot of the section falls back to it.
+//! the newer truth and every shot of the line falls back to it.
 //!
 //! A shot WITHOUT a row takes its credit from those legacy columns through
 //! [`crate::models::SurveyCredit::from_legacy`]. That is the migration for every
 //! file written before this feature or saved since by an older build. The
 //! writer relies on it in the other direction too: it writes a row only for a
 //! shot whose credit the fallback would NOT reproduce, so an uncredited project
-//! (and a section whose shots all agree with its legacy columns) costs nothing.
+//! (and a line whose shots all agree with its legacy columns) costs nothing.
 //! A row is explicit even when its lists are empty.
 //!
 //! Rows are keyed by the shot uuid `write.rs` mints or keeps. Nothing the file
@@ -66,7 +66,7 @@
 //! - A credit table of another shape - a view or other non-table object, a
 //!   missing column, an expression of its schema failing part way, or a
 //!   `credit_people` missing beside `shot_credits` - gives no rows at all, with
-//!   a warning: every shot falls back to its section's legacy columns. SQLite
+//!   a warning: every shot falls back to its line's legacy columns. SQLite
 //!   failing for a reason of its own (busy, locked, I/O, out of memory,
 //!   interrupted, corrupt, full, too big) still fails the open: degrading then
 //!   would let the next save write the file without its rows.
@@ -119,15 +119,15 @@ pub(super) const RECREATE_CREDIT_TABLES: &str = "
     DROP TABLE IF EXISTS credit_sections;
 ";
 
-/// A section's legacy `(sections.surveyor, sections.date)`, as stored text.
+/// A line's legacy `(lines.surveyor, lines.date)`, as stored text.
 pub(super) type LegacyPair = (Option<String>, Option<String>);
 
-/// A shot's address in `shot_credits`: its section and its uuid. A uuid alone
+/// A shot's address in `shot_credits`: its line and its uuid. A uuid alone
 /// is not enough - a file written before uuids were project-unique can hold
-/// one uuid in several sections, and each of those shots keeps its own credit.
+/// one uuid in several lines, and each of those shots keeps its own credit.
 pub(super) type CreditKey = (u32, String);
 
-/// Write one row per `((section, uuid), credit)`, interning people. The caller
+/// Write one row per `((line, uuid), credit)`, interning people. The caller
 /// passes only the shots that need a row, each key once.
 pub(super) fn write_credit_rows(
     tx: &Transaction<'_>,
@@ -151,7 +151,7 @@ pub(super) fn write_credit_rows(
         ids.insert(key, id);
         Ok(id)
     };
-    for ((section_id, uuid), credit) in rows {
+    for ((line_id, uuid), credit) in rows {
         let mut join = |people: &[Person]| -> Result<String> {
             let mut out = Vec::with_capacity(people.len());
             for person in people {
@@ -162,7 +162,7 @@ pub(super) fn write_credit_rows(
         let surveyors = join(&credit.surveyors)?;
         let explorers = join(&credit.explorers)?;
         insert_row.execute(params![
-            section_id,
+            line_id,
             uuid,
             credit.date.map(|d| d.to_string()),
             surveyors,
@@ -172,24 +172,24 @@ pub(super) fn write_credit_rows(
     Ok(())
 }
 
-/// Record, per section, the legacy pair this save wrote into `sections`.
+/// Record, per line, the legacy pair this save wrote into `lines`.
 pub(super) fn write_recorded_legacy(
     tx: &Transaction<'_>,
-    section_id: u32,
+    line_id: u32,
     pair: (Option<&str>, Option<&str>),
 ) -> Result<()> {
     tx.execute(
         "INSERT INTO credit_sections (section_id, surveyor, date) VALUES (?1, ?2, ?3)",
-        params![section_id, pair.0, pair.1],
+        params![line_id, pair.0, pair.1],
     )?;
     Ok(())
 }
 
-/// The legacy pair recorded for each section in `stored` (rows naming no
-/// section of the file are not kept). A missing table means "nothing
-/// recorded", so no section's credit rows apply; so does one of another shape,
+/// The legacy pair recorded for each line in `stored` (rows naming no
+/// line of the file are not kept). A missing table means "nothing
+/// recorded", so no line's credit rows apply; so does one of another shape,
 /// with a warning ([`degrade`]). An unreadable row records nothing for its
-/// section. SQLite failing for a reason of its own fails the open.
+/// line. SQLite failing for a reason of its own fails the open.
 pub(super) fn load_recorded_legacy(
     conn: &Connection,
     stored: &HashMap<u32, LegacyPair>,
@@ -223,25 +223,25 @@ pub(super) fn read_recorded_legacy(
     for row in iter {
         // The closure decodes nothing fallibly, so an error here is the
         // read itself failing part way: the rest of the table is unknown.
-        let (section_id, surveyor, date) = row.map_err(|e| Unreadable::new(TABLE, "read", e))?;
-        let (Ok(section_id), Ok(surveyor), Ok(date)) = (section_id, surveyor, date) else {
+        let (line_id, surveyor, date) = row.map_err(|e| Unreadable::new(TABLE, "read", e))?;
+        let (Ok(line_id), Ok(surveyor), Ok(date)) = (line_id, surveyor, date) else {
             skipped += 1;
             continue;
         };
-        if stored.contains_key(&section_id) {
-            recorded.insert(section_id, (surveyor, date));
+        if stored.contains_key(&line_id) {
+            recorded.insert(line_id, (surveyor, date));
         }
     }
     warn_skipped(TABLE, skipped, 0);
     Ok(recorded)
 }
 
-/// Every readable `shot_credits` row, by `(section, shot uuid)`.
+/// Every readable `shot_credits` row, by `(line, shot uuid)`.
 ///
 /// Missing `shot_credits` reads as no rows. A credit table of another shape -
 /// not a table, a column missing (another tool, a hand repair or a future
 /// build wrote it), an expression of its schema failing part way - also gives
-/// no rows, with a warning, so every shot falls back to its section's legacy
+/// no rows, with a warning, so every shot falls back to its line's legacy
 /// columns ([`degrade`]). The rows need their people: a missing `credit_people`
 /// beside `shot_credits`, or one of another shape, voids them the same way.
 /// Inside readable tables, an unreadable row or person is skipped and counted
@@ -253,7 +253,7 @@ pub(super) fn load_credit_rows(conn: &Connection) -> Result<HashMap<CreditKey, S
 
 /// A credit read's result for the open: the value; or, for a table of another
 /// shape ([`Unreadable::is_shape`]), a warning and nothing (every shot then
-/// reads its section's legacy columns); or, when SQLite failed for a reason
+/// reads its line's legacy columns); or, when SQLite failed for a reason
 /// that says nothing about the table, the error, so the open fails as it did
 /// before #717. Degrading on a busy or failing disk would let the next save
 /// write the file without its credit rows and lose them for good.
@@ -286,7 +286,7 @@ pub(super) fn read_credit_rows(
     let iter = stmt
         .query_map([], |row| {
             Ok(StoredRow {
-                section_id: row.get(0),
+                line_id: row.get(0),
                 uuid: row.get(1),
                 date: row.get(2),
                 surveyors: row.get(3),
@@ -311,7 +311,7 @@ pub(super) fn read_credit_rows(
 
 /// One `shot_credits` row as stored, each value as it decoded.
 struct StoredRow {
-    section_id: rusqlite::Result<u32>,
+    line_id: rusqlite::Result<u32>,
     uuid: rusqlite::Result<String>,
     date: rusqlite::Result<Option<String>>,
     surveyors: rusqlite::Result<Option<String>>,
@@ -325,10 +325,10 @@ impl StoredRow {
     /// that is not text or names an id `people` does not hold (dangling, or a
     /// person that could not be read). Using such a row anyway would strip
     /// what it cannot read from the shot, and the next save would make that
-    /// loss permanent; without it the shot reads its section's legacy
+    /// loss permanent; without it the shot reads its line's legacy
     /// columns, which name everyone this build credited there.
     fn credit(self, people: &HashMap<i64, Person>) -> Option<(CreditKey, SurveyCredit)> {
-        let section_id = self.section_id.ok()?;
+        let line_id = self.line_id.ok()?;
         let uuid = self.uuid.ok().filter(|u| !u.is_empty())?;
         let date = match self.date.ok()? {
             None => None,
@@ -337,7 +337,7 @@ impl StoredRow {
         let surveyors = resolve_ids(&self.surveyors.ok()??, people)?;
         let explorers = resolve_ids(&self.explorers.ok()??, people)?;
         Some((
-            (section_id, uuid),
+            (line_id, uuid),
             SurveyCredit {
                 surveyors,
                 explorers,
@@ -468,7 +468,7 @@ impl Unreadable {
             step = self.step,
             sqlite_code = ?sqlite_code,
             purpose = "read per-shot survey credit",
-            "A survey-credit table cannot be read; every shot falls back to its section's \
+            "A survey-credit table cannot be read; every shot falls back to its line's \
              legacy surveyor/date"
         );
     }

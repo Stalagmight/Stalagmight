@@ -19,18 +19,18 @@ const MAX_VISIBLE_WARNINGS = 3;
  *
  * Every PRODUCTION producer reaches this dialog through `presentImportReceipt`
  * (`saveFeedback.ts`, #411/#420 - tests may open it directly by injecting
- * `openDialog('import-receipt', ...)`): a receipt that carries a warning, reports zero sections
+ * `openDialog('import-receipt', ...)`): a receipt that carries a warning, reports zero lines
  * imported (#442), or performed a unit conversion (`unit_conversion` != null
  * - a silent transformation notice with no room in a toast's one-line budget)
  * still opens the modal here; a clean, unconverted receipt with something to
  * show instead surfaces as a toast and never reaches this file.
  *
- * `sections_found` is the whole-file section count, not a promise every
- * section was imported - DMP/Compass/Walls wizards let the user deliberately
- * deselect surveys, so a frontend-derived "N sections not imported" warning
- * from `sections_found - sections_imported` would false-alarm on every
+ * `lines_found` is the whole-file line count, not a promise every
+ * line was imported - DMP/Compass/Walls wizards let the user deliberately
+ * deselect surveys, so a frontend-derived "N lines not imported" warning
+ * from `lines_found - lines_imported` would false-alarm on every
  * partial selection. Every genuine silent-drop class (e.g. TML zero-shot
- * sections) is instead named explicitly in `receipt.warnings` by the backend.
+ * lines) is instead named explicitly in `receipt.warnings` by the backend.
  */
 export default function ImportReceiptDialog() {
   const { t } = useTranslation();
@@ -71,7 +71,7 @@ export default function ImportReceiptDialog() {
           )}
           {receipt.zero_datum_created != null && (
             <li data-testid="import-receipt-zero-datum-created">
-              {t('dialogs.importReceipt.zeroDatumCreated', { section: receipt.zero_datum_created })}
+              {t('dialogs.importReceipt.zeroDatumCreated', { line: receipt.zero_datum_created })}
             </li>
           )}
         </ul>

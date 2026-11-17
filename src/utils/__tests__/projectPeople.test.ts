@@ -1,10 +1,10 @@
 /**
  * projectPeople: everyone the open project credits, without materializing a
- * binary-loaded section's lazy shots.
+ * binary-loaded line's lazy shots.
  */
 import { describe, expect, it } from 'vitest';
-import { noteLazySectionCredits, projectPeople, sectionPeople } from '../projectPeople';
-import type { Section, SurveyCredit } from '../../types/ipc.generated';
+import { noteLazyLineCredits, projectPeople, linePeople } from '../projectPeople';
+import type { Line, SurveyCredit } from '../../types/ipc.generated';
 
 const credit = (surveyors: string[], explorers: string[] = []): SurveyCredit => ({
   surveyors: surveyors.map((name) => ({ name })),
@@ -12,14 +12,14 @@ const credit = (surveyors: string[], explorers: string[] = []): SurveyCredit => 
   date: null,
 });
 
-function eager(credits: Array<SurveyCredit | undefined>): Section {
-  return { shots: credits.map((c, i) => ({ id: i, ...(c ? { credit: c } : {}) })) } as unknown as Section;
+function eager(credits: Array<SurveyCredit | undefined>): Line {
+  return { shots: credits.map((c, i) => ({ id: i, ...(c ? { credit: c } : {}) })) } as unknown as Line;
 }
 
-function lazy(credits: SurveyCredit[]): { section: Section; materialized: () => boolean } {
+function lazy(credits: SurveyCredit[]): { line: Line; materialized: () => boolean } {
   let touched = false;
-  const section = {} as Section;
-  Object.defineProperty(section, 'shots', {
+  const line = {} as Line;
+  Object.defineProperty(line, 'shots', {
     get() {
       touched = true;
       return [];
@@ -27,26 +27,26 @@ function lazy(credits: SurveyCredit[]): { section: Section; materialized: () => 
     enumerable: true,
     configurable: true,
   });
-  noteLazySectionCredits(section, () => credits);
-  return { section, materialized: () => touched };
+  noteLazyLineCredits(line, () => credits);
+  return { line, materialized: () => touched };
 }
 
 describe('projectPeople', () => {
-  it('collects surveyors and explorers of every shot of every section once', () => {
+  it('collects surveyors and explorers of every shot of every line once', () => {
     const a = eager([credit(['Ann', 'Bo']), undefined, credit(['ann'], ['Cy'])]);
     const b = eager([credit([], ['Bo', 'Dee'])]);
-    expect(projectPeople({ sections: [a, b] }).map((p) => p.name)).toEqual(['Ann', 'Bo', 'Cy', 'Dee']);
+    expect(projectPeople({ lines: [a, b] }).map((p) => p.name)).toEqual(['Ann', 'Bo', 'Cy', 'Dee']);
   });
 
-  it('reads a lazy section from its registered credits without materializing it', () => {
-    const { section, materialized } = lazy([credit(['Eve'], ['Fay'])]);
-    expect(sectionPeople(section).map((p) => p.name)).toEqual(['Eve', 'Fay']);
+  it('reads a lazy line from its registered credits without materializing it', () => {
+    const { line, materialized } = lazy([credit(['Eve'], ['Fay'])]);
+    expect(linePeople(line).map((p) => p.name)).toEqual(['Eve', 'Fay']);
     expect(materialized()).toBe(false);
   });
 
-  it('caches per section and per shots array', () => {
+  it('caches per line and per shots array', () => {
     const a = eager([credit(['Ann'])]);
-    expect(sectionPeople(a)).toBe(sectionPeople(a));
+    expect(linePeople(a)).toBe(linePeople(a));
   });
 
   it('is empty without a project', () => {

@@ -9,7 +9,7 @@
  */
 import * as path from 'path';
 import type { Journey } from './framework';
-import { loadFixtureWithoutUndoHistory, disableAutoSave, makeSection, undoDepth } from '../scenarios/common';
+import { loadFixtureWithoutUndoHistory, disableAutoSave, makeLine, undoDepth } from '../scenarios/common';
 import { canonicalProjectSnapshot } from '../lib/fuzzOracleCore';
 import {
   classifyDiffs,
@@ -27,12 +27,12 @@ export const saveReopen: Journey = {
     const { path: fixturePath } = await loadFixtureWithoutUndoHistory(ctx);
     await disableAutoSave(ctx);
 
-    const created = (await ctx.callAction('project', 'createSection', [makeSection(466)])) as {
+    const created = (await ctx.callAction('project', 'createLine', [makeLine(466)])) as {
       ok: boolean;
       result?: { success?: boolean; error?: string | null };
     };
     if (!created.ok || created.result?.success === false) {
-      throw new Error(`createSection failed: ${created.result?.error ?? 'unknown'}`);
+      throw new Error(`createLine failed: ${created.result?.error ?? 'unknown'}`);
     }
     const depthBefore = await undoDepth(ctx);
 

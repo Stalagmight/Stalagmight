@@ -146,13 +146,13 @@ export default function CorruptionRecoveryDialog() {
         return;
       }
 
-      // Write the full project JSON or sections JSON to disk
-      const content = data.fullProjectJson ?? data.sectionsJson ?? '{}';
+      // Write the full project JSON or lines JSON to disk
+      const content = data.fullProjectJson ?? data.linesJson ?? '{}';
       const { writeTextFile } = await import('@tauri-apps/plugin-fs');
       await writeTextFile(destPath, content);
 
       const parts: string[] = [];
-      if (data.sectionCount > 0) parts.push(`${data.sectionCount} section(s)`);
+      if (data.lineCount > 0) parts.push(`${data.lineCount} line(s)`);
       if (data.shotCount > 0) parts.push(`${data.shotCount} shot(s)`);
       if (data.mergeCount > 0) parts.push(`${data.mergeCount} merge(s)`);
       const summary = parts.length > 0 ? parts.join(', ') : 'no recoverable data';

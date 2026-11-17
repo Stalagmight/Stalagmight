@@ -24,7 +24,7 @@ pub fn export_json(project: &Project, path: &Path) -> Result<()> {
 #[derive(Debug, Serialize)]
 pub struct JsonExport {
     pub project: JsonProjectMeta,
-    pub sections: Vec<JsonSection>,
+    pub lines: Vec<JsonLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,10 +34,10 @@ pub struct JsonProjectMeta {
     pub exported_at: String,
 }
 
-/// A section. Its survey credit is the aggregate of its shots' (each shot
+/// A line. Its survey credit is the aggregate of its shots' (each shot
 /// carries its own): people by NAME only - emails never leave in an export.
 #[derive(Debug, Serialize)]
-pub struct JsonSection {
+pub struct JsonLine {
     pub id: u32,
     pub name: Option<String>,
     /// The distinct surveyor names joined with `", "` - the legacy field.
@@ -91,10 +91,10 @@ impl JsonExport {
                 location: project.location.clone(),
                 exported_at: Utc::now().to_rfc3339(),
             },
-            sections: project
-                .sections
+            lines: project
+                .lines
                 .iter()
-                .map(|s| JsonSection {
+                .map(|s| JsonLine {
                     id: s.id,
                     name: s.name.clone(),
                     surveyor: s.surveyor_names(),
@@ -148,13 +148,13 @@ impl JsonExport {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{LineData, ShotData};
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_export_json() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             surveyor: Some("Tester".to_string()),
             date: None,
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn credit_is_per_shot_with_section_aggregates_and_never_emails() {
+    fn credit_is_per_shot_with_line_aggregates_and_never_emails() {
         use crate::models::{Person, SurveyCredit};
         let mut project = Project::new("Credit".to_string(), None);
         let shot = |credit: SurveyCredit| ShotData {
@@ -199,7 +199,7 @@ mod tests {
         };
         let ann = Person::new("Ann", Some("ann@example.org")).unwrap();
         let bo = Person::named("Bo").unwrap();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![
                 shot(SurveyCredit {
                     surveyors: vec![ann],
@@ -223,15 +223,15 @@ mod tests {
             "no email leaves: {contents}"
         );
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let section = &parsed["sections"][0];
-        assert_eq!(section["surveyors"], serde_json::json!(["Ann", "Bo"]));
-        assert_eq!(section["explorers"], serde_json::json!(["Bo"]));
-        assert_eq!(section["surveyor"], "Ann, Bo");
-        assert_eq!(section["date"], "2024-05-02");
-        assert_eq!(section["date_last"], "2024-05-09");
-        assert_eq!(section["shots"][0]["surveyors"], serde_json::json!(["Ann"]));
-        assert_eq!(section["shots"][1]["date"], "2024-05-09");
-        let bare = section["shots"][2].as_object().unwrap();
+        let line = &parsed["sections"][0];
+        assert_eq!(line["surveyors"], serde_json::json!(["Ann", "Bo"]));
+        assert_eq!(line["explorers"], serde_json::json!(["Bo"]));
+        assert_eq!(line["surveyor"], "Ann, Bo");
+        assert_eq!(line["date"], "2024-05-02");
+        assert_eq!(line["date_last"], "2024-05-09");
+        assert_eq!(line["shots"][0]["surveyors"], serde_json::json!(["Ann"]));
+        assert_eq!(line["shots"][1]["date"], "2024-05-09");
+        let bare = line["shots"][2].as_object().unwrap();
         assert!(!bare.contains_key("surveyors") && !bare.contains_key("date"));
     }
 
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn test_export_json_unicode_names() {
         let mut project = Project::new("日本語テスト".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Grotte de l'Ours".to_string()),
             surveyor: Some("Ñoño".to_string()),
             date: None,
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn test_export_json_reference_shots_and_optional_fields() {
         let mut project = Project::new("Reference".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: None,
             surveyor: None,
             date: None,

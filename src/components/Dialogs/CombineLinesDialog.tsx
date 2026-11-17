@@ -1,0 +1,415 @@
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
+import { getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
+import { formatStationIdWithName } from '../../utils/formatters';
+import { formatLength } from '../../utils/formatStats';
+import { defaultConfig } from '../../types/config';
+import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
+import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
+import type { CombinePick } from '../../types/ipc/CombinePick';
+import type { Line, LineId, StationRef } from '../../types/project';
+import type { CreditedPerson, Shot } from '../../types/ipc.generated';
+import { formatCreditDateRange, shotCredit, summarizeCredits } from '../../utils/lineCredit';
+import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
+import { CombinePlanNotes } from './CombinePlanNotes';
+
+const lineLabel = (line: Line | undefined, id: number) =>
+  line?.name?.trim() ? line.name : `Line ${id}`;
+
+/**
+ * Who the combined line credits, and when: every shot keeps its own
+ * surveyors, explorers and date, so this is the two lines' shots taken
+ * together, in the combined line's order (the other line reversed when
+ * it is, and before or after the kept one).
+ */
+function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }) {
+  const { t } = useTranslation();
+  const summary = summarizeCredits(shots.map(shotCredit));
+  const shotCount = (count: number) => t('dialogs.combineSections.shots', { count });
+  const people = (list: CreditedPerson[]) =>
+    list
+      .map((p) => t('dialogs.combineSections.personShots', { name: p.person.name, shots: shotCount(p.shots) }))
+      .join(', ');
+  const dates = formatCreditDateRange(summary);
+  const empty = summary.surveyors.length === 0 && summary.explorers.length === 0 && !dates;
+  return (
+    <div className="space-y-1 text-sm" data-testid="combine-credit">
+      <div className="text-text-secondary">
+        {t('dialogs.combineSections.creditTitle', { shots: shotCount(summary.shot_count) })}
+      </div>
+      {empty ? (
+        <div data-testid="combine-credit-none">No surveyors, explorers or dates recorded on either line.</div>
+      ) : (
+        <>
+          {summary.surveyors.length > 0 && (
+            <div data-testid="combine-credit-surveyors">Surveyors: {people(summary.surveyors)}</div>
+          )}
+          {summary.explorers.length > 0 && (
+            <div data-testid="combine-credit-explorers">Explorers: {people(summary.explorers)}</div>
+          )}
+          {dates && <div data-testid="combine-credit-dates">Surveyed: {dates}</div>}
+        </>
+      )}
+      <div className="text-text-secondary">Every shot keeps its own surveyors, explorers and date.</div>
+    </div>
+  );
+}
+
+/**
+ * Combine Lines: join two lines that meet end to end (merged,
+ * co-located, or across a loop closure) into one. Other lines there stay
+ * attached as branches. Opened with the backend's `CombineCandidate` for one
+ * pair: a two-line selection, or the pair picked in the station menu
+ * ("Combine Line With <name>...", or the "Combine Lines..." submenu at a
+ * junction), with `keep` the line the menu named first. What else the
+ * combine changes for the kept line shown (a side that moves, ties that
+ * become loop closures, converted bearings...) is listed, with everything
+ * else informational, under a folded "Details".
+ */
+export default function CombineLinesDialog() {
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, setSelection } = useUIStore();
+  const { combineLines, project, stations, config } = useProjectStore();
+  const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
+  const candidate = dialogData.candidate as CombineCandidate | undefined;
+
+  const lineA = project?.lines.find((s) => s.id === candidate?.line_a);
+  const lineB = project?.lines.find((s) => s.id === candidate?.line_b);
+  const isStale = !candidate || !lineA || !lineB;
+
+  // `a` (the lower id) is kept unless the user swaps.
+  // Start on `b` only when `a` cannot be kept but `b` can (its shot numbers
+  // are used up for the session).
+  // The line the menu named first (`keep`) is kept, as long as it can be:
+  // otherwise `a`, the lower id, unless `a` cannot be kept but `b` can (its
+  // shot numbers are used up for the session).
+  const [keepB, setKeepB] = useState(() => {
+    const keep = dialogData.keep as LineId | undefined;
+    if (keep === candidate?.line_b && !candidate?.blocked_keeping_b) return true;
+    if (keep === candidate?.line_a && !candidate?.blocked_keeping_a) return false;
+    return Boolean(candidate?.blocked_keeping_a) && !candidate?.blocked_keeping_b;
+  });
+  const kept = keepB ? lineB : lineA;
+  const other = keepB ? lineA : lineB;
+  const keptId = (keepB ? candidate?.line_b : candidate?.line_a) ?? 0;
+  const otherId = (keepB ? candidate?.line_a : candidate?.line_b) ?? 0;
+  const keptName = lineLabel(kept, keptId);
+  const otherName = lineLabel(other, otherId);
+
+  // From the RAW names: an unnamed kept line defaults to unnamed (the field
+  // shows the "Line N" label as its placeholder), not to that label.
+  const defaultName = defaultCombinedName(kept?.name ?? '', other?.name ?? '');
+  const [name, setName] = useState<string | null>(null);
+  const [color, setColor] = useState<string | null>(null);
+  const [swapLr, setSwapLr] = useState(true);
+  const [commentPick, setCommentPick] = useState<CombinePick>('kept');
+  const [namePick, setNamePick] = useState<CombinePick>('kept');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Untouched fields follow the kept line when the user swaps.
+  const shownName = name ?? defaultName;
+  const shownColor = color ?? kept?.color ?? '#3b82f6';
+
+  const join = keepB ? candidate?.station_b : candidate?.station_a;
+  const joinName = join
+    ? stations.find(
+        (s) => s.station_ref.line_id === join.line_id && s.station_ref.station_index === join.station_index
+      )?.name
+    : undefined;
+  const joinLabel = join ? formatStationIdWithName(join.line_id, join.station_index, joinName) : '';
+  const stationLabel = (ref: StationRef) =>
+    formatStationIdWithName(
+      ref.line_id,
+      ref.station_index,
+      stations.find(
+        (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
+      )?.name
+    );
+  const plan = candidate ? combinePlanFor(candidate, keptId) : undefined;
+  const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
+  const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
+  const summary = t('dialogs.combineSections.summary', {
+    kept: keptName,
+    keptShots: t('dialogs.combineSections.shots', { count: keptShots }),
+    other: otherName,
+    otherShots: t('dialogs.combineSections.shots', { count: otherShots }),
+    station: joinLabel,
+  });
+  // Where the other line's shots go (wording from #713): the kept line
+  // keeps its station 0 unless the join is at its start.
+  const keptEnd = keepB ? candidate?.end_b : candidate?.end_a;
+  const otherEnd = keepB ? candidate?.end_a : candidate?.end_b;
+  const placement = `${otherName} will be ${candidate?.reverses ? 'reversed and ' : ''}added ${
+    keptEnd === 'start' ? 'before' : 'after'
+  } ${keptName}.`;
+
+  const keptText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? b : a) ?? '';
+  const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
+  const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b);
+  const nameConflict = Boolean(candidate?.station_name_a && candidate?.station_name_b);
+  const blocked =
+    candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
+  const lineName = (id: LineId) => lineLabel(project?.lines.find((s) => s.id === id), id);
+  const listNames = (ids: LineId[]) => ids.map(lineName).join(', ');
+  const handleConfirm = async () => {
+    if (isSubmitting || isStale || blocked) return;
+    if (isEditingBlockedNow()) {
+      setError('Editing is disabled in the current view.');
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    const dialogKey = dialogData;
+    try {
+      const result = await combineLines(keptId, otherId, {
+        name: shownName.trim(),
+        color: shownColor,
+        swap_lr: swapLr,
+        comment_pick: commentConflict ? commentPick : 'kept',
+        name_pick: nameConflict ? namePick : 'kept',
+        // The join this dialog shows: two lines can meet at more than one
+        // place (a loop of two), and the backend must not pick another.
+        ...(keptEnd && otherEnd ? { join: { kept: keptEnd, other: otherEnd } } : {}),
+      });
+      if (!result.success) {
+        setError(result.error ?? 'Failed to combine lines');
+        setIsSubmitting(false);
+        return;
+      }
+      setSelection({ type: 'line', lineId: keptId });
+      if (useUIStore.getState().dialogData !== dialogKey) return;
+      trackDialogComplete('combine-lines');
+      closeDialog();
+    } catch (e) {
+      setError(getErrorMessage(e, 'Failed to combine lines'));
+      setIsSubmitting(false);
+    }
+  };
+
+  const pickChoice = (
+    key: 'comment' | 'name',
+    legend: string,
+    value: CombinePick,
+    onChange: (pick: CombinePick) => void,
+    options: Array<[CombinePick, string]>
+  ) => (
+    <fieldset className="space-y-1" data-testid={`combine-${key}-pick`}>
+      <legend className="text-sm text-text-secondary mb-1">{legend}</legend>
+      {options.map(([pick, label]) => (
+        <label key={pick} className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={`combine-${key}-pick`}
+            checked={value === pick}
+            onChange={() => onChange(pick)}
+            disabled={isSubmitting}
+            data-testid={`combine-${key}-pick-${pick}`}
+          />
+          <span className="truncate">{label}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+
+  return (
+    <DialogWrapper
+      title="Combine Lines"
+      onClose={closeDialog}
+      size="md"
+      closeOnBackdropClick={!isSubmitting}
+      data-testid="combine-lines-dialog"
+    >
+      <div className="space-y-4">
+        <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
+        {!isStale && <p className="text-sm" data-testid="combine-plan">{placement}</p>}
+        {!isStale && candidate?.join_kind === 'closure' && (
+          <p className="text-sm" data-testid="combine-closure-join">
+            {t('dialogs.combineSections.closureJoin', {
+              kept: keptName,
+              other: otherName,
+              distance: formatLength(plan?.shift_m ?? 0, lengthUnit, 2),
+            })}
+          </p>
+        )}
+        {/* Outside the folded Details: the user is told before confirming that
+            a merge or closure of theirs goes (#746); Details names each one. */}
+        {!isStale && (plan?.closures_removed_across_one_shot?.length ?? 0) > 0 && (
+          <p className="text-sm" data-testid="combine-removed-summary">
+            {t('dialogs.combineSections.removedSummary', {
+              count: plan?.closures_removed_across_one_shot?.length ?? 0,
+            })}
+          </p>
+        )}
+
+        <div className="flex items-center justify-between gap-2 text-sm">
+          <span data-testid="combine-kept-label">
+            Keep <strong>{keptName}</strong> (its id, shot numbers and direction)
+          </span>
+          <Button onClick={() => setKeepB((v) => !v)} disabled={isSubmitting || isStale} data-testid="combine-swap-kept">
+            Keep {otherName} instead
+          </Button>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <label className="block text-sm text-text-secondary mb-1" htmlFor="combine-name">
+              Combined line name
+            </label>
+            <input
+              id="combine-name"
+              type="text"
+              value={shownName}
+              placeholder={`${keptName} (leave empty to keep it unnamed)`}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full"
+              disabled={isSubmitting}
+              data-testid="combine-name"
+            />
+          </div>
+          <input
+            type="color"
+            value={shownColor}
+            onChange={(e) => setColor(e.target.value)}
+            className="w-8 h-8 rounded cursor-pointer border border-border"
+            aria-label="Combined line colour"
+            disabled={isSubmitting}
+            data-testid="combine-color"
+          />
+        </div>
+
+        {candidate?.reverses && (
+          <div className="text-sm" data-testid="combine-reverse-notice">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={swapLr}
+                onChange={(e) => setSwapLr(e.target.checked)}
+                disabled={isSubmitting}
+                data-testid="combine-swap-lr"
+              />
+              Swap {otherName}'s left and right walls
+            </label>
+          </div>
+        )}
+
+        {commentConflict &&
+          pickChoice('comment', 'The join station has two comments. Keep:', commentPick, setCommentPick, [
+            ['kept', keptText(candidate?.comment_a, candidate?.comment_b)],
+            ['other', otherText(candidate?.comment_a, candidate?.comment_b)],
+            ['both', 'Both'],
+          ])}
+        {nameConflict &&
+          pickChoice('name', 'The join station has two names. Keep:', namePick, setNamePick, [
+            ['kept', keptText(candidate?.station_name_a, candidate?.station_name_b)],
+            ['other', otherText(candidate?.station_name_a, candidate?.station_name_b)],
+          ])}
+
+        {/* Everything informational, folded: what moves, what becomes a loop
+            closure, branches, depth, direction and credit. */}
+        <details className="text-sm" data-testid="combine-details">
+          <summary className="cursor-pointer text-text-secondary hover:text-text-primary" data-testid="combine-details-toggle">
+            Details
+          </summary>
+          <div className="mt-3 space-y-4">
+            {candidate?.reverses && (
+              <p data-testid="combine-reverse-explain">
+                Reversing {otherName} reciprocates its bearings and swaps its depths, so every station stays where
+                it is.
+              </p>
+            )}
+
+            {candidate && candidate.branches.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-branches-note">
+                {t('dialogs.combineSections.branchesNote', {
+                  names: listNames(candidate.branches),
+                  count: candidate.branches.length,
+                })}
+              </p>
+            )}
+            {candidate && candidate.loose_ends.length > 0 && (
+              <p className="text-text-secondary" data-testid="combine-loose-ends-note">
+                {t('dialogs.combineSections.looseEndsNote', {
+                  names: listNames(candidate.loose_ends),
+                  count: candidate.loose_ends.length,
+                })}
+              </p>
+            )}
+            {candidate?.depth_difference_m != null && (
+              <p className="text-warning" data-testid="combine-depth-note">
+                {t('dialogs.combineSections.depthNote', {
+                  gap: formatLength(candidate.depth_difference_m, lengthUnit, 2),
+                  half: formatLength(candidate.depth_difference_m / 2, lengthUnit, 2),
+                })}
+              </p>
+            )}
+
+            {!isStale && candidate && plan && (
+              <CombinePlanNotes
+                candidate={candidate}
+                plan={plan}
+                keptId={keptId}
+                keptName={keptName}
+                otherName={otherName}
+                keptQuality={kept?.quality}
+                otherQuality={other?.quality}
+                lengthUnit={lengthUnit}
+                lineName={lineName}
+                stationLabel={stationLabel}
+              />
+            )}
+
+            <p className="text-text-secondary" data-testid="combine-direction-note">
+              The combined line keeps {keptName}'s survey direction ({kept?.direction === 'out' ? 'Out' : 'In'}).
+            </p>
+
+            {!isStale && kept && other && (
+              <CombinedCreditSummary
+                shots={(() => {
+                  const moved = candidate?.reverses ? [...other.shots].reverse() : other.shots;
+                  return keptEnd === 'start' ? [...moved, ...kept.shots] : [...kept.shots, ...moved];
+                })()}
+              />
+            )}
+          </div>
+        </details>
+
+        {blocked && (
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-blocked">
+            {blocked}
+          </div>
+        )}
+        {isStale && (
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-stale">
+            One of these lines no longer exists. Close this and pick the join again.
+          </div>
+        )}
+        {error && (
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="combine-error">
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          <Button onClick={closeDialog} disabled={isSubmitting} data-testid="combine-cancel">
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleConfirm}
+            disabled={isSubmitting || isStale || Boolean(blocked)}
+            data-primary-action=""
+            data-testid="combine-confirm"
+          >
+            {isSubmitting ? 'Combining...' : 'Combine'}
+          </Button>
+        </div>
+      </div>
+    </DialogWrapper>
+  );
+}

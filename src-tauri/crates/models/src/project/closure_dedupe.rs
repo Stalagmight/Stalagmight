@@ -1,4 +1,4 @@
-//! Combine Sections making two loop closures identical (#749): which one
+//! Combine Lines making two loop closures identical (#749): which one
 //! stays, applied to the combined project (`Project::dedupe_closures_in`) and
 //! predicted by the plan the dialog shows (`Project::closures_replaced`),
 //! both through the one rule [`closure_dedupe`].
@@ -42,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     ClosureStrategy, CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, LoopClosure,
-    SectionId, StationRef,
+    LineId, StationRef,
 };
 
 use super::combine_plan::{JoinPoint, ResolvedClosure, Tie, TieId};
@@ -50,7 +50,7 @@ use super::Project;
 
 /// One loop closure as [`closure_dedupe`] sees it: its two stations once the
 /// combine is done (in either order) and whether the solve takes it. `None`
-/// for a closure the dedupe leaves alone (not on the combined section, or one
+/// for a closure the dedupe leaves alone (not on the combined line, or one
 /// whose stations do not resolve).
 pub(crate) type DedupeEntry = Option<((StationRef, StationRef), bool)>;
 
@@ -119,7 +119,7 @@ enum Origin<'a> {
 }
 
 impl Project {
-    /// Drop loop closures onto `section_id` that the combine made identical,
+    /// Drop loop closures onto `line_id` that the combine made identical,
     /// by [`closure_dedupe`] (see the module docs). Each kept closure stays
     /// where it was in `loop_closures`.
     ///
@@ -128,14 +128,14 @@ impl Project {
     /// the plan lists as replaced (`closures_replaced`).
     pub(super) fn dedupe_closures_in(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
     ) -> Vec<(LoopClosure, LoopClosure)> {
         let entries: Vec<DedupeEntry> = self
             .loop_closures
             .iter()
             .map(|closure| {
-                if closure.station_a.section_id != section_id
-                    && closure.station_b.section_id != section_id
+                if closure.station_a.line_id != line_id
+                    && closure.station_b.line_id != line_id
                 {
                     return None;
                 }
@@ -180,7 +180,7 @@ impl Project {
     /// shot (#746), a snapped one of `torn_ties` made ordinary, then each
     /// merge of `torn_ties` as the `Batch` closure `tear_ties` appends. A
     /// station keeps its identity through the combine except the other
-    /// section's join station, which becomes the kept one's.
+    /// line's join station, which becomes the kept one's.
     ///
     /// `O(closures)`, and nothing at all for a combine that touches no
     /// closure the solve does not take ([`Self::combine_may_replace`]).
@@ -202,7 +202,7 @@ impl Project {
         let on_combined = |a: StationRef, b: StationRef| {
             [a, b]
                 .iter()
-                .any(|at| at.section_id == join.kept || at.section_id == join.other)
+                .any(|at| at.line_id == join.kept || at.line_id == join.other)
         };
         let entry = |a: StationRef, b: StationRef, eligible: bool| -> DedupeEntry {
             on_combined(a, b).then_some(((joined(a), joined(b)), eligible))
@@ -263,12 +263,12 @@ impl Project {
     /// the two: checked off the stored keys, without resolving anything, so
     /// the station menu pays for [`Self::closures_replaced`] only where it can
     /// say something.
-    pub(crate) fn combine_may_replace(&self, kept: SectionId, other: SectionId) -> bool {
+    pub(crate) fn combine_may_replace(&self, kept: LineId, other: LineId) -> bool {
         self.loop_closures.iter().any(|closure| {
             !Self::closure_is_eligible(closure.strategy)
                 && [&closure.station_a, &closure.station_b]
                     .iter()
-                    .any(|key| key.section_id == kept || key.section_id == other)
+                    .any(|key| key.line_id == kept || key.line_id == other)
         })
     }
 

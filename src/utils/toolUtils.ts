@@ -65,7 +65,7 @@ export function isMutatingTool(tool: ToolType): boolean {
  *
  * Single owner on purpose (#316). Three copies of this table used to live in
  * MapCanvas and had drifted: two still named tools that no longer exist
- * (`draw`, `delete`, `move_section`) and they disagreed on `merge`
+ * (`draw`, `delete`, `move_line`) and they disagreed on `merge`
  * (`cell` vs `crosshair`) and on the move tools (`move` vs `default`). Any
  * writer that guesses wrong re-opens the class of bug where one cursor writer
  * silently clobbers another's.

@@ -57,9 +57,9 @@ const RESULT: MnemoPullResult = {
   file_name: 'MNemo-2026-11-13_143005.dmp',
   firmware: 'v2.4',
   bytes: 4096,
-  sections: 3,
+  lines: 3,
   shots: 41,
-  skipped_sections: 0,
+  skipped_lines: 0,
   unread_trailing_bytes: 0,
   unreadable_reason: null,
 };
@@ -114,7 +114,7 @@ describe('MnemoImportDialog', () => {
 
     expect(invokeIpcMock).toHaveBeenCalledWith('pull_mnemo', { port: MNEMO.name }, expect.anything());
     expect(await screen.findByTestId('mnemo-result-summary')).toHaveTextContent(
-      'Saved MNemo-2026-11-13_143005.dmp: 3 sections, 41 shots.'
+      'Saved MNemo-2026-11-13_143005.dmp: 3 lines, 41 shots.'
     );
 
     await userEvent.click(screen.getByTestId('mnemo-continue'));
@@ -201,23 +201,23 @@ describe('MnemoImportDialog', () => {
     expect(invokeIpcMock).not.toHaveBeenCalledWith('cancel_mnemo_pull', undefined, expect.anything());
   });
 
-  it('reports sections it could not read', async () => {
-    backend({ pull: async () => ({ ...RESULT, skipped_sections: 2, unread_trailing_bytes: 70 }) });
+  it('reports lines it could not read', async () => {
+    backend({ pull: async () => ({ ...RESULT, skipped_lines: 2, unread_trailing_bytes: 70 }) });
     await renderReady();
     await userEvent.click(screen.getByTestId('mnemo-download'));
 
     const losses = await screen.findByTestId('mnemo-result-losses');
-    expect(losses).toHaveTextContent('2 sections could not be read');
-    expect(losses).toHaveTextContent('70 bytes after the last complete section were not read');
+    expect(losses).toHaveTextContent('2 lines could not be read');
+    expect(losses).toHaveTextContent('70 bytes after the last complete line were not read');
     expect(screen.getByTestId('mnemo-continue')).not.toBeDisabled();
   });
 
   it('keeps an unreadable dump but will not import it, and can show the file', async () => {
-    backend({ pull: async () => ({ ...RESULT, sections: 0, shots: 0, unreadable_reason: 'No sections found' }) });
+    backend({ pull: async () => ({ ...RESULT, lines: 0, shots: 0, unreadable_reason: 'No lines found' }) });
     await renderReady();
     await userEvent.click(screen.getByTestId('mnemo-download'));
 
-    expect(await screen.findByTestId('mnemo-result-unreadable')).toHaveTextContent('No sections found');
+    expect(await screen.findByTestId('mnemo-result-unreadable')).toHaveTextContent('No lines found');
     expect(screen.getByTestId('mnemo-continue')).toBeDisabled();
 
     await userEvent.click(screen.getByTestId('mnemo-show-file'));

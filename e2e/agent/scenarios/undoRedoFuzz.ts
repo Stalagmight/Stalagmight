@@ -42,8 +42,8 @@
  *   - MUTATE: draw an action, run it, then reconcile with what the stacks did.
  *     A rejected command must change neither the stacks nor the state (that
  *     assertion is what catches a command that mutates and then fails). A
- *     command that succeeds without pushing an entry (`ReverseSection` on a
- *     shot-less section, `UnmergeStations` on an unmerged station) must leave
+ *     command that succeeds without pushing an entry (`ReverseLine` on a
+ *     shot-less line, `UnmergeStations` on an unmerged station) must leave
  *     the state alone; it may still clear the redo stack, which truncates the
  *     model's forward branch.
  *   - UNDO / REDO: the state must equal `snapshots[cursor +/- 1]` exactly, and
@@ -98,32 +98,32 @@
  *     pnpm agent:scenario undo-redo-fuzz --seed N --iterations M --release
  *
  * 4, 5 and 6 need `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx`: they need loop
- * closures, zero datums and null section metadata present AT LOAD, and the
- * fractal fixture has none of those (all 32 of its sections have a non-null
+ * closures, zero datums and null line metadata present AT LOAD, and the
+ * fractal fixture has none of those (all 32 of its lines have a non-null
  * surveyor; naharon has 13 null ones). Fixture diversity is what found them.
  *
  * 1. FIXED (94896857). `--seed 1 --iterations 40` on fractal - this
- *    is what the `agent:scenarios` smoke entry hits. Create a section, undo,
+ *    is what the `agent:scenarios` smoke entry hits. Create a line, undo,
  *    redo: every shot uuid was re-minted. SECOND MANIFESTATION, only
  *    observable once runs save (`naharon`, seed 23 x60): the same
- *    `restore_section` path also reset `reverse_parity` and BOTH gauge anchors
- *    (`Section::new`), so a redo silently discarded the least-squares gauge pair
+ *    `restore_line` path also reset `reverse_parity` and BOTH gauge anchors
+ *    (`Line::new`), so a redo silently discarded the least-squares gauge pair
  *    a save had captured.
- *    `UndoData::CreatedSectionSnapshot` stored a `SectionData`, which has no
- *    uuid field, so redo went `restore_section` -> `Section::new_with_id` ->
+ *    `UndoData::CreatedLineSnapshot` stored a `LineData`, which has no
+ *    uuid field, so redo went `restore_line` -> `Line::new_with_id` ->
  *    `Shot::new` -> `Uuid::new_v4()`. Fixed by giving the entry a
- *    `SectionIdentity` (shot uuids, parity, both anchors) that
- *    `Section::restore_with_identity` puts back, with the undo refreshing that
- *    identity from the live section so save-captured anchors survive; legacy
+ *    `LineIdentity` (shot uuids, parity, both anchors) that
+ *    `Line::restore_with_identity` puts back, with the undo refreshing that
+ *    identity from the live line so save-captured anchors survive; legacy
  *    entries still mint.
  * 2. FIXED (94896857 exact-zero half, a67dd1b5 float-dust half, f16c96a8 the
  *    whole state class).
  *    `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 11 --iterations 150` on fractal
  *    (not re-found under v2) - undoing a shot INSERT left
- *    behind an all-zero `section_offsets` entry the section did not have.
- *    `adjust_section_offset` created the key while compensating; the undo put
+ *    behind an all-zero `line_offsets` entry the line did not have.
+ *    `adjust_line_offset` created the key while compensating; the undo put
  *    the value back to 0 but nothing removed the key. The end state is that a
- *    dust-zero entry is UNREPRESENTABLE: `write_section_offset` is the single
+ *    dust-zero entry is UNREPRESENTABLE: `write_line_offset` is the single
  *    normalizing writer (a value within `Project::OFFSET_DUST_M` of the origin is
  *    removed rather than written), and two boundaries enforce it on maps this app
  *    did not write - the loader after its zero-trust re-solve, and snapshot
@@ -134,12 +134,12 @@
  *    `undoPersistenceFuzz.ts` for the other end of the same argument.
  * 3. FIXED (72595cc6). `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 2 --iterations 36`
  *    on fractal (not re-found under v2; failed at #36, depth 11) - appending the
- *    FIRST shot into an EMPTY section and undoing displaced the whole section by
+ *    FIRST shot into an EMPTY line and undoing displaced the whole line by
  *    that shot's horizontal vector (1.13 m in the repro), and the displacement
  *    RATCHETED on every further undo/redo cycle. `Project::add_shot` (the append
  *    path) is offset-neutral, but the undo routed through
  *    `remove_shot_with_rewire`, whose `pos == 0` branch unconditionally called
- *    `adjust_section_offset`. The empty-section append now has its exact inverse
+ *    `adjust_line_offset`. The empty-line append now has its exact inverse
  *    (`remove_appended_first_shot`): offsets untouched, station-0 refs kept.
  *    (Finding 15 was this bug re-measured, and is fixed with it.)
  * 4. FIXED (94896857). `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 4 --iterations 19`
@@ -151,9 +151,9 @@
  *    same shape, finding 17) now capture their index and reinsert at it, with a
  *    push fallback for legacy entries.
  * 5. FIXED (b9c9d649). `--seed 16 --iterations 40` on naharon - undoing
- *    `updateSection` COULD NOT restore a `name` / `surveyor` / `date` that was
+ *    `updateLine` COULD NOT restore a `name` / `surveyor` / `date` that was
  *    previously null; the new value silently survived the undo. The capture was
- *    right (`undo_capture.rs` builds `Some(None)`), but `SectionUpdates` had only
+ *    right (`undo_capture.rs` builds `Some(None)`), but `LineUpdates` had only
  *    `#[serde(default)]` on those three fields, so `Some(None)` and `None` BOTH
  *    serialized to `null` in `values_json` and both read back as `None` = "leave
  *    it alone". They now carry `deserialize_with = "double_option"` +
@@ -172,7 +172,7 @@
  *    while `Command::DeleteShot` keeps every guard (pinned by its own test).
  * 7. FIXED (94896857). `--seed 12 --iterations 40` on fractal - a jump through
  *    the history dropdown's path landed on a DIFFERENT state than the same depth
- *    reached by single undos: `section_offsets` out by 2.4 m, and the stations
+ *    reached by single undos: `line_offsets` out by 2.4 m, and the stations
  *    with it.
  *    `--seed 15 --iterations 40` on fractal is the same bug reached through the
  *    INTEGRITY oracle instead - the state compared equal (the geometry paths
@@ -193,21 +193,21 @@
  *
  * 8. FIXED (b9c9d649). DATA CORRUPTION. `--seed 14 --iterations 6` on fractal -
  *    after a save/reload, an `undo` DELETED THE WRONG SHOT. Six iterations: a
- *    `createShot(before=)` into a one-shot section makes the ids diverge from
+ *    `createShot(before=)` into a one-shot line makes the ids diverge from
  *    positional order, the save/reload renumbers, and the undo hit the wrong
  *    slot. The shot the user still had was gone and one they deleted was back -
  *    silent, and it persisted on the next save.
  *
  *    The chain: shots are RENUMBERED on load to
- *    `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs); undo entries
+ *    `line_id * FEATURE_ID_STRIDE + sequence_order` (read.rs); undo entries
  *    are persisted and reloaded as OPAQUE JSON (`load_undo_stack`) with NO
  *    remapping anywhere on the restore path; and
- *    `UndoData::CreatedShotSnapshot { section_id, shot_id }` undid by calling
- *    `delete_shot(section_id, shot_id)`. Because the in-session allocator
- *    (`take_shot_id`) hands out ids from the SAME `section_id * STRIDE + n` space
+ *    `UndoData::CreatedShotSnapshot { line_id, shot_id }` undid by calling
+ *    `delete_shot(line_id, shot_id)`. Because the in-session allocator
+ *    (`take_shot_id`) hands out ids from the SAME `line_id * STRIDE + n` space
  *    the loader renumbers into, a stale id did not miss - it COLLIDED with
- *    whatever shot now occupied that slot. A section only diverges from positional
- *    order after a mid-section insert or delete, which is why this needed a fuzzer
+ *    whatever shot now occupied that slot. A line only diverges from positional
+ *    order after a mid-line insert or delete, which is why this needed a fuzzer
  *    to reach.
  *
  *    Fixed by addressing shots by `Shot::uuid` in the persisted entries (additive
@@ -246,12 +246,12 @@
  * kept bugs 3 and 7 visible and is now the whole of what this scenario tolerates:
  *
  *   - `SAVE_HEALING_MUTATIONS` - `save_project` mints missing shot uuids, dedupes
- *     within-section duplicates, captures missing gauge anchors, drops orphan
- *     `section_offsets` and sanitizes non-finite values, all with no undo entry.
+ *     within-line duplicates, captures missing gauge anchors, drops orphan
+ *     `line_offsets` and sanitizes non-finite values, all with no undo entry.
  *   - `RELOAD_RESOLVED_GEOMETRY` - `redrive_offsets_after_load` ends in an
  *     unconditional `resolve_offsets()` ("Zero-trust: never honor a persisted
  *     derivable offset", offsets.rs:186-188), so a reload RECOMPUTES
- *     `section_offsets` and the station coordinates derived from them rather than
+ *     `line_offsets` and the station coordinates derived from them rather than
  *     restoring them.
  *
  * That subtraction stays honest by two guards `checkSnapshot` keeps: the slow
@@ -263,9 +263,9 @@
  * not by size.
  *
  * `Shot::id` is not persisted either - the loader renumbers to
- * `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372) - so from the
+ * `line_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372) - so from the
  * first reload the model compares id-agnostically (shot ids replaced by position,
- * everything else still exact). Section ids ARE persisted and are compared.
+ * everything else still exact). Line ids ARE persisted and are compared.
  *
  * ## Three oracles, not one
  *
@@ -305,12 +305,12 @@
  *   bug 2  -- v1 escape --           not re-found in the sweep
  *   bug 3  -- v1 escape --           not re-found in the sweep
  *   bug 4  -- v1 escape --           not re-found in the sweep
- *   bug 5  naharon seed 16 x40       sections[20].surveyor null -> kept
+ *   bug 5  naharon seed 16 x40       lines[20].surveyor null -> kept
  *   bug 6  naharon seed 1  x40       "undo at depth 2 failed outright"
  *          naharon seed 21 x60       the same wedge reached through undoTo; its
  *                                    6-move sequence later became the clearest
  *                                    statement of finding 11's residue (entry 11)
- *   bug 7  fractal seed 12 x40       undoTo(0) 2.4 m section_offsets divergence
+ *   bug 7  fractal seed 12 x40       undoTo(0) 2.4 m line_offsets divergence
  *          fractal seed 15 x40       same bug via the INTEGRITY oracle instead:
  *                                    undoTo skipped reconcile_geometry, so
  *                                    realign_merges never ran and the reloaded
@@ -320,7 +320,7 @@
  *                                    reload-resolved across the epoch, so ONLY
  *                                    the integrity delta caught it - which is
  *                                    the argument for having three oracles.
- *   bug 8  fractal seed 14 x6        createShot(before=) into a 1-shot section,
+ *   bug 8  fractal seed 14 x6        createShot(before=) into a 1-shot line,
  *                                    save/reload, undo -> the WRONG shot was
  *                                    deleted. Six iterations, the cleanest
  *                                    repro of the worst bug.
@@ -346,7 +346,7 @@
  * ## v3: the import group, opt-in
  *
  * `STALAGMIGHT_FUZZ_STREAM=v3` is v2 PLUS the fifteen generators in
- * `undoRedoFuzzImportActions.ts`: synthetic `ImportSectionConfig` batches across
+ * `undoRedoFuzzImportActions.ts`: synthetic `ImportLineConfig` batches across
  * all six placement variants, the null-in-a-required-f64 family, the DMP
  * wizard's `existing_shot_updates`, the four file importers on files built by
  * `surveyFileSpecs.ts`, and the cheap read-only probes. About 22% of a balanced
@@ -376,9 +376,9 @@
  *
  * ## A v3 OBSERVATION that is not a finding
  *
- * `execute_import_sections` refuses a non-finite value in an
+ * `execute_import_lines` refuses a non-finite value in an
  * `existing_shot_updates` patch by name, before any mutation, and has a Rust
- * test for it (`test_execute_import_sections_rejects_non_finite_shot_update`,
+ * test for it (`test_execute_import_lines_rejects_non_finite_shot_update`,
  * "attacker-controllable input ... must hold the same all_finite invariant as
  * update_shot"). NOTHING THAT CROSSED JSON CAN REACH IT. Every `ShotUpdates`
  * field is `Option<f64>` (or the double-option `Option<Option<f64>>`) with
@@ -395,7 +395,7 @@
  * check is a Rust-API defence and cannot be cited as protecting the frontend.
  * If a caller ever needs a non-finite patch field rejected rather than dropped,
  * `ShotUpdates` has to distinguish "absent" from "explicitly null" for the
- * non-nullable numbers, exactly as finding 5 made `SectionUpdates` do.
+ * non-nullable numbers, exactly as finding 5 made `LineUpdates` do.
  *
  * V3 SWEEP, at the wave that introduced it. 8 cells (both fixtures, seeds 1-4,
  * x40) plus 14 more on the seven seeds whose swarm profile is `import-heavy`
@@ -449,7 +449,7 @@
  * campaign actually measured.
  *
  * `suggest_import_placement` is a store action and IS reached, including its
- * non-empty return: `createMotifSection` plants a run and `probeSuggestMotif`
+ * non-empty return: `createMotifLine` plants a run and `probeSuggestMotif`
  * asks for a placement using a jittered copy of it. Both are appended at the END
  * of the v3 group, so v1 and v2 arrays are unchanged; the metric-for-metric v3
  * replay record above predates them.
@@ -459,9 +459,9 @@
  * problem rather than a transcription. `Refs::learn` pairs what a recorded move
  * created against what the replayed move created POSITIONALLY, with `zip` and no
  * length check - which is sound only because every existing `Op` creates a fixed
- * number of entities (at most one section, one shot, one closure; `BatchOp` has
+ * number of entities (at most one line, one shot, one closure; `BatchOp` has
  * no creating variant at all). An import creates an arbitrary number in one
- * move, and `execute_import_sections` drops sections whose placement does not
+ * move, and `execute_import_lines` drops lines whose placement does not
  * resolve - so a replay that places one fewer would pair a PREFIX, silently, and
  * the shrinker would then minimize toward the mis-pairing instead of toward the
  * bug. Whoever adds it has to give `learn` a checked, arity-aware pairing first.
@@ -495,7 +495,7 @@
  * 11. FIXED (94896857, completed by b9d6b14b).
  *    A save HEALS live state with no undo entry
  *    (`ensure_shot_uuids`, `ensure_unique_shot_uuids`,
- *    `capture_missing_gauge_anchors`, the orphan `section_offsets` retain -
+ *    `capture_missing_gauge_anchors`, the orphan `line_offsets` retain -
  *    core/state/project_io.rs). A `ProjectSnapshotPair` captured BEFORE that
  *    save held the pre-heal project in BOTH halves and neither was refreshed,
  *    so undoing or redoing an UNRELATED command recorded before the save
@@ -523,12 +523,12 @@
  *    THE RESIDUE, found by this scenario after wave 2 and closed by b9d6b14b.
  *    94896857 re-applied the heals to a restored project as a CARRY-FORWARD:
  *    `reapply_heals_after_restore` (core/state/project_io.rs) copies an anchor
- *    onto a restored section only from a LIVE section with the same id that
- *    already has one. That could not cover a snapshot that RE-CREATES a section
+ *    onto a restored line only from a LIVE line with the same id that
+ *    already has one. That could not cover a snapshot that RE-CREATES a line
  *    the live project does not currently have - nothing to carry forward from, so
- *    the anchors the save captured were lost. (The `CreateSection` path never had
- *    the problem: its entry carries a `SectionIdentity` refreshed from the live
- *    section at undo time, finding 1. It was specifically the snapshot-pair path.)
+ *    the anchors the save captured were lost. (The `CreateLine` path never had
+ *    the problem: its entry carries a `LineIdentity` refreshed from the live
+ *    line at undo time, finding 1. It was specifically the snapshot-pair path.)
  *    Fixed by making snapshot pairs SELF-REFRESHING WALLS: an undo re-records the
  *    entry's `after` half from the live project before restoring `before`, and a
  *    redo does the mirror, so pair undo/redo are exact inverses by construction
@@ -538,18 +538,18 @@
  *    `pnpm agent:fuzz-shrink` (43 steps -> 2, 1-minimal, no classifier involved):
  *
  *        1. executeBatch(revSec+crtSec+updShot)   <- pushes a ProjectSnapshotPair
- *                                                    whose `after` holds a NEW section
- *        2. save                                  <- captures that section's gauge pair
+ *                                                    whose `after` holds a NEW line
+ *        2. save                                  <- captures that line's gauge pair
  *        (then the replayer's own unwind/rewind: undo to 0, redo back)
  *
  *        redo did not restore the state recorded at depth 2
- *          at project.sections[32].gauge_neighbour_uuid
+ *          at project.lines[32].gauge_neighbour_uuid
  *            expected: "3178f6da-..."   actual: null
  *
  *    Six-move variant on naharon (seed 21 x60), a different command reaching the
  *    same place - `deleteShotRangeSplit` also produces a snapshot pair that
- *    re-creates a section: reverseSection, deleteShotRangeSplit, save+reload,
- *    updateShot, undo, undo, redo -> `sections[37].gauge_shot_uuid` null.
+ *    re-creates a line: reverseLine, deleteShotRangeSplit, save+reload,
+ *    updateShot, undo, undo, redo -> `lines[37].gauge_shot_uuid` null.
  *
  *    It was RED at fractal seeds 1, 12, 15, 47, 63 (x40) and naharon seeds 1, 21,
  *    31, 63 - roughly half of all seeds, because "a snapshot pair, then a save"
@@ -564,7 +564,7 @@
  *    true loop - but it meant save+reopen was not state-preserving, because the
  *    same conversion did not run after every command that can orphan a closure.
  *    The resolution was to normalize EAGERLY rather than tolerate:
- *    `execute_delete_last_shot_and_section` converts orphan closures and
+ *    `execute_delete_last_shot_and_line` converts orphan closures and
  *    reconciles, and the range-shift path already converted per shot. naharon
  *    seed 14 x40 showed the same count drop on a plain UNDO and is covered by
  *    the same fix.
@@ -906,7 +906,7 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   // A shot list that differs field-by-field cannot say whether the same shots
   // moved or a DIFFERENT shot was removed. uuid survives a save/reload, so it
   // answers that - and the answer is the difference between drift and data loss.
-  if (diffs.some((diff) => /^project\.sections\[\d+\]\.shots\b/.test(diff.path))) {
+  if (diffs.some((diff) => /^project\.lines\[\d+\]\.shots\b/.test(diff.path))) {
     const deltas = shotSetDelta(expected, actual);
     if (deltas.length > 0) {
       lines.push('  SHOT IDENTITY DELTA (by uuid, which survives save/reload):');
@@ -1051,7 +1051,7 @@ async function runFuzz(
       `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
     );
   }
-  // The recorded steps carry RESOLVED section and shot ids, so replaying them
+  // The recorded steps carry RESOLVED line and shot ids, so replaying them
   // against a different project drives moves at ids that do not exist there:
   // an invented failure, or a green run, either way not the recorded bug.
   if (replay && replay.fixture !== fixture) {
@@ -1372,7 +1372,7 @@ async function runFuzz(
     // ONLY a comparison that crosses an epoch boundary may subtract the
     // documented undo-less changes. Within an epoch the oracle stays strict -
     // otherwise "a reload re-solves offsets" would permanently hide every
-    // section_offsets bug the fuzzer exists to find (bugs 3 and 7).
+    // line_offsets bug the fuzzer exists to find (bugs 3 and 7).
     const attributable = res.crossesEpoch
       ? [
           ...(savesDone > 0 ? SAVE_HEALING_MUTATIONS : []),
@@ -1479,13 +1479,13 @@ async function runFuzz(
    *
    *   1. SAVE IS ATTRIBUTABLE. `save_project` heals live state with no undo
    *      entry - `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
-   *      `capture_missing_gauge_anchors`, the orphan `section_offsets` retain,
+   *      `capture_missing_gauge_anchors`, the orphan `line_offsets` retain,
    *      non-finite sanitize. Every path that changes must match
    *      `SAVE_HEALING_MUTATIONS` by path AND direction; anything else fails.
    *   2. THE STACKS SURVIVE. Both lengths must come back exactly.
    *   3. THE RESTORED STACK IS THE SAME HISTORY. From here the model compares
    *      id-agnostically (the loader renumbers `Shot::id` to
-   *      `section_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
+   *      `line_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
    *      final unwind/rewind then walks the whole RESTORED stack against the
    *      snapshots recorded before the save.
    */

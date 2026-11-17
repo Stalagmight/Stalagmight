@@ -12,7 +12,7 @@
  *
  * Rendered at the full-component tier (real DataTable, real projectStore,
  * mocked `invokeIpc`) because the ordering only exists across a real unmount +
- * remount of the component that owns the view state. `sections={[]}` keeps
+ * remount of the component that owns the view state. `lines={[]}` keeps
  * SpreadsheetGrid out of the render; the column-visibility checkbox is enough to
  * change the view snapshot, and it stands in for the width edits that share the
  * same snapshot and the same debounced effect.
@@ -99,7 +99,7 @@ function updateViewCalls() {
 
 describe('DataTable view save across a close/reopen inside the flush window (#357 item 4)', () => {
   it('does not revert the flushed write when the table is reopened before the re-sync lands', async () => {
-    const first = render(<DataTable sections={[]} />);
+    const first = render(<DataTable lines={[]} />);
 
     // Hide `comment`, then close the table inside the 500ms debounce window so
     // the unmount flush - not the timer - is what fires the IPC.
@@ -109,13 +109,13 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     await flushMicrotasks();
     expect(updateViewCalls()).toHaveLength(1);
     expect(updateViewCalls()[0]?.[1]).toMatchObject({
-      hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'],
+      hiddenColumns: ['comment', 'explorers', 'line_id', 'shot_id', 'survey_date', 'surveyors'],
     });
 
     // The IPC has NOT settled yet, so its `loadConfig` re-sync has not run.
     // Reopening here is the race: the new mount can only seed from the
     // in-memory config.
-    render(<DataTable sections={[]} />);
+    render(<DataTable lines={[]} />);
 
     // Now let the write land and the re-sync arrive - after the seed, which is
     // the whole point: the one-shot seed will refuse to re-read it.
@@ -136,7 +136,7 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     // `comment` must still be hidden. Without the optimistic publish the second
     // payload drops it, silently undoing the write the unmount flush just made.
     expect(calls[1]?.[1]).toMatchObject({
-      hiddenColumns: ['_warnings', 'comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'],
+      hiddenColumns: ['_warnings', 'comment', 'explorers', 'line_id', 'shot_id', 'survey_date', 'surveyors'],
     });
   });
 });

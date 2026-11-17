@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, createProject, type SectionSeed } from './helpers/app';
+import { seedProjectWithLines, waitForMapReady, createProject, type LineSeed } from './helpers/app';
 
 /**
  * E2E tests for Syntactic Highlighting: the colored duotone toolbar, the
@@ -8,7 +8,7 @@ import { seedProjectWithSections, waitForMapReady, createProject, type SectionSe
  * settings panel (level / preset / per-color overrides) with live preview.
  */
 
-const seeds: SectionSeed[] = [
+const seeds: LineSeed[] = [
   {
     name: 'SH Main',
     direction: 'in',
@@ -71,7 +71,7 @@ test.describe('Syntactic Highlighting', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'SH Test');
-    await seedProjectWithSections(page, seeds);
+    await seedProjectWithLines(page, seeds);
     await waitForMapReady(page);
   });
 
@@ -162,12 +162,12 @@ test.describe('Syntactic Highlighting', () => {
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__: {
-          projectStore: { getState: () => { project: { sections: { id: number; shots: { id: number }[] }[] } } };
+          projectStore: { getState: () => { project: { lines: { id: number; shots: { id: number }[] }[] } } };
           uiStore: { getState: () => { setSelection: (s: unknown) => void } };
         };
       }).__E2E_TEST__;
-      const section = e2e.projectStore.getState().project.sections[0];
-      e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId: section.shots[0].id });
+      const line = e2e.projectStore.getState().project.lines[0];
+      e2e.uiStore.getState().setSelection({ type: 'shot', lineId: line.id, shotId: line.shots[0].id });
     });
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible();

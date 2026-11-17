@@ -270,7 +270,7 @@ describe('parseCsvRows', () => {
 
 describe('csvTextViolations', () => {
   const header =
-    'section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment';
+    'line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment';
   const row = (name: string, comment: string): string =>
     [
       '1',
@@ -612,10 +612,10 @@ describe('X5 convergence', () => {
   });
 
   it('settles at the THIRD export, which a real survey needs', () => {
-    // The first import inherits its section ORDER from the source project
+    // The first import inherits its line ORDER from the source project
     // rather than deriving it, so the composition takes one more pass to reach
     // its own fixed point. Measured: T2 != T3, T3 == T4, byte for byte, with
-    // the same 40 sections and zero shots changing section. Finding 6.
+    // the same 40 lines and zero shots changing line. Finding 6.
     expect(checkConvergence({ exports: ['<a/>', '<b/>', '<b/>'] }, REPRO)).toEqual({
       via: 'raw',
       settledAt: 3,
@@ -840,16 +840,16 @@ describe('X6 shot multiset', () => {
     ).toThrow(/did not come back/);
   });
 
-  it('flags a duplicate uuid WITHIN one section', () => {
+  it('flags a duplicate uuid WITHIN one line', () => {
     expect(() => checkNoDuplicateUuids([['u1', 'u2', 'u1']], REPRO)).toThrow(/same uuid/);
     expect(() => checkNoDuplicateUuids([['u1', 'u2']], REPRO)).not.toThrow();
   });
 
-  it('ACCEPTS the same uuid in two different sections', () => {
-    // Shot-uuid uniqueness is per-section by design: `resolve_key` and the
-    // `(section_id, uuid)` cache are section-scoped, and the exporter handles
+  it('ACCEPTS the same uuid in two different lines', () => {
+    // Shot-uuid uniqueness is per-line by design: `resolve_key` and the
+    // `(line_id, uuid)` cache are line-scoped, and the exporter handles
     // the document-level collision itself (`remint_duplicate_uuids`). Importing
-    // one file twice lands the copies in NEW sections, so this is the ordinary
+    // one file twice lands the copies in NEW lines, so this is the ordinary
     // outcome, not a defect.
     expect(() => checkNoDuplicateUuids([['u1', 'u2'], ['u1', 'u2']], REPRO)).not.toThrow();
   });

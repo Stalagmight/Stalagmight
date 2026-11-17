@@ -13,11 +13,11 @@
  *
  * Bug 8 (issue #413, the data-corruption one) is three facts stacked:
  *
- *   1. shots are RENUMBERED on load to `section_id * FEATURE_ID_STRIDE +
+ *   1. shots are RENUMBERED on load to `line_id * FEATURE_ID_STRIDE +
  *      sequence_order` (persistence/sqlite/read.rs:372);
  *   2. undo entries are persisted and reloaded as OPAQUE JSON with no remapping
  *      anywhere on the restore path (persistence/sqlite/undo.rs); and
- *   3. the in-session allocator (`Section::take_shot_id`) hands out ids from the
+ *   3. the in-session allocator (`Line::take_shot_id`) hands out ids from the
  *      SAME space, so a stale id does not miss - it COLLIDES.
  *
  * Nothing about that reasoning is specific to `CreatedShotSnapshot`. Every
@@ -37,8 +37,8 @@
  *    mutations, with seeded targets and values, that puts every reachable
  *    `UndoData` variant on the stack. The plan is then CHECKED against
  *    `get_undo_stack`, not assumed.
- * 3. Assert the id-vs-position divergence really happened. A section whose ids
- *    still equal `section_id * STRIDE + position` would survive the reload
+ * 3. Assert the id-vs-position divergence really happened. A line whose ids
+ *    still equal `line_id * STRIDE + position` would survive the reload
  *    unchanged, and the whole collision precondition would be absent.
  * 4. Undo a few entries, so the REDO stack is non-empty when the save runs (both
  *    stacks are persisted, and the redo half restores too).
@@ -96,9 +96,9 @@
  *
  *     The re-apply is a CARRY-FORWARD from the live project, which left a residue
  *     that `undo-redo-fuzz` found and this scenario never could: it cannot
- *     restore anchors to a section the snapshot RE-CREATES, because nothing live
+ *     restore anchors to a line the snapshot RE-CREATES, because nothing live
  *     holds them. That shape is out of this plan's reach - its snapshot pairs edit
- *     sections that stay put - which is why it passed while half of
+ *     lines that stay put - which is why it passed while half of
  *     `undo-redo-fuzz`'s seeds did not. b9d6b14b closes it by making snapshot
  *     pairs SELF-REFRESHING walls (an undo re-records the entry's `after` half
  *     from the live project before restoring `before`, and a redo mirrors it), so
@@ -114,7 +114,7 @@
  *   - FINDINGS 12 and 13, this scenario's own (see below; both fixed in
  *     b9c9d649). Their classifiers - `stale-id-writes-to-the-wrong-shot` plus
  *     its three derived-geometry siblings, and the
- *     `Shot N not found in section S` wedge signature - are deleted with them.
+ *     `Shot N not found in line S` wedge signature - are deleted with them.
  *
  *   - CONTAMINATION, deleted with the defects that motivated it. Once a stale-id
  *     defect had fired, the live project no longer matched any snapshot recorded
@@ -169,26 +169,26 @@
  *
  *         undo did not restore the state recorded at depth 16
  *           (the entry it consumed was set_shot_kind)
- *           at project.sections[32].shots[0].kind
+ *           at project.lines[32].shots[0].kind
  *             expected: "Normal"   actual: "Jump"
  *
  *     What is NOT affected, which bounds the fix: `SegmentMoveInfo` and
- *     `ZeroDatumInfo` name sections and section ids ARE persisted; `ClosureInfo`
+ *     `ZeroDatumInfo` name lines and line ids ARE persisted; `ClosureInfo`
  *     and every stored station reference use `StationKey`
- *     (`SectionStart` / `AfterShot(uuid)`, models/station.rs), which is
+ *     (`LineStart` / `AfterShot(uuid)`, models/station.rs), which is
  *     uuid-anchored on purpose. Six further variants have restore arms but no
  *     live producer at all - see `UNREACHABLE_VARIANTS`.
  *
- * 13. WEDGED HISTORY. Same mechanism, opposite outcome. A section that has had a
+ * 13. WEDGED HISTORY. Same mechanism, opposite outcome. A line that has had a
  *     shot DELETED has handed out more ids than it has shots, so the newest
- *     persisted id ran PAST `section_id * STRIDE + (len - 1)` and missed
+ *     persisted id ran PAST `line_id * STRIDE + (len - 1)` and missed
  *     everything: `delete_shot` / `update_shot` / `set_shot_kind` returned
- *     "Shot N not found in section S", the undo failed, and `undo_inner`'s
+ *     "Shot N not found in line S", the undo failed, and `undo_inner`'s
  *     epilogue pushed the entry back - so it failed identically forever and
  *     every entry beneath it was unreachable for good.
  *
  *     Bug 8's write-up says a stale id "does not miss - it COLLIDES". True only
- *     while the section still has as many shots as ids were handed out; a delete
+ *     while the line still has as many shots as ids were handed out; a delete
  *     breaks that and switched the whole defect into this regime.
  *
  *     Beyond addressing shots by uuid, the wedge itself is now structurally
@@ -202,7 +202,7 @@
  *     on fractal. That flag is still off by default, but no longer because the
  *     wedge it used to construct was terminal - that wedge is fixed, and a run
  *     with the flag set now walks the whole stack like any other. It stays
- *     opt-in because it is a DIFFERENT id-space shape (the target section's ids
+ *     opt-in because it is a DIFFERENT id-space shape (the target line's ids
  *     run past the renumbered range, so a stale id misses rather than collides),
  *     and the default arrangement is the one the plan's coverage promises are
  *     written against.
@@ -210,18 +210,18 @@
  * ## Found by this scenario on 2026-08-05 (release, HEAD 4579f18f) - FIXED
  *
  * 27. FIXED (b9d6b14b, and the state class removed entirely by f16c96a8).
- *     UNDO DROPPED AN EXACTLY-ZERO `section_offsets` KEY. On naharon, undoing an
- *     `update_shot` removed `project.section_offsets.0`, which the state it was
+ *     UNDO DROPPED AN EXACTLY-ZERO `line_offsets` KEY. On naharon, undoing an
+ *     `update_shot` removed `project.line_offsets.0`, which the state it was
  *     restoring had as `[0,0]`:
  *
  *         undo did not restore the state recorded at depth 16
  *           (the entry it consumed was update_shot)
- *           at project.section_offsets.0
+ *           at project.line_offsets.0
  *             expected: [0,0]   actual: <absent>
  *
  *     It fired BEFORE the save (`saves=0 reloads=0`), so it was an in-session
  *     defect, not a persistence one, and it was the exact mirror of finding 2.
- *     Finding 2 was "an undo LEAKS an all-zero offset key the section did not
+ *     Finding 2 was "an undo LEAKS an all-zero offset key the line did not
  *     have"; a67dd1b5 fixed it by making adjust-style writes DROP a key that
  *     lands within `Project::OFFSET_DUST_M` of zero. An undo of
  *     `PreviousValues { shot_id }` re-executes `update_shot`, which runs that
@@ -231,7 +231,7 @@
  *
  *     Fixed on the principle that AN INVERSE RESTORES, IT DOES NOT RE-DERIVE:
  *     `PreviousValues` and `CreatedShotSnapshot` capture the rigid connected set's
- *     `section_offsets` PRE-command (additive serde fields) and the undo puts them
+ *     `line_offsets` PRE-command (additive serde fields) and the undo puts them
  *     back verbatim instead of running the cascade again (b9d6b14b). f16c96a8 then
  *     removed the underlying state from the model altogether - a dust-zero offset
  *     entry is unrepresentable, normalized by the single writer and re-normalized
@@ -245,9 +245,9 @@
  *     `pnpm agent:fuzz-shrink` reduced it to 5 steps (1-minimal, 2 candidates
  *     rejected as failing differently):
  *
- *         1. createSection(spare,shots=3)          <- section 41
+ *         1. createLine(spare,shots=3)          <- line 41
  *         2. mergeStations(41/3,5/3)               <- join it to the graph
- *         3. removeZeroDatum(0/0)                  <- section 0 loses its datum
+ *         3. removeZeroDatum(0/0)                  <- line 0 loses its datum
  *         4. updateShot(s=41,shot=4100001,...)
  *         5. undo
  *
@@ -628,7 +628,7 @@ async function runIteration(
       `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
     );
   }
-  // The recorded steps carry RESOLVED section and shot ids, so replaying them
+  // The recorded steps carry RESOLVED line and shot ids, so replaying them
   // against a different project drives moves at ids that do not exist there:
   // an invented failure, or a green run, either way not the recorded bug.
   if (replay && replay.fixture !== fixture) {
@@ -943,7 +943,7 @@ async function runIteration(
   // Empty when replaying: the trace supplies every move, and running the plan as
   // well would make the replay something other than the cycle it came from.
   for (const plan of replay ? [] : COVERAGE_STEPS) {
-    const sectionIdsBefore = plan.remembers ? digest.s.map((entry) => entry[0]) : [];
+    const lineIdsBefore = plan.remembers ? digest.s.map((entry) => entry[0]) : [];
     const built = plan.build(ctx, digest, memo);
     if (built === null) {
       note(`${tag} ${plan.name} -> NOT BUILDABLE`);
@@ -962,17 +962,17 @@ async function runIteration(
     // Only after a step that actually pushed an entry - which is what the
     // `continue`s in the extracted body used to guarantee positionally.
     if (plan.remembers && pushed === 1) {
-      const fresh = digest.s.map((entry) => entry[0]).filter((id) => !sectionIdsBefore.includes(id));
+      const fresh = digest.s.map((entry) => entry[0]).filter((id) => !lineIdsBefore.includes(id));
       const created = fresh[0];
       if (fresh.length !== 1 || created === undefined) {
         fail(
-          `${plan.name} added ${fresh.length} section(s); the plan needs exactly one to hold on to`,
-          `  before=${JSON.stringify(sectionIdsBefore.slice(-8))} ` +
+          `${plan.name} added ${fresh.length} line(s); the plan needs exactly one to hold on to`,
+          `  before=${JSON.stringify(lineIdsBefore.slice(-8))} ` +
             `after=${JSON.stringify(digest.s.map((entry) => entry[0]).slice(-8))}`,
         );
       }
-      if (plan.remembers === 'target') memo.createdSectionId = created;
-      else memo.spareSectionId = created;
+      if (plan.remembers === 'target') memo.createdLineId = created;
+      else memo.spareLineId = created;
     }
   }
 
@@ -992,19 +992,19 @@ async function runIteration(
   // steps that produced the divergence - so these are skipped there. No app
   // oracle is skipped: the roundtrip, invariant, integrity and stack-survival
   // checks all run on both paths.
-  const targetSection = memo.createdSectionId;
-  if (!replay && targetSection === null) fail('the plan never identified its target section');
+  const targetLine = memo.createdLineId;
+  if (!replay && targetLine === null) fail('the plan never identified its target line');
   const targetShots =
-    targetSection === null ? [] : digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
-  if (!replay && targetSection !== null && !idsDivergeFromPosition(targetSection, targetShots)) {
+    targetLine === null ? [] : digest.s.find((entry) => entry[0] === targetLine)?.[1] ?? [];
+  if (!replay && targetLine !== null && !idsDivergeFromPosition(targetLine, targetShots)) {
     fail(
       'the plan did not make shot ids diverge from positional order, so a stale persisted id ' +
         'would address the same shot after the reload and the whole precondition is absent',
-      `  section ${targetSection} ids=${JSON.stringify(targetShots)} (the loader will renumber ` +
-        `them to ${JSON.stringify(targetShots.map((_, i) => targetSection * FEATURE_ID_STRIDE + i))})`,
+      `  line ${targetLine} ids=${JSON.stringify(targetShots)} (the loader will renumber ` +
+        `them to ${JSON.stringify(targetShots.map((_, i) => targetLine * FEATURE_ID_STRIDE + i))})`,
     );
   }
-  if (!replay) ctx.metric('divergedSections');
+  if (!replay) ctx.metric('divergedLines');
 
   // -----------------------------------------------------------------------
   // 3. Undo a few, so the REDO stack is non-empty when the save runs.
@@ -1020,7 +1020,7 @@ async function runIteration(
    *
    * It used to return false for one tolerated case: finding 13's WEDGE, where a
    * persisted shot id ran past the renumbered range, `delete_shot` /
-   * `update_shot` / `set_shot_kind` returned "Shot N not found in section S",
+   * `update_shot` / `set_shot_kind` returned "Shot N not found in line S",
    * `undo_inner` pushed the entry back, and every entry beneath it was
    * unreachable for good. That is fixed (undo data addresses shots by uuid, and
    * a load-time applicability pass drops an entry whose target no longer
@@ -1218,15 +1218,15 @@ async function runIteration(
   // happened, so a build that stopped renumbering would fail here loudly instead
   // of quietly turning this scenario into a no-op.
   const renumbered =
-    targetSection === null ? [] : digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
-  if (!replay && targetSection !== null && idsDivergeFromPosition(targetSection, renumbered)) {
+    targetLine === null ? [] : digest.s.find((entry) => entry[0] === targetLine)?.[1] ?? [];
+  if (!replay && targetLine !== null && idsDivergeFromPosition(targetLine, renumbered)) {
     fail(
-      'the reload did NOT renumber shot ids to section_id * FEATURE_ID_STRIDE + position, so the ' +
+      'the reload did NOT renumber shot ids to line_id * FEATURE_ID_STRIDE + position, so the ' +
         'stale-id collision this scenario tests for cannot arise',
-      `  section ${targetSection} ids after reload = ${JSON.stringify(renumbered)}`,
+      `  line ${targetLine} ids after reload = ${JSON.stringify(renumbered)}`,
     );
   }
-  if (!replay) ctx.metric('renumberedSections');
+  if (!replay) ctx.metric('renumberedLines');
 
   // -----------------------------------------------------------------------
   // 5. Read the restored stacks: which entry sits at which depth.

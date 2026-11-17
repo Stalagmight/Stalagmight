@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSectionStats } from '../SectionsPanel';
+import { calculateLineStats } from '../SectionsPanel';
 import { surveyDataFromLegacy } from '../../../types/survey-data';
-import type { Section } from '../../../types/ipc/Section';
+import type { Line } from '../../../types/ipc/Line';
 import type { Shot } from '../../../types/ipc/Shot';
 import type { ShotKind } from '../../../types/ipc/ShotKind';
 
@@ -27,7 +27,7 @@ function shot(id: number, length: number, kind: ShotKind): Shot {
 }
 
 /** 10 m Normal, 4 m Reference, 3 m Jump: 13 m surveyed, two virtual shots. */
-function section(): Section {
+function line(): Line {
   return {
     id: 1,
     name: 'Main',
@@ -43,20 +43,20 @@ function section(): Section {
 }
 
 /**
- * The sections-list row shows each section's length; it must leave out Reference
+ * The lines-list row shows each line's length; it must leave out Reference
  * shots like the project total it sits beside (#689), on both the flat-array
- * path and the legacy `section.shots` fallback.
+ * path and the legacy `line.shots` fallback.
  */
-describe('calculateSectionStats length', () => {
+describe('calculateLineStats length', () => {
   it('leaves out Reference shots on the flat-array path', () => {
-    const s = section();
+    const s = line();
     const data = surveyDataFromLegacy([s], []);
-    const stats = calculateSectionStats(s, data.sections[0], data);
+    const stats = calculateLineStats(s, data.lines[0], data);
     expect(stats).toEqual({ shotCount: 3, length: 13, referenceCount: 2 });
   });
 
   it('leaves out Reference shots on the legacy fallback', () => {
-    const stats = calculateSectionStats(section(), undefined, null);
+    const stats = calculateLineStats(line(), undefined, null);
     expect(stats).toEqual({ shotCount: 3, length: 13, referenceCount: 2 });
   });
 });

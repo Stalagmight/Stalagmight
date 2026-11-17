@@ -104,7 +104,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
             if (!geometryReadOnly) ctx.onGpsCellClick(station);
           }}
           title={geometryReadOnly ? undefined : t('dataTable.stationGps.edit')}
-          data-testid={`station-gps-${station.station_ref.section_id}-${station.station_ref.station_index}`}
+          data-testid={`station-gps-${station.station_ref.line_id}-${station.station_ref.station_index}`}
         >
           {station.is_zero_datum ? (
             <DotIcon size={20} />
@@ -129,7 +129,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
         if (total === 0) return null;
         const tooltipParts: string[] = [];
         if (mergeCount > 0) {
-          tooltipParts.push(`Merges: ${station.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}`);
+          tooltipParts.push(`Merges: ${station.merged_with.map((m) => `${m.line_id}.${m.station_index}`).join(', ')}`);
         }
         if (closureCount > 0) {
           tooltipParts.push(`Closures: ${closureCount}`);
@@ -142,7 +142,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
               e.stopPropagation();
               ctx.onConnectionsCellClick(station, { x: e.clientX, y: e.clientY });
             }}
-            data-testid={`station-conn-${station.station_ref.section_id}-${station.station_ref.station_index}`}
+            data-testid={`station-conn-${station.station_ref.line_id}-${station.station_ref.station_index}`}
           >
             <LinkIcon size={12} />
             {total}

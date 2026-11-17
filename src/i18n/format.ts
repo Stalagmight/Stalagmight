@@ -7,7 +7,7 @@ let numberFormatLocale = 'locale';
 let dateFormatLocale = 'locale';
 
 // Cache for Intl.NumberFormat instances - construction is expensive (~0.05ms each in WebKit).
-// With hundreds of sections rendering per frame, this adds up to 20-40ms.
+// With hundreds of lines rendering per frame, this adds up to 20-40ms.
 const numberFormatCache = new Map<string, Intl.NumberFormat>();
 
 function getCachedNumberFormat(locale: string, options?: Intl.NumberFormatOptions): Intl.NumberFormat {

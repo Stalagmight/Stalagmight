@@ -51,7 +51,7 @@ export function DistanceLegend({ max, visible, colorScale = null, embedded = fal
   const maxLabel = `${formatFixed(scaled ? scaled.max : max, undefined, precision.coordinates)}${t('common.units.meters')}`;
   const originLabel = origin
     ? t('map.distanceLegend.fromStation', {
-        id: formatStationId(origin.section_id, origin.station_index),
+        id: formatStationId(origin.line_id, origin.station_index),
       })
     : t('map.distanceLegend.fromEntrance');
 

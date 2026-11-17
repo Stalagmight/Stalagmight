@@ -69,7 +69,7 @@ let loadProject: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   openDialog = vi.fn();
-  closeProject = vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] }));
+  closeProject = vi.fn(async () => ({ success: true, warnings: [], error: null, line_ids: [] }));
   loadProject = vi.fn(async () => ({ success: true }));
   resetQuitConfirmationForTests();
   resetSpeleoExitPromptForTests();
@@ -78,7 +78,7 @@ beforeEach(() => {
     isDirty: false,
     closeProject,
     loadProject,
-    saveProject: vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] })),
+    saveProject: vi.fn(async () => ({ success: true, warnings: [], error: null, line_ids: [] })),
   });
   useUIStore.setState({ openDialog: openDialog as never, activeDialog: null, dialogData: {} });
 });

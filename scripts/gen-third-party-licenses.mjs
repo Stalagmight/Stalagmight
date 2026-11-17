@@ -240,7 +240,7 @@ SOFTWARE.
   },
   'murmurhash-js@1.0.0': {
     licenseId: 'MIT',
-    source: 'https://github.com/mikolalysenko/murmurhash-js/blob/master/README.md ("License (MIT)" section, verified 2026-08-03)',
+    source: 'https://github.com/mikolalysenko/murmurhash-js/blob/master/README.md ("License (MIT)" line, verified 2026-08-03)',
     text: `Copyright (c) 2011 Gary Court
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -255,7 +255,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
   // notice verbatim.
   '@mapbox/jsonlint-lines-primitives@2.0.2': {
     licenseId: 'MIT',
-    source: 'https://github.com/mapbox/jsonlint/blob/master/README.md ("MIT License" section, verified 2026-08-03; fork of zaach/jsonlint, same notice)',
+    source: 'https://github.com/mapbox/jsonlint/blob/master/README.md ("MIT License" line, verified 2026-08-03; fork of zaach/jsonlint, same notice)',
     text: `Copyright (C) 2012 Zachary Carter
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -360,7 +360,7 @@ function dedupe(groups) {
   return out;
 }
 
-function renderSection(title, intro, groups) {
+function renderLine(title, intro, groups) {
   const parts = [`## ${title}\n`, `${intro}\n`];
   for (const g of groups) {
     const pkgList = g.packages.map((p) => `\`${p.name} ${p.version}\``).join(', ');
@@ -404,12 +404,12 @@ function main() {
   const jsCount = new Set(js.flatMap((g) => g.packages.map((p) => `${p.name}@${p.version}`))).size;
 
   const body = [
-    renderSection(
+    renderLine(
       'npm packages',
       'The production JavaScript dependencies bundled into the frontend, with the license/notice files each package ships.',
       js,
     ),
-    renderSection(
+    renderLine(
       'Rust crates',
       'The dependency graph of the release binary (telemetry features included, dev-dependencies excluded), as harvested by cargo-about.',
       rust,

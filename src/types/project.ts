@@ -1,7 +1,7 @@
 // Project and model types generated from Rust IPC models.
 
 export type ShotId = number;
-export type SectionId = number;
+export type LineId = number;
 
 export type {
   SurveyDirection,
@@ -10,10 +10,10 @@ export type {
   ShotKind,
   VirtualShotMode,
   ShotUpdates,
-  Section,
-  SectionData,
-  SectionUpdates,
-  SectionStats,
+  Line,
+  LineData,
+  LineUpdates,
+  LineStats,
   StationRef,
   GpsCoordinates,
   GpsBounds,

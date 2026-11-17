@@ -31,13 +31,13 @@ import type {
   ProjectMetadata,
   Station,
   ProjectStats,
-  SectionData,
-  SectionUpdates,
+  LineData,
+  LineUpdates,
   ShotData,
   ShotUpdates,
   ShotKind,
   VirtualShotMode,
-  SectionId,
+  LineId,
   ShotId,
   StationRef,
   GpsCoordinates,
@@ -46,19 +46,19 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
-import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { ReversedLine } from '../types/ipc/ReversedLine';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { NewerSchema } from '../types/ipc/NewerSchema';
 import { newerSchemaMessage } from '../utils/newerSchema';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxLinePlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportLineConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 
-/** Additive import-receipt provenance (#391) - see `import_sections` (Rust) for the fields' meaning. */
+/** Additive import-receipt provenance (#391) - see `import_lines` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
   sourceLabel?: string;
   sourceFileName?: string;
-  sectionsFound?: number;
+  linesFound?: number;
 }
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
@@ -66,7 +66,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, withGpsFixFlags } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
-import { createSectionStructureActions, type SectionStructureActions } from './sectionStructureActions';
+import { createLineStructureActions, type LineStructureActions } from './lineStructureActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
@@ -164,7 +164,7 @@ export function emptyCommandResult(
     success,
     warnings,
     error: success ? null : (error ?? null),
-    section_ids: [],
+    line_ids: [],
   };
 }
 
@@ -221,7 +221,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, SectionStructureActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, LineStructureActions {
   // State
   project: Project | null;
   /**
@@ -244,7 +244,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * Struct-of-Arrays representation of the loaded project's bulk
    * data (shots + stations). Lives alongside `project` and `stations`
    * during the Phase-A migration; once consumers are migrated this
-   * becomes the primary representation and `project.sections[].shots`
+   * becomes the primary representation and `project.lines[].shots`
    * + `stations` go away.
    */
   surveyData: SurveyData | null;
@@ -354,9 +354,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
-   * import wizard applies sections via direct `import_sections` IPC calls that
+   * import wizard applies lines via direct `import_lines` IPC calls that
    * bypass `executeCommand`, so they don't set `isDirty` themselves; the wizard
-   * calls this after each successful batch so the imported sections register as
+   * calls this after each successful batch so the imported lines register as
    * unsaved - powering autosave and the project-close guard (`handleCloseProject`).
    * (Window-close during the wizard is guarded separately, by `isImportInProgress`
    * in App.tsx.) (#110)
@@ -368,8 +368,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * the caller can fall back to the measured view rather than getting stuck).
    */
   loadAdjustedGeometry: () => Promise<boolean>;
-  /** Check if a shot (by section_id + shot index) is frozen */
-  isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
+  /** Check if a shot (by line_id + shot index) is frozen */
+  isShotFrozen: (lineId: number, shotIndex: number) => boolean;
   /** Structural-integrity issues found in the open project (empty = sound). */
   integrityIssues: string[];
   /** True once the user dismissed the integrity banner for the CURRENT issue set.
@@ -400,39 +400,39 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
   refreshWarnings: () => Promise<void>;
-  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
-  unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
+  resolveWarning: (lineId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
+  unresolveWarning: (lineId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
   deleteProject: (path: string) => Promise<CommandResult>;
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
-  createSection: (data: SectionData) => Promise<CommandResult>;
-  createSectionAndMerge: (
-    data: SectionData,
+  createLine: (data: LineData) => Promise<CommandResult>;
+  createLineAndMerge: (
+    data: LineData,
     importStationIndex: number,
     targetStation: StationRef,
     closureStrategy: ClosureStrategy
   ) => Promise<CommandResult>;
-  updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
-  deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
+  updateLine: (lineId: LineId, updates: LineUpdates) => Promise<CommandResult>;
+  deleteLine: (lineId: LineId) => Promise<CommandResult>;
   /**
-   * Reverse a section end-to-end so the far end becomes station 0 (#24).
+   * Reverse a line end-to-end so the far end becomes station 0 (#24).
    * Geometry is preserved - every station keeps its world coordinate and only
    * the numbering direction changes. `swapLeftRight` also mirrors the left/right
    * passage dimensions; it is opt-in because whether LRUD was recorded facing
    * along travel is a survey convention we cannot infer, so the user is asked.
    */
-  reverseSection: (sectionId: SectionId, swapLeftRight: boolean) => Promise<CommandResult>;
+  reverseLine: (lineId: LineId, swapLeftRight: boolean) => Promise<CommandResult>;
 
-  createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
-  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
-  deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
-  deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
-  deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
-  setShotKind: (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
+  createShot: (lineId: LineId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
+  updateShot: (lineId: LineId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
+  deleteShot: (lineId: LineId, shotId: ShotId) => Promise<CommandResult>;
+  deleteShotAndSplit: (lineId: LineId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
+  deleteLastShotAndLine: (lineId: LineId, shotId: ShotId) => Promise<CommandResult>;
+  deleteShotRangeSplit: (lineId: LineId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
+  deleteShotRangeShift: (lineId: LineId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
+  setShotKind: (lineId: LineId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
@@ -447,11 +447,11 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    *  "is this station an entrance?"; omitted keeps the stored answer. */
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean; accuracyM?: number; entrance?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
-  moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
-  moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
+  moveLine: (lineId: LineId, offset: Coordinates) => Promise<CommandResult>;
+  moveSegment: (lineId: LineId, offset: Coordinates) => Promise<CommandResult>;
   moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
-  getConnectedSectionIds: (sectionId: SectionId) => Promise<number[]>;
-  getAnchoredSectionIds: () => Promise<number[]>;
+  getConnectedLineIds: (lineId: LineId) => Promise<number[]>;
+  getAnchoredLineIds: () => Promise<number[]>;
 
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
@@ -466,7 +466,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedLines?: number[] | null, rootPlacement?: TmlRootPlacement | null) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
@@ -478,10 +478,10 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /** Rename a recent project's display name by path (project need not be open). */
   setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
-  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
+  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, linePlacements: GpxLinePlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
-  checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
+  checkLineHashes: (hashes: string[]) => Promise<boolean[]>;
   /**
    * `existingShotUpdates` is the overlap interpolation the DMP wizard computes
    * client-side (`applyAllOverlapTreatments`). It is LAST rather than in the
@@ -489,10 +489,10 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * call's argument positions untouched. Optional and defaulted to `null`, which
    * the backend reads as "no updates".
    */
-  importSections: (
-    sections: ImportSectionConfig[],
+  importLines: (
+    lines: ImportLineConfig[],
     fileHash?: string | null,
-    sectionHashes?: string[] | null,
+    lineHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
@@ -529,10 +529,10 @@ function isPartialMultiStepFailure(error: string | null): boolean {
  * valid and silently leave the frontend's positional refs on the wrong physical station.
  *
  * A missing value on either side is NOT a switch. Before the first refresh the store may hold
- * no project at all, and a closed project resolves to no sections, which the transform builder
+ * no project at all, and a closed project resolves to no lines, which the transform builder
  * already reduces to a no-op. Only two DIFFERENT identities mean the reply belongs to a project
- * that is no longer open - and because section ids are small per-project integers, those entries
- * would otherwise match sections in whatever is now open.
+ * that is no longer open - and because line ids are small per-project integers, those entries
+ * would otherwise match lines in whatever is now open.
  */
 export function projectSwitched(before: string | null, after: string | null): boolean {
   return before !== null && after !== null && before !== after;
@@ -543,7 +543,7 @@ const PROJECT_CHANGED = 'The project changed before this action could run.';
 
 /** The commands that funnel through the backend's `finalize_deferred_import`. */
 const IMPORT_COMMANDS = new Set([
-  'import_sections',
+  'import_lines',
   'execute_tml_import',
   'execute_compass_import',
   'execute_walls_import',
@@ -673,8 +673,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
     // differ once a mutation can wait behind another: project load/create/close do not go
     // through the queue, so B can open while this entry is still waiting, and reading the
-    // identity inside the callback would capture B and run A's section ids against B's
-    // sections - which, since section ids are small per-project integers, would mostly RESOLVE.
+    // identity inside the callback would capture B and run A's line ids against B's
+    // lines - which, since line ids are small per-project integers, would mostly RESOLVE.
     const requestProjectKey = get().project?.created_at ?? null;
     return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey));
   };
@@ -691,11 +691,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       // #310: anchor the gas-plan pins against the survey as it stands BEFORE this edit - a pin
       // placed a moment ago may still be sitting on the debounce. No-op for a plan with no pins.
-      const edit = await beforeSurveyEdit(get().project?.sections);
+      const edit = await beforeSurveyEdit(get().project?.lines);
       // Re-checked AFTER the flush: it is a real IPC round trip, and project load/create/close do
       // not go through the mutation queue, so a project can open while it is in flight. The guard
       // above ran before that window existed, and `args` were captured against the OUTGOING
-      // project - whose section ids, being small per-project integers, would mostly RESOLVE in
+      // project - whose line ids, being small per-project integers, would mostly RESOLVE in
       // whatever is now open.
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
       const result = await invokeIpc<CommandResult>(command, args, meta);
@@ -712,7 +712,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // the origin back, re-applying the forward shift onto restored numbering - silently,
         // since every index stays in range.
         if (!lostProject(requestProjectKey)) {
-          applyEditAftermath(result.reversed_sections, get().project?.sections ?? [], edit);
+          applyEditAftermath(result.reversed_lines, get().project?.lines ?? [], edit);
         }
         set({ isDirty: true });
         noteImportResolvedDeferredSave(command, result, set);
@@ -810,13 +810,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE
     // physical station, silently and persistably. The backend reports what it
     // renumbered on the result (undo/redo of a reverse re-reverses the same
-    // sections), one entry per reversing STEP with the shot count in force at it,
+    // lines), one entry per reversing STEP with the shot count in force at it,
     // so compose them and re-mirror once the refreshed state lands. Absent on
     // everything else, which is the common case and costs nothing.
-    let reversedSections: readonly ReversedSection[] | undefined;
+    let reversedLines: readonly ReversedLine[] | undefined;
     let edit: SurveyEdit | undefined;
     try {
-      edit = await beforeSurveyEdit(get().project?.sections); // #310, see executeCommandInner
+      edit = await beforeSurveyEdit(get().project?.lines); // #310, see executeCommandInner
       // Re-checked after the flush for the same reason executeCommandInner does: the flush is a
       // real round trip, and a project can open across it while `args` still name the outgoing
       // one. Returning from inside the `try` still runs the `finally`, which is correct rather
@@ -826,7 +826,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
-        reversedSections = result.reversed_sections;
+        reversedLines = result.reversed_lines;
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
@@ -836,12 +836,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           set({ isDirty: true });
           useSpeleoStore.getState().markDirty();
           // A partial multi-step failure still renumbered: the steps BEFORE the
-          // failing one already flipped their sections and cannot be rolled back,
+          // failing one already flipped their lines and cannot be rolled back,
           // which is why the backend attaches the entries it applied to the
           // failure return too. Dropping them here would leave the plan pins and
           // the distance origin mirrored onto the opposite physical stations with
           // no error the user could connect to it.
-          reversedSections = result.reversed_sections;
+          reversedLines = result.reversed_lines;
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string - mashing Ctrl+Z
@@ -864,8 +864,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // as much as a clean one's do.
       if (!lostProject(requestProjectKey)) await afterSurveyEdit(edit);
       await get().refreshProjectState();
-      // #24: same project-switch guard as executeCommand. Section ids are small per-project
-      // integers, so entries from the OUTGOING project would otherwise match sections in
+      // #24: same project-switch guard as executeCommand. Line ids are small per-project
+      // integers, so entries from the OUTGOING project would otherwise match lines in
       // whatever is now open and mirror that project's origin instead.
       // The per-step counts come off the wire; the REFRESHED project supplies only
       // the range to clamp into, which is the numbering the origin now has to fit.
@@ -873,7 +873,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
       if (!lostProject(requestProjectKey)) {
-        applyEditAftermath(reversedSections, get().project?.sections ?? [], edit);
+        applyEditAftermath(reversedLines, get().project?.lines ?? [], edit);
       }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
@@ -917,8 +917,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectHistoryBannerActions(set, get),
   // splitShotAtDistance / editShotCredit live in projectShotActions.ts
   ...createProjectShotActions(executeCommand),
-  // splitSection / combineSections live in sectionStructureActions.ts
-  ...createSectionStructureActions(executeCommand),
+  // splitLine / combineLines live in lineStructureActions.ts
+  ...createLineStructureActions(executeCommand),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
@@ -1121,7 +1121,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
         useUIStore.getState().triggerFitToBounds();
         // Reset the Details panel to the project-level view on open (#54): a
-        // stale shot/station/section selection from a previous project/session
+        // stale shot/station/line selection from a previous project/session
         // must not carry over.
         useUIStore.getState().clearSelection();
         // Same hazard for tool state (#275 B1): an armed move-comment pickup or
@@ -1320,7 +1320,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     try {
       // Attribute the create to its entry point (peek: a DMP import-into-new
-      // flow also fires import_sections, which peeks the same source).
+      // flow also fires import_lines, which peeks the same source).
       const actionSource = peekProjectActionSource();
       if (actionSource) setSource(actionSource);
       dispatched = true;
@@ -1417,7 +1417,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
     // New project: the initial save is deferred, so the import is invisible until
     // a real save writes the .stalx and adds it to Recent Projects. Do that now.
-    // (The backend import_sections command also resolves this as a durable
+    // (The backend import_lines command also resolves this as a durable
     // safety net; this gives the immediate, complete save with correct dirty state.)
     let result: CommandResult;
     try {
@@ -1500,9 +1500,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }, request);
   },
 
-  isShotFrozen: (sectionId: number, shotIndex: number) => {
+  isShotFrozen: (lineId: number, shotIndex: number) => {
     return get().frozenShots.some(
-      (f) => f.section_id === sectionId && f.shot_index === shotIndex
+      (f) => f.line_id === lineId && f.shot_index === shotIndex
     );
   },
 
@@ -1512,12 +1512,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
         purpose: 'refresh project state in UI',
       });
-      debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
+      debugLog('[projectStore] refreshProjectState: got state, lines:', state?.project?.lines?.length);
       if (state) {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
-        // the only shape stored; project loses .sections[i].shots.
-        const surveyData = withGpsFixFlags(surveyDataFromLegacy(state.project.sections, state.stations), state.project.zero_datums);
+        // the only shape stored; project loses .lines[i].shots.
+        const surveyData = withGpsFixFlags(surveyDataFromLegacy(state.project.lines, state.stations), state.project.zero_datums);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1553,12 +1553,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
+  resolveWarning: async (lineId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
     try {
       await invokeIpc(
         'resolve_warning',
-        { sectionId, shotId, warningCode, comment },
-        { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
+        { lineId, shotId, warningCode, comment },
+        { purpose: 'acknowledge validation warning', fields: { lineId, shotId, warningCode } }
       );
       useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
@@ -1571,12 +1571,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
+  unresolveWarning: async (lineId: number, shotId: number, warningCode: string) => {
     try {
       await invokeIpc(
         'unresolve_warning',
-        { sectionId, shotId, warningCode },
-        { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
+        { lineId, shotId, warningCode },
+        { purpose: 'reopen validation warning', fields: { lineId, shotId, warningCode } }
       );
       useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
@@ -1798,10 +1798,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   }),
 
-  // Section operations
-  createSection: async (data: SectionData) => {
+  // Line operations
+  createLine: async (data: LineData) => {
     return executeCommand(
-      'create_section',
+      'create_line',
       {
         name: data.name,
         surveyor: data.surveyor,
@@ -1812,20 +1812,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         shots: data.shots,
       },
       {
-        purpose: 'add section to project',
+        purpose: 'add line to project',
         fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
       }
     );
   },
 
-  createSectionAndMerge: async (
-    data: SectionData,
+  createLineAndMerge: async (
+    data: LineData,
     importStationIndex: number,
     targetStation: StationRef,
     closureStrategy: ClosureStrategy
   ) => {
     return executeCommand(
-      'create_section_and_merge',
+      'create_line_and_merge',
       {
         name: data.name,
         surveyor: data.surveyor,
@@ -1839,90 +1839,90 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         closureStrategy,
       },
       {
-        purpose: 'add section and merge stations',
+        purpose: 'add line and merge stations',
         fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
       }
     );
   },
 
-  updateSection: async (sectionId: SectionId, updates: SectionUpdates) => {
+  updateLine: async (lineId: LineId, updates: LineUpdates) => {
     return executeCommand(
-      'update_section',
-      { sectionId, updates },
-      { purpose: 'update section metadata', fields: { sectionId } }
+      'update_line',
+      { lineId, updates },
+      { purpose: 'update line metadata', fields: { lineId } }
     );
   },
 
-  deleteSection: async (sectionId: SectionId) => {
+  deleteLine: async (lineId: LineId) => {
     return notifyRemovedClosures(await executeCommand(
-      'delete_section',
-      { sectionId },
-      { purpose: 'remove section from project', fields: { sectionId } }
+      'delete_line',
+      { lineId },
+      { purpose: 'remove line from project', fields: { lineId } }
     ));
   },
 
-  reverseSection: async (sectionId: SectionId, swapLeftRight: boolean) => {
+  reverseLine: async (lineId: LineId, swapLeftRight: boolean) => {
     return executeCommand(
-      'reverse_section',
-      { sectionId, swapLeftRight },
+      'reverse_line',
+      { lineId, swapLeftRight },
       {
-        purpose: 'reverse section numbering end-to-end',
-        fields: { sectionId, swapLeftRight },
+        purpose: 'reverse line numbering end-to-end',
+        fields: { lineId, swapLeftRight },
       }
     );
   },
 
   // Shot operations
-  createShot: async (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => {
+  createShot: async (lineId: LineId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => {
     return executeCommand(
       'create_shot',
       {
-        sectionId,
+        lineId,
         shot,
         afterShotId: afterShotId ?? null,
         beforeShotId: beforeShotId ?? null,
       },
       {
-        purpose: 'add shot to section',
-        fields: { sectionId, afterShotId: afterShotId ?? null, beforeShotId: beforeShotId ?? null },
+        purpose: 'add shot to line',
+        fields: { lineId, afterShotId: afterShotId ?? null, beforeShotId: beforeShotId ?? null },
       }
     );
   },
 
-  updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => {
+  updateShot: async (lineId: LineId, shotId: ShotId, updates: ShotUpdatesPatch) => {
     return executeCommand(
       'update_shot',
-      { sectionId, shotId, updates },
-      { purpose: 'update shot measurements', fields: { sectionId, shotId } }
+      { lineId, shotId, updates },
+      { purpose: 'update shot measurements', fields: { lineId, shotId } }
     );
   },
 
-  deleteShot: async (sectionId: SectionId, shotId: ShotId) => {
+  deleteShot: async (lineId: LineId, shotId: ShotId) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot',
-      { sectionId, shotId },
-      { purpose: 'delete shot from section', fields: { sectionId, shotId } }
+      { lineId, shotId },
+      { purpose: 'delete shot from line', fields: { lineId, shotId } }
     ));
   },
 
-  deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
+  deleteShotAndSplit: async (lineId: LineId, shotId: ShotId, nameA: string, nameB: string) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_and_split',
-      { sectionId, shotId, nameA, nameB },
-      { purpose: 'delete shot and split section', fields: { sectionId, shotId } }
+      { lineId, shotId, nameA, nameB },
+      { purpose: 'delete shot and split line', fields: { lineId, shotId } }
     ));
   },
 
-  deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
+  deleteLastShotAndLine: async (lineId: LineId, shotId: ShotId) => {
     return notifyRemovedClosures(await executeCommand(
-      'delete_last_shot_and_section',
-      { sectionId, shotId },
-      { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
+      'delete_last_shot_and_line',
+      { lineId, shotId },
+      { purpose: 'remove single-shot line', fields: { lineId, shotId } }
     ));
   },
 
   deleteShotRangeSplit: async (
-    sectionId: SectionId,
+    lineId: LineId,
     startShotId: ShotId,
     endShotId: ShotId,
     nameA: string,
@@ -1930,24 +1930,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_split',
-      { sectionId, startShotId, endShotId, nameA, nameB },
-      { purpose: 'delete shot range and split section', fields: { sectionId, startShotId, endShotId } }
+      { lineId, startShotId, endShotId, nameA, nameB },
+      { purpose: 'delete shot range and split line', fields: { lineId, startShotId, endShotId } }
     ));
   },
 
-  deleteShotRangeShift: async (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => {
+  deleteShotRangeShift: async (lineId: LineId, startShotId: ShotId, endShotId: ShotId) => {
     return notifyRemovedClosures(await executeCommand(
       'delete_shot_range_shift',
-      { sectionId, startShotId, endShotId },
-      { purpose: 'delete shot range and close gap', fields: { sectionId, startShotId, endShotId } }
+      { lineId, startShotId, endShotId },
+      { purpose: 'delete shot range and close gap', fields: { lineId, startShotId, endShotId } }
     ));
   },
 
-  setShotKind: async (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => {
+  setShotKind: async (lineId: LineId, shotId: ShotId, kind: ShotKind) => {
     return executeCommand(
       'set_shot_kind',
-      { sectionId, shotId, kind },
-      { purpose: 'set shot kind (permanent/jump/reference)', fields: { sectionId, shotId, kind } }
+      { lineId, shotId, kind },
+      { purpose: 'set shot kind (permanent/jump/reference)', fields: { lineId, shotId, kind } }
     );
   },
 
@@ -1956,7 +1956,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return notifyRemovedClosures(await executeCommand(
       'merge_stations',
       { stationA, stationB },
-      { purpose: 'connect survey sections', fields: { stationA, stationB } }
+      { purpose: 'connect survey lines', fields: { stationA, stationB } }
     ));
   },
 
@@ -2028,9 +2028,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Reuse the measured shot columns (identical under closure adjustment) and
       // rebuild only the station columns, so entering/restoring the adjusted view
-      // never force-materializes the lazy `section.shots` getters (#mem). Fall
+      // never force-materializes the lazy `line.shots` getters (#mem). Fall
       // back to the full legacy walk only if the measured SoA is somehow absent.
-      const adjustedData = surveyData ? surveyDataWithAdjustedStations(surveyData, adjusted) : surveyDataFromLegacy(project.sections, adjusted);
+      const adjustedData = surveyData ? surveyDataWithAdjustedStations(surveyData, adjusted) : surveyDataFromLegacy(project.lines, adjusted);
       const surveyDataAdjusted = withGpsFixFlags(adjustedData, project.zero_datums);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       // What this solve left out (#737); a failed part also has a Warnings entry.
@@ -2084,19 +2084,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     ));
   },
 
-  moveSection: async (sectionId: SectionId, offset: Coordinates) => {
+  moveLine: async (lineId: LineId, offset: Coordinates) => {
     return executeCommand(
-      'move_section',
-      { sectionId, offset },
-      { purpose: 'reposition section for alignment', fields: { sectionId } }
+      'move_line',
+      { lineId, offset },
+      { purpose: 'reposition line for alignment', fields: { lineId } }
     );
   },
 
-  moveSegment: async (sectionId: SectionId, offset: Coordinates) => {
+  moveSegment: async (lineId: LineId, offset: Coordinates) => {
     return executeCommand(
       'move_segment',
-      { sectionId, offset },
-      { purpose: 'move connected segment', fields: { sectionId } }
+      { lineId, offset },
+      { purpose: 'move connected segment', fields: { lineId } }
     );
   },
 
@@ -2108,19 +2108,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  getConnectedSectionIds: async (sectionId: SectionId) => {
+  getConnectedLineIds: async (lineId: LineId) => {
     return await invokeIpc<number[]>(
-      'get_rigid_connected_section_ids',
-      { sectionId },
-      { purpose: 'query connected section ids', fields: { sectionId } }
+      'get_rigid_connected_line_ids',
+      { lineId },
+      { purpose: 'query connected line ids', fields: { lineId } }
     );
   },
 
-  getAnchoredSectionIds: async () => {
+  getAnchoredLineIds: async () => {
     return await invokeIpc<number[]>(
-      'get_anchored_section_ids',
+      'get_anchored_line_ids',
       undefined,
-      { purpose: 'query anchored section ids' }
+      { purpose: 'query anchored line ids' }
     );
   },
 
@@ -2185,7 +2185,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => {
+  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedLines?: number[] | null, rootPlacement?: TmlRootPlacement | null) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2200,7 +2200,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           virtualShotMode: virtualShotMode ?? null,
           // #425: null on either means "no filter" / "decide the root placement
           // the way you always did", so an older caller behaves unchanged.
-          selectedSections: selectedSections ?? null,
+          selectedLines: selectedLines ?? null,
           rootPlacement: rootPlacement ?? null,
         },
         { purpose: 'import Ariane TML/TMLU', fields: { path } }
@@ -2307,7 +2307,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => {
+  executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, linePlacements: GpxLinePlacement[], depthInverted: boolean) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2319,7 +2319,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           importWaypoints,
           importTracks,
           importRoutes,
-          sectionPlacements,
+          linePlacements,
           depthInverted,
         },
         { purpose: 'import GPX file', fields: { path } }
@@ -2345,17 +2345,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  checkSectionHashes: async (hashes: string[]) => {
-    return await invokeIpc<boolean[]>('check_section_hashes', { hashes }, {
-      purpose: 'detect duplicate section imports',
+  checkLineHashes: async (hashes: string[]) => {
+    return await invokeIpc<boolean[]>('check_line_hashes', { hashes }, {
+      purpose: 'detect duplicate line imports',
       fields: { count: hashes.length },
     });
   },
 
-  importSections: async (
-    sections: ImportSectionConfig[],
+  importLines: async (
+    lines: ImportLineConfig[],
     fileHash?: string | null,
-    sectionHashes?: string[] | null,
+    lineHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
@@ -2364,11 +2364,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     if (s) setSource(s);
     try {
       return await executeCommand(
-        'import_sections',
+        'import_lines',
         {
-          sections,
+          lines,
           fileHash: fileHash ?? null,
-          sectionHashes: sectionHashes ?? null,
+          lineHashes: lineHashes ?? null,
           // The command has taken these since the overlap work; this wrapper
           // could not express them, so the only route to the overlap path was
           // the DMP wizard's direct `invokeIpc`. Optional and null-defaulted, so
@@ -2377,9 +2377,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           virtualShotMode: virtualShotMode ?? null,
           sourceLabel: provenance?.sourceLabel ?? null,
           sourceFileName: provenance?.sourceFileName ?? null,
-          sectionsFound: provenance?.sectionsFound ?? null,
+          linesFound: provenance?.linesFound ?? null,
         },
-        { purpose: 'apply imported sections', fields: { section_count: sections.length } }
+        { purpose: 'apply imported lines', fields: { line_count: lines.length } }
       );
     } finally {
       // Terminal flow: the project is already open, so there's no
@@ -2402,8 +2402,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   suggestImportPlacement: async (
     shots: ShotData[],
     // What `shots` are measured against (#438). Pass the same value the
-    // `ImportSectionConfig` will carry: the matcher compares these bearings
-    // against existing sections' and scores them in one frame, so omitting it
+    // `ImportLineConfig` will carry: the matcher compares these bearings
+    // against existing lines' and scores them in one frame, so omitting it
     // falls back to the project default and mis-scores a real overlap by the
     // difference of the two corrections.
     azimuthReference?: AzimuthReference | null,

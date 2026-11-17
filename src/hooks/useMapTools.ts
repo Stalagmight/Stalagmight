@@ -10,7 +10,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
-import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
+import type { LineId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { reachableStationKeySet, nearestOriginShotEndpoint } from '../utils/gasReach';
@@ -24,7 +24,7 @@ import { projectIdentityKey } from '../utils/projectIdentity';
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
  *
  * Three states, checked in order: the one-shot "Pick on map" origin picker (armed from the
- * Origin section's button) always wins and disarms itself via `setOrigin`; before an origin is
+ * Origin line's button) always wins and disarms itself via `setOrigin`; before an origin is
  * chosen at all, the FIRST click sets the origin (answering "Where does this dive start?") so
  * the entry card can resolve before any endpoint exists to plan toward; only once an origin is
  * chosen does a plain click resume its ordinary job of setting the ENDPOINT.
@@ -51,17 +51,17 @@ function isConnectable(ep: MeasureEndpoint): boolean {
 /** Map a UI measure endpoint to the backend `RulerEndpoint` (null for raw points). */
 function toRulerEndpoint(ep: MeasureEndpoint): RulerEndpoint | null {
   if (ep.kind === 'station') {
-    return { section_id: ep.section_id, station_index: ep.station_index, shot_id: null, t: null };
+    return { line_id: ep.line_id, station_index: ep.station_index, shot_id: null, t: null };
   }
   if (ep.kind === 'shotPoint') {
-    return { section_id: ep.section_id, shot_id: ep.shot_id, t: ep.t, station_index: null };
+    return { line_id: ep.line_id, shot_id: ep.shot_id, t: ep.t, station_index: null };
   }
   return null;
 }
 
 interface MoveDragStartData {
   type: 'station' | 'segment' | 'shot';
-  sectionId?: number;
+  lineId?: number;
   stationRef?: StationRef;
   shotIndex?: number;
   /** Screen coordinates of the click that initiated the drag */
@@ -72,7 +72,7 @@ interface MoveDragStartData {
 interface MapToolsOptions {
   onMoveDragStart?: (data: MoveDragStartData) => void;
   onFeatureHover?: (isHovering: boolean) => void;
-  /** Station keys ("sectionId:stationIndex") that cannot be moved (zero-datum or transitively connected) */
+  /** Station keys ("lineId:stationIndex") that cannot be moved (zero-datum or transitively connected) */
   immovableStationKeys?: Set<string>;
   /** GPS origin for converting a raw map click to meters (ruler `point` endpoints). */
   gpsOrigin?: GpsOrigin | null;
@@ -84,7 +84,7 @@ interface MapToolsOptions {
     screenY: number
   ) =>
     | { kind: 'station'; station: StationRef }
-    | { kind: 'shot'; section_id: SectionId; shot_id: ShotId; t: number }
+    | { kind: 'shot'; line_id: LineId; shot_id: ShotId; t: number }
     | null;
 }
 
@@ -104,7 +104,7 @@ export function nearestReachableStationRef(
   for (const st of stations) {
     if (
       reachable &&
-      !reachable.has(`${st.station_ref.section_id}:${st.station_ref.station_index}`)
+      !reachable.has(`${st.station_ref.line_id}:${st.station_ref.station_index}`)
     ) {
       continue;
     }
@@ -122,7 +122,7 @@ export function nearestReachableStationRef(
 /**
  * The uiStore keys this hook reads (#430). Explicit, so the subscription costs a
  * 25-key shallow compare instead of a ~180-key one and can actually bail out while
- * the camera moves. The hover keys (hoveredStation / hoveredShot / hoveredSectionId)
+ * the camera moves. The hover keys (hoveredStation / hoveredShot / hoveredLineId)
  * are deliberately ABSENT: this hook runs inside MapCanvas, so subscribing to them
  * would re-render that whole component on every mousemove. measureSnapShot is absent
  * for the same reason - it is rewritten on every mousemove over a shot (the live `t`)
@@ -210,7 +210,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   const getStationCoordinates = useCallback(
     (ref: StationRef): Coordinates | null => {
       const station = activeStations.find(
-        (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+        (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
       );
       return station?.coordinates ?? null;
     },
@@ -242,22 +242,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Build a shot-point endpoint from a shot id + fractional position `t`,
   // interpolating the 3D coords from the active stations (geometry-mode aware).
   const buildShotPointEndpoint = useCallback(
-    (sectionId: SectionId, shotId: ShotId, t: number): MeasureEndpoint | null => {
-      const section = project?.sections.find((s) => s.id === sectionId);
-      if (!section) return null;
-      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+    (lineId: LineId, shotId: ShotId, t: number): MeasureEndpoint | null => {
+      const line = project?.lines.find((s) => s.id === lineId);
+      if (!line) return null;
+      const pos = line.shots.findIndex((sh) => sh.id === shotId);
       if (pos < 0) return null;
-      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
-      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      const from = getStationCoordinates({ line_id: lineId, station_index: pos });
+      const to = getStationCoordinates({ line_id: lineId, station_index: pos + 1 });
       if (!from || !to) return null;
       const coords: Coordinates = {
         x: from.x + t * (to.x - from.x),
         y: from.y + t * (to.y - from.y),
         z: from.z + t * (to.z - from.z),
       };
-      return { kind: 'shotPoint', section_id: sectionId, shot_id: shotId, t, coords };
+      return { kind: 'shotPoint', line_id: lineId, shot_id: shotId, t, coords };
     },
-    [project?.sections, getStationCoordinates]
+    [project?.lines, getStationCoordinates]
   );
 
   // Fractional position `t` of a click along a shot, derived from the click's map
@@ -266,19 +266,19 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // available (snapping disabled), so a click near an end of a long shot isn't
   // recorded as the midpoint (#26, Codex).
   const clickShotParam = useCallback(
-    (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent): number | null => {
+    (lineId: LineId, shotId: ShotId, event: MapMouseEvent): number | null => {
       if (!event.lngLat) return null;
-      const section = project?.sections.find((s) => s.id === sectionId);
-      if (!section) return null;
-      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+      const line = project?.lines.find((s) => s.id === lineId);
+      if (!line) return null;
+      const pos = line.shots.findIndex((sh) => sh.id === shotId);
       if (pos < 0) return null;
-      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
-      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      const from = getStationCoordinates({ line_id: lineId, station_index: pos });
+      const to = getStationCoordinates({ line_id: lineId, station_index: pos + 1 });
       if (!from || !to) return null;
       const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
       return projectParamOnSegment(m.x, m.y, from.x, from.y, to.x, to.y);
     },
-    [project?.sections, getStationCoordinates, options.gpsOrigin]
+    [project?.lines, getStationCoordinates, options.gpsOrigin]
   );
 
   // Monotonic id so a fast second measurement discards a stale along-line response.
@@ -475,7 +475,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           } else {
             // Check if clicking the same station
             if (
-              mergeStationA.section_id === ref.section_id &&
+              mergeStationA.line_id === ref.line_id &&
               mergeStationA.station_index === ref.station_index
             ) {
               // Clear selection
@@ -493,7 +493,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (coords) {
             applyMeasureClick({
               kind: 'station',
-              section_id: ref.section_id,
+              line_id: ref.line_id,
               station_index: ref.station_index,
               coords,
             });
@@ -503,7 +503,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
         case 'move_station': {
           // Guard: block interaction with immovable stations (zero-datum or transitively connected)
-          const stationKey = `${ref.section_id}:${ref.station_index}`;
+          const stationKey = `${ref.line_id}:${ref.station_index}`;
           if (options.immovableStationKeys?.has(stationKey)) break;
 
           // Start drag operation - handled by MapCanvas
@@ -519,10 +519,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
 
         case 'move_segment': {
-          // Start segment move drag - anchored sections are silently ignored
+          // Start segment move drag - anchored lines are silently ignored
           options.onMoveDragStart?.({
             type: 'segment',
-            sectionId: ref.section_id,
+            lineId: ref.line_id,
             stationRef: ref,
             screenX: mouseEvent.clientX,
             screenY: mouseEvent.clientY,
@@ -534,7 +534,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           setSelection({ type: 'station', stationRef: ref });
           // Lookup the station's current comment
           const station = stations.find(
-            (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+            (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
           );
           const currentComment = station?.comment ?? '';
           useUIStore.getState().setCommentTarget({
@@ -549,7 +549,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'move_comment': {
           const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
           const mcStation = stations.find(
-            (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+            (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
           );
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
@@ -572,7 +572,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               // Target empty - atomic move
               const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
                 ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
-                : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
+                : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
               const target = { type: 'station' as const, station_ref: ref };
               await useProjectStore.getState().moveComment(source, target, false);
               clearMoveCommentSource();
@@ -597,7 +597,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // rebuild the handler (and the memoized callback bundle below) each time (#430).
       options.immovableStationKeys,
       options.onMoveDragStart,
-      project?.sections,
+      project?.lines,
       setMergeStationA,
       setSelection,
       showStations,
@@ -612,7 +612,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
-    async (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => {
+    async (lineId: LineId, shotId: ShotId, event: MapMouseEvent) => {
       // GUARD: No interactions for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
@@ -627,7 +627,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       switch (activeTool) {
         case 'select': {
-          const sel: Selection = { type: 'shot', sectionId, shotId };
+          const sel: Selection = { type: 'shot', lineId, shotId };
           if (mouseEvent.shiftKey) {
             addToSelection(sel);
           } else if (mouseEvent.ctrlKey || mouseEvent.metaKey) {
@@ -638,17 +638,17 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           // Distance gradient (#34): re-root on a shot click too. With stations
           // hidden - common (and nicer-looking) while the gradient is on - you
           // can't click a station, so re-root to the shot's lower-numbered
-          // endpoint station (section_id, shotIndex).
+          // endpoint station (line_id, shotIndex).
           if (
             (showDistanceGradient || showGasPlan) &&
             !mouseEvent.shiftKey &&
             !mouseEvent.ctrlKey &&
             !mouseEvent.metaKey
           ) {
-            const section = project?.sections.find((s) => s.id === sectionId);
-            const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
+            const line = project?.lines.find((s) => s.id === lineId);
+            const shotIndex = line?.shots.findIndex((s) => s.id === shotId) ?? -1;
             if (shotIndex !== -1) {
-              const ref = { section_id: sectionId, station_index: shotIndex };
+              const ref = { line_id: lineId, station_index: shotIndex };
               // Mutually exclusive overlays: the distance gradient re-roots, Plan applies the
               // same origin/endpoint split as the station click above (#298, #395).
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
@@ -657,7 +657,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
                 // current origin, not always the lower-numbered one (#395 regression fix) -
                 // "current origin" is the entrance pre-origin, or the outgoing origin on a
                 // re-armed pick-on-map (see nearestOriginShotEndpoint's JSDoc).
-                const other = { section_id: sectionId, station_index: shotIndex + 1 };
+                const other = { line_id: lineId, station_index: shotIndex + 1 };
                 const nearer = nearestOriginShotEndpoint(
                   ref,
                   other,
@@ -675,27 +675,27 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'move_shot': {
           // Guard: block interaction if either shot endpoint is immovable
           if (options.immovableStationKeys) {
-            const section = project?.sections.find((s) => s.id === sectionId);
-            if (section) {
-              const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+            const line = project?.lines.find((s) => s.id === lineId);
+            if (line) {
+              const shotIndex = line.shots.findIndex((s) => s.id === shotId);
               if (shotIndex !== -1) {
-                const fromKey = `${sectionId}:${shotIndex}`;
-                const toKey = `${sectionId}:${shotIndex + 1}`;
+                const fromKey = `${lineId}:${shotIndex}`;
+                const toKey = `${lineId}:${shotIndex + 1}`;
                 if (options.immovableStationKeys.has(fromKey) || options.immovableStationKeys.has(toKey)) break;
               }
             }
           }
 
           // Select the shot and clear other selection effects
-          setSelection({ type: 'shot', sectionId, shotId });
-          // Find the shot index within the section
-          const shotSection = project?.sections.find((s) => s.id === sectionId);
-          if (shotSection) {
-            const shotIndex = shotSection.shots.findIndex((s) => s.id === shotId);
+          setSelection({ type: 'shot', lineId, shotId });
+          // Find the shot index within the line
+          const shotLine = project?.lines.find((s) => s.id === lineId);
+          if (shotLine) {
+            const shotIndex = shotLine.shots.findIndex((s) => s.id === shotId);
             if (shotIndex !== -1) {
               options.onMoveDragStart?.({
                 type: 'shot',
-                sectionId,
+                lineId,
                 shotIndex,
                 screenX: mouseEvent.clientX,
                 screenY: mouseEvent.clientY,
@@ -709,7 +709,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           // Start segment move drag from a shot click (same as station click)
           options.onMoveDragStart?.({
             type: 'segment',
-            sectionId,
+            lineId,
             screenX: mouseEvent.clientX,
             screenY: mouseEvent.clientY,
           });
@@ -717,14 +717,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'comment': {
-          setSelection({ type: 'shot', sectionId, shotId });
+          setSelection({ type: 'shot', lineId, shotId });
           // Lookup the shot's current comment
-          const section = project?.sections.find((s) => s.id === sectionId);
-          const shot = section?.shots.find((s) => s.id === shotId);
+          const line = project?.lines.find((s) => s.id === lineId);
+          const shot = line?.shots.find((s) => s.id === shotId);
           const currentComment = shot?.comment ?? '';
           useUIStore.getState().setCommentTarget({
             type: 'shot',
-            sectionId,
+            lineId,
             shotId,
             screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY },
             currentComment,
@@ -734,16 +734,16 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
         case 'move_comment': {
           const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
-          const mcSection = project?.sections.find((s) => s.id === sectionId);
-          const mcShot = mcSection?.shots.find((s) => s.id === shotId);
+          const mcLine = project?.lines.find((s) => s.id === lineId);
+          const mcShot = mcLine?.shots.find((s) => s.id === shotId);
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcShot?.comment) {
               showToast(t('map.toasts.noCommentToMove'), TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
-            setSelection({ type: 'shot', sectionId, shotId });
-            setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+            setSelection({ type: 'shot', lineId, shotId });
+            setMoveCommentSource({ type: 'shot', lineId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcShot?.comment ?? '';
@@ -751,14 +751,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               // Target has comment - open swap dialog
               openDialog('swap-comments', {
                 source: moveCommentSource,
-                target: { type: 'shot', sectionId, shotId, comment: targetComment },
+                target: { type: 'shot', lineId, shotId, comment: targetComment },
               });
             } else {
               // Target empty - atomic move
               const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
                 ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
-                : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
-              const target = { type: 'shot' as const, section_id: sectionId, shot_id: shotId };
+                : { type: 'shot' as const, line_id: moveCommentSource.lineId!, shot_id: moveCommentSource.shotId! };
+              const target = { type: 'shot' as const, line_id: lineId, shot_id: shotId };
               await useProjectStore.getState().moveComment(source, target, false);
               clearMoveCommentSource();
             }
@@ -776,7 +776,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             if (coords) {
               applyMeasureClick({
                 kind: 'station',
-                section_id: snap.station.section_id,
+                line_id: snap.station.line_id,
                 station_index: snap.station.station_index,
                 coords,
               });
@@ -786,15 +786,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           // Otherwise derive t directly from the click position on this shot, rather
           // than the RAF/deferred snap store (which can hold a stale shot/t), falling
           // back to the midpoint only if it can't be projected.
-          const t = clickShotParam(sectionId, shotId, event) ?? 0.5;
-          const ep = buildShotPointEndpoint(sectionId, shotId, t);
+          const t = clickShotParam(lineId, shotId, event) ?? 0.5;
+          const ep = buildShotPointEndpoint(lineId, shotId, t);
           if (ep) applyMeasureClick(ep);
           break;
         }
       }
     },
     // See handleStationClick: the read `options` fields, not the object (#430).
-    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, project?.zero_datums, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.lines, project?.zero_datums, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
@@ -815,10 +815,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         if (snap?.kind === 'station') {
           const coords = getStationCoordinates(snap.station);
           if (coords) {
-            ep = { kind: 'station', section_id: snap.station.section_id, station_index: snap.station.station_index, coords };
+            ep = { kind: 'station', line_id: snap.station.line_id, station_index: snap.station.station_index, coords };
           }
         } else if (snap?.kind === 'shot') {
-          ep = buildShotPointEndpoint(snap.section_id, snap.shot_id, snap.t);
+          ep = buildShotPointEndpoint(snap.line_id, snap.shot_id, snap.t);
         }
         if (!ep && event.lngLat) {
           const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
@@ -844,7 +844,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             } else {
               // Check if clicking the same station
               if (
-                mergeStationA.section_id === snappedStation.section_id &&
+                mergeStationA.line_id === snappedStation.line_id &&
                 mergeStationA.station_index === snappedStation.station_index
               ) {
                 clearMergeStations();
@@ -904,10 +904,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     ]
   );
 
-  // Handle station hover - only highlights the specific station, not the whole section.
-  // Panel-side section-name highlight is derived in SectionsPanel from the hovered
-  // shot/station, so we deliberately don't touch hoveredSectionId here (doing so would
-  // (a) feed back into SurveyLayer.setHoveredSection and light up the whole section on
+  // Handle station hover - only highlights the specific station, not the whole line.
+  // Panel-side line-name highlight is derived in SectionsPanel from the hovered
+  // shot/station, so we deliberately don't touch hoveredLineId here (doing so would
+  // (a) feed back into SurveyLayer.setHoveredLine and light up the whole line on
   // the map, and (b) get clobbered by the trailing null callback when the cursor moves
   // from a shot to a station).
   const handleStationHover = useCallback(
@@ -922,10 +922,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeTool, setHoveredStation]
   );
 
-  // Handle shot hover - only highlights the specific shot, not the whole section.
-  // See handleStationHover for why we don't set hoveredSectionId here.
+  // Handle shot hover - only highlights the specific shot, not the whole line.
+  // See handleStationHover for why we don't set hoveredLineId here.
   const handleShotHover = useCallback(
-    (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
+    (shot: { lineId: LineId; shotId: ShotId } | null) => {
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredShot(null);
@@ -941,7 +941,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     (
       target:
         | { type: 'station'; ref: StationRef }
-        | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT: number }
+        | { type: 'shot'; lineId: LineId; shotId: ShotId; alongT: number }
         | null,
       event: MapMouseEvent
     ) => {
@@ -991,7 +991,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         if (target.type === 'station') {
           setSelection({ type: 'station', stationRef: target.ref });
         } else {
-          setSelection({ type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+          setSelection({ type: 'shot', lineId: target.lineId, shotId: target.shotId });
         }
 
         // Open context menu

@@ -86,7 +86,7 @@ describe('SpeleoDB workspace', () => {
     const end = startCall('exclusive');
     for (const id of actions) expect(screen.getByTestId(id), id).toBeDisabled();
     // Navigation is never gated.
-    expect(screen.getByTestId('speleodb-workspace-section-history')).toBeEnabled();
+    expect(screen.getByTestId('speleodb-workspace-line-history')).toBeEnabled();
     end();
     for (const id of actions) expect(screen.getByTestId(id), id).toBeEnabled();
   });

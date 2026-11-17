@@ -8,24 +8,24 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: Stri
 beforeEach(() => {
   useProjectStore.setState({ project: { name: 'Local cave', file_path: '/local.stalx', zero_datums: [] } as never });
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local', remoteProjectId: null, session: null, busy: false });
-  useUIStore.setState({ activeDialog: null, dialogData: {}, appMode: 'survey', leftWorkspace: 'sections', surveyLeftWorkspace: 'sections' });
+  useUIStore.setState({ activeDialog: null, dialogData: {}, appMode: 'survey', leftWorkspace: 'lines', surveyLeftWorkspace: 'lines' });
 });
 it('local SpeleoDB tab offers only conversion and opens the project creation form', () => {
-  render(<LeftWorkspace sections={<div>Sections content</div>} />);
+  render(<LeftWorkspace lines={<div>Lines content</div>} />);
   fireEvent.click(screen.getByRole('tab', { name: 'SpeleoDB' }));
   const panel = screen.getByRole('tabpanel', { name: 'SpeleoDB' });
   expect(within(panel).getAllByRole('button')).toHaveLength(1);
   fireEvent.click(within(panel).getByRole('button', { name: 'Convert to a SpeleoDB project' }));
   expect(useUIStore.getState().activeDialog).toBe('publish-to-speleodb');
   expect(screen.queryByTestId('speleodb-workspace-upload')).toBeNull();
-  expect(screen.queryByTestId('speleodb-workspace-section-history')).toBeNull();
+  expect(screen.queryByTestId('speleodb-workspace-line-history')).toBeNull();
 });
-it('the local SpeleoDB tab, opened outside Survey, offers conversion without section editors', () => {
-  render(<LeftWorkspace sections={<div>Sections content</div>} />);
+it('the local SpeleoDB tab, opened outside Survey, offers conversion without line editors', () => {
+  render(<LeftWorkspace lines={<div>Lines content</div>} />);
   for (const mode of ['plan', 'export'] as const) {
     act(() => useUIStore.getState().setAppMode(mode));
     act(() => useUIStore.getState().openSpeleoWorkspace());
     expect(screen.getByRole('button', { name: 'Convert to a SpeleoDB project' })).toBeVisible();
-    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Lines' })).toBeNull();
   }
 });

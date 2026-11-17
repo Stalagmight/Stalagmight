@@ -238,23 +238,23 @@ function SignOutPrompt({ kind, initial, settle }: {
               )}
 
               {others.length > 0 && (
-                <section className="space-y-1" data-testid="speleodb-signout-unuploaded">
+                <line className="space-y-1" data-testid="speleodb-signout-unuploaded">
                   <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.otherChangesBody')}</p>
                   <ul className="list-disc pl-5 text-sm text-text-primary">
                     {others.map((p) => (
                       <li key={p.summary.id} data-testid={`speleodb-signout-row-${p.summary.id}`}>{name(p)}</li>
                     ))}
                   </ul>
-                </section>
+                </line>
               )}
 
               {otherLocks.length > 0 && (
-                <section className="space-y-1" data-testid="speleodb-signout-releasable">
+                <line className="space-y-1" data-testid="speleodb-signout-releasable">
                   <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.willRelease')}</p>
                   <ul className="list-disc pl-5 text-sm text-text-primary">
                     {otherLocks.map((p) => <li key={p.summary.id}>{name(p)}</li>)}
                   </ul>
-                </section>
+                </line>
               )}
             </>
           )}

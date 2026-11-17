@@ -9,7 +9,7 @@ import '../../../i18n';
 import { StationDatumDetail } from '../StationDatumDetail';
 import type { ZeroDatum } from '../../../types/ipc/ZeroDatum';
 
-const REF = { section_id: 1, station_index: 5 };
+const REF = { line_id: 1, station_index: 5 };
 const GPS = { latitude: 20.5, longitude: -87.25, depth_reference: 0 };
 const GAP = { gap_m: 12.4, bearing_deg: 44, survey_distance_m: 500, threshold_m: 25, exceeds_threshold: false };
 

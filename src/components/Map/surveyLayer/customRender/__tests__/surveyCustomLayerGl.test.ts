@@ -6,10 +6,10 @@ import { emptySurveyData, type SurveyData } from '../../../../../types/survey-da
 import type { Rgba8 } from '../colorPack';
 import { FakeGl, FakeWebGLBuffer, asGl } from './fakeGl';
 
-/** One section, 3 stations, 2 valid shots -> 2 line segments + 3 circles. */
+/** One line, 3 stations, 2 valid shots -> 2 line segments + 3 circles. */
 function makeSurvey(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     {
       id: 1, name: 'A', color: '#ff0000',
       direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2,
@@ -17,10 +17,10 @@ function makeSurvey(): SurveyData {
   ];
   d.shotCount = 2;
   d.shotIds = new Uint32Array([0, 1]);
-  d.shotSectionIds = new Uint32Array([1, 1]);
+  d.shotLineIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, 0]);
   d.stationCount = 3;
-  d.stationSectionIds = new Uint32Array([1, 1, 1]);
+  d.stationLineIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);

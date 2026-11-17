@@ -33,7 +33,7 @@ beforeEach(async () => {
   useGasPlanStore.setState({ gasConfig: structuredClone(defaultConfig.gas) });
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
-    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], line_ids: [] })),
   });
 });
 

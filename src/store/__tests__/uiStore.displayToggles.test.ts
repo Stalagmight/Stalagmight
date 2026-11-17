@@ -33,7 +33,7 @@ const settingsWith = (overrides: Partial<DisplaySettings>): DisplaySettings => (
 const getCleanTestState = () => ({
   showStations: true,
   showShots: true,
-  showSectionNames: true,
+  showLineNames: true,
   showStationLabels: false,
   showStationNames: false,
   showShotData: false,
@@ -81,8 +81,8 @@ describe('Display Toggle State', () => {
       expect(useUIStore.getState().showShots).toBe(DISPLAY_DEFAULTS.showShots);
     });
 
-    it('store showSectionNames uses DISPLAY_DEFAULTS value', () => {
-      expect(useUIStore.getState().showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
+    it('store showLineNames uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showLineNames).toBe(DISPLAY_DEFAULTS.showLineNames);
     });
 
     it('store showStationLabels uses DISPLAY_DEFAULTS value', () => {
@@ -152,7 +152,7 @@ describe('Display Toggle State', () => {
       useUIStore.setState({
         showStations: !DISPLAY_DEFAULTS.showStations,
         showShots: !DISPLAY_DEFAULTS.showShots,
-        showSectionNames: !DISPLAY_DEFAULTS.showSectionNames,
+        showLineNames: !DISPLAY_DEFAULTS.showLineNames,
         showStationLabels: !DISPLAY_DEFAULTS.showStationLabels,
         showStationNames: !DISPLAY_DEFAULTS.showStationNames,
         showShotData: !DISPLAY_DEFAULTS.showShotData,
@@ -172,7 +172,7 @@ describe('Display Toggle State', () => {
       const state = useUIStore.getState();
       expect(state.showStations).toBe(DISPLAY_DEFAULTS.showStations);
       expect(state.showShots).toBe(DISPLAY_DEFAULTS.showShots);
-      expect(state.showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
+      expect(state.showLineNames).toBe(DISPLAY_DEFAULTS.showLineNames);
       expect(state.showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
       expect(state.showStationNames).toBe(DISPLAY_DEFAULTS.showStationNames);
       expect(state.showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
@@ -306,7 +306,7 @@ describe('Display Toggle State', () => {
     it('enabling the depth gradient turns the distance gradient off and clears its origin/field', () => {
       useUIStore.setState({
         showDistanceGradient: true,
-        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceGradientOrigin: { line_id: 1, station_index: 2 },
         distanceField: {} as never,
         showDepthGradient: false,
       });
@@ -353,7 +353,7 @@ describe('Display Toggle State', () => {
       useUIStore.setState({
         showDepthGradient: true,
         showDistanceGradient: true,
-        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceGradientOrigin: { line_id: 1, station_index: 2 },
         distanceField: {} as never,
         showIssueSeverity: false,
       });
@@ -430,7 +430,7 @@ describe('Display Toggle State', () => {
 
     it('repro: distance on, a load re-applies the saved depth preference, then pick Depth', () => {
       ui().setColorMode('distance');
-      ui().setDistanceGradientOrigin({ section_id: 1, station_index: 2 });
+      ui().setDistanceGradientOrigin({ line_id: 1, station_index: 2 });
       // Project load / revision restore: the saved depth=on comes back underneath
       // the runtime-only distance overlay. The load must leave ONE valid mode.
       ui().applyDisplaySettings(settingsWith({ showDepthGradient: true }));
@@ -458,29 +458,29 @@ describe('Display Toggle State', () => {
       expect(ui().showDistanceGradient).toBe(false);
     });
 
-    it("selecting 'section' from the invalid pair clears every overlay and the distance cache", () => {
+    it("selecting 'line' from the invalid pair clears every overlay and the distance cache", () => {
       useUIStore.setState({
         showDepthGradient: true,
         showDistanceGradient: true,
-        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceGradientOrigin: { line_id: 1, station_index: 2 },
         distanceField: {} as never,
       });
-      ui().setColorMode('section');
+      ui().setColorMode('line');
       const s = ui();
-      expect(colorModeOf(s)).toBe('section');
+      expect(colorModeOf(s)).toBe('line');
       expect(s.showDepthGradient).toBe(false);
       expect(s.showDistanceGradient).toBe(false);
       expect(s.distanceGradientOrigin).toBeNull();
       expect(s.distanceField).toBeNull();
     });
 
-    it("leaving distance for 'section' still clears the origin and cached field", () => {
+    it("leaving distance for 'line' still clears the origin and cached field", () => {
       ui().setColorMode('distance');
-      ui().setDistanceGradientOrigin({ section_id: 3, station_index: 4 });
+      ui().setDistanceGradientOrigin({ line_id: 3, station_index: 4 });
       useUIStore.setState({ distanceField: {} as never });
-      ui().setColorMode('section');
+      ui().setColorMode('line');
       const s = ui();
-      expect(colorModeOf(s)).toBe('section');
+      expect(colorModeOf(s)).toBe('line');
       expect(s.distanceGradientOrigin).toBeNull();
       expect(s.distanceField).toBeNull();
     });
@@ -505,7 +505,7 @@ describe('Display Toggle State', () => {
           value: 'true',
         });
       });
-      ui().setColorMode('section');
+      ui().setColorMode('line');
       await vi.waitFor(() => {
         expect(invoke).toHaveBeenCalledWith('save_display_setting', {
           key: 'showDepthGradient',
@@ -531,8 +531,8 @@ describe('Display Toggle State', () => {
         ui().setColorMode(overlay);
         expect(ui().showDepthGradient).toBe(false);
         vi.clearAllMocks();
-        ui().setColorMode('section');
-        expect(colorModeOf(ui())).toBe('section');
+        ui().setColorMode('line');
+        expect(colorModeOf(ui())).toBe('line');
         await vi.waitFor(() => {
           expect(invoke).toHaveBeenCalledWith('save_display_setting', {
             key: 'showDepthGradient',
@@ -547,9 +547,9 @@ describe('Display Toggle State', () => {
       // suppressed-depth case. Turning it into a blanket write on every None would
       // emit an IPC round trip on a pure no-op.
       useUIStore.setState({ appMode: 'survey' });
-      expect(colorModeOf(ui())).toBe('section');
+      expect(colorModeOf(ui())).toBe('line');
       vi.clearAllMocks();
-      ui().setColorMode('section');
+      ui().setColorMode('line');
       expect(invoke).not.toHaveBeenCalledWith(
         'save_display_setting',
         expect.objectContaining({ key: 'showDepthGradient' })
@@ -586,7 +586,7 @@ describe('Display Toggle State', () => {
       // colorResolvers.ts both gate depth against issue-severity ONLY, never
       // against showDistanceGradient. This assertion is the thing standing
       // between a colorModeFlags regression and depth painting over distance.
-      for (const mode of ['section', 'depth', 'distance', 'issues'] as const) {
+      for (const mode of ['line', 'depth', 'distance', 'issues'] as const) {
         expect(colorModeFlags(mode)).toMatchObject({
           showDepthGradient: mode === 'depth',
           showDistanceGradient: mode === 'distance',
@@ -596,7 +596,7 @@ describe('Display Toggle State', () => {
     });
 
     it('colorModeFlags round-trips through colorModeOf for every mode', () => {
-      for (const mode of ['section', 'depth', 'distance', 'issues'] as const) {
+      for (const mode of ['line', 'depth', 'distance', 'issues'] as const) {
         expect(colorModeOf({ ...getCleanTestState(), ...colorModeFlags(mode) })).toBe(mode);
       }
     });
@@ -797,11 +797,11 @@ describe('Selection Clearing', () => {
   it('clearSelectionByType clears only stations when type is station', () => {
     const stationSelection = {
       type: 'station' as const,
-      stationRef: { section_id: 1, station_index: 0 },
+      stationRef: { line_id: 1, station_index: 0 },
     };
     const shotSelection = {
       type: 'shot' as const,
-      sectionId: 1,
+      lineId: 1,
       shotId: 0,
     };
 
@@ -818,18 +818,18 @@ describe('Selection Clearing', () => {
     const remaining = useUIStore.getState().multiSelection;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.type).toBe('shot');
-    expect(remaining[0]!.sectionId).toBe(1);
+    expect(remaining[0]!.lineId).toBe(1);
     expect(remaining[0]!.shotId).toBe(0);
   });
 
   it('clearSelectionByType clears only shots when type is shot', () => {
     const stationSelection = {
       type: 'station' as const,
-      stationRef: { section_id: 1, station_index: 0 },
+      stationRef: { line_id: 1, station_index: 0 },
     };
     const shotSelection = {
       type: 'shot' as const,
-      sectionId: 1,
+      lineId: 1,
       shotId: 0,
     };
 
@@ -846,22 +846,22 @@ describe('Selection Clearing', () => {
     const remaining = useUIStore.getState().multiSelection;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.type).toBe('station');
-    expect(remaining[0]!.stationRef?.section_id).toBe(1);
+    expect(remaining[0]!.stationRef?.line_id).toBe(1);
     expect(remaining[0]!.stationRef?.station_index).toBe(0);
   });
 
   it('clearSelectionByType updates selection to last remaining item', () => {
     const stationSelection1 = {
       type: 'station' as const,
-      stationRef: { section_id: 1, station_index: 0 },
+      stationRef: { line_id: 1, station_index: 0 },
     };
     const stationSelection2 = {
       type: 'station' as const,
-      stationRef: { section_id: 1, station_index: 1 },
+      stationRef: { line_id: 1, station_index: 1 },
     };
     const shotSelection = {
       type: 'shot' as const,
-      sectionId: 1,
+      lineId: 1,
       shotId: 0,
     };
 
@@ -886,11 +886,11 @@ describe('Selection Clearing', () => {
   it('filterSelection removes items that fail predicate', () => {
     const stationSelection = {
       type: 'station' as const,
-      stationRef: { section_id: 1, station_index: 0 },
+      stationRef: { line_id: 1, station_index: 0 },
     };
     const shotSelection = {
       type: 'shot' as const,
-      sectionId: 1,
+      lineId: 1,
       shotId: 0,
     };
 
@@ -904,7 +904,7 @@ describe('Selection Clearing', () => {
     const remaining = useUIStore.getState().multiSelection;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.type).toBe('station');
-    expect(remaining[0]!.stationRef?.section_id).toBe(1);
+    expect(remaining[0]!.stationRef?.line_id).toBe(1);
     expect(remaining[0]!.stationRef?.station_index).toBe(0);
   });
 
@@ -1071,7 +1071,7 @@ describe('Plan/Export display isolation', () => {
   it.each(['plan', 'export'] as const)(
     'entering %s clears every overlay (plus the distance cache) and forces the closure map',
     (mode) => {
-      // The entry write goes through colorModeFlags('section') rather than
+      // The entry write goes through colorModeFlags('line') rather than
       // hand-listing the flags, so this pins the whole set it is responsible for -
       // including the distance origin/field cache and the ruler reset that share
       // the same set().
@@ -1081,7 +1081,7 @@ describe('Plan/Export display isolation', () => {
         showDepthGradient: true,
         showDistanceGradient: true,
         showIssueSeverity: true,
-        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceGradientOrigin: { line_id: 1, station_index: 2 },
         distanceField: {} as never,
         measureStart: { kind: 'point', x: 1, y: 2, z: 3 },
       });
@@ -1089,7 +1089,7 @@ describe('Plan/Export display isolation', () => {
       const s = useUIStore.getState();
       expect(s.appMode).toBe(mode);
       expect(s.geometryMode).toBe('closureAdjusted');
-      expect(colorModeOf(s)).toBe('section');
+      expect(colorModeOf(s)).toBe('line');
       expect(s.showDepthGradient).toBe(false);
       expect(s.showDistanceGradient).toBe(false);
       expect(s.showIssueSeverity).toBe(false);
@@ -1111,7 +1111,7 @@ describe('Plan/Export display isolation', () => {
 });
 
 describe('Placement mode forces stations visible (#518)', () => {
-  const sectionData = { name: 'S', surveyor: null, date: null, color: '#fff', direction: 'in', quality: 1, shots: [] };
+  const lineData = { name: 'S', surveyor: null, date: null, color: '#fff', direction: 'in', quality: 1, shots: [] };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1120,7 +1120,7 @@ describe('Placement mode forces stations visible (#518)', () => {
 
   it('turns stations on when a placement starts', () => {
     expect(useUIStore.getState().showStations).toBe(false);
-    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    useUIStore.getState().startPlacementMode(lineData as never, 0);
     // MapCanvas cancels an active placement whenever showStations is false, so a
     // placement that started with the toggle off died before the first click.
     expect(useUIStore.getState().showStations).toBe(true);
@@ -1128,7 +1128,7 @@ describe('Placement mode forces stations visible (#518)', () => {
   });
 
   it('does NOT persist the forcing to the saved display settings', async () => {
-    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    useUIStore.getState().startPlacementMode(lineData as never, 0);
     await new Promise((r) => setTimeout(r, 20));
     // A prerequisite of a transient mode is not a preference: `toggleDisplay`
     // would have written it through `saveDisplaySetting`.
@@ -1145,7 +1145,7 @@ describe('Placement mode forces stations visible (#518)', () => {
   });
 
   it('leaves stations on when the placement ends, like every other mode exit', () => {
-    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    useUIStore.getState().startPlacementMode(lineData as never, 0);
     useUIStore.getState().cancelPlacementMode();
     // One-way, exactly as the gas exit and the measure clear are: re-hiding them
     // would take away the thing the user just placed against.

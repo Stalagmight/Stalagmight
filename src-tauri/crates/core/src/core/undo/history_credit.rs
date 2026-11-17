@@ -5,7 +5,7 @@ use super::history_view::{FieldChange, PreviewData};
 use super::{ShotCreditChange, UndoData, UndoEntry};
 use crate::core::Command;
 use crate::models::{
-    dedupe_people, join_names, CreditEdit, CreditEditKind, Person, SectionId, SurveyCredit,
+    dedupe_people, join_names, CreditEdit, CreditEditKind, Person, LineId, SurveyCredit,
 };
 
 /// Longest name list a preview row shows, in chars.
@@ -92,17 +92,17 @@ pub(super) fn credit_preview(edit: &CreditEdit, changes: &[ShotCreditChange]) ->
     }
 }
 
-/// The `values_json` a legacy section-metadata edit's preview reads: the
+/// The `values_json` a legacy line-metadata edit's preview reads: the
 /// recorded other fields, plus the surveyor names and earliest date the shots
 /// carried before.
-pub(super) fn legacy_section_values(
+pub(super) fn legacy_line_values(
     changes: &[ShotCreditChange],
-    section_values: Option<&(SectionId, String)>,
+    line_values: Option<&(LineId, String)>,
 ) -> String {
-    let mut prev = section_values
+    let mut prev = line_values
         .and_then(|(_, json)| serde_json::from_str::<serde_json::Value>(json).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    // A shot-less section recorded its own previous pair in the values.
+    // A shot-less line recorded its own previous pair in the values.
     if changes.is_empty() {
         return prev.to_string();
     }

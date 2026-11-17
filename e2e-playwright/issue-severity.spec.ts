@@ -2,14 +2,14 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
   getShotScreenPositions,
   getStationScreenPositions,
   waitForDrawnShots,
   readCanvasPixel,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -23,7 +23,7 @@ import {
  * no `survey-shots` / `survey-stations` layer to read a `line-color` /
  * `circle-color` paint off and no per-feature `colorIndex` to resolve through it.
  * The oracle is the PAINTED PIXEL, which also restores per-feature identity for
- * free (the drawn-geometry hook carries sectionId / shotId / stationIndex), so the
+ * free (the drawn-geometry hook carries lineId / shotId / stationIndex), so the
  * old geometry-matching against merged vector-tile groups is gone.
  *
  * Severity palette (fixed, themeColors): error #ef4444, warning #eab308,
@@ -36,8 +36,8 @@ const SEV_ERROR = '#ef4444';
 const SEV_WARNING = '#eab308';
 const SEV_CLEAR = '#22c55e';
 
-/** One section, 3 shots → 4 stations (idx 0..3). shot i joins station i and i+1. */
-const sectionSeeds: SectionSeed[] = [
+/** One line, 3 shots → 4 stations (idx 0..3). shot i joins station i and i+1. */
+const lineSeeds: LineSeed[] = [
   {
     name: 'Severity A',
     direction: 'in',
@@ -61,38 +61,38 @@ async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
 async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
   const colorKeys = ['showDepthGradient', 'showDistanceGradient', 'showIssueSeverity'];
   const before = await isToggleOn(page, toggleKey);
-  // Color modes are single-select: turn one OFF by selecting Section, not by re-clicking the pill.
+  // Color modes are single-select: turn one OFF by selecting Line, not by re-clicking the pill.
   if (before && colorKeys.includes(toggleKey)) {
-    await page.locator('[data-testid="display-color-section"]').click();
+    await page.locator('[data-testid="display-color-line"]').click();
   } else {
     await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).click();
   }
   await expect.poll(async () => isToggleOn(page, toggleKey), { timeout: 2000 }).not.toBe(before);
 }
 
-async function getSectionIds(page: Page): Promise<number[]> {
+async function getLineIds(page: Page): Promise<number[]> {
   return page.evaluate(() => {
     const stores = (window as unknown as {
-      __E2E_TEST__?: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } } };
+      __E2E_TEST__?: { projectStore: { getState: () => { project: { lines: Array<{ id: number }> } | null } } };
     }).__E2E_TEST__;
-    return stores?.projectStore.getState().project?.sections.map((s) => s.id) ?? [];
+    return stores?.projectStore.getState().project?.lines.map((s) => s.id) ?? [];
   });
 }
 
-async function getShotIds(page: Page, sectionId: number): Promise<number[]> {
+async function getShotIds(page: Page, lineId: number): Promise<number[]> {
   return page.evaluate((secId) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore: { getState: () => { project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null } };
+        projectStore: { getState: () => { project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } | null } };
       };
     }).__E2E_TEST__;
-    const section = stores?.projectStore.getState().project?.sections.find((s) => s.id === secId);
-    return section?.shots.map((shot) => shot.id) ?? [];
-  }, sectionId);
+    const line = stores?.projectStore.getState().project?.lines.find((s) => s.id === secId);
+    return line?.shots.map((shot) => shot.id) ?? [];
+  }, lineId);
 }
 
 interface MockWarning {
-  sectionId: number;
+  lineId: number;
   shotId: number;
   shotIndex: number;
   code: string;
@@ -163,7 +163,7 @@ function hexRgb(hex: string): [number, number, number] {
 /**
  * Whether a painted sample is the given palette color. A tolerance keeps the
  * comparison honest without being brittle: the severity palette entries are far
- * apart from each other and from the section blue, so nothing else lands within it.
+ * apart from each other and from the line blue, so nothing else lands within it.
  */
 function isColor(px: PixelRgba | undefined, hex: string, tolerance = 10): boolean {
   if (!px) return false;
@@ -208,7 +208,7 @@ async function shotColorsById(page: Page): Promise<Record<number, PixelRgba>> {
 
 /**
  * Painted FILL of every drawn station, keyed by stationIndex (the seed is
- * single-section, so station_index is unique, keeping the original keying). The
+ * single-line, so station_index is unique, keeping the original keying). The
  * center pixel of a station disc is its fill; the stroke is a ring around it.
  */
 async function stationColorsByIndex(page: Page): Promise<Record<number, PixelRgba>> {
@@ -223,7 +223,7 @@ test.describe('Issue Severity coloring (#22)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Issue Severity Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
     await waitForDrawnShots(page, 3);
     await zoomIn(page);
@@ -233,7 +233,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await openDisplayMenu(page);
     expect(await isToggleOn(page, 'showIssueSeverity')).toBe(false);
 
-    // Baseline: section colors, not the clear-green severity color.
+    // Baseline: line colors, not the clear-green severity color.
     const shotsBefore = await shotColorsById(page);
     expect(Object.values(shotsBefore).some((c) => !isColor(c, SEV_CLEAR))).toBe(true);
 
@@ -252,7 +252,7 @@ test.describe('Issue Severity coloring (#22)', () => {
       return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
-    // Off ⇒ section colors return (no longer all green).
+    // Off ⇒ line colors return (no longer all green).
     await toggleDisplayOption(page, 'showIssueSeverity');
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
@@ -261,15 +261,15 @@ test.describe('Issue Severity coloring (#22)', () => {
   });
 
   test('error/warning issues color the right shots and propagate to endpoint stations', async ({ page }) => {
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIds(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIds(page, lineId);
     expect(shotIds.length).toBe(3);
 
     await injectWarnings(page, [
-      { sectionId, shotId: shotIds[0]!, shotIndex: 0, code: 'ZERO_LENGTH', message: 'err', severity: 'error', isResolved: false },
-      { sectionId, shotId: shotIds[1]!, shotIndex: 1, code: 'SHORT_SHOT', message: 'warn', severity: 'warning', isResolved: false },
+      { lineId, shotId: shotIds[0]!, shotIndex: 0, code: 'ZERO_LENGTH', message: 'err', severity: 'error', isResolved: false },
+      { lineId, shotId: shotIds[1]!, shotIndex: 1, code: 'SHORT_SHOT', message: 'warn', severity: 'warning', isResolved: false },
       // Resolved error on the last shot must NOT color it.
-      { sectionId, shotId: shotIds[2]!, shotIndex: 2, code: 'ZERO_LENGTH', message: 'err', severity: 'error', isResolved: true },
+      { lineId, shotId: shotIds[2]!, shotIndex: 2, code: 'ZERO_LENGTH', message: 'err', severity: 'error', isResolved: true },
     ]);
 
     await openDisplayMenu(page);
@@ -321,7 +321,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     });
     expect(await issueSeverityFlag(page)).toBe(false);
 
-    // Baseline (Details tab): section colors, not the clear-green severity color.
+    // Baseline (Details tab): line colors, not the clear-green severity color.
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
@@ -353,7 +353,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await expect(page.locator('[data-testid="display-toggle-showIssueSeverity"]')).toHaveAttribute('aria-pressed', 'false');
     await page.keyboard.press('Escape');
 
-    // Leaving recomputes from the saved toggles: section colors, no legend.
+    // Leaving recomputes from the saved toggles: line colors, no legend.
     await page.getByTestId('detail-tab-details').click();
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
@@ -386,7 +386,7 @@ test.describe('Issue Severity coloring (#22)', () => {
  * and 3. Their colours are the ramp stops (displayColor.test.ts pins the bytes).
  */
 const RAMP = ['#22c55e', '#86bc33', '#eab308', '#ed7c26', '#ef4444'];
-const gradientSeeds: SectionSeed[] = [
+const gradientSeeds: LineSeed[] = [
   {
     name: 'Gradient',
     direction: 'in',
@@ -404,15 +404,15 @@ test.describe('Survey Issues gradient', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Gradient Test');
-    await seedProjectWithSections(page, gradientSeeds);
+    await seedProjectWithLines(page, gradientSeeds);
     await waitForMapIdle(page);
     await waitForDrawnShots(page, 5);
     await zoomIn(page);
   });
 
   test('a shot is painted by how far its readings disagree', async ({ page }) => {
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIds(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIds(page, lineId);
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showIssueSeverity');
     await expect.poll(async () => {
@@ -422,12 +422,12 @@ test.describe('Survey Issues gradient', () => {
   });
 
   test('the colour cog regrades by its levels, drops a switched-off error, and never touches the warnings', async ({ page }) => {
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIds(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIds(page, lineId);
     // The validator's own azimuth warnings for the 40 and 60 degree shots (over
     // the 20 degree threshold); the mock does not validate, so inject them.
     const azWarnings: MockWarning[] = [3, 4].map((i) => ({
-      sectionId, shotId: shotIds[i]!, shotIndex: i, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: false,
+      lineId, shotId: shotIds[i]!, shotIndex: i, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: false,
     }));
     await injectWarnings(page, azWarnings);
     await openDisplayMenu(page);
@@ -483,8 +483,8 @@ test.describe('Survey Issues gradient', () => {
   });
 
   test('a palette picked in the colour cog paints the same scale', async ({ page }) => {
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIds(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIds(page, lineId);
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showIssueSeverity');
     await page.keyboard.press('Escape');
@@ -502,10 +502,10 @@ test.describe('Survey Issues gradient', () => {
   });
 
   test('ignoring the azimuth warning drops that delta from the colour', async ({ page }) => {
-    const sectionId = (await getSectionIds(page))[0]!;
-    const shotIds = await getShotIds(page, sectionId);
+    const lineId = (await getLineIds(page))[0]!;
+    const shotIds = await getShotIds(page, lineId);
     await injectWarnings(page, [
-      { sectionId, shotId: shotIds[3]!, shotIndex: 3, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: true },
+      { lineId, shotId: shotIds[3]!, shotIndex: 3, code: 'AZIMUTH_DEVIATION', message: 'az', severity: 'warning', isResolved: true },
     ]);
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showIssueSeverity');

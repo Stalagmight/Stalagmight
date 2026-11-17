@@ -9,12 +9,12 @@ use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
 use crate::models::placement_suggest::{
-    suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
-    ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
+    suggest_all_placements, suggest_placements, CrossLineSuggestion, ExistingLine,
+    ImportLineForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
 };
 use crate::models::{AzimuthReference, ShotData};
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
-use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
+use crate::parsers::gpx::{GpxFile, GpxLinePlacement};
 use crate::parsers::tml::{TmlFile, TmlImportOptions, TmlRootPlacement};
 use crate::parsers::walls::{WallsFile, WallsImportOptions};
 use crate::parsers::DmpFile;
@@ -103,20 +103,20 @@ pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> Comman
     state.track_imported_file(hash)
 }
 
-/// Batch-check which section content hashes have already been imported.
+/// Batch-check which line content hashes have already been imported.
 /// Returns a parallel Vec<bool> (true = already imported).
 #[tauri::command]
-pub fn check_section_hashes(
+pub fn check_line_hashes(
     state: State<'_, AppState>,
     hashes: Vec<String>,
 ) -> Result<Vec<bool>, String> {
     tracing::debug!(
         count = hashes.len(),
-        purpose = "detect duplicate section imports",
-        "Checking section content hashes"
+        purpose = "detect duplicate line imports",
+        "Checking line content hashes"
     );
     state
-        .check_section_hashes(&hashes)
+        .check_line_hashes(&hashes)
         .map_err(|e| e.to_string())
 }
 
@@ -176,7 +176,7 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
 ///   left the session half-broken reported as perfectly clean.
 ///
 /// The import's own warnings are EXTENDED, never replaced: per-shot validation
-/// warnings from `execute_import_sections` are already in there.
+/// warnings from `execute_import_lines` are already in there.
 ///
 /// A successful save's warnings additionally go onto the RECEIPT, leading. The
 /// `CommandResult.warnings` copy alone reaches nobody: the frontend keeps only
@@ -224,48 +224,48 @@ fn merge_deferred_save_outcome(
     ))
 }
 
-/// Import multiple sections as a single atomic undo/redo unit.
+/// Import multiple lines as a single atomic undo/redo unit.
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
 ///
-/// `source_label` / `source_file_name` / `sections_found` are additive
+/// `source_label` / `source_file_name` / `lines_found` are additive
 /// provenance for the import receipt - today only the MNemo DMP wizard passes
 /// them (a later shard). All three are optional and `serde`-defaulted, so
 /// existing callers (and the Playwright IPC mock) are unaffected, and the
-/// base receipt `execute_import_sections` already attached is left at its
+/// base receipt `execute_import_lines` already attached is left at its
 /// defaults when none are provided.
 #[tauri::command]
-pub fn import_sections(
+pub fn import_lines(
     state: State<'_, AppState>,
-    sections: Vec<crate::models::ImportSectionConfig>,
+    lines: Vec<crate::models::ImportLineConfig>,
     file_hash: Option<String>,
-    section_hashes: Option<Vec<String>>,
+    line_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
     virtual_shot_mode: Option<VirtualShotMode>,
     source_label: Option<String>,
     source_file_name: Option<String>,
-    sections_found: Option<u32>,
+    lines_found: Option<u32>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
-        section_count = sections.len(),
+        line_count = lines.len(),
         update_count = updates.len(),
         purpose = "batch import with overlap updates",
-        "import_sections called",
+        "import_lines called",
     );
-    let mut result = state.execute_import_sections(
-        sections,
+    let mut result = state.execute_import_lines(
+        lines,
         Vec::new(),
         file_hash,
-        section_hashes.unwrap_or_default(),
+        line_hashes.unwrap_or_default(),
         updates,
         virtual_shot_mode.unwrap_or_default(),
     );
 
-    if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
+    if source_label.is_some() || source_file_name.is_some() || lines_found.is_some() {
         if let Some(receipt) = result.import_receipt.as_mut() {
             receipt.source_format = source_label.unwrap_or_else(|| "MNemo DMP".to_string());
             receipt.file_name = source_file_name.unwrap_or_default();
-            receipt.sections_found = sections_found.unwrap_or(0);
+            receipt.lines_found = lines_found.unwrap_or(0);
         }
     }
 
@@ -274,8 +274,8 @@ pub fn import_sections(
 
 /// Append another `.stalx`'s survey into the OPEN project (#674) as one undo
 /// step, refusing (nothing changed) with no project open, the open project's
-/// own file, or an unreadable file. The result carries `section_ids` - exactly
-/// the added sections, the orphan-placement dialog's input - and an
+/// own file, or an unreadable file. The result carries `line_ids` - exactly
+/// the added lines, the orphan-placement dialog's input - and an
 /// `import_receipt`. Funnels through `finalize_deferred_import` like every
 /// import, so an add into a never-saved project makes it real on disk.
 ///
@@ -338,7 +338,7 @@ pub fn execute_tml_import(
     include_excluded: bool,
     comments_on_stations: bool,
     virtual_shot_mode: Option<VirtualShotMode>,
-    selected_sections: Option<Vec<u32>>,
+    selected_lines: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
 ) -> CommandResult {
     tracing::info!(
@@ -368,15 +368,15 @@ pub fn execute_tml_import(
     let opts = TmlImportOptions {
         include_excluded,
         comments_on_stations,
-        // `None` ⇒ import every section; `Some(list)` ⇒ only the chosen section
-        // indices (into the preview's `TmlFile::sections`, which the dialog
+        // `None` ⇒ import every line; `Some(list)` ⇒ only the chosen line
+        // indices (into the preview's `TmlFile::lines`, which the dialog
         // lists 1:1). An empty list imports nothing and lands the empty
         // receipt, exactly like a file whose every shot was filtered out.
-        selected_sections: selected_sections.map(|v| v.into_iter().collect()),
+        selected_lines: selected_lines.map(|v| v.into_iter().collect()),
         // `None` ⇒ the pre-#425 silent default (the file's GPS, else origin).
         root_placement,
     };
-    let (sections, closures, converter_warnings) =
+    let (lines, closures, converter_warnings) =
         match crate::parsers::tml::convert_tml_with_options(&tml, &opts) {
             Ok(result) => result,
             Err(e) => {
@@ -393,13 +393,13 @@ pub fn execute_tml_import(
 
     tracing::info!(
         path = ?path,
-        section_count = sections.len(),
+        line_count = lines.len(),
         closure_count = closures.len(),
         purpose = "import Ariane TML/TMLU",
         "Converted TML to import configs, executing import"
     );
 
-    let sections_found = tml.sections.len() as u32;
+    let lines_found = tml.lines.len() as u32;
     let unit_conversion = tml_unit_conversion_note(tml.unit);
 
     // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
@@ -416,7 +416,7 @@ pub fn execute_tml_import(
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
     let mut result = state.execute_tml_import_sections(
-        sections,
+        lines,
         closures,
         file_hash,
         Vec::new(),
@@ -430,7 +430,7 @@ pub fn execute_tml_import(
         &mut result,
         "Ariane TML",
         &path,
-        sections_found,
+        lines_found,
         unit_conversion,
         converter_warnings,
     );
@@ -501,7 +501,7 @@ pub fn execute_compass_import(
         apply_corrections,
         comments_on_stations,
     };
-    let (sections, closures, warnings) =
+    let (lines, closures, warnings) =
         match crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts) {
             Ok(result) => result,
             Err(e) => {
@@ -522,19 +522,19 @@ pub fn execute_compass_import(
 
     tracing::info!(
         path = ?path,
-        section_count = sections.len(),
+        line_count = lines.len(),
         closure_count = closures.len(),
         warning_count = warnings.len(),
         purpose = "import Compass",
         "Converted Compass to import configs, executing import"
     );
 
-    let (sections_found, length_unit) = crate::parsers::compass::preview_scalars(&parsed);
+    let (lines_found, length_unit) = crate::parsers::compass::preview_scalars(&parsed);
     let unit_conversion = compass_unit_conversion_note(length_unit.as_deref());
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_import_sections(
-        sections,
+    let mut result = state.execute_import_lines(
+        lines,
         closures,
         file_hash,
         Vec::new(),
@@ -551,7 +551,7 @@ pub fn execute_compass_import(
         &mut result,
         "Compass",
         &path,
-        sections_found,
+        lines_found,
         unit_conversion,
         warnings,
     );
@@ -591,7 +591,7 @@ pub fn execute_gpx_import(
     import_waypoints: bool,
     import_tracks: bool,
     import_routes: bool,
-    section_placements: Vec<GpxSectionPlacement>,
+    line_placements: Vec<GpxLinePlacement>,
     depth_inverted: bool,
 ) -> CommandResult {
     tracing::info!(
@@ -616,12 +616,12 @@ pub fn execute_gpx_import(
         }
     };
 
-    let sections = match crate::parsers::gpx::convert_gpx_to_import_configs(
+    let lines = match crate::parsers::gpx::convert_gpx_to_import_configs(
         &gpx,
         import_waypoints,
         import_tracks,
         import_routes,
-        &section_placements,
+        &line_placements,
         depth_inverted,
     ) {
         Ok(s) => s,
@@ -638,12 +638,12 @@ pub fn execute_gpx_import(
 
     tracing::info!(
         path = ?path,
-        section_count = sections.len(),
+        line_count = lines.len(),
         purpose = "import GPX",
         "Converted GPX to import configs, executing import"
     );
 
-    let sections_found = sections.len() as u32;
+    let lines_found = lines.len() as u32;
 
     // Auto, not a per-file override: the GPX dialog has no mode control, so
     // there is nothing to pass through - but the chain rule still has to run.
@@ -651,8 +651,8 @@ pub fn execute_gpx_import(
     // classifier can promote it, and skipping the pass here (this path used
     // to call `finalize_deferred_import` directly) left a GPS surface track
     // tying two sumps together permanently excluded from the survey graph.
-    let mut result = state.execute_import_sections(
-        sections,
+    let mut result = state.execute_import_lines(
+        lines,
         Vec::new(),
         file_hash,
         Vec::new(),
@@ -660,33 +660,33 @@ pub fn execute_gpx_import(
         VirtualShotMode::Auto,
     );
 
-    decorate_receipt(&mut result, "GPX", &path, sections_found, None, Vec::new());
+    decorate_receipt(&mut result, "GPX", &path, lines_found, None, Vec::new());
 
     finalize_deferred_import(state.inner(), result)
 }
 
-/// Suggest placement positions for an import section by detecting reference shot overlap.
+/// Suggest placement positions for an import line by detecting reference shot overlap.
 #[tauri::command]
 pub fn suggest_import_placement(
     state: State<'_, AppState>,
     shots: Vec<ShotData>,
     // `azimuth_reference` is what `shots` are measured against (#438). The
-    // caller has it on the `ImportSectionConfig` it is about to send; `None`
+    // caller has it on the `ImportLineConfig` it is about to send; `None`
     // falls back to the project default, which is only right when the importer
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
     let project = state.get_project_state().ok_or("No project open")?;
 
-    let existing_sections: Vec<ExistingSection> = project
-        .sections
+    let existing_lines: Vec<ExistingLine> = project
+        .lines
         .iter()
-        .map(|s| ExistingSection {
+        .map(|s| ExistingLine {
             id: s.id,
             name: s
                 .name
                 .clone()
-                .unwrap_or_else(|| format!("Section {}", s.id)),
+                .unwrap_or_else(|| format!("Line {}", s.id)),
             shots: s.shots.clone(),
             azimuth_reference: project.azimuth_reference_for(s),
         })
@@ -695,85 +695,85 @@ pub fn suggest_import_placement(
     let config = state.get_config();
     Ok(suggest_placements(
         &shots,
-        // The section does not exist yet, so its reference is whatever the
+        // The line does not exist yet, so its reference is whatever the
         // importer declared for it; the project default is the fallback (#438).
         azimuth_reference
             .map(AzimuthReference::sanitised)
             .or(project.default_azimuth_reference)
             .unwrap_or_default(),
-        &existing_sections,
+        &existing_lines,
         &config.placement_suggestion,
     ))
 }
 
-/// Suggest placements for ALL import sections against BOTH existing project
-/// sections AND each other (import-to-import). Returns a flat list sorted by score.
+/// Suggest placements for ALL import lines against BOTH existing project
+/// lines AND each other (import-to-import). Returns a flat list sorted by score.
 #[tauri::command]
 pub fn suggest_all_import_placements(
     state: State<'_, AppState>,
-    import_sections: Vec<ImportSectionForSuggestion>,
-) -> Result<Vec<CrossSectionSuggestion>, String> {
-    let existing_sections: Vec<ExistingSection> = match state.get_project_state() {
+    import_lines: Vec<ImportLineForSuggestion>,
+) -> Result<Vec<CrossLineSuggestion>, String> {
+    let existing_lines: Vec<ExistingLine> = match state.get_project_state() {
         Some(project) => project
-            .sections
+            .lines
             .iter()
-            .map(|s| ExistingSection {
+            .map(|s| ExistingLine {
                 id: s.id,
                 name: s
                     .name
                     .clone()
-                    .unwrap_or_else(|| format!("Section {}", s.id)),
+                    .unwrap_or_else(|| format!("Line {}", s.id)),
                 shots: s.shots.clone(),
                 azimuth_reference: project.azimuth_reference_for(s),
             })
             .collect(),
         None => Vec::new(),
     };
-    // Only the FALLBACK: each section carries its own reference and is scored
+    // Only the FALLBACK: each line carries its own reference and is scored
     // in it (#438).
     let fallback_reference = state
         .get_project_state()
         .and_then(|p| p.default_azimuth_reference)
         .unwrap_or_default();
-    let import_sections: Vec<ImportSectionForSuggestion> = import_sections
+    let import_lines: Vec<ImportLineForSuggestion> = import_lines
         .into_iter()
-        .map(|mut section| {
+        .map(|mut line| {
             // Deserialized straight off the wire: re-impose the type's
             // invariants before anything computes with it.
-            section.azimuth_reference = section.azimuth_reference.map(AzimuthReference::sanitised);
-            section
+            line.azimuth_reference = line.azimuth_reference.map(AzimuthReference::sanitised);
+            line
         })
         .collect();
 
     let config = state.get_config();
     Ok(suggest_all_placements(
-        &import_sections,
+        &import_lines,
         fallback_reference,
-        &existing_sections,
+        &existing_lines,
         &config.placement_suggestion,
     ))
 }
 
-/// Suggest placements for orphaned sections' leaf ends against datum-anchored
-/// sections. Orphaned sections are those in connected components (via merges)
+/// Suggest placements for orphaned lines' leaf ends against datum-anchored
+/// lines. Orphaned lines are those in connected components (via merges)
 /// with no zero datum; an orphan the import touched may go onto any anchored
-/// section, a pre-existing one only onto a newly imported anchored section
+/// line, a pre-existing one only onto a newly imported anchored line
 /// (see `Project::suggest_orphan_placements`).
 ///
 /// Async, with the matching on a blocking thread as `add_project_file` does:
-/// an orphan from the import is matched against every anchored section of the
+/// an orphan from the import is matched against every anchored line of the
 /// open project, which on a large survey is too long to hold the main thread.
 #[tauri::command]
 pub async fn suggest_orphan_placements<R: tauri::Runtime>(
     app_handle: AppHandle<R>,
-    newly_imported_section_ids: Vec<u32>,
+    newly_imported_line_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let project = state.get_project_state().ok_or("No project open")?;
         let config = state.get_config();
         Ok(project
-            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion))
+            .suggest_orphan_placements(&newly_imported_line_ids, &config.placement_suggestion))
     })
     .await
     .unwrap_or_else(|join_error| {
@@ -783,17 +783,17 @@ pub async fn suggest_orphan_placements<R: tauri::Runtime>(
     })
 }
 
-/// Count sections not connected to a zero datum, restricted to components
-/// touched by `newly_imported_section_ids`. Used by the import dialogs to add
+/// Count lines not connected to a zero datum, restricted to components
+/// touched by `newly_imported_line_ids`. Used by the import dialogs to add
 /// an info line to the import receipt when the orphan-placement pass produced
 /// no suggestions (#446).
 #[tauri::command]
-pub fn count_unanchored_sections(
+pub fn count_unanchored_lines(
     state: State<'_, AppState>,
-    newly_imported_section_ids: Vec<u32>,
+    newly_imported_line_ids: Vec<u32>,
 ) -> Result<u32, String> {
     let project = state.get_project_state().ok_or("No project open")?;
-    Ok(project.count_unanchored_sections(&newly_imported_section_ids))
+    Ok(project.count_unanchored_lines(&newly_imported_line_ids))
 }
 
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
@@ -859,7 +859,7 @@ pub fn execute_walls_import(
         // the parser's survey order).
         selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
     };
-    let (sections, closures, warnings) =
+    let (lines, closures, warnings) =
         match crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts) {
             Ok(result) => result,
             Err(e) => {
@@ -880,19 +880,19 @@ pub fn execute_walls_import(
 
     tracing::info!(
         path = ?path,
-        section_count = sections.len(),
+        line_count = lines.len(),
         closure_count = closures.len(),
         warning_count = warnings.len(),
         purpose = "import Walls",
         "Converted Walls to import configs, executing import"
     );
 
-    let (sections_found, any_feet_units) = crate::parsers::walls::preview_scalars(&parsed);
+    let (lines_found, any_feet_units) = crate::parsers::walls::preview_scalars(&parsed);
     let unit_conversion = walls_unit_conversion_note(any_feet_units);
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_import_sections(
-        sections,
+    let mut result = state.execute_import_lines(
+        lines,
         closures,
         file_hash,
         Vec::new(),
@@ -909,7 +909,7 @@ pub fn execute_walls_import(
         &mut result,
         "Walls",
         &path,
-        sections_found,
+        lines_found,
         unit_conversion,
         warnings,
     );
@@ -935,8 +935,8 @@ mod receipt_tests {
         CommandResult::success().with_import_receipt(ImportReceipt {
             source_format: String::new(),
             file_name: String::new(),
-            sections_found: 0,
-            sections_imported: 3,
+            lines_found: 0,
+            lines_imported: 3,
             shot_count: 12,
             closures_requested: 1,
             closures_created: 1,
@@ -956,20 +956,20 @@ mod receipt_tests {
             Path::new("/tmp/cave.tml"),
             5,
             Some("Lengths converted from feet to meters".to_string()),
-            vec!["1 section had no shots after filtering and was dropped".to_string()],
+            vec!["1 line had no shots after filtering and was dropped".to_string()],
         );
         let receipt = result
             .import_receipt
             .expect("receipt must survive decoration");
         assert_eq!(receipt.source_format, "Ariane TML");
         assert_eq!(receipt.file_name, "cave.tml");
-        assert_eq!(receipt.sections_found, 5);
+        assert_eq!(receipt.lines_found, 5);
         assert_eq!(
             receipt.unit_conversion.as_deref(),
             Some("Lengths converted from feet to meters")
         );
-        // Base counts from execute_import_sections are untouched.
-        assert_eq!(receipt.sections_imported, 3);
+        // Base counts from execute_import_lines are untouched.
+        assert_eq!(receipt.lines_imported, 3);
         assert_eq!(receipt.shot_count, 12);
         assert_eq!(receipt.warnings.len(), 1);
     }
@@ -1022,17 +1022,17 @@ mod receipt_tests {
             Path::new("/tmp/cave.tml"),
             2,
             None,
-            vec!["2 sections had no shots after filtering and were dropped".to_string()],
+            vec!["2 lines had no shots after filtering and were dropped".to_string()],
         );
         let receipt = result
             .import_receipt
             .expect("an empty import must still report a receipt");
-        assert_eq!(receipt.sections_imported, 0);
+        assert_eq!(receipt.lines_imported, 0);
         assert_eq!(receipt.shot_count, 0);
-        assert_eq!(receipt.sections_found, 2);
+        assert_eq!(receipt.lines_found, 2);
         assert_eq!(
             receipt.warnings,
-            vec!["2 sections had no shots after filtering and were dropped".to_string()]
+            vec!["2 lines had no shots after filtering and were dropped".to_string()]
         );
     }
 
@@ -1072,7 +1072,7 @@ mod receipt_tests {
     #[test]
     fn a_degraded_deferred_save_leads_the_receipt() {
         let import_result = CommandResult::success().with_import_receipt(ImportReceipt {
-            warnings: vec!["1 section had no shots after filtering".to_string()],
+            warnings: vec!["1 line had no shots after filtering".to_string()],
             ..ImportReceipt::empty()
         });
 
@@ -1084,7 +1084,7 @@ mod receipt_tests {
             receipt.warnings,
             vec![
                 "File saved, but database could not be reopened.".to_string(),
-                "1 section had no shots after filtering".to_string(),
+                "1 line had no shots after filtering".to_string(),
             ]
         );
     }

@@ -12,7 +12,7 @@
 //! - station elevations are integrated from `length * sin(inclination)` along the
 //!   station graph (anchored at the `.MAK` fixed station's UTM elevation, or 0)
 //!   and stored as Stalagmight absolute depth (positive = down);
-//! - the station-name graph is split into linear sections joined by
+//! - the station-name graph is split into linear lines joined by
 //!   `FromImporting` merges + loop closures;
 //! - a `.MAK` fixed station becomes a GPS zero datum (UTM → WGS84 via `proj4rs`).
 
@@ -30,7 +30,7 @@ use compass_data::{
 };
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
-use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
+use crate::models::line::{ImportClosure, ImportPlacement, ImportLineConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 use crate::parsers::encoding::{read_latin1, reject_bom};
@@ -41,8 +41,8 @@ const MISSING_VALUE_THRESHOLD: f64 = 990.0;
 /// Angles at or below this are Compass "missing data" sentinels.
 const MISSING_ANGLE_THRESHOLD: f64 = -900.0;
 
-/// Section colors cycled across imported sections (matches the app palette feel).
-const SECTION_COLORS: &[&str] = &[
+/// Line colors cycled across imported lines (matches the app palette feel).
+const LINE_COLORS: &[&str] = &[
     "#4ecdc4", "#ff6b6b", "#ffd93d", "#6bcB77", "#4d96ff", "#c780fa", "#ff9f45", "#9bdeac",
 ];
 
@@ -644,7 +644,7 @@ struct SurveyCtx {
     ///
     /// Replaces the old `declination` / `convergence_angle` pair, which
     /// `shot_geometry` folded into every azimuth. The readings now land in the
-    /// project exactly as the file recorded them and this rides on the section.
+    /// project exactly as the file recorded them and this rides on the line.
     /// The correction is the declination ALONE: the UTM grid convergence is
     /// reported as a warning instead of being folded in, because geometry is
     /// drawn in true north and Compass's own display frame is the grid.
@@ -1092,8 +1092,8 @@ fn inclination_to_degrees(raw: f64, units: &InclinationUnits, slope_length_raw: 
 }
 
 /// The survey's declination and where the number came from (#438: the
-/// provenance is recorded on the section, so the UI can explain the value and a
-/// later policy change knows which sections it may recompute).
+/// provenance is recorded on the line, so the UI can explain the value and a
+/// later policy change knows which lines it may recompute).
 fn survey_declination(
     mode: DeclinationMode,
     survey: &Survey,
@@ -1293,7 +1293,7 @@ fn resolve_anchor(parsed: &ParsedCompass, warnings: &mut Vec<String>) -> Option<
     })
 }
 
-/// Kept shot with its survey context, retained for graph + section building.
+/// Kept shot with its survey context, retained for graph + line building.
 struct KeptSurvey<'a> {
     survey: &'a Survey,
     ctx: SurveyCtx,
@@ -1388,7 +1388,7 @@ fn build_elevation(
 pub fn convert_compass_to_import_configs(
     parsed: &ParsedCompass,
     opts: &CompassImportOptions,
-) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+) -> Result<(Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>)> {
     let mut warnings = parsed.warnings.clone();
 
     let anchor = resolve_anchor(parsed, &mut warnings);
@@ -1445,7 +1445,7 @@ pub fn convert_compass_to_import_configs(
             }
             let (_, length_m, inclination) = shot_geometry(shot, &ctx);
             if length_m <= 0.0 {
-                // Zero-length connectors can't be stored as section shots.
+                // Zero-length connectors can't be stored as line shots.
                 // Dropping a shot removes its connectivity, so never do it
                 // silently (#275).
                 warnings.push(format!(
@@ -1479,7 +1479,7 @@ pub fn convert_compass_to_import_configs(
     let depth_of = |station: &str| depth_ref - elevation.get(station).copied().unwrap_or(0.0);
 
     // Pass 2a: split every kept survey into head-to-tail chains and build the
-    // per-section data (names, shots, label). Placement is decided in pass 2b
+    // per-line data (names, shots, label). Placement is decided in pass 2b
     // by a spanning-tree walk over chain connectivity, so it doesn't depend on
     // survey/file order (the previous one-pass first-occurrence registration
     // mis-placed every chain whose shared station was first defined in a
@@ -1487,14 +1487,14 @@ pub fn convert_compass_to_import_configs(
     // private real-cave corpus the spanning-tree placement was first
     // validated against).
     struct PendingChain {
-        section_index: u32,
+        line_index: u32,
         names: Vec<String>,
         shots: Vec<ShotData>,
         station_comments: Vec<(u32, String)>,
         label: String,
         surveyor: Option<String>,
         date: chrono::NaiveDate,
-        /// The survey's north reference (#438). Per-SECTION because Compass
+        /// The survey's north reference (#438). Per-LINE because Compass
         /// declares the declination per survey and can change mode mid-file.
         azimuth_reference: AzimuthReference,
     }
@@ -1506,7 +1506,7 @@ pub fn convert_compass_to_import_configs(
             if chain.is_empty() {
                 continue;
             }
-            let section_index = chains.len() as u32;
+            let line_index = chains.len() as u32;
             let mut names: Vec<String> = Vec::with_capacity(chain.len() + 1);
             names.push(kept_survey.shots[chain[0]].from.clone());
             for &idx in chain {
@@ -1539,11 +1539,11 @@ pub fn convert_compass_to_import_configs(
                 }
             }
             chains.push(PendingChain {
-                section_index,
+                line_index,
                 names,
                 shots: shots_data,
                 station_comments,
-                label: section_label(kept_survey.survey, multi, chain_idx),
+                label: line_label(kept_survey.survey, multi, chain_idx),
                 surveyor: non_empty(&kept_survey.survey.team),
                 date: kept_survey.survey.date,
                 azimuth_reference: kept_survey.ctx.azimuth_reference,
@@ -1635,7 +1635,7 @@ pub fn convert_compass_to_import_configs(
                 {
                     placement[nb] = Some(ImportPlacement::FromImporting {
                         import_station: child_st,
-                        target_section_index: chains[parent_idx].section_index,
+                        target_line_index: chains[parent_idx].line_index,
                         target_station_index: parent_st,
                     });
                     placement_merge_station[nb] = Some(child_st);
@@ -1653,7 +1653,7 @@ pub fn convert_compass_to_import_configs(
                 placement[seed] = Some(ImportPlacement::Origin);
                 if next_root_warns {
                     warnings.push(format!(
-                        "Section '{}' starts a separate component not connected to the georeferenced survey; placed at origin",
+                        "Line '{}' starts a separate component not connected to the georeferenced survey; placed at origin",
                         chains[seed].label
                     ));
                 }
@@ -1668,18 +1668,18 @@ pub fn convert_compass_to_import_configs(
 
     // Pass 2c: emit loop closures for shared stations that aren't the
     // spanning-tree merge edge - pin each chain's other shared station to the
-    // canonical (earliest by section_index) occurrence.
+    // canonical (earliest by line_index) occurrence.
     let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
     for chain in &chains {
         for (k, name) in chain.names.iter().enumerate() {
             canonical
                 .entry(name.as_str())
                 .and_modify(|prev| {
-                    if chain.section_index < prev.0 {
-                        *prev = (chain.section_index, k as u32);
+                    if chain.line_index < prev.0 {
+                        *prev = (chain.line_index, k as u32);
                     }
                 })
-                .or_insert((chain.section_index, k as u32));
+                .or_insert((chain.line_index, k as u32));
         }
     }
     let mut closures: Vec<ImportClosure> = Vec::new();
@@ -1687,22 +1687,22 @@ pub fn convert_compass_to_import_configs(
         std::collections::HashSet::new();
     for (ci, chain) in chains.iter().enumerate() {
         let merge_st = placement_merge_station[ci];
-        let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
+        let parent_line = placement_parent[ci].map(|p| chains[p].line_index);
         for (k, name) in chain.names.iter().enumerate() {
             if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                if canon_sec == chain.section_index {
+                if canon_sec == chain.line_index {
                     continue; // This chain owns the canonical occurrence.
                 }
                 // Skip the spanning-tree merge edge for THIS chain.
-                if Some(k as u32) == merge_st && parent_section == Some(canon_sec) {
+                if Some(k as u32) == merge_st && parent_line == Some(canon_sec) {
                     continue;
                 }
-                let key = (chain.section_index, k as u32, canon_sec, canon_st);
+                let key = (chain.line_index, k as u32, canon_sec, canon_st);
                 if closure_keys.insert(key) {
                     closures.push(ImportClosure {
-                        from_section_index: chain.section_index,
+                        from_line_index: chain.line_index,
                         from_station_index: k as u32,
-                        to_section_index: canon_sec,
+                        to_line_index: canon_sec,
                         to_station_index: canon_st,
                     });
                 }
@@ -1712,12 +1712,12 @@ pub fn convert_compass_to_import_configs(
 
     // Emit configs in BFS creation order so FromImporting targets always
     // precede their dependents at create time.
-    let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
+    let mut configs: Vec<ImportLineConfig> = Vec::with_capacity(chains.len());
     for ci in creation_order {
         let chain = &chains[ci];
         let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
         // The team are the surveyors of every shot of the survey, on its date;
-        // the credit rides on the shots, so the section template stays empty.
+        // the credit rides on the shots, so the line template stays empty.
         // One allocation for the whole survey: every shot shares it
         // (`ShotData::credit`), however long the team line and the survey.
         let credit =
@@ -1733,13 +1733,13 @@ pub fn convert_compass_to_import_configs(
                 shot
             })
             .collect();
-        configs.push(ImportSectionConfig {
+        configs.push(ImportLineConfig {
             reverse: false,
-            section_index: chain.section_index,
+            line_index: chain.line_index,
             name: Some(chain.label.clone()),
             surveyor: None,
             date: None,
-            color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
+            color: LINE_COLORS[chain.line_index as usize % LINE_COLORS.len()].to_string(),
             direction: None,
             quality: 1.0,
             shots,
@@ -1758,9 +1758,9 @@ pub fn convert_compass_to_import_configs(
     Ok((configs, closures, warnings))
 }
 
-fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
+fn line_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
     // Prefer the survey name; fall back to the cave name; and if both
-    // are blank, label as "Unnamed section" so the SectionsPanel never
+    // are blank, label as "Unnamed line" so the SectionsPanel never
     // renders an empty row (Compass files with empty header lines do
     // happen - partial exports, hand-edited DATs, etc.).
     let trimmed_name = survey.name.trim();
@@ -1771,7 +1771,7 @@ fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
         if !trimmed_cave.is_empty() {
             trimmed_cave.to_string()
         } else {
-            "Unnamed section".to_string()
+            "Unnamed line".to_string()
         }
     };
     if multi {
@@ -1781,25 +1781,25 @@ fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
     }
 }
 
-/// Reorder configs so that any section referenced by a `FromImporting` placement
+/// Reorder configs so that any line referenced by a `FromImporting` placement
 /// is created before its dependent (Kahn's algorithm; cycles fall back to
 /// original order).
-fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
+fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
     if configs.len() <= 1 {
         return;
     }
     let pos_of: HashMap<u32, usize> = configs
         .iter()
         .enumerate()
-        .map(|(i, c)| (c.section_index, i))
+        .map(|(i, c)| (c.line_index, i))
         .collect();
     let dep: Vec<Option<usize>> = configs
         .iter()
         .map(|c| match &c.placement {
             ImportPlacement::FromImporting {
-                target_section_index,
+                target_line_index,
                 ..
-            } => pos_of.get(target_section_index).copied(),
+            } => pos_of.get(target_line_index).copied(),
             _ => None,
         })
         .collect();
@@ -1807,7 +1807,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
     // Ready-queue Kahn's: build a reverse-dependency adjacency list so
     // each placed config can directly enqueue the configs that were
     // waiting on it.  Replaces an outer-loop-scan-everything version
-    // that ran O(N²) for deeply-chained surveys (one section per pass
+    // that ran O(N²) for deeply-chained surveys (one line per pass
     // dependency).
     //
     // children[i] = indices of configs whose `dep` is Some(i).
@@ -1844,7 +1844,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         }
     }
 
-    let mut reordered: Vec<Option<ImportSectionConfig>> = configs.drain(..).map(Some).collect();
+    let mut reordered: Vec<Option<ImportLineConfig>> = configs.drain(..).map(Some).collect();
     for idx in order {
         if let Some(config) = reordered[idx].take() {
             configs.push(config);
@@ -1901,7 +1901,7 @@ mod tests {
             .join(name)
     }
 
-    fn total_shots(configs: &[ImportSectionConfig]) -> usize {
+    fn total_shots(configs: &[ImportLineConfig]) -> usize {
         configs.iter().map(|c| c.shots.len()).sum()
     }
 
@@ -1941,7 +1941,7 @@ mod tests {
         let anchor_config = configs
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("a section anchored by zero datum");
+            .expect("a line anchored by zero datum");
         if let ImportPlacement::ZeroDatum { station_index, .. } = anchor_config.placement {
             assert_eq!(station_index, 0);
         }
@@ -2471,14 +2471,14 @@ mod tests {
         // station_comment at station_index = shot index, and the shot's own
         // comment should be cleared.  The private fixture's first shot
         // carries an entrance note on its FROM station; this test asserts
-        // that note migrates to station 0 of the anchor section.
+        // that note migrates to station 0 of the anchor line.
         let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (promoted, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let anchor = promoted
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
+            .expect("zero datum line");
         assert!(
             anchor.shots[0].comment.is_none(),
             "first shot's comment should be promoted off the shot, got {:?}",
@@ -2495,7 +2495,7 @@ mod tests {
         );
 
         // With the option off, comments stay on the shot and station_comments
-        // is empty for the section.
+        // is empty for the line.
         let (kept_on_shots, _, _) = convert_compass_to_import_configs(
             &parsed,
             &CompassImportOptions {
@@ -2508,7 +2508,7 @@ mod tests {
         let anchor_raw = kept_on_shots
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
+            .expect("zero datum line");
         assert!(anchor_raw.station_comments.is_empty());
         assert!(
             anchor_raw.shots[0]
@@ -2521,12 +2521,12 @@ mod tests {
 
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
-    fn private_cave_every_section_connects_to_the_zero_datum() {
+    fn private_cave_every_line_connects_to_the_zero_datum() {
         // Regression guard for the spanning-tree placement: every Compass
-        // section in the private corpus must attach to the network through a
+        // line in the private corpus must attach to the network through a
         // station-name path back to the zero datum (1 ZeroDatum + the rest
         // FromImporting), with no chains stranded at origin.  A one-pass
-        // first-occurrence placement previously left ~20 sections detached
+        // first-occurrence placement previously left ~20 lines detached
         // because their connection station was first defined in a
         // later-processed survey.
         let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
@@ -2542,7 +2542,7 @@ mod tests {
             }
         }
         assert_eq!(zero, 1, "exactly one zero datum expected");
-        assert_eq!(origin, 0, "no section should be stranded at origin");
+        assert_eq!(origin, 0, "no line should be stranded at origin");
         assert!(
             warnings.iter().all(|w| !w.contains("origin")),
             "no 'placed at origin' warnings expected, got: {warnings:?}"
@@ -2559,7 +2559,7 @@ mod tests {
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert!(!configs.is_empty());
-        // Every section is linear and non-empty.
+        // Every line is linear and non-empty.
         assert!(configs.iter().all(|c| !c.shots.is_empty()));
     }
 
@@ -2971,14 +2971,14 @@ mod tests {
     /// #438: Compass used to fold `declination - convergence` into every shot at
     /// import (`azimuth + ctx.declination - ctx.convergence_angle`), destroying
     /// the measured reading. It now keeps the reading and declares the
-    /// correction on the section.
+    /// correction on the line.
     ///
     /// Both halves are asserted because either alone is satisfiable by a wrong
     /// implementation: keeping the reading without recording the correction
     /// silently drops the declination (the cave rotates), and recording it while
     /// still baking it in applies it twice.
     #[test]
-    fn a_declared_declination_lands_on_the_section_not_on_the_shots() {
+    fn a_declared_declination_lands_on_the_line_not_on_the_shots() {
         let dir = tempfile::tempdir().unwrap();
         let dat = dir.path().join("declination.dat");
         std::fs::write(&dat, synthetic_dat_with_declination(5.0)).unwrap();
@@ -2998,7 +2998,7 @@ mod tests {
             .expect("Compass always declares a reference");
         assert!(
             (reference.applied_correction() - 5.0).abs() < 1e-9,
-            "the declared declination must land on the section, got {}",
+            "the declared declination must land on the line, got {}",
             reference.applied_correction()
         );
         assert_eq!(reference.north, crate::models::NorthReference::Magnetic);

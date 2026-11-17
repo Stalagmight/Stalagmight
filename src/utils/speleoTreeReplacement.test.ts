@@ -32,25 +32,25 @@ beforeEach(() => {
   useUIStore.setState({
     view: 'global',
     activeTool: 'merge',
-    selection: { type: 'station', stationRef: { section_id: 1, station_index: 2 } },
+    selection: { type: 'station', stationRef: { line_id: 1, station_index: 2 } },
     multiSelection: [
-      { type: 'station', stationRef: { section_id: 1, station_index: 2 } },
+      { type: 'station', stationRef: { line_id: 1, station_index: 2 } },
     ],
-    mergeStationA: { section_id: 1, station_index: 2 },
-    mergeStationB: { section_id: 1, station_index: 3 },
+    mergeStationA: { line_id: 1, station_index: 2 },
+    mergeStationB: { line_id: 1, station_index: 3 },
     commentTarget: {
       type: 'shot',
-      sectionId: 1,
+      lineId: 1,
       shotId: 7,
       screenPos: { x: 10, y: 20 },
       currentComment: 'old tree',
     },
     measureStart: { kind: 'point', x: 1, y: 2, z: 3 },
-    distanceGradientOrigin: { section_id: 1, station_index: 2 },
+    distanceGradientOrigin: { line_id: 1, station_index: 2 },
     distanceField: {} as never,
   });
   useGasPlanStore.getState().reset();
-  useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
+  useGasPlanStore.getState().setEndpoint({ line_id: 1, station_index: 2 });
 });
 
 describe('applySpeleoTreeReplacement', () => {

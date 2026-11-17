@@ -15,7 +15,7 @@ export const BAR = 12;
  * The tab anchors are FIXED insets from one container edge (`right: tabInset` for
  * the bottom Data tab, `top: tabTop` for the side tabs). Once the container is
  * smaller than the inset the tab's whole box lands outside it: the Data tab walked
- * off the left edge of a narrow map column and rendered on top of the Sections
+ * off the left edge of a narrow map column and rendered on top of the Lines
  * panel, and a side tab drops below its bar when an open Data panel shortens it.
  *
  * `container === null` means "not measured yet" (first paint, or a zero-layout
@@ -192,7 +192,7 @@ function DockComponent({
 
   // Let a sibling (the side bars) track this panel's edge live during its drag.
   // The cleanup clears the flag if this Dock unmounts mid-drag (project/view
-  // switch, fullscreen toggle, section-focus collapse): otherwise the parent's
+  // switch, fullscreen toggle, line-focus collapse): otherwise the parent's
   // sibling-resizing flag would stick true and permanently suspend the sibling
   // panels' open/close easing for the rest of the session.
   // Measure the overlay wrapper and the tab box so the tab anchors can be clamped

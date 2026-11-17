@@ -8,7 +8,7 @@ import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
  */
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project with mock lines/stations
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
@@ -95,7 +95,7 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Cmd/Ctrl+, works when focused in section name input', async ({ page }) => {
+  test('Cmd/Ctrl+, works when focused in line name input', async ({ page }) => {
     // We're in project view (SingleSystemView) where keyboard shortcuts are active
     // Wait for canvas to be visible and ready (deterministic check)
     const canvas = page.locator('canvas');

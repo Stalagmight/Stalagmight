@@ -8,9 +8,9 @@ import { setupMockedPage } from './helpers/app';
  * The dialog is opened via uiStore.openDialog('merge-projects', { selectedProjects }).
  *
  * Mock recent projects provide the selectedProjects data:
- *   Alpha:  5 sections, 1250.5m
- *   Beta:   3 sections, 820.0m
- *   Gamma:  8 sections, 2100.3m
+ *   Alpha:  5 lines, 1250.5m
+ *   Beta:   3 lines, 820.0m
+ *   Gamma:  8 lines, 2100.3m
  */
 
 const MOCK_PROJECTS = [
@@ -19,7 +19,7 @@ const MOCK_PROJECTS = [
     location: 'Yucatan, Mexico',
     file_path: '/projects/cave-alpha.stalx',
     modified_at: new Date().toISOString(),
-    section_count: 5,
+    line_count: 5,
     total_length: 1250.5,
     gps_center: [-87.4631, 20.2137],
     gps_bounds: null,
@@ -29,7 +29,7 @@ const MOCK_PROJECTS = [
     location: 'Florida, USA',
     file_path: '/projects/cave-beta.stalx',
     modified_at: new Date(Date.now() - 86400000).toISOString(),
-    section_count: 3,
+    line_count: 3,
     total_length: 820.0,
     gps_center: [-82.4584, 29.6516],
     gps_bounds: null,
@@ -39,7 +39,7 @@ const MOCK_PROJECTS = [
     location: 'Bahamas',
     file_path: '/projects/cave-gamma.stalx',
     modified_at: new Date(Date.now() - 172800000).toISOString(),
-    section_count: 8,
+    line_count: 8,
     total_length: 2100.3,
     gps_center: [-77.3963, 25.0343],
     gps_bounds: null,
@@ -80,21 +80,21 @@ test.describe('Merge Projects Dialog', () => {
     await expect(nameInput).toHaveValue('Cave System Alpha_merged');
   });
 
-  test('projects list shows section counts and lengths', async ({ page }) => {
+  test('projects list shows line counts and lengths', async ({ page }) => {
     await openMergeDialog(page);
 
     const dialog = page.getByTestId('merge-projects-dialog');
-    // Each project should show its section count
-    await expect(dialog).toContainText('5 sections');
-    await expect(dialog).toContainText('3 sections');
-    await expect(dialog).toContainText('8 sections');
+    // Each project should show its line count
+    await expect(dialog).toContainText('5 lines');
+    await expect(dialog).toContainText('3 lines');
+    await expect(dialog).toContainText('8 lines');
   });
 
-  test('total sections and length are summed correctly', async ({ page }) => {
+  test('total lines and length are summed correctly', async ({ page }) => {
     await openMergeDialog(page);
 
     const dialog = page.getByTestId('merge-projects-dialog');
-    // Total sections: 5 + 3 + 8 = 16
+    // Total lines: 5 + 3 + 8 = 16
     await expect(dialog).toContainText('16');
     // Total length: 1250.5 + 820 + 2100.3 = 4170.8m = ~4.17 km
     // Should show as km since total > 1000m

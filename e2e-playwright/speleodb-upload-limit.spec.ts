@@ -110,7 +110,7 @@ test.describe('revision times', () => {
       };
       await (w.__E2E_TEST__.speleoStore.getState().refreshSession as () => Promise<void>)();
       await (w.__E2E_TEST__.projectStore.getState().loadProject as (p: string) => Promise<unknown>)('/projects/cave-alpha.stalx');
-      w.__E2E_TEST__.uiStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: true, speleoWorkspaceSection: 'history' });
+      w.__E2E_TEST__.uiStore.setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: true, speleoWorkspaceLine: 'history' });
     });
     await page.getByTestId('workspace-tab-speleodb').click();
     const iso = page.getByTestId('speleodb-revision-date-0aaaaaaabbbbbbbb');

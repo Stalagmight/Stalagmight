@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Section } from '../../types/ipc/Section';
+import type { Line } from '../../types/ipc/Line';
 import type { Station } from '../../types/ipc/Station';
 import { surveyDataFromLegacy, lazyStationArray } from '../../types/survey-data';
 import { computeImmovableStationKeys } from '../immovableStations';
@@ -20,13 +20,13 @@ function immovableViaStationArray(
   alignedClosureIds: ReadonlySet<bigint>,
 ): Set<string> {
   const stationByKey = new Map(
-    stations.map((s) => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s]),
+    stations.map((s) => [`${s.station_ref.line_id}:${s.station_ref.station_index}`, s]),
   );
   const immovable = new Set<string>();
   const queue: string[] = [];
   for (const s of stations) {
     if (s.is_zero_datum) {
-      queue.push(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
+      queue.push(`${s.station_ref.line_id}:${s.station_ref.station_index}`);
     }
   }
   while (queue.length > 0) {
@@ -36,23 +36,23 @@ function immovableViaStationArray(
     const st = stationByKey.get(key);
     if (!st) continue;
     for (const ref of st.merged_with) {
-      queue.push(`${ref.section_id}:${ref.station_index}`);
+      queue.push(`${ref.line_id}:${ref.station_index}`);
     }
     for (const cr of st.closures_with ?? []) {
       if (!alignedClosureIds.has(cr.closure_id)) continue;
-      queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
+      queue.push(`${cr.station_ref.line_id}:${cr.station_ref.station_index}`);
     }
   }
   return immovable;
 }
 
 const st = (
-  section_id: number,
+  line_id: number,
   station_index: number,
   opts: Partial<Station> = {},
 ): Station => ({
-  station_ref: { section_id, station_index },
-  coordinates: { x: station_index, y: section_id, z: 0 },
+  station_ref: { line_id, station_index },
+  coordinates: { x: station_index, y: line_id, z: 0 },
   is_zero_datum: false,
   gps_coordinates: null,
   merged_with: [],
@@ -60,11 +60,11 @@ const st = (
   ...opts,
 });
 
-/** One section per station so `next_shot_id`/shots don't matter; the BFS only
- *  reads station topology. Each station needs a section shell to exist in SoA. */
+/** One line per station so `next_shot_id`/shots don't matter; the BFS only
+ *  reads station topology. Each station needs a line shell to exist in SoA. */
 function fixture(stations: Station[]): { data: ReturnType<typeof surveyDataFromLegacy> } {
-  const sectionIds = [...new Set(stations.map((s) => s.station_ref.section_id))];
-  const sections: Section[] = sectionIds.map((id) => ({
+  const lineIds = [...new Set(stations.map((s) => s.station_ref.line_id))];
+  const lines: Line[] = lineIds.map((id) => ({
     id,
     name: `S${id}`,
     surveyor: null,
@@ -76,7 +76,7 @@ function fixture(stations: Station[]): { data: ReturnType<typeof surveyDataFromL
     reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
     shots: [],
   }));
-  return { data: surveyDataFromLegacy(sections, stations) };
+  return { data: surveyDataFromLegacy(lines, stations) };
 }
 
 describe('computeImmovableStationKeys', () => {
@@ -84,21 +84,21 @@ describe('computeImmovableStationKeys', () => {
     // 0:0 is the datum. merged 0:0 <-> 1:0. 1:0 aligned-closure to 2:0.
     // 3:0 links to 0:0 only through an UNALIGNED closure -> must stay movable.
     const stations = [
-      st(0, 0, { is_zero_datum: true, merged_with: [{ section_id: 1, station_index: 0 }] }),
+      st(0, 0, { is_zero_datum: true, merged_with: [{ line_id: 1, station_index: 0 }] }),
       st(1, 0, {
-        merged_with: [{ section_id: 0, station_index: 0 }],
+        merged_with: [{ line_id: 0, station_index: 0 }],
         closures_with: [
-          { closure_id: 1n, station_ref: { section_id: 2, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 1n, station_ref: { line_id: 2, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
       st(2, 0, {
         closures_with: [
-          { closure_id: 1n, station_ref: { section_id: 1, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 1n, station_ref: { line_id: 1, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
       st(3, 0, {
         closures_with: [
-          { closure_id: 2n, station_ref: { section_id: 0, station_index: 0 }, via_station: null, is_transitive: false },
+          { closure_id: 2n, station_ref: { line_id: 0, station_index: 0 }, via_station: null, is_transitive: false },
         ],
       }),
     ];
@@ -112,7 +112,7 @@ describe('computeImmovableStationKeys', () => {
   });
 
   it('returns an empty set when there is no zero-datum', () => {
-    const { data } = fixture([st(0, 0), st(0, 1, { merged_with: [{ section_id: 0, station_index: 0 }] })]);
+    const { data } = fixture([st(0, 0), st(0, 1, { merged_with: [{ line_id: 0, station_index: 0 }] })]);
     const got = computeImmovableStationKeys(data, new Set<bigint>());
     expect(got.size).toBe(0);
     expect(got).toEqual(immovableViaStationArray(lazyStationArray(data), new Set<bigint>()));
@@ -120,8 +120,8 @@ describe('computeImmovableStationKeys', () => {
 
   it('handles a merge cycle without looping and matches the oracle', () => {
     const stations = [
-      st(0, 0, { is_zero_datum: true, merged_with: [{ section_id: 0, station_index: 1 }] }),
-      st(0, 1, { merged_with: [{ section_id: 0, station_index: 0 }] }), // cycle back
+      st(0, 0, { is_zero_datum: true, merged_with: [{ line_id: 0, station_index: 1 }] }),
+      st(0, 1, { merged_with: [{ line_id: 0, station_index: 0 }] }), // cycle back
     ];
     const { data } = fixture(stations);
     const got = computeImmovableStationKeys(data, new Set<bigint>());

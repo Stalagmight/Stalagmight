@@ -91,7 +91,7 @@ test('a quit that waited for the upload, then hits a failed lock release, asks i
   await startSlowUpload(page);
   await page.evaluate(() => {
     (window as unknown as QuitWindow).__MOCK_IPC_OVERRIDES__.speleodb_settle_open_lock = {
-      success: false, warnings: [], section_ids: [], lock_release: 'failed',
+      success: false, warnings: [], line_ids: [], lock_release: 'failed',
       error: 'The SpeleoDB lock could not be handed back: SpeleoDB returned HTTP 503: synthetic',
     };
   });
@@ -180,7 +180,7 @@ test('window X while Close Project is still handing the lock back waits for it, 
   await page.evaluate(() => {
     const w = window as unknown as QuitWindow & { __finishClose: () => void };
     const closing = new Promise((resolve) => {
-      w.__finishClose = () => resolve({ success: true, warnings: [], section_ids: [], lock_release: 'released' });
+      w.__finishClose = () => resolve({ success: true, warnings: [], line_ids: [], lock_release: 'released' });
     });
     const overrides: Record<string, unknown> = {};
     Object.defineProperty(overrides, 'close_project', { get: () => closing });

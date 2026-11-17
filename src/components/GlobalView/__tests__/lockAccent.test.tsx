@@ -53,7 +53,7 @@ const project = (id: string | undefined, name: string): ProjectMetadata => ({
   location: null,
   file_path: `/p/${name}.stalx`,
   modified_at: '2026-07-26T00:00:00Z',
-  section_count: 1,
+  line_count: 1,
   total_length: 10,
   station_count: 2,
   gps_center: null,
@@ -184,7 +184,7 @@ describe('recents write-lock accent', () => {
         location={null}
         filePath={MINE_PROJECT.file_path}
         modifiedAt={MINE_PROJECT.modified_at}
-        sectionCount={1}
+        lineCount={1}
         totalLength={10}
         isSelected
         speleoLock={resolveSpeleoLock(MINE_PROJECT, REMOTE_LOCKS, ME)}
@@ -205,7 +205,7 @@ describe('recents write-lock accent', () => {
         location={null}
         filePath={FREE_PROJECT.file_path}
         modifiedAt={FREE_PROJECT.modified_at}
-        sectionCount={1}
+        lineCount={1}
         totalLength={10}
         isSelected
         speleoLock={resolveSpeleoLock(FREE_PROJECT, REMOTE_LOCKS, ME)}
@@ -223,7 +223,7 @@ describe('recents write-lock accent', () => {
         location={null}
         filePath={THEIRS_PROJECT.file_path}
         modifiedAt={THEIRS_PROJECT.modified_at}
-        sectionCount={1}
+        lineCount={1}
         totalLength={10}
         speleoLock={resolveSpeleoLock(THEIRS_PROJECT, REMOTE_LOCKS, ME)}
       />,

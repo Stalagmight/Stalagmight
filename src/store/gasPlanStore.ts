@@ -357,7 +357,7 @@ interface GasPlanState {
    */
   originChosen: boolean;
   /**
-   * #395: the diver clicked "Pick on map" in the Origin section and the next station click sets
+   * #395: the diver clicked "Pick on map" in the Origin line and the next station click sets
    * the ORIGIN rather than the endpoint - a one-shot arm/disarm, mirroring `placementMode`
    * (uiStore). Consumed (and cleared) by `setOrigin`, so any origin pick - map click or Escape -
    * always leaves it disarmed.
@@ -927,7 +927,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   addWaypoint: (ref) =>
     set((s) => {
       const dup = s.waypoints.some(
-        (w) => w.section_id === ref.section_id && w.station_index === ref.station_index,
+        (w) => w.line_id === ref.line_id && w.station_index === ref.station_index,
       );
       if (dup || s.waypoints.length >= MAX_WAYPOINTS) return {};
       // A new way point is always appended at the end of the visit order, so it always splits
@@ -1017,7 +1017,7 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   // A segment is a GAS INPUT: its speed divides straight into every edge cost on that span
   // (`gas = rmv x ata(depth) x length / speed`), so a slower span costs more gas and reaches less
   // far. `on_scooter` spends the rig's range but does NOT derate the breathing rate - scootering
-  // gets no reduced-RMV credit (PRD section 10), which is the conservative direction. Either way
+  // gets no reduced-RMV credit (PRD line 10), which is the conservative direction. Either way
   // the field is stale, so this nulls `reachField` and clears `stageDropOverrides` exactly like
   // `setCylinders`/`setGasConfig`.
   setSegments: (segments) =>

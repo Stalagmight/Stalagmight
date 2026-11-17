@@ -1,7 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   openDebugStatsMenu,
   getStationScreenPositions,
@@ -10,7 +10,7 @@ import {
   readCanvasPixel,
   countCanvasInk,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -20,7 +20,7 @@ import {
  */
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project with mock lines/stations
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
@@ -31,7 +31,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Visibility Main',
     direction: 'in',
@@ -102,7 +102,7 @@ test.describe('Display Toggle Visibility', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Display Toggle Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -126,7 +126,7 @@ test.describe('Display Toggle Visibility', () => {
     // `survey-stations` layer whose `visibility` can stand in for "markers are on
     // screen": hiding them is a skipped draw call. The oracle is painted ink around
     // the station. It cannot be the center pixel alone: a station disc and its
-    // shots share the section color, so the center stays that color either way -
+    // shots share the line color, so the center stays that color either way -
     // what changes is that the disc's ~9 px footprint collapses to the shot's line
     // width.
     await zoomIn(page);
@@ -224,7 +224,7 @@ test.describe('Label Toggle Click Coverage', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Label Toggle Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -243,18 +243,18 @@ test.describe('Label Toggle Click Coverage', () => {
   }
 });
 
-/** Give the first seeded section's stations names, as a DMP import would, and
+/** Give the first seeded line's stations names, as a DMP import would, and
  *  rebuild the survey data from them (the mock threads names into
  *  get_project_state only). */
 async function seedStationNames(page: Page, names: Array<[number, string]>): Promise<void> {
   await page.evaluate(async (names) => {
     const w = window as unknown as {
-      __MOCK_SET_STATION_NAME__: (sectionId: number, stationIndex: number, name: string | null) => void;
-      __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> }; refreshProjectState: () => Promise<void> } } };
+      __MOCK_SET_STATION_NAME__: (lineId: number, stationIndex: number, name: string | null) => void;
+      __E2E_TEST__: { projectStore: { getState: () => { project: { lines: Array<{ id: number }> }; refreshProjectState: () => Promise<void> } } };
     };
     const store = w.__E2E_TEST__.projectStore.getState();
-    const sectionId = store.project.sections[0]!.id;
-    for (const [index, name] of names) w.__MOCK_SET_STATION_NAME__(sectionId, index, name);
+    const lineId = store.project.lines[0]!.id;
+    for (const [index, name] of names) w.__MOCK_SET_STATION_NAME__(lineId, index, name);
     await store.refreshProjectState();
   }, names);
 }
@@ -272,7 +272,7 @@ test.describe('Station IDs / Station names', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Station Names Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -348,7 +348,7 @@ test.describe('Errors labels toggle', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Errors Toggle Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -370,7 +370,7 @@ test.describe('Selection Blocking When Hidden', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Selection Blocking Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -470,7 +470,7 @@ test.describe('Selection Clearing on Toggle', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Selection Clearing Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -481,7 +481,7 @@ test.describe('Selection Clearing on Toggle', () => {
       const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { addToSelection: (s: unknown) => void } } } }).__E2E_TEST__;
       stores?.uiStore?.getState()?.addToSelection({
         type: 'station',
-        stationRef: { section_id: 1, station_index: 0 },
+        stationRef: { line_id: 1, station_index: 0 },
       });
     });
 
@@ -512,7 +512,7 @@ test.describe('Selection Clearing on Toggle', () => {
       const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { addToSelection: (s: unknown) => void } } } }).__E2E_TEST__;
       stores?.uiStore?.getState()?.addToSelection({
         type: 'shot',
-        sectionId: 1,
+        lineId: 1,
         shotId: 0,
       });
     });
@@ -545,11 +545,11 @@ test.describe('Selection Clearing on Toggle', () => {
       const state = stores?.uiStore?.getState();
       state?.addToSelection({
         type: 'station',
-        stationRef: { section_id: 1, station_index: 0 },
+        stationRef: { line_id: 1, station_index: 0 },
       });
       state?.addToSelection({
         type: 'shot',
-        sectionId: 1,
+        lineId: 1,
         shotId: 0,
       });
     });
@@ -586,7 +586,7 @@ test.describe('Toast Notifications', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Toast Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
   });
 
@@ -721,7 +721,7 @@ test.describe('Toggle Relationship Tests', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Toggle Relationship Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -805,7 +805,7 @@ test.describe('Merge Tool Interaction', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Tool Operation Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -821,7 +821,7 @@ test.describe('Merge Tool Interaction', () => {
     await page.evaluate((ref) => {
       const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setMergeStationA: (ref: unknown) => void } } } }).__E2E_TEST__;
       stores?.uiStore?.getState()?.setMergeStationA(ref);
-    }, { section_id: station.sectionId, station_index: station.stationIndex });
+    }, { line_id: station.lineId, station_index: station.stationIndex });
 
     // Verify merge station A is set
     await expect.poll(async () => {
@@ -852,7 +852,7 @@ test.describe('Display Menu State Persistence', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'State Persistence Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnStations(page, 1);
   });
@@ -907,7 +907,7 @@ test.describe('Debug submenu (Dev/Memory/Map/Zoom Stats)', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Dev Stats Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
   });
 

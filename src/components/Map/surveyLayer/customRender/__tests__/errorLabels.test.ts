@@ -150,23 +150,23 @@ function fakeAtlas(): GlyphAtlas {
 }
 
 describe('buildLabelDescriptors: Errors labels', () => {
-  /** Two shots in one section: shot 0 disagrees on azimuth by 40 (score 2),
+  /** Two shots in one line: shot 0 disagrees on azimuth by 40 (score 2),
    *  shot 1 (a reference shot) by 10 (score 0.5); a closure between station 0
    *  and station 2. */
   function survey() {
     const data = buildSurveyData({
-      sections: [{ id: 1, shotIds: [101, 102] }],
+      lines: [{ id: 1, shotIds: [101, 102] }],
       stations: [
-        { sectionId: 1, stationIndex: 0, x: 0, y: 0 },
-        { sectionId: 1, stationIndex: 1, x: 10, y: 0 },
-        { sectionId: 1, stationIndex: 2, x: 20, y: 4 },
+        { lineId: 1, stationIndex: 0, x: 0, y: 0 },
+        { lineId: 1, stationIndex: 1, x: 10, y: 0 },
+        { lineId: 1, stationIndex: 2, x: 20, y: 4 },
       ],
       shots: { 0: { azimuthIn: 90, azimuthOut: 130 }, 1: { azimuthIn: 90, azimuthOut: 100 } },
     });
     data.shotFlags[1] = shotKindToFlags('Reference');
     const closure = {
-      station_a: { section_id: 1, station_index: 0 },
-      station_b: { section_id: 1, station_index: 2 },
+      station_a: { line_id: 1, station_index: 0 },
+      station_b: { line_id: 1, station_index: 2 },
       error_percentage: 4,
       misclosure_distance: 0.5,
     } as unknown as LoopClosure;
@@ -217,7 +217,7 @@ describe('buildLabelDescriptors: Errors labels', () => {
 
   it('skips a closure whose station is not in the survey', () => {
     const { data, closure } = survey();
-    const stale = { ...closure, station_b: { section_id: 9, station_index: 0 } } as LoopClosure;
+    const stale = { ...closure, station_b: { line_id: 9, station_index: 0 } } as LoopClosure;
     const descs = buildLabelDescriptors(data, null, 0, 0, ctx(labelInput(data, { closures: [stale] })));
     expect(descs.some((d) => d.kind === LABEL_KIND.CLOSURE_ERROR)).toBe(false);
   });

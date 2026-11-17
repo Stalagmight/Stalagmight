@@ -39,7 +39,7 @@ describe('ExportPreview depth endpoints (#360)', () => {
     document.documentElement.style.setProperty('--cc-depth-shallow', '#14487f');
     document.documentElement.style.setProperty('--cc-depth-deep', '#a52a1a');
     // The preview only fires for an open project.
-    useProjectStore.setState({ project: { name: 'T', sections: [] } as never });
+    useProjectStore.setState({ project: { name: 'T', lines: [] } as never });
   });
 
   it('asks the backend for the LIVE theme ramp, matching what export writes', async () => {

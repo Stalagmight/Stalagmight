@@ -29,10 +29,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
-vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
-  SectionMetadataForm: () => null,
+vi.mock('../LinePreview', () => ({ default: () => null }));
+vi.mock('../../common/LineMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/LineMetadataForm')>()),
+  LineMetadataForm: () => null,
 }));
 
 vi.mock('../../../store/projectStore', () => ({
@@ -66,7 +66,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -74,7 +74,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: 2 }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -89,7 +89,7 @@ function renderDialog(onBack = vi.fn()) {
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={onBack}
@@ -111,7 +111,7 @@ describe('ZeroDatumConfigDialog Escape while the Back confirm is open', () => {
     const onBack = vi.fn();
     renderDialog(onBack);
 
-    // Make the section dirty, then open the Back confirm.
+    // Make the line dirty, then open the Back confirm.
     fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
     fireEvent.click(screen.getByTestId('zero-datum-config-back'));
     expect(screen.getByTestId('zero-datum-config-back-confirm-discard')).toBeInTheDocument();

@@ -189,9 +189,9 @@ for (const signedIn of [false, true]) {
       copies: [copy(THEIRS, 'Synthetic theirs', signedIn ? 'other_account' : 'signed_out')],
       recents: [
         { name: 'Local cave', file_path: '/projects/local.stalx', location: null, modified_at: '2026-01-01T00:00:00Z',
-          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.46, 20.21], gps_bounds: null, is_remote: false },
+          line_count: 1, station_count: 2, total_length: 3, gps_center: [-87.46, 20.21], gps_bounds: null, is_remote: false },
         { name: 'Synthetic theirs', file_path: path, location: null, modified_at: '2026-01-01T00:00:00Z',
-          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.4631, 20.2137], gps_bounds: null,
+          line_count: 1, station_count: 2, total_length: 3, gps_center: [-87.4631, 20.2137], gps_bounds: null,
           is_remote: true, speleodb_project_id: THEIRS },
       ],
     });
@@ -264,10 +264,10 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
     (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { openDialog: (d: string, data?: unknown) => void } } } })
       .__E2E_TEST__.uiStore.getState().openDialog('settings', { initialCategory: 'speleodb' });
   });
-  const section = page.getByTestId('section-speleodb-cache');
-  await expect(section).toBeVisible();
+  const line = page.getByTestId('line-speleodb-cache');
+  await expect(line).toBeVisible();
 
-  await section.getByTestId('speleodb-purge-cache').click();
+  await line.getByTestId('speleodb-purge-cache').click();
   const dialog = page.getByTestId('speleodb-purge-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('Remove 2 downloaded copies');
@@ -276,13 +276,13 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   await expect(dialog.getByTestId('speleodb-purge-locks')).toContainText('Your editing locks on these projects are handed back');
   await dialog.getByTestId('speleodb-purge-keep-at-risk').click();
   await expect(dialog).toHaveCount(0);
-  await expect(section.getByTestId('speleodb-purge-result')).toContainText('Removed 1 downloaded copy.');
-  await expect(section.getByTestId('speleodb-purge-result')).toContainText('Synthetic mine');
-  await expect(section.getByTestId('speleodb-purge-result')).toContainText('Handed back the editing lock of: Synthetic legacy');
-  // The last section of the panel: its result is brought into view, every line of it.
-  await expect(section.getByTestId('speleodb-purge-result')).toBeInViewport({ ratio: 1 });
+  await expect(line.getByTestId('speleodb-purge-result')).toContainText('Removed 1 downloaded copy.');
+  await expect(line.getByTestId('speleodb-purge-result')).toContainText('Synthetic mine');
+  await expect(line.getByTestId('speleodb-purge-result')).toContainText('Handed back the editing lock of: Synthetic legacy');
+  // The last line of the panel: its result is brought into view, every line of it.
+  await expect(line.getByTestId('speleodb-purge-result')).toBeInViewport({ ratio: 1 });
 
-  await section.getByTestId('speleodb-purge-cache').click();
+  await line.getByTestId('speleodb-purge-cache').click();
   await page.getByTestId('speleodb-purge-delete-all').click();
   const lost = page.getByTestId('speleodb-purge-lost-dialog');
   await expect(lost).toBeVisible();
@@ -306,8 +306,8 @@ test('purge is disabled, and says why, when nothing is downloaded', async ({ pag
     (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { openDialog: (d: string, data?: unknown) => void } } } })
       .__E2E_TEST__.uiStore.getState().openDialog('settings', { initialCategory: 'speleodb' });
   });
-  const section = page.getByTestId('section-speleodb-cache');
-  await expect(section.getByTestId('speleodb-purge-empty')).toHaveText('There are no downloaded copies to remove.');
-  await expect(section.getByTestId('speleodb-purge-cache')).toBeDisabled();
+  const line = page.getByTestId('line-speleodb-cache');
+  await expect(line.getByTestId('speleodb-purge-empty')).toHaveText('There are no downloaded copies to remove.');
+  await expect(line.getByTestId('speleodb-purge-cache')).toBeDisabled();
   expect(await calls(page, 'speleodb_purge_cached_copies')).toEqual([]);
 });

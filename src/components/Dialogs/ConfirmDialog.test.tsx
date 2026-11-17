@@ -8,7 +8,7 @@
  * succeeded, with the user seeing nothing. The fix routes every path through a
  * shared `runDelete` that checks `result.success`, surfaces the error, and keeps
  * the dialog open; a thrown transport error is caught the same way. Mirrors
- * `SplitSectionDialog`'s failure handling (result-check + try/catch + in-flight guard).
+ * `SplitLineDialog`'s failure handling (result-check + try/catch + in-flight guard).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -23,7 +23,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult } from '../../types/commands';
 
-const SECTION_ID = 1;
+const LINE_ID = 1;
 const SHOT_ID = 2;
 
 let deleteShot: ReturnType<typeof vi.fn>;
@@ -40,8 +40,8 @@ beforeEach(() => {
   clearSelection = vi.fn();
   useProjectStore.setState({
     deleteShot,
-    deleteSection: vi.fn(),
-    deleteLastShotAndSection: vi.fn(),
+    deleteLine: vi.fn(),
+    deleteLastShotAndLine: vi.fn(),
     deleteShotAndSplit,
   });
   useUIStore.setState({
@@ -51,10 +51,10 @@ beforeEach(() => {
     setSelection,
     dialogData: {
       type: 'shot',
-      sectionId: SECTION_ID,
+      lineId: LINE_ID,
       shotId: SHOT_ID,
       splitRequired: true,
-      sectionName: 'Main Passage',
+      lineName: 'Main Passage',
     },
   });
 });
@@ -76,14 +76,14 @@ describe('ConfirmDialog delete+split refusal (#241)', () => {
     expect(setSelection).not.toHaveBeenCalled();
   });
 
-  it('selects section A and closes on success', async () => {
+  it('selects line A and closes on success', async () => {
     deleteShotAndSplit.mockResolvedValue({ success: true, error: null } as CommandResult);
 
     render(<ConfirmDialog />);
     fireEvent.click(screen.getByText('Delete & Split'));
 
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(setSelection).toHaveBeenCalledWith({ type: 'section', sectionId: SECTION_ID });
+    expect(setSelection).toHaveBeenCalledWith({ type: 'line', lineId: LINE_ID });
   });
 });
 
@@ -95,7 +95,7 @@ describe('ConfirmDialog non-split delete refusal (#241)', () => {
     useUIStore.setState({
       dialogData: {
         type: 'shot',
-        sectionId: SECTION_ID,
+        lineId: LINE_ID,
         shotId: SHOT_ID,
         splitRequired: false,
         totalShots: 3,
@@ -143,7 +143,7 @@ describe('ConfirmDialog non-split delete refusal (#241)', () => {
     // IPC is still in flight. closeDialog is global UI state, so the late success-path
     // close must NOT fire -- otherwise it would close whatever dialog is open now.
     deleteShot.mockImplementation(async () => {
-      useUIStore.setState({ activeDialog: 'edit-section' });
+      useUIStore.setState({ activeDialog: 'edit-line' });
       return { success: true, error: null } as CommandResult;
     });
 

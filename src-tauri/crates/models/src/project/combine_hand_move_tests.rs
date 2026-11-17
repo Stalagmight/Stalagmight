@@ -1,7 +1,7 @@
-//! Combine Sections where a join station was moved by hand (#755): a manual
+//! Combine Lines where a join station was moved by hand (#755): a manual
 //! station offset, as an older or hand-edited file carries it, on the kept
 //! join station, the other one, or both, horizontal and in depth, with a
-//! section merged at each join station. The joined station keeps the fixed
+//! line merged at each join station. The joined station keeps the fixed
 //! side's hand move, so the other join station lands on it by the gap as
 //! shown: what is merged there moves with the joined station, by that gap,
 //! not with its side (`combine_plan.rs`). Merged stations stay one point,
@@ -13,39 +13,39 @@ use chrono::Utc;
 use super::combine_closure_tests::{add, adjusted, check_combined, dist, options, shot, xy};
 use crate::{
     ClosureStrategy, CombineJoinEnds, CombineJoinKind, GpsCoordinates, LoopClosure, Project,
-    SectionEnd, SectionId, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
+    LineEnd, LineId, ShotData, StationMerge, StationRef, TornTieKind, TornTieReason,
     ZeroDatum,
 };
 
 const NONE: (f64, f64, f64) = (0.0, 0.0, 0.0);
 
-/// Two sections meeting at a join, with a section merged at each join
+/// Two lines meeting at a join, with a line merged at each join
 /// station.
 struct Fixture {
     project: Project,
-    k: SectionId,
-    o: SectionId,
+    k: LineId,
+    o: LineId,
     /// Merged at O's join station.
-    t: SectionId,
+    t: LineId,
     /// Merged at K's join station.
-    u: SectionId,
-    k_end: SectionEnd,
-    o_end: SectionEnd,
+    u: LineId,
+    k_end: LineEnd,
+    o_end: LineEnd,
     join_k: StationRef,
     join_o: StationRef,
 }
 
-fn end_index(project: &Project, id: SectionId, end: SectionEnd) -> u32 {
+fn end_index(project: &Project, id: LineId, end: LineEnd) -> u32 {
     match end {
-        SectionEnd::Start => 0,
-        SectionEnd::End => project.get_section(id).unwrap().shots.len() as u32,
+        LineEnd::Start => 0,
+        LineEnd::End => project.get_line(id).unwrap().shots.len() as u32,
     }
 }
 
 /// Move `id` so its station `index` sits exactly on `target` as shown.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, StationRef::new(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
 /// A shot with depth readings at both ends.
@@ -76,8 +76,8 @@ fn hand_move(project: &mut Project, at: StationRef, hand: (f64, f64, f64)) {
 /// the join stations; T is merged at O's join station and U at K's, each on
 /// its station as shown. K has the lowest id.
 fn join(
-    k_end: SectionEnd,
-    o_end: SectionEnd,
+    k_end: LineEnd,
+    o_end: LineEnd,
     merged: bool,
     hand_k: (f64, f64, f64),
     hand_o: (f64, f64, f64),
@@ -95,7 +95,7 @@ fn join(
         "O",
         vec![deep(0.0, 4.0, 3.0, 3.5), deep(300.0, 6.0, 3.5, 4.5)],
     );
-    project.set_section_offset(k, (100.0, -40.0));
+    project.set_line_offset(k, (100.0, -40.0));
     let join_k = StationRef::new(k, end_index(&project, k, k_end));
     let join_o = StationRef::new(o, end_index(&project, o, o_end));
     hand_move(&mut project, join_k, hand_k);
@@ -147,10 +147,10 @@ fn hold(project: &mut Project, at: StationRef) {
     });
 }
 
-/// Every station of every section, as shown.
+/// Every station of every line, as shown.
 fn every_station(project: &Project) -> Vec<(StationRef, (f64, f64))> {
     project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .map(|at| (at, xy(project, at)))
@@ -170,30 +170,30 @@ fn a_30_cm_hand_move_carries_its_branch_as_planned_and_nothing_after() {
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
     let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
-    project.set_section_offset(o, (10.0, 0.0));
+    project.set_line_offset(o, (10.0, 0.0));
     hand_move(&mut project, StationRef::new(o, 0), (0.3, 0.0, 0.0));
-    project.set_section_offset(t, (10.3, 0.0));
+    project.set_line_offset(t, (10.3, 0.0));
     project
         .merge_stations(StationRef::new(o, 0), StationRef::new(t, 0))
         .unwrap();
-    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let candidate = project.combine_candidate_for_lines(k, o).unwrap();
     assert_eq!(candidate.join_kind, CombineJoinKind::CoLocated);
     assert_eq!(candidate.branches, vec![t]);
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moving_section, Some(o));
-    assert_eq!(plan.moved_sections, vec![o], "T is not moved by the shift");
+    assert_eq!(plan.moving_line, Some(o));
+    assert_eq!(plan.moved_lines, vec![o], "T is not moved by the shift");
     assert!(plan.shift_m < 1e-12, "the chain gap is 0: {}", plan.shift_m);
     let joined = plan.moved_with_joined_station.clone().unwrap();
     assert_eq!(joined.station, StationRef::new(o, 0));
-    assert_eq!(joined.sections, vec![t]);
+    assert_eq!(joined.lines, vec![t]);
     assert!((joined.shift_m - 0.3).abs() < 1e-12, "{}", joined.shift_m);
     let change = plan.join_offset_change_m.unwrap();
     assert!((change - 0.3).abs() < 1e-12, "{change}");
 
     let mut after = project.clone();
-    after.combine_sections(k, o, &options(None)).unwrap();
+    after.combine_lines(k, o, &options(None)).unwrap();
     check_combined(&project, &after, &candidate, k, "0.3 m", &[]);
-    let at = |p: &Project, s: SectionId, i: u32| xy(p, StationRef::new(s, i));
+    let at = |p: &Project, s: LineId, i: u32| xy(p, StationRef::new(s, i));
     // K stays, O's start lands on K's end and its far end stays; T moves the
     // 0.3 m with the joined station, still merged to it.
     for (now, want) in [
@@ -206,7 +206,7 @@ fn a_30_cm_hand_move_carries_its_branch_as_planned_and_nothing_after() {
         assert!(dist(now, want) < 1e-9, "{now:?} is not at {want:?}");
     }
     let lengths: Vec<f64> = after
-        .get_section(k)
+        .get_line(k)
         .unwrap()
         .shots
         .iter()
@@ -252,8 +252,8 @@ fn second(hand: (f64, f64, f64)) -> (f64, f64, f64) {
     (0.5 * hand.1 - 0.0003, -0.5 * hand.0, -0.5 * hand.2)
 }
 
-/// Every pairing of the two ends, merged or side by side, either section
-/// kept, the side the other section is on free or held by a zero datum, and
+/// Every pairing of the two ends, merged or side by side, either line
+/// kept, the side the other line is on free or held by a zero datum, and
 /// a hand move on the kept join station, the other one, both (different), or
 /// both the same (a split's), of each size in [`HANDS`]: every combine is
 /// what its plan says (`check_combined`: the side that moves moves by the
@@ -265,8 +265,8 @@ fn second(hand: (f64, f64, f64)) -> (f64, f64, f64) {
 #[test]
 fn hand_moves_on_the_join_for_every_pairing() {
     let mut combined = 0;
-    for k_end in [SectionEnd::Start, SectionEnd::End] {
-        for o_end in [SectionEnd::Start, SectionEnd::End] {
+    for k_end in [LineEnd::Start, LineEnd::End] {
+        for o_end in [LineEnd::Start, LineEnd::End] {
             for merged in [false, true] {
                 for held in [false, true] {
                     for (size, hand) in HANDS {
@@ -329,15 +329,15 @@ fn check_one(
         .combine_candidate_joining(kept, other, Some(ends))
         .unwrap();
     assert_eq!(candidate.blocked_reason, None, "{what}");
-    let plan = if candidate.section_a == kept {
+    let plan = if candidate.line_a == kept {
         &candidate.plan_keeping_a
     } else {
         &candidate.plan_keeping_b
     };
-    // What moves with the joined station: the third section merged at the
+    // What moves with the joined station: the third line merged at the
     // join station whose hand move is dropped, when the two hand moves
     // differ horizontally past dust on a join that is not merged.
-    let dropped_at = if plan.moving_section == Some(kept) {
+    let dropped_at = if plan.moving_line == Some(kept) {
         if keep_k {
             join.join_k
         } else {
@@ -365,7 +365,7 @@ fn check_one(
     let got = plan
         .moved_with_joined_station
         .as_ref()
-        .map(|j| (j.station, j.sections.clone()));
+        .map(|j| (j.station, j.lines.clone()));
     assert_eq!(got, want, "{what}");
     let difference = {
         let d = (
@@ -385,10 +385,10 @@ fn check_one(
 
     let mut after = project.clone();
     after
-        .combine_sections(kept, other, &options(Some(ends)))
+        .combine_lines(kept, other, &options(Some(ends)))
         .unwrap();
     check_combined(project, &after, &candidate, kept, what, &[]);
-    // T and U on the joined station, wherever it is in the combined section.
+    // T and U on the joined station, wherever it is in the combined line.
     let joined = after
         .station_merges
         .iter()
@@ -397,7 +397,7 @@ fn check_one(
                 after.resolve_key(&m.station_a)?,
                 after.resolve_key(&m.station_b)?,
             );
-            match (a.section_id == join.t, b.section_id == join.t) {
+            match (a.line_id == join.t, b.line_id == join.t) {
                 (true, false) => Some(b),
                 (false, true) => Some(a),
                 _ => None,
@@ -408,7 +408,7 @@ fn check_one(
         let apart = dist(xy(&after, joined), xy(&after, StationRef::new(branch, 0)));
         assert!(
             apart < 2.0 * Project::OFFSET_DUST_M,
-            "{what}: section {branch} is {apart:.7} m off the joined station"
+            "{what}: line {branch} is {apart:.7} m off the joined station"
         );
     }
     let mut repaired = after.clone();
@@ -417,7 +417,7 @@ fn check_one(
         0,
         "{what}: the repair fixed a merge"
     );
-    assert_eq!(repaired.section_offsets, after.section_offsets, "{what}");
+    assert_eq!(repaired.line_offsets, after.line_offsets, "{what}");
     // The joined station keeps the fixed side's hand move, and nothing else
     // carries one.
     let kept_hand: Vec<(f64, f64, f64)> = after.station_offsets.values().copied().collect();
@@ -455,9 +455,9 @@ fn check_one(
             "{what}: {at:?} at depth {now}, not {want}"
         );
     }
-    // No shot changes: the combined section's lengths are the two sections'.
+    // No shot changes: the combined line's lengths are the two lines'.
     let mut lengths: Vec<f64> = after
-        .get_section(kept)
+        .get_line(kept)
         .unwrap()
         .shots
         .iter()
@@ -467,7 +467,7 @@ fn check_one(
         .iter()
         .flat_map(|id| {
             project
-                .get_section(*id)
+                .get_line(*id)
                 .unwrap()
                 .shots
                 .iter()
@@ -488,8 +488,8 @@ fn check_one(
 #[test]
 fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     let mut join = join(
-        SectionEnd::End,
-        SectionEnd::Start,
+        LineEnd::End,
+        LineEnd::Start,
         false,
         (0.3, 0.0, 0.0),
         NONE,
@@ -498,7 +498,7 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     let t = join.t;
     join.project
         .station_merges
-        .retain(|m| m.station_a.section_id != t && m.station_b.section_id != t);
+        .retain(|m| m.station_a.line_id != t && m.station_b.line_id != t);
     // Z runs along O's second shot: merged at O's far end, snapped at O's
     // station 1 (a loop snap, not Z's only tie).
     let z = add(&mut join.project, "Z", vec![deep(300.0, 6.0, 3.5, 4.5)]);
@@ -523,22 +523,22 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     join.project.loop_closures.push(snap);
     let (k, o) = (join.k, join.o);
     let ends = CombineJoinEnds {
-        kept: SectionEnd::End,
-        other: SectionEnd::Start,
+        kept: LineEnd::End,
+        other: LineEnd::Start,
     };
     let candidate = join
         .project
         .combine_candidate_joining(k, o, Some(ends))
         .unwrap();
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moving_section, None);
-    assert!(plan.moved_sections.is_empty());
+    assert_eq!(plan.moving_line, None);
+    assert!(plan.moved_lines.is_empty());
     assert!(plan.torn_ties.is_empty(), "{:?}", plan.torn_ties);
     assert_eq!(plan.moved_with_joined_station, None);
     let change = plan.join_offset_change_m.unwrap();
     assert!((change - 0.3).abs() < 1e-12, "{change}");
     let mut after = join.project.clone();
-    after.combine_sections(k, o, &options(Some(ends))).unwrap();
+    after.combine_lines(k, o, &options(Some(ends))).unwrap();
     check_combined(
         &join.project,
         &after,
@@ -555,7 +555,7 @@ fn nothing_merged_at_the_dropped_join_station_moves_nothing() {
     assert_eq!(repaired.realign_merges(), 0);
 }
 
-/// The issue's shape with a section C merged off T (T's far end) and Z
+/// The issue's shape with a line C merged off T (T's far end) and Z
 /// merged off C, Z's far end snapped to O's station 1: T, C and Z move with
 /// the joined station by the 0.3 m while O stays (#755), so the snap between
 /// Z and O can no longer hold and becomes an ordinary loop closure. Nothing
@@ -568,7 +568,7 @@ fn a_snap_between_what_moves_with_the_joined_station_and_its_side_tears() {
     let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
     let c = add(&mut project, "C", vec![shot(90.0, 9.7)]);
     let z = add(&mut project, "Z", vec![shot(180.0, 5.0)]);
-    project.set_section_offset(o, (10.0, 0.0));
+    project.set_line_offset(o, (10.0, 0.0));
     hand_move(&mut project, StationRef::new(o, 0), (0.3, 0.0, 0.0));
     let chain = [
         (t, StationRef::new(o, 0)),
@@ -597,11 +597,11 @@ fn a_snap_between_what_moves_with_the_joined_station_and_its_side_tears() {
         is_aligned: true,
     });
     project.next_closure_id = 2;
-    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let candidate = project.combine_candidate_for_lines(k, o).unwrap();
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moved_sections, vec![o]);
+    assert_eq!(plan.moved_lines, vec![o]);
     let joined = plan.moved_with_joined_station.clone().unwrap();
-    assert_eq!(joined.sections, vec![t, c, z], "T and what hangs off it");
+    assert_eq!(joined.lines, vec![t, c, z], "T and what hangs off it");
     assert!((joined.shift_m - 0.3).abs() < 1e-12);
     let torn: Vec<_> = plan
         .torn_ties
@@ -614,7 +614,7 @@ fn a_snap_between_what_moves_with_the_joined_station_and_its_side_tears() {
     );
 
     let mut after = project.clone();
-    after.combine_sections(k, o, &options(None)).unwrap();
+    after.combine_lines(k, o, &options(None)).unwrap();
     check_combined(&project, &after, &candidate, k, "apart", &[]);
     for id in [t, c, z] {
         for i in 0..=1 {
@@ -655,23 +655,23 @@ fn hand_moves_at_the_float_dust_edge_leave_nothing_to_heal() {
         let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
         let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
         let t = add(&mut project, "T", vec![shot(0.0, 5.0)]);
-        project.set_section_offset(o, (10.0 - 0.9 * dust, 0.0));
+        project.set_line_offset(o, (10.0 - 0.9 * dust, 0.0));
         let o0 = StationRef::new(o, 0);
         hand_move(&mut project, o0, (hand, 0.0, 0.0));
         let shown = xy(&project, o0);
         place(&mut project, t, 0, shown);
         project.merge_stations(o0, StationRef::new(t, 0)).unwrap();
-        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        let candidate = project.combine_candidate_for_lines(k, o).unwrap();
         let plan = &candidate.plan_keeping_a;
         assert_eq!(
             plan.moved_with_joined_station
                 .as_ref()
-                .map(|j| j.sections.clone()),
+                .map(|j| j.lines.clone()),
             carried.then(|| vec![t]),
             "{what}"
         );
         let mut after = project.clone();
-        after.combine_sections(k, o, &options(None)).unwrap();
+        after.combine_lines(k, o, &options(None)).unwrap();
         check_combined(&project, &after, &candidate, k, what, &[]);
         let (joined, t0) = (
             xy(&after, StationRef::new(k, 1)),
@@ -715,7 +715,7 @@ fn a_merge_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart() {
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let t = add(&mut project, "T", vec![shot(90.0, 19.7)]);
-    project.set_section_offset(o, (10.0, 0.0));
+    project.set_line_offset(o, (10.0, 0.0));
     let o0 = StationRef::new(o, 0);
     hand_move(&mut project, o0, (0.3, 0.0, 0.0));
     let shown = xy(&project, o0);
@@ -740,7 +740,7 @@ fn a_merge_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart() {
     );
     assert_eq!(loaded.station_merges.len(), 2);
 
-    let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+    let candidate = project.combine_candidate_for_lines(k, o).unwrap();
     let plan = &candidate.plan_keeping_a;
     assert_eq!(plan.moved_with_joined_station, None, "T stays with O");
     let torn: Vec<_> = plan
@@ -758,7 +758,7 @@ fn a_merge_loop_at_a_hand_moved_join_tears_there_instead_of_pulling_apart() {
         )]
     );
     let mut after = project.clone();
-    after.combine_sections(k, o, &options(None)).unwrap();
+    after.combine_lines(k, o, &options(None)).unwrap();
     check_combined(&project, &after, &candidate, k, "merge loop", &[]);
     assert!(dist(xy(&after, t1), xy(&after, StationRef::new(k, 3))) < 1e-9);
     let closure = after.loop_closures.last().unwrap();
@@ -787,7 +787,7 @@ fn closures_whose_ends_the_hand_move_moves_apart_are_measured_again() {
         let mut project = Project::new("Measure".to_string(), None);
         let k = add(&mut project, "K", vec![shot(90.0, 5.0), shot(90.0, 5.0)]);
         let o = add(&mut project, "O", vec![shot(90.0, 10.0)]);
-        project.set_section_offset(o, (10.0, 0.0));
+        project.set_line_offset(o, (10.0, 0.0));
         let o0 = StationRef::new(o, 0);
         hand_move(&mut project, o0, (0.3, 0.0, 0.0));
         let mut ends = vec![(o0, StationRef::new(k, 0))];
@@ -817,7 +817,7 @@ fn closures_whose_ends_the_hand_move_moves_apart_are_measured_again() {
         }
         project.next_closure_id = 3;
         let mut after = project.clone();
-        after.combine_sections(k, o, &options(None)).unwrap();
+        after.combine_lines(k, o, &options(None)).unwrap();
         // Measured as the combine measures: with no closure to run through.
         let mut bare = after.clone();
         bare.loop_closures.clear();
@@ -935,12 +935,12 @@ fn a_combine_at_two_hand_moved_join_stations_moves_the_view_as_worked_out() {
         let joined_shown = (k1.0 + 10.0 + hand_k.0, k1.1 + hand_k.1);
         assert!(dist(before[&k_end], joined_shown) < 1e-9, "{what}");
 
-        let candidate = project.combine_candidate_for_sections(k, o).unwrap();
+        let candidate = project.combine_candidate_for_lines(k, o).unwrap();
         let plan = &candidate.plan_keeping_a;
-        assert_eq!(candidate.section_a, k, "{what}");
-        assert_eq!(plan.moving_section, Some(o), "{what}: O's side moves");
+        assert_eq!(candidate.line_a, k, "{what}");
+        assert_eq!(plan.moving_line, Some(o), "{what}: O's side moves");
         let mut after = project.clone();
-        after.combine_sections(k, o, &options(None)).unwrap();
+        after.combine_lines(k, o, &options(None)).unwrap();
         check_combined(&project, &after, &candidate, k, what, &[]);
 
         // The Raw Data View, worked out.

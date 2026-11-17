@@ -9,10 +9,10 @@ impl AppState {
         station_b: StationRef,
     ) -> CommandResult {
         self.with_project_mut(|project| {
-            // Check same section (not allowed)
-            if station_a.section_id == station_b.section_id {
+            // Check same line (not allowed)
+            if station_a.line_id == station_b.line_id {
                 return CommandResult::failure(
-                    "Cannot merge stations from the same section".to_string(),
+                    "Cannot merge stations from the same line".to_string(),
                 );
             }
 
@@ -21,7 +21,7 @@ impl AppState {
                     tracing::debug!(
                         ?station_a,
                         ?station_b,
-                        purpose = "connect survey sections",
+                        purpose = "connect survey lines",
                         "Stations merged"
                     );
                     CommandResult::success()
@@ -31,7 +31,7 @@ impl AppState {
                         ?station_a,
                         ?station_b,
                         error = %e,
-                        purpose = "connect survey sections",
+                        purpose = "connect survey lines",
                         "Failed to merge stations"
                     );
                     CommandResult::failure(e)

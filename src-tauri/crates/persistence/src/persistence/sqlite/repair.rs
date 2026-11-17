@@ -3,7 +3,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
-use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
+use super::{BackupInfo, Database, SalvagedData, SalvagedLine};
 
 impl Database {
     /// Write a self-contained snapshot of an on-disk `.stalx` to `dest` using
@@ -244,7 +244,7 @@ impl Database {
     ///
     /// Everything else PROLIFERATES with the project, by design: survey data,
     /// `project_settings` (shared validation config #57), AND the durable
-    /// project-data tables `imported_file_hashes` / `imported_section_hashes`
+    /// project-data tables `imported_file_hashes` / `imported_line_hashes`
     /// (project-wide import-dedup - collaborators must not re-import the same file)
     /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
     /// a comment). These are NOT stripped - only a writer holding the lock can push,
@@ -479,15 +479,15 @@ impl Database {
                 .push(format!("Failed to read project metadata: {e}")),
         }
 
-        // Sections
-        match db.try_read_sections() {
-            Ok(sections) => {
-                salvaged.section_count = sections.len();
-                salvaged.sections_json = serde_json::to_string(&sections).ok();
+        // Lines
+        match db.try_read_lines() {
+            Ok(lines) => {
+                salvaged.line_count = lines.len();
+                salvaged.lines_json = serde_json::to_string(&lines).ok();
             }
             Err(e) => salvaged
                 .errors
-                .push(format!("Failed to read sections: {e}")),
+                .push(format!("Failed to read lines: {e}")),
         }
 
         // Shots
@@ -614,7 +614,7 @@ impl Database {
         Ok(Some((name, location)))
     }
 
-    pub(super) fn try_read_sections(&self) -> Result<Vec<SalvagedSection>> {
+    pub(super) fn try_read_lines(&self) -> Result<Vec<SalvagedLine>> {
         if !self.table_exists("sections")? {
             return Ok(Vec::new());
         }
@@ -622,7 +622,7 @@ impl Database {
             .conn
             .prepare("SELECT id, name, surveyor, date, color FROM sections ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
-            Ok(SalvagedSection {
+            Ok(SalvagedLine {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 surveyor: row.get(2)?,
@@ -630,11 +630,11 @@ impl Database {
                 color: row.get(4)?,
             })
         })?;
-        let mut sections = Vec::new();
+        let mut lines = Vec::new();
         for row in rows {
-            sections.push(row?);
+            lines.push(row?);
         }
-        Ok(sections)
+        Ok(lines)
     }
 
     pub(super) fn try_read_shot_count(&self) -> Result<usize> {

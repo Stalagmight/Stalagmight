@@ -1,14 +1,14 @@
 mod app_state;
-mod command_combine_sections;
+mod command_combine_lines;
 mod command_comment;
 mod command_credit;
 mod command_delete_split;
 mod command_import;
 mod command_move;
 mod command_query;
-mod command_section;
+mod command_line;
 mod command_shot;
-mod command_split_section;
+mod command_split_line;
 mod command_split_shot;
 mod command_station;
 mod commands;
@@ -70,7 +70,7 @@ mod azimuth_reference_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
-mod combine_sections_tests;
+mod combine_lines_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
@@ -175,6 +175,13 @@ mod issue_756_tests;
 mod legacy_disk_vectors_dump;
 #[cfg(test)]
 mod metamorphic_undo_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod pre_line_rename_disk_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -307,7 +314,7 @@ mod speleodb_upload_limit_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
-mod split_section_tests;
+mod split_line_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

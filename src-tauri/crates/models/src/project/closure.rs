@@ -3,7 +3,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    normalize_azimuth, AzimuthReference, ClosureStrategy, Coordinates, LoopClosure, SectionId,
+    normalize_azimuth, AzimuthReference, ClosureStrategy, Coordinates, LoopClosure, LineId,
     Shot, StationRef,
 };
 
@@ -32,7 +32,7 @@ impl Project {
 
     /// The shot's displacement in WORLD (true-north) space, which is the frame
     /// the solver and every coordinate consumer work in - so `reference` is the
-    /// section's, applied here once (#438).
+    /// line's, applied here once (#438).
     pub(super) fn shot_vector_along(
         shot: &Shot,
         forward: bool,
@@ -56,7 +56,7 @@ impl Project {
     /// `dx`/`dy` are WORLD displacement, so the bearing they imply is a true-north
     /// one and has to be turned back into a MEASURED reading before it is stored
     /// (#438) - a shot always holds what the instrument read. Skipping the
-    /// inverse would rotate the section by one declination per adjustment, and
+    /// inverse would rotate the line by one declination per adjustment, and
     /// the adjustment is re-runnable.
     pub(super) fn update_shot_horizontal_only(
         shot: &mut Shot,
@@ -79,13 +79,13 @@ impl Project {
         // depth_in, depth_out, pitch_in, pitch_out are intentionally left unchanged
     }
 
-    /// Does `component` (a set of sections) hold a GPS-fix zero datum? Such a
+    /// Does `component` (a set of lines) hold a GPS-fix zero datum? Such a
     /// component is solved in the Closures Computed View even without an
     /// eligible closure, since the fix itself pulls the survey (#741).
-    pub(crate) fn component_has_gps_fix(&self, component: &HashSet<SectionId>) -> bool {
+    pub(crate) fn component_has_gps_fix(&self, component: &HashSet<LineId>) -> bool {
         self.gps_fix_datums().iter().any(|zd| {
             self.resolve_key(&zd.station_ref)
-                .is_some_and(|sr| component.contains(&sr.section_id))
+                .is_some_and(|sr| component.contains(&sr.line_id))
         })
     }
 
@@ -126,20 +126,20 @@ impl Project {
             return Err("Anchor station does not exist".to_string());
         }
 
-        let component = self.get_connected_section_ids(anchor_station.section_id);
+        let component = self.get_connected_line_ids(anchor_station.line_id);
         // Only PLACEMENT datums must stay where they are: a GPS fix (#741) is
         // exactly what the solve pulls the survey toward, so its station moves.
         let zero_datum_set: HashSet<StationRef> = self
             .placement_datum_refs()
             .into_iter()
-            .filter(|sr| component.contains(&sr.section_id))
+            .filter(|sr| component.contains(&sr.line_id))
             .collect();
         let has_gps_fix = self.component_has_gps_fix(&component);
 
         debug!(
             anchor_station = ?anchor_station,
             method = ?method,
-            component_section_count = component.len(),
+            component_line_count = component.len(),
             zero_datum_count = zero_datum_set.len(),
             purpose = "adjust loop closures",
             "Preparing loop closure adjustment"
@@ -157,8 +157,8 @@ impl Project {
             .loop_closures
             .iter()
             .filter(|lc| {
-                component.contains(&lc.station_a.section_id)
-                    && component.contains(&lc.station_b.section_id)
+                component.contains(&lc.station_a.line_id)
+                    && component.contains(&lc.station_b.line_id)
                     && (lc.strategy == method || lc.strategy == ClosureStrategy::Batch)
             })
             .cloned()
@@ -234,11 +234,11 @@ impl Project {
         Ok(())
     }
 
-    fn recompute_closure_metrics_for_component(&mut self, component: &HashSet<SectionId>) {
+    fn recompute_closure_metrics_for_component(&mut self, component: &HashSet<LineId>) {
         let mut updates = Vec::new();
         for (idx, closure) in self.loop_closures.iter().enumerate() {
-            if component.contains(&closure.station_a.section_id)
-                && component.contains(&closure.station_b.section_id)
+            if component.contains(&closure.station_a.line_id)
+                && component.contains(&closure.station_b.line_id)
             {
                 if let (Some(a), Some(b)) = (
                     self.resolve_key(&closure.station_a),
@@ -290,45 +290,45 @@ impl Project {
         let total_dy = existing.1 + delta.y;
         let total_dz = existing.2 + delta.z;
 
-        // Resolved before the `&mut` borrow of `sections` below, which rules out
+        // Resolved before the `&mut` borrow of `lines` below, which rules out
         // reading the project default afterwards (#438).
-        let azimuth_reference = self.azimuth_reference_for_id(station_ref.section_id);
+        let azimuth_reference = self.azimuth_reference_for_id(station_ref.line_id);
 
-        let Some(section) = self
-            .sections
+        let Some(line) = self
+            .lines
             .iter_mut()
-            .find(|s| s.id == station_ref.section_id)
+            .find(|s| s.id == station_ref.line_id)
         else {
-            return Err("Section not found".to_string());
+            return Err("Line not found".to_string());
         };
 
         let idx = station_ref.station_index as usize;
-        if idx > section.shots.len() {
+        if idx > line.shots.len() {
             return Err("Invalid station index".to_string());
         }
 
         if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
             let current = self
-                .section_offsets
-                .get(&station_ref.section_id)
+                .line_offsets
+                .get(&station_ref.line_id)
                 .copied()
                 .unwrap_or((0.0, 0.0));
-            // Through `write_section_offset` so a move that lands the offset back
+            // Through `write_line_offset` so a move that lands the offset back
             // within dust of the origin drops the key instead of leaving an inert
             // entry for the next save to serialize (#413 finding 2, both halves,
             // and the invariant on that function). Can't call
-            // `self.adjust_section_offset` here: `section` above is a live &mut
-            // borrow of `self.sections`, and only the disjoint field borrow of
-            // `self.section_offsets` is available.
-            Self::write_section_offset(
-                &mut self.section_offsets,
-                station_ref.section_id,
+            // `self.adjust_line_offset` here: `line` above is a live &mut
+            // borrow of `self.lines`, and only the disjoint field borrow of
+            // `self.line_offsets` is available.
+            Self::write_line_offset(
+                &mut self.line_offsets,
+                station_ref.line_id,
                 (current.0 + total_dx, current.1 + total_dy),
             );
         }
 
         if idx > 0 {
-            if let Some(shot) = section.shots.get_mut(idx - 1) {
+            if let Some(shot) = line.shots.get_mut(idx - 1) {
                 let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
@@ -355,7 +355,7 @@ impl Project {
             }
         }
 
-        if let Some(shot) = section.shots.get_mut(idx) {
+        if let Some(shot) = line.shots.get_mut(idx) {
             let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let old_horizontal = shot.horizontal_length();
             let old_dx = old_horizontal * azi_rad.sin();
@@ -489,7 +489,7 @@ impl Project {
         );
 
         let mut targets: HashMap<StationRef, Coordinates> = HashMap::new();
-        let section_lookup = self.build_section_lookup();
+        let line_lookup = self.build_line_lookup();
         // Owned (values are `Copy`) so the path closure below does not have to
         // hold a `&self` borrow into the mutation phase that follows (#438).
         let azimuth_references = self.azimuth_reference_map();
@@ -519,14 +519,14 @@ impl Project {
                 }
                 let vec = match step.edge {
                     PathEdge::Shot {
-                        section_id,
+                        line_id,
                         shot_index,
                         forward,
                     } => {
-                        let section = section_lookup
-                            .get(&section_id)
-                            .ok_or_else(|| "Section not found for closure path".to_string())?;
-                        let shot = section
+                        let line = line_lookup
+                            .get(&line_id)
+                            .ok_or_else(|| "Line not found for closure path".to_string())?;
+                        let shot = line
                             .shots
                             .get(shot_index)
                             .ok_or_else(|| "Shot not found for closure path".to_string())?;
@@ -534,7 +534,7 @@ impl Project {
                             shot,
                             forward,
                             azimuth_references
-                                .get(&section_id)
+                                .get(&line_id)
                                 .copied()
                                 .unwrap_or_default(),
                         );
@@ -570,13 +570,13 @@ impl Project {
                     continue;
                 }
                 if let PathEdge::Shot {
-                    section_id,
+                    line_id,
                     shot_index,
                     ..
                 } = step.edge
                 {
-                    if let Some(section) = section_lookup.get(&section_id) {
-                        if let Some(shot) = section.shots.get(shot_index) {
+                    if let Some(line) = line_lookup.get(&line_id) {
+                        if let Some(shot) = line.shots.get(shot_index) {
                             *total_len += shot.length;
                             *shot_count += 1;
                         }
@@ -602,7 +602,7 @@ impl Project {
                 }
             }
             zero_nodes.sort_by(|a, b| {
-                (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index))
+                (a.line_id, a.station_index).cmp(&(b.line_id, b.station_index))
             });
             zero_nodes.dedup();
 
@@ -809,7 +809,7 @@ impl Project {
         // Apply moves
         let mut moves: Vec<(StationRef, Coordinates)> = final_deltas.into_iter().collect();
         moves.sort_by(|a, b| {
-            (a.0.section_id, a.0.station_index).cmp(&(b.0.section_id, b.0.station_index))
+            (a.0.line_id, a.0.station_index).cmp(&(b.0.line_id, b.0.station_index))
         });
         for (station, delta) in moves {
             if Self::coords_norm(delta) <= 1e-9 {

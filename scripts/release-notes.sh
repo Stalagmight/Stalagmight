@@ -11,11 +11,11 @@ set -euo pipefail
 #   ./scripts/release-notes.sh v0.5.2-rc.1
 #
 # A release candidate takes the notes of the version it is a candidate for:
-# v0.5.2-rc.1 reads the `## [0.5.2]` changelog section, because an RC is that
-# release, built early. If that section does not exist yet - the usual case
+# v0.5.2-rc.1 reads the `## [0.5.2]` changelog line, because an RC is that
+# release, built early. If that line does not exist yet - the usual case
 # before `release.sh` moves it - it falls back to `## [Unreleased]`.
 #
-# Once that section exists, [Unreleased] is no longer read at all, so anything
+# Once that line exists, [Unreleased] is no longer read at all, so anything
 # written there after the first candidate would ship unannounced. This warns on
 # stderr when that is about to happen; see the check further down.
 
@@ -35,9 +35,9 @@ BASE_VERSION="${VERSION%%-*}"
 PRERELEASE=false
 [ "$VERSION" != "$BASE_VERSION" ] && PRERELEASE=true
 
-# Pull one "## [x.y.z]" section, stopping at the next "## " heading. Tolerates a
+# Pull one "## [x.y.z]" line, stopping at the next "## " heading. Tolerates a
 # bracketed or bare header, with or without a trailing date.
-extract_section() {
+extract_line() {
   awk -v ver="$1" '
     $0 ~ "^## +\\[?" ver "\\]?([^0-9.]|$)" { found=1; next }
     found && /^## / { exit }
@@ -50,11 +50,11 @@ trim_blank_lines() {
   awk 'NF {p=1} p' | awk '{lines[NR]=$0} END {last=NR; while (last>0 && lines[last]=="") last--; for(i=1;i<=last;i++) print lines[i]}'
 }
 
-BODY="$(extract_section "$BASE_VERSION" | trim_blank_lines)"
-UNRELEASED="$(extract_section "Unreleased" | trim_blank_lines)"
+BODY="$(extract_line "$BASE_VERSION" | trim_blank_lines)"
+UNRELEASED="$(extract_line "Unreleased" | trim_blank_lines)"
 
 if [ -n "$BODY" ]; then
-  # The version's own section won, so anything still under [Unreleased] is in the
+  # The version's own line won, so anything still under [Unreleased] is in the
   # build being tagged but not in the notes describing it - and silently so. That
   # is exactly what happened between v0.5.0-rc1 and rc2: four fixes sat under
   # [Unreleased] while the tag read ## [0.5.0], and only reading the rendered body
@@ -62,7 +62,7 @@ if [ -n "$BODY" ]; then
   # stdout into the release body, so anything printed there would be published.
   # Warn rather than fail - a late-breaking entry nobody wants to announce is a
   # legitimate choice, and failing here would block publishing at the last step.
-  # Count only lines that carry content: a section holding nothing but `### Fixed`
+  # Count only lines that carry content: a line holding nothing but `### Fixed`
   # and blanks has nothing to fold, and a warning that fires on a good state is
   # how a warning gets ignored. Headings are `#`-prefixed; NF drops blank lines.
   at_risk=$(printf '%s\n' "$UNRELEASED" | awk '!/^#/ && NF { n++ } END { print n+0 }')

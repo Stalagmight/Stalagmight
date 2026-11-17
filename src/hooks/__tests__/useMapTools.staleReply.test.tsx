@@ -48,15 +48,15 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     location: null,
     created_at: '2026-01-01T00:00:00Z',
     modified_at: '2026-01-01T00:00:00Z',
-    sections: [],
+    lines: [],
     station_merges: [],
     zero_datums: [],
     loop_closures: [],
     file_path: '/mock/a.stalx',
-    next_section_id: 1,
-    section_offsets: {},
+    next_line_id: 1,
+    line_offsets: {},
     imported_file_hashes: [],
-    imported_section_hashes: [],
+    imported_line_hashes: [],
     next_closure_id: 1n,
     validation: {
       warn_shot_length_min: 0,
@@ -72,9 +72,9 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   };
 }
 
-function makeStation(section_id: number, station_index: number, x: number, y: number): Station {
+function makeStation(line_id: number, station_index: number, x: number, y: number): Station {
   return {
-    station_ref: { section_id, station_index },
+    station_ref: { line_id, station_index },
     coordinates: { x, y, z: 0 },
     is_zero_datum: false,
     gps_coordinates: null,
@@ -121,13 +121,13 @@ const clickEvent = { originalEvent: new MouseEvent('click') } as unknown as MapM
 
 const RESULT_A: AlongLineResult = {
   along_line: 111,
-  path_shots: [{ section_id: 1, shot_id: 1 }],
-  path_stations: [{ section_id: 1, station_index: 1 }],
+  path_shots: [{ line_id: 1, shot_id: 1 }],
+  path_stations: [{ line_id: 1, station_index: 1 }],
 };
 const RESULT_B: AlongLineResult = {
   along_line: 222,
-  path_shots: [{ section_id: 1, shot_id: 2 }],
-  path_stations: [{ section_id: 1, station_index: 2 }],
+  path_shots: [{ line_id: 1, shot_id: 2 }],
+  path_stations: [{ line_id: 1, station_index: 2 }],
 };
 
 const RESULT_A_SHAPE = {
@@ -196,10 +196,10 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     expectAlongLineCallCount(1);
 
@@ -232,20 +232,20 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     expectAlongLineCallCount(1);
 
     // Clicking again on a completed measurement resets and restarts it (#26) -
     // a fast second measurement with fresh endpoints, request 1 still pending.
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 2 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 2 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     expectAlongLineCallCount(2);
 
@@ -263,10 +263,10 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     expectAlongLineCallCount(1);
 
@@ -295,10 +295,10 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     expect(useUIStore.getState().measureAlongLinePending).toBe(true);
 
@@ -316,16 +316,16 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 2 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 2 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     expectAlongLineCallCount(2);
 
@@ -347,10 +347,10 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     const { result } = renderHook(() => useMapTools());
 
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 0 }, clickEvent);
     });
     act(() => {
-      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+      result.current.onStationClick?.({ line_id: 1, station_index: 1 }, clickEvent);
     });
     expectAlongLineCallCount(1);
 

@@ -40,7 +40,7 @@
  * it - the visible set only ever grows.
  *
  * REAL LINE FIRST (virtual rank). A label that belongs only to virtual geometry -
- * a Jump or Reference shot, or a station / section every leg of which is one - is
+ * a Jump or Reference shot, or a station / line every leg of which is one - is
  * never shown in place of a real-line label. The ladder above runs once per
  * {@link labelVirtualRank} (real 0, jump 1, reference 2), best rank first, and a
  * later pass RESERVES every earlier-rank winner's slot, including the ones that
@@ -52,14 +52,14 @@
  * vanish the two would then overlap. So a real
  * label's reveal is exactly what it would be with no virtual labels at all, and a
  * jump label's likewise with no reference labels. The tier / kind / ordinal order
- * still decides WITHIN a rank. Below the label build band only section names are
- * built, so there the station / shot labels around a jump or reference section's
+ * still decides WITHIN a rank. Below the label build band only line names are
+ * built, so there the station / shot labels around a jump or reference line's
  * name come in as RESERVED slots ({@link RevealInput.reserved}) - otherwise the
  * name would show at z10..13.5 only to lose its slot, and vanish, once they are.
  *
  * ERRORS LABELS (SHOT_ERROR / CLOSURE_ERROR) rank by their SCORE (worst first)
  * within a pass, so where two overlap the worse error is the one shown: those at
- * or past a warning level right after section names, minor ones after station
+ * or past a warning level right after line names, minor ones after station
  * labels. They are not ordinal-decimated (tier 0). An error label that is
  * admitted at a ladder step but does not fit there RESERVES its box for the rest
  * of that step: no later candidate of the same pass may take the space, so at
@@ -68,7 +68,7 @@
  * the visible set stays monotone in zoom.
  *
  * DETERMINISM ACROSS REBUILDS. The priority order uses a STABLE per-label id
- * (global shot / station index, or section id) rather than the array position,
+ * (global shot / station index, or line id) rather than the array position,
  * so a pan-settle rebuild whose candidate membership shifts still resolves an
  * unchanged neighbourhood identically (padding absorbs the edge effects).
  */
@@ -185,8 +185,8 @@ export interface RevealInput {
    *  but a build at a higher zoom would. A virtual candidate leaves their slots
    *  free exactly as if they were drawn (from their decimation floor, the
    *  earliest they could reveal), so it never shows here only to lose its slot
-   *  once they are built: the section-only build below the label band reserves
-   *  the station / shot labels around a jump or reference section's name. They
+   *  once they are built: the line-only build below the label band reserves
+   *  the station / shot labels around a jump or reference line's name. They
    *  get no reveal of their own and block only labels of a worse rank. */
   reserved?: RevealReservation | undefined;
   /** Emit horizon slack in zoom levels (default {@link EMIT_SLACK}). */
@@ -204,15 +204,15 @@ export interface RevealInput {
  *  An Errors label at or past a warning level (`score >= 1`) outranks station
  *  labels; a minor one comes after them, so trivial deltas do not crowd out
  *  station IDs. Errors stay ordered worst first (the split is by score). */
-export function labelPriority(kind: LabelKind, firstInSection: boolean, score = 0): number {
+export function labelPriority(kind: LabelKind, firstInLine: boolean, score = 0): number {
   switch (kind) {
-    case LABEL_KIND.SECTION_NAME:
+    case LABEL_KIND.LINE_NAME:
       return 0;
     case LABEL_KIND.SHOT_ERROR:
     case LABEL_KIND.CLOSURE_ERROR:
       return score >= SCORE_WARNING ? 1 : 4;
     case LABEL_KIND.STATION_LABEL:
-      return firstInSection ? 2 : 3;
+      return firstInLine ? 2 : 3;
     case LABEL_KIND.SHOT_LABEL:
       return 5;
     default:
@@ -225,13 +225,13 @@ export function isErrorKind(kind: LabelKind): boolean {
   return kind === LABEL_KIND.SHOT_ERROR || kind === LABEL_KIND.CLOSURE_ERROR;
 }
 
-/** Real-line labels: a Normal shot's own labels, or a station / section that at
+/** Real-line labels: a Normal shot's own labels, or a station / line that at
  *  least one Normal shot touches. */
 export const VIRTUAL_RANK_REAL = 0;
-/** Labels of a Jump (swum, no line laid), or of a station / section touched only
+/** Labels of a Jump (swum, no line laid), or of a station / line touched only
  *  by virtual shots, at least one of them a Jump. */
 export const VIRTUAL_RANK_JUMP = 1;
-/** Labels of a Reference (tape tie, not swimmable), or of a station / section
+/** Labels of a Reference (tape tie, not swimmable), or of a station / line
  *  touched only by References. */
 export const VIRTUAL_RANK_REFERENCE = 2;
 const VIRTUAL_RANK_COUNT = 3;
@@ -242,7 +242,7 @@ const VIRTUAL_RANK_COUNT = 3;
  * one holds (module header, REAL LINE FIRST).
  *
  * Shot labels and shot comments carry their own shot's kind (`JUMP` /
- * `REFERENCE`). Station labels, station comments and section names carry the
+ * `REFERENCE`). Station labels, station comments and line names carry the
  * all-virtual bit pair (`ALL_JUMP` / `ALL_REFERENCE`), set only when no Normal
  * shot touches them; such a label takes the better of the kinds that touch it,
  * so a station on both a jump and a reference ranks as a jump (as does a station
@@ -259,12 +259,12 @@ export function labelVirtualRank(desc: LabelDescriptor): number {
 
 /** A stable per-label identity independent of the array position, so the
  *  priority order (and thus the reveal outcome) is deterministic across rebuilds
- *  whose candidate membership shifts. Global shot / station indices and section
+ *  whose candidate membership shifts. Global shot / station indices and line
  *  ids are viewport-independent. */
 function stableId(desc: LabelDescriptor): number {
   if (desc.shotGlobal !== undefined) return desc.shotGlobal;
   if (desc.stationGlobal !== undefined) return desc.stationGlobal;
-  return desc.sectionId ?? 0;
+  return desc.lineId ?? 0;
 }
 
 interface Candidate {
@@ -323,11 +323,11 @@ function overlaps(a: ScreenBox, b: ScreenBox): boolean {
 function isCandidate(desc: LabelDescriptor, input: RevealInput): boolean {
   if (!input.kindVisible[desc.kind]) return false;
   // Per-kind, mirroring the shader: a hidden kind's own labels stop being
-  // candidates, while an ALL_REFERENCE station/section label needs both kinds
+  // candidates, while an ALL_REFERENCE station/line label needs both kinds
   // hidden before its geometry is actually gone.
   if (input.hideReference && (desc.flags & LABEL_FLAG.REFERENCE) !== 0) return false;
   if (input.hideJump && (desc.flags & LABEL_FLAG.JUMP) !== 0) return false;
-  // A station/section label whose every leg is virtual stops being a candidate
+  // A station/line label whose every leg is virtual stops being a candidate
   // when every kind touching it is hidden - per-kind, mirroring the shader and
   // the circle. A station can be touched by BOTH kinds, hence a bit pair.
   const allJump = (desc.flags & LABEL_FLAG.ALL_JUMP) !== 0;
@@ -429,8 +429,8 @@ export function computeRevealZooms(
     if (extent === null || extent === undefined) continue; // no ink → never emitted
     const desc = descriptors[i]!;
     const style = LABEL_KIND_STYLE[desc.kind];
-    const firstInSection = (desc.flags & LABEL_FLAG.FIRST_IN_SECTION) !== 0;
-    const admitZoom = decimationAdmitZoom(desc.kind, desc.ordinal, firstInSection, style.minzoom);
+    const firstInLine = (desc.flags & LABEL_FLAG.FIRST_IN_LINE) !== 0;
+    const admitZoom = decimationAdmitZoom(desc.kind, desc.ordinal, firstInLine, style.minzoom);
     if (!isCandidate(desc, input)) {
       // Toggled-off / reference-hidden: emitted UNCONTESTED at its decimation
       // floor (mirrors the old "emitted, no collide-hide"), so a later toggle-on
@@ -447,7 +447,7 @@ export function computeRevealZooms(
       admitZoom,
       rank: labelVirtualRank(desc),
       tier: errorKind ? 0 : decimationTier(desc.ordinal),
-      priority: labelPriority(desc.kind, firstInSection, desc.score),
+      priority: labelPriority(desc.kind, firstInLine, desc.score),
       scoreRank: errorKind ? -(desc.score ?? 0) : 0,
       ordinal: desc.ordinal,
       id: stableId(desc),
@@ -608,8 +608,8 @@ function reservedPhantoms(input: RevealInput, levelAt: (zoom: number) => number,
     const desc = reserved.descriptors[i]!;
     if (extent === null || extent === undefined || !isCandidate(desc, input)) continue;
     const style = LABEL_KIND_STYLE[desc.kind];
-    const firstInSection = (desc.flags & LABEL_FLAG.FIRST_IN_SECTION) !== 0;
-    const admitZoom = decimationAdmitZoom(desc.kind, desc.ordinal, firstInSection, style.minzoom);
+    const firstInLine = (desc.flags & LABEL_FLAG.FIRST_IN_LINE) !== 0;
+    const admitZoom = decimationAdmitZoom(desc.kind, desc.ordinal, firstInLine, style.minzoom);
     const level = levelAt(admitZoom);
     if (level >= levelCount) continue;
     const rank = labelVirtualRank(desc);

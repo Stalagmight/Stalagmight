@@ -13,7 +13,7 @@
  * Rendered at the full-component tier (real DataTable, real projectStore, mocked
  * `invokeIpc`) because the crash is in the seed -> save-effect handoff across a
  * real state update, which only exists when the component owns the state.
- * `sections={[]}` keeps SpreadsheetGrid out of the render.
+ * `lines={[]}` keeps SpreadsheetGrid out of the render.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
@@ -71,7 +71,7 @@ afterEach(() => {
 
 describe('data-table view seed against a backend predating the view fields', () => {
   it('mounts and survives the debounce instead of crashing on the absent fields', async () => {
-    expect(() => render(<DataTable sections={[]} />)).not.toThrow();
+    expect(() => render(<DataTable lines={[]} />)).not.toThrow();
     expect(screen.getByTestId('data-table-columns-menu')).toBeTruthy();
 
     // The crash is not at mount: the seed effect and the save effect run in the
@@ -84,7 +84,7 @@ describe('data-table view seed against a backend predating the view fields', () 
   });
 
   it('starts with no overrides rather than scheduling a save of state the user never touched', async () => {
-    render(<DataTable sections={[]} />);
+    render(<DataTable lines={[]} />);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);

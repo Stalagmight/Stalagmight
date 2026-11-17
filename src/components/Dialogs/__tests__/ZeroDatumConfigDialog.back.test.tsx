@@ -5,7 +5,7 @@
  *
  * The fix carries this dialog's LIVE state (not just what it opened with) via
  * `onBack`, and App.tsx's routing decides whether a forward pass re-seeds it:
- * only a same-section re-pick does. This suite mounts the REAL
+ * only a same-line re-pick does. This suite mounts the REAL
  * `ZeroDatumSelectionDialog` and `ZeroDatumConfigDialog`, driven by the REAL
  * `uiStore`, through a harness that calls the exact PRODUCTION functions
  * App.tsx calls (`carryZeroDatumConfig`, `readCarriedZeroDatumConfig`,
@@ -37,7 +37,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
@@ -99,7 +99,7 @@ function dmpSection(name: string, hash: string): DmpSection {
 function dmpFile(): DmpFile {
   return {
     version: 1,
-    sections: [dmpSection('Main Passage', 'hash-a'), dmpSection('Side Tunnel', 'hash-b')],
+    lines: [dmpSection('Main Passage', 'hash-a'), dmpSection('Side Tunnel', 'hash-b')],
   } as unknown as DmpFile;
 }
 
@@ -110,7 +110,7 @@ const selectionConfig = {
 } as unknown as DmpSelectionConfig;
 
 /** Mirrors App.tsx's `zero-datum-selection` / `zero-datum-config` routing
- *  (the `onBack` prop around App.tsx:855 and `onSelectSection` around
+ *  (the `onBack` prop around App.tsx:855 and `onSelectLine` around
  *  App.tsx:825), calling the same production carry functions App.tsx does. */
 function Harness() {
   const activeDialog = useUIStore((s) => s.activeDialog);
@@ -126,12 +126,12 @@ function Harness() {
         onCancel={() => {}}
         onBack={() => {}}
         onSkip={() => {}}
-        onSelectSection={(sectionIndex) => {
+        onSelectLine={(lineIndex) => {
           openDialog('zero-datum-config', {
             dmpFile: dialogData.dmpFile,
             selectionConfig: dialogData.selectionConfig,
-            zeroDatumSectionIndex: sectionIndex,
-            [ZERO_DATUM_CARRY_KEY]: carryZeroDatumConfig(readCarriedZeroDatumConfig(dialogData), sectionIndex),
+            zeroDatumLineIndex: lineIndex,
+            [ZERO_DATUM_CARRY_KEY]: carryZeroDatumConfig(readCarriedZeroDatumConfig(dialogData), lineIndex),
           });
         }}
       />
@@ -142,7 +142,7 @@ function Harness() {
       <ZeroDatumConfigDialog
         dmpFile={dialogData.dmpFile as DmpFile}
         selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
-        sectionIndex={dialogData.zeroDatumSectionIndex as number}
+        lineIndex={dialogData.zeroDatumLineIndex as number}
         filePath="/tmp/anchor.dmp"
         initialConfig={readCarriedZeroDatumConfig(dialogData)}
         onCancel={() => {}}
@@ -182,49 +182,49 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
    * has nothing to hand back, and the reopened config dialog shows the file
    * defaults instead of what was typed.
    */
-  it('Back-to-selection then same-section-forward shows the LIVE (not just carried-in) GPS and name', () => {
+  it('Back-to-selection then same-line-forward shows the LIVE (not just carried-in) GPS and name', () => {
     useUIStore.getState().openDialog('zero-datum-config', {
       dmpFile: dmpFile(),
       selectionConfig,
-      zeroDatumSectionIndex: 0,
+      zeroDatumLineIndex: 0,
     });
     render(<Harness />);
 
     fireEvent.change(screen.getByTestId('zero-datum-gps-input'), {
       target: { value: '24.550123, -81.780456' },
     });
-    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'Typed Name' } });
+    fireEvent.change(screen.getByTestId('line-name-input'), { target: { value: 'Typed Name' } });
 
     clickBack();
-    fireEvent.click(screen.getByTestId('zero-datum-section-card-0'));
+    fireEvent.click(screen.getByTestId('zero-datum-line-card-0'));
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('24.550123, -81.780456');
-    expect(screen.getByTestId('section-name-input')).toHaveValue('Typed Name');
+    expect(screen.getByTestId('line-name-input')).toHaveValue('Typed Name');
   });
 
   /**
    * Injection: in `carryZeroDatumConfig` (src/utils/zeroDatumCarry.ts), drop
-   * the `carried?.sectionIndex === sectionIndex` check (always return
-   * `carried`) - a different-section re-pick then still shows 'Typed Name'.
+   * the `carried?.lineIndex === lineIndex` check (always return
+   * `carried`) - a different-line re-pick then still shows 'Typed Name'.
    */
-  it('Back-to-selection then different-section-forward starts fresh', () => {
+  it('Back-to-selection then different-line-forward starts fresh', () => {
     useUIStore.getState().openDialog('zero-datum-config', {
       dmpFile: dmpFile(),
       selectionConfig,
-      zeroDatumSectionIndex: 0,
+      zeroDatumLineIndex: 0,
     });
     render(<Harness />);
 
     fireEvent.change(screen.getByTestId('zero-datum-gps-input'), {
       target: { value: '24.550123, -81.780456' },
     });
-    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'Typed Name' } });
+    fireEvent.change(screen.getByTestId('line-name-input'), { target: { value: 'Typed Name' } });
 
     clickBack();
-    fireEvent.click(screen.getByTestId('zero-datum-section-card-1'));
+    fireEvent.click(screen.getByTestId('zero-datum-line-card-1'));
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('');
-    expect(screen.getByTestId('section-name-input')).toHaveValue('Side Tunnel');
+    expect(screen.getByTestId('line-name-input')).toHaveValue('Side Tunnel');
   });
 
   /**
@@ -239,7 +239,7 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
     useUIStore.getState().openDialog('zero-datum-config', {
       dmpFile: dmpFile(),
       selectionConfig,
-      zeroDatumSectionIndex: 0,
+      zeroDatumLineIndex: 0,
     });
     render(<Harness />);
 
@@ -249,7 +249,7 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
     expect(screen.queryByTestId('zero-datum-gps-parsed')).not.toBeInTheDocument();
 
     clickBack();
-    fireEvent.click(screen.getByTestId('zero-datum-section-card-0'));
+    fireEvent.click(screen.getByTestId('zero-datum-line-card-0'));
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('not a coordinate');
   });
@@ -269,7 +269,7 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
     useUIStore.getState().openDialog('zero-datum-config', {
       dmpFile: dmpFile(),
       selectionConfig,
-      zeroDatumSectionIndex: 0,
+      zeroDatumLineIndex: 0,
     });
     render(<Harness />);
 
@@ -281,7 +281,7 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
     });
 
     clickBack();
-    fireEvent.click(screen.getByTestId('zero-datum-section-card-0'));
+    fireEvent.click(screen.getByTestId('zero-datum-line-card-0'));
 
     expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('-12.5');
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('not a coordinate');
@@ -296,9 +296,9 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
     useUIStore.getState().openDialog('zero-datum-selection', { dmpFile: dmpFile(), selectionConfig });
     render(<Harness />);
 
-    fireEvent.click(screen.getByTestId('zero-datum-section-card-0'));
+    fireEvent.click(screen.getByTestId('zero-datum-line-card-0'));
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('');
-    expect(screen.getByTestId('section-name-input')).toHaveValue('Main Passage');
+    expect(screen.getByTestId('line-name-input')).toHaveValue('Main Passage');
   });
 });

@@ -30,8 +30,8 @@ function open(dialogData: Record<string, unknown>) {
   useUIStore.setState({
     activeDialog: 'closure',
     dialogData: {
-      stationA: { section_id: 0, station_index: 1 },
-      stationB: { section_id: 0, station_index: 2 },
+      stationA: { line_id: 0, station_index: 1 },
+      stationB: { line_id: 0, station_index: 2 },
       preview,
       ...dialogData,
     },
@@ -43,7 +43,7 @@ describe('ClosureDialog - refusal guard (#737)', () => {
 
   beforeEach(() => {
     createLoopClosure.mockReset();
-    createLoopClosure.mockResolvedValue({ success: true, warnings: [], section_ids: [] });
+    createLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
     useProjectStore.setState({ createLoopClosure, project: null } as never);
   });
 
@@ -80,8 +80,8 @@ describe('ClosureDialog - refusal guard (#737)', () => {
     expect(create).toBeEnabled();
     await userEvent.click(create);
     expect(createLoopClosure).toHaveBeenCalledWith(
-      { section_id: 0, station_index: 1 },
-      { section_id: 0, station_index: 2 },
+      { line_id: 0, station_index: 1 },
+      { line_id: 0, station_index: 2 },
       'Batch',
     );
   });

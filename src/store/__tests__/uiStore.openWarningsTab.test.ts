@@ -26,7 +26,7 @@ describe('openWarningsTab', () => {
       detailPanelMode: 'pin',
       detailRevealNonce: 0,
       requestResolveWarning: null,
-      focusedSectionId: null,
+      focusedLineId: null,
       dataTableFullScreen: false,
     });
   });
@@ -74,7 +74,7 @@ describe('openWarningsTab', () => {
   it('triggerResolveWarning still asks for one issue through the same reveal', () => {
     useUIStore.getState().triggerResolveWarning(3, 7);
     const s = useUIStore.getState();
-    expect(s.requestResolveWarning).toEqual({ sectionId: 3, shotId: 7 });
+    expect(s.requestResolveWarning).toEqual({ lineId: 3, shotId: 7 });
     expect(s.detailPanelTab).toBe('warnings');
     expect(s.detailPanelOpen).toBe(true);
   });

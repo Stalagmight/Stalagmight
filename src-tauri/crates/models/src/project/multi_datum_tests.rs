@@ -9,7 +9,7 @@ use chrono::Utc;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
     datum_gap_threshold_m, gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates,
-    Project, SectionData, SectionId, ShotData, StationMerge, StationRef, ZeroDatum,
+    Project, LineData, LineId, ShotData, StationMerge, StationRef, ZeroDatum,
     MAX_GPS_ACCURACY_M,
 };
 
@@ -27,8 +27,8 @@ fn gps_at(east: f64, north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-/// A section of `count` shots of `length` metres due north.
-fn north_line(project: &mut Project, count: usize, length: f64) -> SectionId {
+/// A line of `count` shots of `length` metres due north.
+fn north_line(project: &mut Project, count: usize, length: f64) -> LineId {
     let shots = (0..count)
         .map(|_| ShotData {
             azimuth_in: 0.0,
@@ -38,7 +38,7 @@ fn north_line(project: &mut Project, count: usize, length: f64) -> SectionId {
         })
         .collect();
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -81,10 +81,10 @@ fn merge(project: &mut Project, a: StationRef, b: StationRef) {
     });
 }
 
-/// Two entrances joined by a 500 m traverse: section A (250 m north from the
-/// first entrance) merged end-to-start onto section B (250 m more). The first
+/// Two entrances joined by a 500 m traverse: line A (250 m north from the
+/// first entrance) merged end-to-start onto line B (250 m more). The first
 /// entrance is the frame datum at A:0. Returns `(project, a, b)`.
-fn two_entrance_traverse() -> (Project, SectionId, SectionId) {
+fn two_entrance_traverse() -> (Project, LineId, LineId) {
     let mut project = Project::new("TwoEntrances".to_string(), None);
     let a = north_line(&mut project, 5, 50.0);
     let b = north_line(&mut project, 5, 50.0);
@@ -221,7 +221,7 @@ fn preview_names_the_role_and_the_gap_before_anything_is_stored() {
 /// Two separately placed pieces, 30 m apart where they are about to be merged:
 /// A (frame, datum A:0) runs 0..100 m north; B is placed by its own GPS so that
 /// B:0 sits 30 m east of A:2.
-fn two_placed_pieces() -> (Project, SectionId, SectionId) {
+fn two_placed_pieces() -> (Project, LineId, LineId) {
     let mut project = Project::new("TwoPieces".to_string(), None);
     let a = north_line(&mut project, 2, 50.0);
     let b = north_line(&mut project, 2, 50.0);
@@ -273,7 +273,7 @@ fn merging_two_placed_pieces_moves_the_later_one_and_makes_its_datum_a_fix() {
         let gap = project.gps_fix_gaps()[&start_b];
         assert!((gap.gap_m - 30.0).abs() < 0.01, "gap {}", gap.gap_m);
 
-        // Nothing tears afterwards: the fix's section is not authoritative.
+        // Nothing tears afterwards: the fix's line is not authoritative.
         project.resolve_offsets();
         assert!(project.check_merge_alignment().is_empty());
         assert_eq!(project.datum_roles()[1], Some(DatumRole::GpsFix));
@@ -305,7 +305,7 @@ fn unmerging_places_the_detached_piece_on_its_own_gps() {
     let after = raw_xy(&project);
     for (sr, (mx, my)) in &merged {
         let (ax, ay) = after[sr];
-        let east = if sr.section_id == b { 30.0 } else { 0.0 };
+        let east = if sr.line_id == b { 30.0 } else { 0.0 };
         assert!(
             (ax - (mx + east)).abs() < 1e-6 && (ay - my).abs() < 1e-6,
             "{sr:?}: ({mx}, {my}) -> ({ax}, {ay})"
@@ -352,7 +352,7 @@ fn removing_a_placement_datum_places_the_promoted_fix_on_its_gps() {
     let after = raw_xy(&project);
     for (sr, (bx, by)) in &before {
         let (ax, ay) = after[sr];
-        let east = if sr.section_id == elsewhere {
+        let east = if sr.line_id == elsewhere {
             0.0
         } else {
             40.0
@@ -431,14 +431,14 @@ fn gap_warning_boundary_is_15_m_plus_2_percent() {
 /// endpoints sit 40 m apart, because the old cascade held both datums.
 ///   A:0 (0,0)  A:2 (0,20) = B:0   B:2 (0,40)
 ///   C:0 (0,0)  C:2 (0,20)
-fn over_anchored_legacy_file() -> (Project, SectionId, SectionId, SectionId) {
+fn over_anchored_legacy_file() -> (Project, LineId, LineId, LineId) {
     let mut project = Project::new("Legacy".to_string(), None);
     let a = north_line(&mut project, 2, 10.0);
     let b = north_line(&mut project, 2, 10.0);
     let c = north_line(&mut project, 2, 10.0);
     project.ensure_shot_uuids();
     merge(&mut project, StationRef::new(a, 2), StationRef::new(b, 0));
-    project.set_section_offset(b, (0.0, 20.0));
+    project.set_line_offset(b, (0.0, 20.0));
     project
         .zero_datums
         .push(ZeroDatum::new(StationRef::new(a, 0).into(), origin()));
@@ -503,7 +503,7 @@ fn an_old_aligned_group_with_two_datums_opens_unchanged_with_a_fix() {
     // second piece already sat on the first): nothing moves on open, nothing is
     // demoted, and the later datum derives as a GPS fix that reports its gap.
     let (mut project, _a, b, c) = over_anchored_legacy_file();
-    project.set_section_offset(c, (0.0, 40.0));
+    project.set_line_offset(c, (0.0, 40.0));
     assert!(project.check_merge_alignment().is_empty(), "setup: aligned");
     let before = raw_xy(&project);
 
@@ -658,13 +658,13 @@ fn each_fix_measures_its_survey_distance_from_its_placement_datum() {
 
 #[test]
 fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
-    // 80 sections of 50 shots chained end to start, a placement datum at the
+    // 80 lines of 50 shots chained end to start, a placement datum at the
     // start and a GPS fix on every other station: about 4000 fixes. One Dijkstra
     // per fix took tens of seconds here; one shared pass takes a fraction of one.
     let mut project = Project::new("ManyFixes".to_string(), None);
-    let sections: Vec<SectionId> = (0..80).map(|_| north_line(&mut project, 50, 2.0)).collect();
+    let lines: Vec<LineId> = (0..80).map(|_| north_line(&mut project, 50, 2.0)).collect();
     project.ensure_shot_uuids();
-    for pair in sections.windows(2) {
+    for pair in lines.windows(2) {
         merge(
             &mut project,
             StationRef::new(pair[0], 50),
@@ -672,14 +672,14 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
         );
     }
     project
-        .set_zero_datum(StationRef::new(sections[0], 0), origin())
+        .set_zero_datum(StationRef::new(lines[0], 0), origin())
         .unwrap();
-    for (s, &section) in sections.iter().enumerate() {
+    for (s, &line) in lines.iter().enumerate() {
         for i in 1..=50u32 {
             let north = (s as f64 * 50.0 + f64::from(i)) * 2.0;
             push_fix(
                 &mut project,
-                StationRef::new(section, i),
+                StationRef::new(line, i),
                 gps_at(1.0, north),
             );
         }
@@ -692,7 +692,7 @@ fn gap_check_cost_does_not_multiply_with_the_number_of_fixes() {
     assert_eq!(gaps.len(), 4000);
     // Each fix is measured back along the chain to the placement datum.
     for (sr, g) in &gaps {
-        let s = sections.iter().position(|id| *id == sr.section_id).unwrap();
+        let s = lines.iter().position(|id| *id == sr.line_id).unwrap();
         let expected = (s as f64 * 50.0 + f64::from(sr.station_index)) * 2.0;
         assert!((g.survey_distance_m.unwrap() - expected).abs() < 1e-6);
     }
@@ -857,7 +857,7 @@ fn a_station_holds_at_most_one_datum() {
 /// Two unconnected placed pieces (#769): A (frame, datum A:0) runs 200 m
 /// east, C is placed by its own GPS 300 m east and 100 m north of A:0, and
 /// C:3 holds a GPS fix.
-fn frame_and_placed_piece() -> (Project, SectionId, SectionId) {
+fn frame_and_placed_piece() -> (Project, LineId, LineId) {
     let mut project = Project::new("FramePieces".to_string(), None);
     let shots = (0..4)
         .map(|_| ShotData {
@@ -868,7 +868,7 @@ fn frame_and_placed_piece() -> (Project, SectionId, SectionId) {
         })
         .collect();
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -961,7 +961,7 @@ fn an_accuracy_or_entrance_edit_of_the_frame_moves_nothing() {
     let (mut project, a, c) = frame_and_placed_piece();
     // C left 5 m off its GPS, as an older file can: only a GPS change
     // re-places a piece.
-    project.adjust_section_offset(c, 5.0, 0.0);
+    project.adjust_line_offset(c, 5.0, 0.0);
     let before = raw_xy(&project);
     let frame = StationRef::new(a, 0);
     project
@@ -988,7 +988,7 @@ fn frame_correction(
 fn a_new_frame_gps_moves_a_piece_off_its_gps_by_the_correction_and_keeps_its_gap() {
     let (mut project, a, c) = frame_and_placed_piece();
     // C left 5 m off its GPS, as an older file can.
-    project.adjust_section_offset(c, 5.0, 0.0);
+    project.adjust_line_offset(c, 5.0, 0.0);
     let c_gps = project.zero_datums[1].gps;
     let c0 = StationRef::new(c, 0);
     let (bx, by) = xy(&project, c0);
@@ -1039,7 +1039,7 @@ fn a_new_frame_gps_moves_a_merged_piece_as_one() {
     let after = raw_xy(&project);
     for (sr, (bx, by)) in &before {
         let (ax, ay) = after[sr];
-        let (ex, ey) = if sr.section_id == a {
+        let (ex, ey) = if sr.line_id == a {
             (0.0, 0.0)
         } else {
             (dx, dy)

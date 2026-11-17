@@ -6,7 +6,7 @@ import { TOAST_KEYS } from './toastKeys';
  * The `CommandResult` warning code a delete with shift reports for each loop
  * closure it removed because, after the delete, the closure spans a single
  * shot (#737; `CLOSURE_REMOVED_ACROSS_ONE_SHOT` in the Rust models), and
- * Combine Sections for each tie it removed because, combined, the closure it
+ * Combine Lines for each tie it removed because, combined, the closure it
  * is or would become joins the two ends of one shot (#746).
  */
 export const CLOSURE_REMOVED_ACROSS_ONE_SHOT = 'CLOSURE_REMOVED_ACROSS_ONE_SHOT';

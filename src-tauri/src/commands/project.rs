@@ -177,7 +177,7 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     stats.penetration_distance =
         project.calculate_penetration_with(&stations, include_reference_legs);
 
-    // Depth is the absolute station range, not a per-section delta walk (#481).
+    // Depth is the absolute station range, not a per-line delta walk (#481).
     let (min_depth, max_depth) = Project::depth_range(&stations);
     stats.min_depth = min_depth;
     stats.max_depth = max_depth;
@@ -332,7 +332,7 @@ pub fn set_project_name_for_path(
 }
 
 /// Merge multiple projects into a new project file
-/// This creates a NEW output file, appends all sections with renumbered IDs,
+/// This creates a NEW output file, appends all lines with renumbered IDs,
 /// keeps all zero datums, and optionally archives the original files.
 #[tauri::command]
 pub fn merge_projects(

@@ -16,8 +16,8 @@ describe('test ID contracts', () => {
   });
 
   it('keeps warning B stable after warning A leaves the list', () => {
-    const warningA = { sectionId: 1, shotId: 2, code: 'LENGTH' };
-    const warningB = { sectionId: 3, shotId: 8, code: 'DEPTH_DIFF', datumStationIndex: 2 };
+    const warningA = { lineId: 1, shotId: 2, code: 'LENGTH' };
+    const warningB = { lineId: 3, shotId: 8, code: 'DEPTH_DIFF', datumStationIndex: 2 };
     const before = [warningA, warningB].map(warningResolveTestId);
     const after = [warningB].map(warningResolveTestId);
 
@@ -29,12 +29,12 @@ describe('test ID contracts', () => {
   });
 
   it('tells apart two closures across the same shot by their closure id (#737)', () => {
-    const first = { sectionId: 0, shotId: 2, code: 'CLOSURE_ACROSS_ONE_SHOT', closureId: 4 };
+    const first = { lineId: 0, shotId: 2, code: 'CLOSURE_ACROSS_ONE_SHOT', closureId: 4 };
     const second = { ...first, closureId: 9 };
     expect(warningKey(first)).toBe('0:2:CLOSURE_ACROSS_ONE_SHOT:c4');
     expect(warningKey(first)).not.toBe(warningKey(second));
     expect(warningResolveTestId(second)).toBe('warning-0%3A2%3ACLOSURE_ACROSS_ONE_SHOT%3Ac9-resolve');
     // A warning without a closure id keeps the key it always had.
-    expect(warningKey({ sectionId: 0, shotId: 2, code: 'LENGTH' })).toBe('0:2:LENGTH');
+    expect(warningKey({ lineId: 0, shotId: 2, code: 'LENGTH' })).toBe('0:2:LENGTH');
   });
 });

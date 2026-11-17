@@ -1,4 +1,4 @@
-//! [#756] Combine Sections beside a section held to the rest by loop
+//! [#756] Combine Lines beside a line held to the rest by loop
 //! closures alone, through `AppState`. The issue's survey cannot be opened:
 //! the open's orphan-closure sweep settles it first, which is why the issue
 //! is not reachable in the app. What a survey the app leaves can show is a
@@ -11,7 +11,7 @@
 
 use super::AppState;
 use crate::models::{
-    ClosureStrategy, LoopClosure, Project, SectionData, SectionId, ShotData, StationRef,
+    ClosureStrategy, LoopClosure, Project, LineData, LineId, ShotData, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -23,9 +23,9 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some(name.to_string()),
             shots,
             ..Default::default()
@@ -33,8 +33,8 @@ fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
         .id
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 fn xy(project: &Project, at: StationRef) -> (f64, f64) {
@@ -43,9 +43,9 @@ fn xy(project: &Project, at: StationRef) -> (f64, f64) {
 }
 
 /// Move `id` so its station `index` sits exactly on `target`.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, st(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
 /// A loop closure as a file stores it, measured off the current geometry.
@@ -79,7 +79,7 @@ fn survey() -> Project {
     let m = add(&mut p, "M", vec![shot(90.0, 3.0)]);
     let z = add(&mut p, "Z", vec![shot(180.0, 5.0)]);
     let w = add(&mut p, "W", vec![shot(90.0, 4.0)]);
-    p.set_section_offset(k, (100.0, -40.0));
+    p.set_line_offset(k, (100.0, -40.0));
     let k2 = xy(&p, st(k, 2));
     place(&mut p, o, 0, (k2.0 + 0.004, k2.1 - 0.003));
     let k0 = xy(&p, st(k, 0));
@@ -141,10 +141,10 @@ fn the_issue_survey_written_to_a_file_opens_settled() {
     );
 }
 
-/// Every station's raw position, by section and index.
+/// Every station's raw position, by line and index.
 fn positions(project: &Project) -> Vec<(StationRef, (f64, f64))> {
     project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
         .map(|at| (at, xy(project, at)))
@@ -159,22 +159,22 @@ fn positions(project: &Project) -> Vec<(StationRef, (f64, f64))> {
 /// between two surveys held by zero datums). Combining K and O keeping K, O
 /// moves and tears its merge to D, and the snap from O into D's part tears
 /// too. Its reason is the zero datum that holds D, and the dialog names D as
-/// the section that stays; it used to give the loop-closure reason. A save
+/// the line that stays; it used to give the loop-closure reason. A save
 /// and a reopen settle nothing more and move nothing.
 #[test]
 fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_commands() {
     use crate::core::Command;
     use crate::models::{
-        CombineJoinEnds, CombinePick, CombineSectionsOptions, Coordinates, GpsCoordinates,
-        SectionEnd, TornTieKind, TornTieReason,
+        CombineJoinEnds, CombinePick, CombineLinesOptions, Coordinates, GpsCoordinates,
+        LineEnd, TornTieKind, TornTieReason,
     };
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Held".to_string(),
         location: None,
     });
-    let create = |name: &str, shots: Vec<ShotData>| -> SectionId {
-        let created = state.execute(Command::CreateSection {
+    let create = |name: &str, shots: Vec<ShotData>| -> LineId {
+        let created = state.execute(Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -183,16 +183,16 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
             shots,
         });
         assert!(created.success, "{:?}", created.error);
-        created.section_id.unwrap()
+        created.line_id.unwrap()
     };
-    let at = |s: SectionId, i: u32| xy(&project(&state), st(s, i));
-    let move_onto = |section: SectionId, index: u32, target: StationRef| {
+    let at = |s: LineId, i: u32| xy(&project(&state), st(s, i));
+    let move_onto = |line: LineId, index: u32, target: StationRef| {
         let (from, to) = (
-            at(section, index),
-            at(target.section_id, target.station_index),
+            at(line, index),
+            at(target.line_id, target.station_index),
         );
-        let moved = state.execute(Command::MoveSection {
-            section_id: section,
+        let moved = state.execute(Command::MoveLine {
+            line_id: line,
             offset: Coordinates {
                 x: to.0 - from.0,
                 y: to.1 - from.1,
@@ -260,10 +260,10 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
     let candidates = state.combine_candidates(st(k, 2)).unwrap();
     let candidate = candidates
         .iter()
-        .find(|c| [c.section_a, c.section_b] == [k, o])
+        .find(|c| [c.line_a, c.line_b] == [k, o])
         .unwrap();
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moving_section, Some(o));
+    assert_eq!(plan.moving_line, Some(o));
     let mut torn: Vec<_> = plan
         .torn_ties
         .iter()
@@ -273,7 +273,7 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
                 .then(|| {
                     [t.station_a, t.station_b]
                         .into_iter()
-                        .find(|at| !plan.moved_sections.contains(&at.section_id))
+                        .find(|at| !plan.moved_lines.contains(&at.line_id))
                 })
                 .flatten();
             (t.kind, t.reason, held)
@@ -291,18 +291,18 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
             ),
         ]
     );
-    let result = state.execute_combine_sections(
+    let result = state.execute_combine_lines(
         k,
         o,
-        CombineSectionsOptions {
+        CombineLinesOptions {
             name: "Joined".to_string(),
             color: "#abcdef".to_string(),
             swap_lr: true,
             comment_pick: CombinePick::Kept,
             name_pick: CombinePick::Kept,
             join: Some(CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             }),
         },
     );

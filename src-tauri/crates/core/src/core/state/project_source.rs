@@ -75,7 +75,7 @@ pub(super) fn read_source_project(
 /// builds zero-datum GPS without `GpsCoordinates::new`'s validation, and reads
 /// offsets as stored. A NaN or infinite value would pass every tolerance
 /// comparison downstream (NaN is never greater than a tolerance) and be written
-/// into the open project as section offsets; an out-of-range datum would place
+/// into the open project as line offsets; an out-of-range datum would place
 /// the copy somewhere meaningless. Checked on the raw read, before anything
 /// derives from it.
 fn refuse_non_finite_placement(project: &Project, label: &str, verb: &str) -> Result<(), String> {
@@ -92,11 +92,11 @@ fn refuse_non_finite_placement(project: &Project, label: &str, verb: &str) -> Re
         }
     }
     if project
-        .section_offsets
+        .line_offsets
         .values()
         .any(|(x, y)| !x.is_finite() || !y.is_finite())
     {
-        return refuse("a section offset is not a finite number".to_string());
+        return refuse("a line offset is not a finite number".to_string());
     }
     if project
         .station_offsets

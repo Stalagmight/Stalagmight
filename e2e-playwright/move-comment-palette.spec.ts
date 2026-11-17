@@ -2,7 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForActiveTool,
   waitForDrawnShots,
@@ -10,7 +10,7 @@ import {
   getStationScreenPositions,
   readCanvasPixel,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
   type ShotScreenPos,
 } from './helpers/app';
 import { commentColorForKey } from '../src/components/Map/surveyLayer/displayColor';
@@ -36,21 +36,21 @@ import { DISTANCE_NEAR, DISTANCE_FAR } from '../src/utils/distanceGradient';
  *
  * `commentColorForKey` is imported from the product module so the expected color
  * is the app's own (the palette slot is an FNV-1a hash of the owner key, not
- * something a test should re-derive). Owner keys are `${sectionId}:s${shotId}`
- * for a shot comment and `${sectionId}:st${stationIndex}` for a station comment.
+ * something a test should re-derive). Owner keys are `${lineId}:s${shotId}`
+ * for a shot comment and `${lineId}:st${stationIndex}` for a station comment.
  */
 
 /**
- * One section, 3 shots -> 4 stations. The FIRST shot owns a comment; the other
+ * One line, 3 shots -> 4 stations. The FIRST shot owns a comment; the other
  * two do not, which is what makes "only the comment owner is tinted" observable.
  *
  * The depths zig-zag across the whole depth range on purpose: the depth-gradient
  * test below reads the ramp ALONG each shot, so every shot needs its two ends far
  * apart on the ramp. The station comment is added in `beforeEach` (station
  * comments live on the station records the backend synthesizes, not on the
- * section seed).
+ * line seed).
  */
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Comment Main',
     direction: 'in',
@@ -73,11 +73,11 @@ const sectionSeeds: SectionSeed[] = [
 /**
  * The station that owns a comment. It must be a FREE END so its disc is crossed
  * by only one shot line - an interior station blends two lines under the probe
- * and the ramp assertions read a mixed pixel. Station 0 is out (the section-name
+ * and the ramp assertions read a mixed pixel. Station 0 is out (the line-name
  * label anchors there), which leaves the survey's last station.
  *
  * It must ALSO land on a different COMMENT_PALETTE slot than the commented shot,
- * or the guard in beforeEach trips. With section-encoded shot ids the old free
+ * or the guard in beforeEach trips. With line-encoded shot ids the old free
  * end collided (`1:st3` and `1:s100000` both hash to yellow), so the seed carries
  * a fourth shot to push the free end out to station 4 (green).
  */
@@ -122,46 +122,46 @@ async function setAppMode(page: Page, mode: string): Promise<void> {
   }, mode);
 }
 
-/** The seeded section's backend id (the mock assigns it, so never hard-code 1). */
-async function getSectionId(page: Page): Promise<number> {
+/** The seeded line's backend id (the mock assigns it, so never hard-code 1). */
+async function getLineId(page: Page): Promise<number> {
   const ids = await page.evaluate(() => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } };
+        projectStore: { getState: () => { project: { lines: Array<{ id: number }> } | null } };
       };
     }).__E2E_TEST__;
-    return e2e?.projectStore.getState().project?.sections.map((s) => s.id) ?? [];
+    return e2e?.projectStore.getState().project?.lines.map((s) => s.id) ?? [];
   });
   expect(ids.length).toBe(1);
   return ids[0]!;
 }
 
-/** The section's shot ids, in seed order (shot 0 is the one that owns a comment). */
-async function getShotIds(page: Page, sectionId: number): Promise<number[]> {
+/** The line's shot ids, in seed order (shot 0 is the one that owns a comment). */
+async function getShotIds(page: Page, lineId: number): Promise<number[]> {
   return page.evaluate((secId) => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
         projectStore: {
           getState: () => {
-            project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+            project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
           };
         };
       };
     }).__E2E_TEST__;
-    const section = e2e?.projectStore.getState().project?.sections.find((s) => s.id === secId);
-    return section?.shots.map((shot) => shot.id) ?? [];
-  }, sectionId);
+    const line = e2e?.projectStore.getState().project?.lines.find((s) => s.id === secId);
+    return line?.shots.map((shot) => shot.id) ?? [];
+  }, lineId);
 }
 
 /**
  * Attach a comment to a station and wait for it to land in the store. Station
- * comments are not part of a section seed: they live on the station records the
+ * comments are not part of a line seed: they live on the station records the
  * backend synthesizes, so they go through the same `set_station_comment` command
  * the UI uses.
  */
 async function setStationComment(
   page: Page,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
   comment: string,
 ): Promise<void> {
@@ -172,7 +172,7 @@ async function setStationComment(
           projectStore: {
             getState: () => {
               updateStationComment: (
-                ref: { section_id: number; station_index: number },
+                ref: { line_id: number; station_index: number },
                 comment: string | null,
               ) => Promise<unknown>;
             };
@@ -181,9 +181,9 @@ async function setStationComment(
       }).__E2E_TEST__;
       await e2e?.projectStore
         .getState()
-        .updateStationComment({ section_id: secId, station_index: idx }, text);
+        .updateStationComment({ line_id: secId, station_index: idx }, text);
     },
-    { secId: sectionId, idx: stationIndex, text: comment },
+    { secId: lineId, idx: stationIndex, text: comment },
   );
   await expect
     .poll(
@@ -195,7 +195,7 @@ async function setStationComment(
                 projectStore: {
                   getState: () => {
                     stations: Array<{
-                      station_ref: { section_id: number; station_index: number };
+                      station_ref: { line_id: number; station_index: number };
                       comment?: string | null;
                     }>;
                   };
@@ -207,11 +207,11 @@ async function setStationComment(
                 .getState()
                 .stations.find(
                   (s) =>
-                    s.station_ref.section_id === secId && s.station_ref.station_index === idx,
+                    s.station_ref.line_id === secId && s.station_ref.station_index === idx,
                 )?.comment ?? null
             );
           },
-          { secId: sectionId, idx: stationIndex },
+          { secId: lineId, idx: stationIndex },
         ),
       { timeout: 5000 },
     )
@@ -273,7 +273,7 @@ const FAR_RGBA = hexRgba(DISTANCE_FAR);
 
 /**
  * Whether a painted sample is the given color. The tolerance keeps the check
- * honest without being brittle: the comment palette, the section blue and the
+ * honest without being brittle: the comment palette, the line blue and the
  * distance ramp ends are all far apart, so nothing else lands inside it.
  */
 function isColor(px: PixelRgba, hex: string, tolerance = 8): boolean {
@@ -296,7 +296,7 @@ function differs(a: PixelRgba, b: PixelRgba, tolerance = 8): boolean {
 
 /**
  * Name a painted sample against the colors this spec cares about, so a mismatch
- * reads as "painted section blue, expected the comment tint" instead of two RGB
+ * reads as "painted line blue, expected the comment tint" instead of two RGB
  * triples. Falls through to the raw channels for anything unexpected.
  */
 function describePixel(px: PixelRgba, palette: Record<string, string>): string {
@@ -306,11 +306,11 @@ function describePixel(px: PixelRgba, palette: Record<string, string>): string {
   return `rgb(${px[0]},${px[1]},${px[2]})`;
 }
 
-async function findShot(page: Page, sectionId: number, shotId: number): Promise<ShotScreenPos> {
+async function findShot(page: Page, lineId: number, shotId: number): Promise<ShotScreenPos> {
   const shot = (await getShotScreenPositions(page)).find(
-    (s) => s.sectionId === sectionId && s.shotId === shotId,
+    (s) => s.lineId === lineId && s.shotId === shotId,
   );
-  if (!shot) throw new Error(`shot ${sectionId}:${shotId} is not drawn`);
+  if (!shot) throw new Error(`shot ${lineId}:${shotId} is not drawn`);
   return shot;
 }
 
@@ -327,11 +327,11 @@ async function findShot(page: Page, sectionId: number, shotId: number): Promise<
  */
 async function shotPixelAt(
   page: Page,
-  sectionId: number,
+  lineId: number,
   shotId: number,
   t: number,
 ): Promise<PixelRgba> {
-  const shot = await findShot(page, sectionId, shotId);
+  const shot = await findShot(page, lineId, shotId);
   return readCanvasPixel(
     page,
     shot.from.x + (shot.to.x - shot.from.x) * t,
@@ -340,25 +340,25 @@ async function shotPixelAt(
 }
 
 /** Painted color at a drawn shot's midpoint (flat outside depth mode). */
-async function shotPixel(page: Page, sectionId: number, shotId: number): Promise<PixelRgba> {
-  return shotPixelAt(page, sectionId, shotId, 0.5);
+async function shotPixel(page: Page, lineId: number, shotId: number): Promise<PixelRgba> {
+  return shotPixelAt(page, lineId, shotId, 0.5);
 }
 
 /** Painted FILL at the center of a drawn station's disc. */
 async function stationPixel(
   page: Page,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
 ): Promise<PixelRgba> {
   const station = (await getStationScreenPositions(page)).find(
-    (s) => s.sectionId === sectionId && s.stationIndex === stationIndex,
+    (s) => s.lineId === lineId && s.stationIndex === stationIndex,
   );
-  if (!station) throw new Error(`station ${sectionId}:${stationIndex} is not drawn`);
+  if (!station) throw new Error(`station ${lineId}:${stationIndex} is not drawn`);
   return readCanvasPixel(page, station.x, station.y);
 }
 
 test.describe('Move-comment tool - palette tint (#52)', () => {
-  let sectionId = 0;
+  let lineId = 0;
   let shotIds: number[] = [];
   /** The palette color the commented shot must paint while move_comment is on. */
   let shotTint = '';
@@ -370,17 +370,17 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Comment Palette Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForDrawnShots(page, 4);
 
-    sectionId = await getSectionId(page);
-    shotIds = await getShotIds(page, sectionId);
+    lineId = await getLineId(page);
+    shotIds = await getShotIds(page, lineId);
     expect(shotIds.length).toBe(4);
-    await setStationComment(page, sectionId, COMMENTED_STATION, 'silt');
+    await setStationComment(page, lineId, COMMENTED_STATION, 'silt');
 
-    shotTint = commentColorForKey(`${sectionId}:s${shotIds[0]!}`);
-    stationTint = commentColorForKey(`${sectionId}:st${COMMENTED_STATION}`);
+    shotTint = commentColorForKey(`${lineId}:s${shotIds[0]!}`);
+    stationTint = commentColorForKey(`${lineId}:st${COMMENTED_STATION}`);
     // The palette slots are hash-derived, so guard the fixture itself: if the two
     // owners ever collided on one slot, "the shot is tinted" and "the station is
     // tinted" would stop being independent facts.
@@ -401,10 +401,10 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     // Before the tool is active nothing paints a comment-palette color: the
     // commented shot is painted exactly like its uncommented neighbours, and so
     // is the commented station.
-    const basePlainShot = await shotPixel(page, sectionId, shotIds[1]!);
-    const baseCommentedShot = await shotPixel(page, sectionId, shotIds[0]!);
-    const basePlainStation = await stationPixel(page, sectionId, PLAIN_STATION);
-    const baseCommentedStation = await stationPixel(page, sectionId, COMMENTED_STATION);
+    const basePlainShot = await shotPixel(page, lineId, shotIds[1]!);
+    const baseCommentedShot = await shotPixel(page, lineId, shotIds[0]!);
+    const basePlainStation = await stationPixel(page, lineId, PLAIN_STATION);
+    const baseCommentedStation = await stationPixel(page, lineId, COMMENTED_STATION);
     expect(describePixel(baseCommentedShot, palette)).not.toBe('shotTint');
     expect(describePixel(baseCommentedStation, palette)).not.toBe('stationTint');
     expect(baseCommentedShot).toEqual(basePlainShot);
@@ -415,23 +415,23 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
 
     // The comment OWNERS repaint in their palette colors.
     await expect
-      .poll(async () => describePixel(await shotPixel(page, sectionId, shotIds[0]!), palette), {
+      .poll(async () => describePixel(await shotPixel(page, lineId, shotIds[0]!), palette), {
         timeout: 3000,
       })
       .toBe('shotTint');
     await expect
       .poll(
         async () =>
-          describePixel(await stationPixel(page, sectionId, COMMENTED_STATION), palette),
+          describePixel(await stationPixel(page, lineId, COMMENTED_STATION), palette),
         { timeout: 3000 },
       )
       .toBe('stationTint');
 
     // ...and only they do: the features that own no comment are untouched, which
     // is the per-feature half of the old `coalesce(['get','commentColor'], base)`.
-    expect(await shotPixel(page, sectionId, shotIds[1]!)).toEqual(basePlainShot);
-    expect(await shotPixel(page, sectionId, shotIds[2]!)).toEqual(basePlainShot);
-    expect(await stationPixel(page, sectionId, PLAIN_STATION)).toEqual(basePlainStation);
+    expect(await shotPixel(page, lineId, shotIds[1]!)).toEqual(basePlainShot);
+    expect(await shotPixel(page, lineId, shotIds[2]!)).toEqual(basePlainShot);
+    expect(await stationPixel(page, lineId, PLAIN_STATION)).toEqual(basePlainStation);
 
     // Deselecting the tool (back to select) restores the EXACT prior pixels, not
     // just "some other color" (the old test compared the whole paint expression).
@@ -439,18 +439,18 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     await waitForActiveTool(page, 'select');
 
     await expect
-      .poll(async () => shotPixel(page, sectionId, shotIds[0]!), { timeout: 3000 })
+      .poll(async () => shotPixel(page, lineId, shotIds[0]!), { timeout: 3000 })
       .toEqual(baseCommentedShot);
     await expect
-      .poll(async () => stationPixel(page, sectionId, COMMENTED_STATION), { timeout: 3000 })
+      .poll(async () => stationPixel(page, lineId, COMMENTED_STATION), { timeout: 3000 })
       .toEqual(baseCommentedStation);
   });
 
   test('the plain comment tool (not move_comment) does not tint shots/stations', async ({
     page,
   }) => {
-    const baseCommentedShot = await shotPixel(page, sectionId, shotIds[0]!);
-    const baseCommentedStation = await stationPixel(page, sectionId, COMMENTED_STATION);
+    const baseCommentedShot = await shotPixel(page, lineId, shotIds[0]!);
+    const baseCommentedStation = await stationPixel(page, lineId, COMMENTED_STATION);
 
     await setActiveTool(page, 'comment');
     await waitForActiveTool(page, 'comment');
@@ -458,14 +458,14 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     // The plain comment tool reveals the comment LABELS but must not repaint the
     // geometry: `commentTint` is `activeTool === 'move_comment'` exactly. The
     // labels anchor below the feature, so these probes see only the geometry.
-    expect(describePixel(await shotPixel(page, sectionId, shotIds[0]!), palette)).not.toBe(
+    expect(describePixel(await shotPixel(page, lineId, shotIds[0]!), palette)).not.toBe(
       'shotTint',
     );
     expect(
-      describePixel(await stationPixel(page, sectionId, COMMENTED_STATION), palette),
+      describePixel(await stationPixel(page, lineId, COMMENTED_STATION), palette),
     ).not.toBe('stationTint');
-    expect(await shotPixel(page, sectionId, shotIds[0]!)).toEqual(baseCommentedShot);
-    expect(await stationPixel(page, sectionId, COMMENTED_STATION)).toEqual(baseCommentedStation);
+    expect(await shotPixel(page, lineId, shotIds[0]!)).toEqual(baseCommentedShot);
+    expect(await stationPixel(page, lineId, COMMENTED_STATION)).toEqual(baseCommentedStation);
   });
 
   test('distance mode owns shots/stations color: move_comment yields, no commentColor in the ramp', async ({
@@ -487,17 +487,17 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     await expect
       .poll(
         async () =>
-          describePixel(await stationPixel(page, sectionId, COMMENTED_STATION), palette),
+          describePixel(await stationPixel(page, lineId, COMMENTED_STATION), palette),
         { timeout: 3000 },
       )
       .toBe('distanceFar');
     await expect
-      .poll(async () => describePixel(await stationPixel(page, sectionId, 0), palette), {
+      .poll(async () => describePixel(await stationPixel(page, lineId, 0), palette), {
         timeout: 3000,
       })
       .toBe('distanceNear');
 
-    const commentedShotPx = await shotPixel(page, sectionId, shotIds[0]!);
+    const commentedShotPx = await shotPixel(page, lineId, shotIds[0]!);
     expect(describePixel(commentedShotPx, palette)).not.toBe('shotTint');
     // ...and it is a genuine ramp color, not some third fallback: every channel
     // lies strictly between the two ramp ends.
@@ -526,8 +526,8 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     const ramping = async (): Promise<string> => {
       const flags: string[] = [];
       for (const shotId of shotIds) {
-        const near = await shotPixelAt(page, sectionId, shotId, 0.3);
-        const far = await shotPixelAt(page, sectionId, shotId, 0.7);
+        const near = await shotPixelAt(page, lineId, shotId, 0.3);
+        const far = await shotPixelAt(page, lineId, shotId, 0.7);
         flags.push(differs(near, far) ? 'ramp' : 'flat');
       }
       return flags.join(',');
@@ -547,7 +547,7 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     // went flat because the depth ramp collapsed to their average-depth
     // color. Pin the first half so "flat" cannot be satisfied by the shots
     // vanishing.
-    expect(describePixel(await shotPixelAt(page, sectionId, shotIds[0]!, 0.3), palette)).toBe(
+    expect(describePixel(await shotPixelAt(page, lineId, shotIds[0]!, 0.3), palette)).toBe(
       'shotTint',
     );
 
@@ -560,7 +560,7 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     await setActiveTool(page, 'move_comment');
     await waitForActiveTool(page, 'move_comment');
     await expect
-      .poll(async () => describePixel(await shotPixel(page, sectionId, shotIds[0]!), palette), {
+      .poll(async () => describePixel(await shotPixel(page, lineId, shotIds[0]!), palette), {
         timeout: 3000,
       })
       .toBe('shotTint');
@@ -580,13 +580,13 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     // the palette color either and would satisfy the "tint is gone" poll vacuously.
     const bg = await readCanvasPixel(page, 8, 8);
     await expect
-      .poll(async () => differs(await shotPixel(page, sectionId, shotIds[0]!), bg), {
+      .poll(async () => differs(await shotPixel(page, lineId, shotIds[0]!), bg), {
         timeout: 5000,
       })
       .toBe(true);
 
-    const planCommented = await shotPixel(page, sectionId, shotIds[0]!);
-    const planPlain = await shotPixel(page, sectionId, shotIds[1]!);
+    const planCommented = await shotPixel(page, lineId, shotIds[0]!);
+    const planPlain = await shotPixel(page, lineId, shotIds[1]!);
     expect(describePixel(planCommented, palette)).not.toBe('shotTint');
     // The comment owner gets no special treatment any more: it paints what an
     // uncommented leg paints (within the plan palette's per-leg spread), which is

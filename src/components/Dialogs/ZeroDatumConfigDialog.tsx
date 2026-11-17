@@ -5,10 +5,10 @@ import { blankEditableShot } from '../common/editableShot';
 import { isEmittedShot, emittedBefore } from '../common/emittedShots';
 import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { DialogWrapper } from './DialogWrapper';
-import SectionPreview from './SectionPreview';
+import LinePreview from './LinePreview';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
-import { SectionMetadataForm, listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
+import { LineMetadataForm, listPeopleProps, type CreditLists } from '../common/LineMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
@@ -21,7 +21,7 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
 import type { Person } from '../../types/ipc.generated';
 import { personKey } from '../../utils/people';
-import { sectionColorPalette } from '../../utils/colors';
+import { lineColorPalette } from '../../utils/colors';
 import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
@@ -33,12 +33,12 @@ function samePeopleLists(a: CreditLists, b: CreditLists): boolean {
 }
 
 export interface ZeroDatumConfigResult {
-  sectionIndex: number;
+  lineIndex: number;
   stationIndex: number;
   gps: GpsCoordinates;
   metadata: {
     name: string;
-    /** Every shot of the section is credited to these (none = no override). */
+    /** Every shot of the line is credited to these (none = no override). */
     surveyors: Person[];
     explorers: Person[];
     date: string | null;
@@ -50,7 +50,7 @@ export interface ZeroDatumConfigResult {
     // to read this back in, not just carry it.
     quality: number;
     direction: 'in' | 'out';
-    /** Reverse this section end-to-end on import (#24). */
+    /** Reverse this line end-to-end on import (#24). */
     reverse: boolean;
   };
   shots: EditableShot[];
@@ -58,7 +58,7 @@ export interface ZeroDatumConfigResult {
 
 /**
  * A snapshot of this dialog's live state, carried on ITS OWN Back to
- * 'zero-datum-selection' and re-seeded on a same-section forward pass (#534).
+ * 'zero-datum-selection' and re-seeded on a same-line forward pass (#534).
  * Frontend-only - never crosses IPC - so unlike a confirmed
  * `ZeroDatumConfigResult` it can hold GPS text that never parsed: the user
  * may press Back before finishing it, and losing the text they typed on the
@@ -90,7 +90,7 @@ function makeNewShot(tempId: number): EditableShot {
 }
 
 /**
- * The rows that will actually be imported - `buildZeroDatumSectionConfig`
+ * The rows that will actually be imported - `buildZeroDatumLineConfig`
  * serializes exactly these, and `editableShotsToDmpSection` draws exactly these.
  * The dialog must count stations over the SAME set: a blank row left among the
  * shots is dropped from the payload, so counting it here made the picker, the
@@ -132,7 +132,7 @@ const survivorsBefore = emittedBefore;
  */
 interface ShotEditState {
   shots: EditableShot[];
-  /** Committed pick, in the CURRENT emitted-station numbering: a section of `s`
+  /** Committed pick, in the CURRENT emitted-station numbering: a line of `s`
    *  counted rows has stations `0..s`. */
   stationIndex: number;
   /** What the preview highlights - follows dropdown hover, reverts to the pick. */
@@ -256,14 +256,14 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
  *
  * The pick has to come back with them or the two disagree: `stationIndex` is
  * numbered over the EDITED rows, so restoring edited rows under a pick reset to
- * 0 would silently re-anchor the survey at the head of the section. Both, or
+ * 0 would silently re-anchor the survey at the head of the line. Both, or
  * neither.
  */
 function initialShotEditState({
-  section,
+  line,
   initialConfig,
 }: {
-  section: DmpSection | undefined;
+  line: DmpSection | undefined;
   initialConfig: ZeroDatumConfigDraft | undefined;
 }): ShotEditState {
   if (initialConfig) {
@@ -285,26 +285,26 @@ function initialShotEditState({
       dirty: false,
     };
   }
-  const shots = section ? convertToEditableShots(section.shots) : [];
+  const shots = line ? convertToEditableShots(line.shots) : [];
   return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 
 interface ZeroDatumConfigDialogProps {
   dmpFile: DmpFile;
   selectionConfig: DmpSelectionConfig;
-  sectionIndex: number;
+  lineIndex: number;
   filePath: string;
   onCancel: () => void;
   /**
    * Back, handed this dialog's OWN live state (#534) so App.tsx can relay it
-   * through 'zero-datum-selection' and re-seed it on a same-section forward
+   * through 'zero-datum-selection' and re-seed it on a same-line forward
    * pass - see `buildCurrentDraft`.
    */
   onBack: (current: ZeroDatumConfigDraft) => void;
   onConfirm: (result: ZeroDatumConfigResult) => void;
   /**
    * What this dialog was confirmed with LAST time (#394 F10), or left with on
-   * ITS OWN Back and re-picked the same section (#534).
+   * ITS OWN Back and re-picked the same line (#534).
    *
    * Stepping Back out of the import wizard returns here, and the wizard
    * withdraws what it imported on the way (the forward pass re-imports from
@@ -318,7 +318,7 @@ interface ZeroDatumConfigDialogProps {
 export default function ZeroDatumConfigDialog({
   dmpFile,
   selectionConfig,
-  sectionIndex,
+  lineIndex,
   filePath: _filePath,
   onCancel,
   onBack,
@@ -329,16 +329,16 @@ export default function ZeroDatumConfigDialog({
   const showToast = useUIStore((st) => st.showToast);
   const precision = useDecimalPrecision();
 
-  const section = dmpFile.sections[sectionIndex];
+  const line = dmpFile.lines[lineIndex];
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
   // Figure out the color index based on position in selected indices
   const colorIndex = useMemo(() => {
     const sorted = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
-    return sorted.indexOf(sectionIndex);
-  }, [selectionConfig.selectedIndices, sectionIndex]);
+    return sorted.indexOf(lineIndex);
+  }, [selectionConfig.selectedIndices, lineIndex]);
 
-  const sectionPalette = useMemo(() => sectionColorPalette(resolvedTheme), [resolvedTheme]);
+  const linePalette = useMemo(() => lineColorPalette(resolvedTheme), [resolvedTheme]);
 
   // Expand grows the DIALOG, same as the other two shot-entry surfaces; the
   // editor only asks, the host owns its size.
@@ -348,7 +348,7 @@ export default function ZeroDatumConfigDialog({
   // why they cannot be separate pieces of state.
   const [{ shots, stationIndex, previewStationIndex, dirty: shotsDirty }, dispatch] = useReducer(
     shotEditReducer,
-    { section, initialConfig },
+    { line, initialConfig },
     initialShotEditState,
   );
   // The reducer's OWN initial pick, captured once - not hardcoded to 0. That
@@ -426,7 +426,7 @@ export default function ZeroDatumConfigDialog({
   // A field the user CLEARED last time stays cleared, so each branch is chosen
   // by whether there is a previous visit at all - `??` per field would
   // resurrect the file/selection default under an emptied one.
-  const initialNameRef = useRef(initialConfig?.metadata.name ?? section?.name ?? '');
+  const initialNameRef = useRef(initialConfig?.metadata.name ?? line?.name ?? '');
   const [name, setName] = useState(initialNameRef.current);
   const initialPeopleRef = useRef<CreditLists>(
     initialConfig
@@ -444,15 +444,15 @@ export default function ZeroDatumConfigDialog({
   const initialDateRef = useRef(
     initialConfig
       ? (initialConfig.metadata.date ?? '')
-      : (selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '')
+      : (selectionConfig.defaultDate ?? line?.date?.split(/[T ]/)[0] ?? '')
   );
   const [date, setDate] = useState(initialDateRef.current);
   const initialColorRef = useRef(
-    initialConfig?.metadata.color ?? sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4'
+    initialConfig?.metadata.color ?? linePalette[colorIndex % linePalette.length] ?? '#4ecdc4'
   );
   const [color, setColor] = useState(initialColorRef.current);
   const initialDirectionRef = useRef<'in' | 'out'>(
-    initialConfig?.metadata.direction ?? (section?.direction === 'out' ? 'out' : 'in')
+    initialConfig?.metadata.direction ?? (line?.direction === 'out' ? 'out' : 'in')
   );
   const [direction, setDirection] = useState(initialDirectionRef.current);
   const initialReverseRef = useRef(initialConfig?.metadata.reverse ?? false);
@@ -466,11 +466,11 @@ export default function ZeroDatumConfigDialog({
 
   // The preview is drawn from the EDITED shots, not the file's original ones,
   // so a click on a station dot and a pick in the dropdown address the same
-  // station. See `editableShotsToDmpSection` for why the raw section diverges
+  // station. See `editableShotsToDmpSection` for why the raw line diverges
   // even before anything is deleted.
-  const previewSection = useMemo(
-    () => (section ? editableShotsToDmpSection(section, shots) : null),
-    [section, shots],
+  const previewLine = useMemo(
+    () => (line ? editableShotsToDmpSection(line, shots) : null),
+    [line, shots],
   );
 
   /** Commit a station pick: the value sent, the map highlight and the hover-revert target. */
@@ -502,7 +502,7 @@ export default function ZeroDatumConfigDialog({
     return false;
   }, [gpsCoords, gpsError, gpsInput]);
 
-  // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
+  // Dirty guard (#F9): GPS text entered, the line renamed, a metadata
   // field touched, the zero-datum STATION PICK changed, or a shot
   // edited/inserted/deleted - anything ESC (or Cancel/Back) would otherwise
   // discard silently. `stationIndex` is sent in the confirm payload just like
@@ -534,18 +534,18 @@ export default function ZeroDatumConfigDialog({
   // via `onClose`/`onCancel`), so it gets its own small, self-contained confirm
   // here. Still relevant after #534, which hands `onBack` this dialog's LIVE
   // state (`buildCurrentDraft`, not just what it opened with): the carry only
-  // survives a SAME-section forward pass out of 'zero-datum-selection' - a
-  // different section, Back-ing further to 'dmp-selection', or leaving the
+  // survives a SAME-line forward pass out of 'zero-datum-selection' - a
+  // different line, Back-ing further to 'dmp-selection', or leaving the
   // wizard entirely all still lose it, so the prompt is honest about a real
   // risk, not a phantom one. The backConfirm copy spells out the same
   // distinction to the user.
   /** This dialog's live state, handed to `onBack` (#534) so App.tsx can carry
    *  it through 'zero-datum-selection' and re-seed it as `initialConfig` on a
-   *  same-section forward pass. Unlike `handleConfirm`'s payload, `gps` may be
+   *  same-line forward pass. Unlike `handleConfirm`'s payload, `gps` may be
    *  null - Back does not require the GPS box to have parsed. */
   const buildCurrentDraft = useCallback(
     (): ZeroDatumConfigDraft => ({
-      sectionIndex,
+      lineIndex,
       stationIndex,
       gps: gpsCoords,
       gpsInputText: gpsInput,
@@ -562,7 +562,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     }),
-    [sectionIndex, stationIndex, gpsCoords, gpsInput, depthReferenceInput, name, people, date, color, direction, reverse, shots]
+    [lineIndex, stationIndex, gpsCoords, gpsInput, depthReferenceInput, name, people, date, color, direction, reverse, shots]
   );
 
   const [backConfirmPending, setBackConfirmPending] = useState(false);
@@ -699,7 +699,7 @@ export default function ZeroDatumConfigDialog({
     if (!depthReferenceValid) return;
     if (blockedByIncompleteShots(incompleteShots, t, TOAST_KEYS.ZERO_DATUM_INCOMPLETE)) return;
     onConfirm({
-      sectionIndex,
+      lineIndex,
       stationIndex,
       gps: gpsCoords,
       metadata: {
@@ -714,9 +714,9 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     });
-  }, [gpsCoords, depthReferenceValid, onConfirm, sectionIndex, stationIndex, name, people, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
+  }, [gpsCoords, depthReferenceValid, onConfirm, lineIndex, stationIndex, name, people, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
 
-  if (!section) return null;
+  if (!line) return null;
 
   return (
     <DialogWrapper
@@ -742,8 +742,8 @@ export default function ZeroDatumConfigDialog({
           style={{ width: 380 }}
           data-testid="zero-datum-preview-map"
         >
-          <SectionPreview
-            section={previewSection}
+          <LinePreview
+            line={previewLine}
             color={color}
             size={340}
             onStationClick={commitStation}
@@ -868,7 +868,7 @@ export default function ZeroDatumConfigDialog({
             </div>
           </div>
 
-          {/* Section name */}
+          {/* Line name */}
           <div>
             <h3 className="text-sm font-medium text-text-primary mb-2">
               {t('dialogs.zeroDatumConfig.metadataHeading')}
@@ -880,7 +880,7 @@ export default function ZeroDatumConfigDialog({
               onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 bg-background border border-border rounded"
               placeholder={t('sectionMetadata.placeholders.name')}
-              data-testid="section-name-input"
+              data-testid="line-name-input"
             />
           </div>
 
@@ -888,7 +888,7 @@ export default function ZeroDatumConfigDialog({
             className={`space-y-5 ${expanded ? 'flex min-h-0 flex-1 flex-col' : ''}`}
             data-testid="zero-datum-editable-rest"
           >
-            <SectionMetadataForm
+            <LineMetadataForm
               name={name}
               people={peopleProps}
               peopleColumns

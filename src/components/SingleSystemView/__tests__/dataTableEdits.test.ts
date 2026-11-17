@@ -103,8 +103,8 @@ describe('buildShotUpdateBatch', () => {
       7,
     );
     expect(cmds).toEqual([
-      { type: 'update_shot', section_id: 7, shot_id: 10, updates: { length: 5, depth_in: 1 } },
-      { type: 'update_shot', section_id: 7, shot_id: 12, updates: { comment: 'x' } },
+      { type: 'update_shot', line_id: 7, shot_id: 10, updates: { length: 5, depth_in: 1 } },
+      { type: 'update_shot', line_id: 7, shot_id: 12, updates: { comment: 'x' } },
     ]);
   });
 

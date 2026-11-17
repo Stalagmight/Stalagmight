@@ -4,7 +4,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::core::{Command, UndoData, UndoEntry};
-use crate::models::{SectionId, ShotKind, ShotUpdates};
+use crate::models::{LineId, ShotKind, ShotUpdates};
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize, TS)]
@@ -17,7 +17,7 @@ pub struct UndoHistoryItem {
     pub description: String,
     /// ISO 8601 timestamp or null for legacy entries
     pub timestamp: Option<String>,
-    /// Command type for icon mapping (e.g., "create_section", "update_shot")
+    /// Command type for icon mapping (e.g., "create_line", "update_shot")
     pub command_type: String,
     /// Preview data showing what changed (null for commands without meaningful diff)
     pub preview_data: Option<PreviewData>,
@@ -54,10 +54,10 @@ fn get_command_type(command: &Command) -> String {
         Command::OpenProject { .. } => "open_project".to_string(),
         Command::SaveProject { .. } => "save_project".to_string(),
         Command::CloseProject => "close_project".to_string(),
-        Command::CreateSection { .. } => "create_section".to_string(),
-        Command::DeleteSection { .. } => "delete_section".to_string(),
-        Command::UpdateSectionMetadata { .. } => "update_section_metadata".to_string(),
-        Command::ReverseSection { .. } => "reverse_section".to_string(),
+        Command::CreateLine { .. } => "create_line".to_string(),
+        Command::DeleteLine { .. } => "delete_line".to_string(),
+        Command::UpdateLineMetadata { .. } => "update_line_metadata".to_string(),
+        Command::ReverseLine { .. } => "reverse_line".to_string(),
         Command::CreateShot { .. } => "create_shot".to_string(),
         Command::UpdateShot { .. } => "update_shot".to_string(),
         Command::DeleteShot { .. } => "delete_shot".to_string(),
@@ -71,7 +71,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::SetStationComment { .. } => "set_station_comment".to_string(),
-        Command::MoveSection { .. } => "move_section".to_string(),
+        Command::MoveLine { .. } => "move_line".to_string(),
         Command::MoveSegment { .. } => "move_segment".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),
         Command::MoveComment { .. } => "move_comment".to_string(),
@@ -85,12 +85,12 @@ fn get_command_type(command: &Command) -> String {
     }
 }
 
-/// Helper to format a station ref with its section name when available
+/// Helper to format a station ref with its line name when available
 fn format_station_with_name(
     station_ref: &crate::models::StationRef,
-    section_names: &HashMap<SectionId, Option<String>>,
+    line_names: &HashMap<LineId, Option<String>>,
 ) -> String {
-    if let Some(Some(name)) = section_names.get(&station_ref.section_id) {
+    if let Some(Some(name)) = line_names.get(&station_ref.line_id) {
         format!("{station_ref} ({name})")
     } else {
         station_ref.to_string()
@@ -102,9 +102,9 @@ fn format_station_with_name(
 /// the anchor to a positional index - the key's own `Display` is used.
 fn format_station_key_with_name(
     key: &crate::models::StationKey,
-    section_names: &HashMap<SectionId, Option<String>>,
+    line_names: &HashMap<LineId, Option<String>>,
 ) -> String {
-    if let Some(Some(name)) = section_names.get(&key.section_id) {
+    if let Some(Some(name)) = line_names.get(&key.line_id) {
         format!("{key} ({name})")
     } else {
         key.to_string()
@@ -116,21 +116,21 @@ fn format_station_key_with_name(
 ///
 /// Both of those arms used to `serde_json::from_str::<Project>(before)`: a WHOLE
 /// project built (every shot's twenty-odd fields, the merges, the closures, the
-/// offset/comment maps, the caches) to read one section's name or one datum's
+/// offset/comment maps, the caches) to read one line's name or one datum's
 /// coordinates. That runs once per entry, and the entries are walked inside
 /// `AppState::get_undo_stack`/`get_redo_stack` while `undo_stack` is LOCKED - so
 /// a history of snapshot-pair entries turned every dropdown refresh into N full
 /// project deserializations under the mutex.
 ///
 /// The fields below are exactly what those arms read. `zero_datums` and the
-/// per-section `id`/`name` are read directly; the shots are here only as their
+/// per-line `id`/`name` are read directly; the shots are here only as their
 /// UUIDs, because resolving a datum's stored [`crate::models::StationKey`]
 /// needs them (see [`SnapshotPreview::resolve_key`]). Everything else serde
 /// skips without materializing.
 #[derive(serde::Deserialize)]
 struct SnapshotPreview {
     #[serde(default)]
-    sections: Vec<SnapshotSection>,
+    lines: Vec<SnapshotLine>,
     #[serde(default)]
     zero_datums: Vec<crate::models::ZeroDatum>,
     /// The GPS fixes, which a snapshot keeps beside `zero_datums` (#741, see
@@ -139,12 +139,12 @@ struct SnapshotPreview {
     zero_datum_fixes: Vec<super::snapshot_fixes::SnapshotFix>,
 }
 
-/// One section of a [`SnapshotPreview`]: its identity, its name, and the shot
-/// UUIDs a key resolution walks. Deliberately NOT `Section` - that pulls the
+/// One line of a [`SnapshotPreview`]: its identity, its name, and the shot
+/// UUIDs a key resolution walks. Deliberately NOT `Line` - that pulls the
 /// full shot rows in with it, which is the cost this shim exists to avoid.
 #[derive(serde::Deserialize)]
-struct SnapshotSection {
-    id: SectionId,
+struct SnapshotLine {
+    id: LineId,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -168,8 +168,8 @@ impl SnapshotPreview {
         serde_json::from_str(snapshot_json).ok()
     }
 
-    fn section(&self, id: SectionId) -> Option<&SnapshotSection> {
-        self.sections.iter().find(|s| s.id == id)
+    fn line(&self, id: LineId) -> Option<&SnapshotLine> {
+        self.lines.iter().find(|s| s.id == id)
     }
 
     /// `Project::resolve_key`, asked of the SNAPSHOT.
@@ -182,24 +182,24 @@ impl SnapshotPreview {
     /// is bounded to this preview: an unresolved key loses the coordinate rows
     /// from a dropdown entry, and can reach nothing else.
     fn resolve_key(&self, key: &crate::models::StationKey) -> Option<crate::models::StationRef> {
-        let section = self.section(key.section_id)?;
+        let line = self.line(key.line_id)?;
         let index = match &key.anchor {
-            crate::models::StationAnchor::SectionStart => 0,
+            crate::models::StationAnchor::LineStart => 0,
             crate::models::StationAnchor::AfterShot(uuid) => {
-                let pos = section
+                let pos = line
                     .shots
                     .iter()
                     .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
                 u32::try_from(pos).ok()?.checked_add(1)?
             }
             crate::models::StationAnchor::Index(i) => {
-                if *i as usize > section.shots.len() {
+                if *i as usize > line.shots.len() {
                     return None;
                 }
                 *i
             }
         };
-        Some(crate::models::StationRef::new(key.section_id, index))
+        Some(crate::models::StationRef::new(key.line_id, index))
     }
 
     /// The GPS of the datum standing on `station_ref`, if the snapshot holds
@@ -269,12 +269,12 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 /// Returns None for commands where no useful details can be extracted from the command alone.
 fn derive_command_details(
     cmd: &Command,
-    section_names: &HashMap<SectionId, Option<String>>,
+    line_names: &HashMap<LineId, Option<String>>,
 ) -> Option<String> {
     match cmd {
-        Command::MoveSection { section_id, offset } => {
+        Command::MoveLine { line_id, offset } => {
             let mut parts = Vec::new();
-            if let Some(Some(name)) = section_names.get(section_id) {
+            if let Some(Some(name)) = line_names.get(line_id) {
                 parts.push(name.clone());
             }
             parts.push(offset.display_offset());
@@ -288,8 +288,8 @@ fn derive_command_details(
             station_b,
         } => Some(format!(
             "{} \u{2194} {}",
-            format_station_with_name(station_a, section_names),
-            format_station_with_name(station_b, section_names),
+            format_station_with_name(station_a, line_names),
+            format_station_with_name(station_b, line_names),
         )),
         Command::CreateLoopClosure {
             station_a,
@@ -307,7 +307,7 @@ fn derive_command_details(
             "Length: {:.2}, Azimuth: {:.1}",
             shot.length, shot.azimuth_in
         )),
-        Command::CreateSection { name, .. } => name.as_ref().map(|n| format!("Name: {n}")),
+        Command::CreateLine { name, .. } => name.as_ref().map(|n| format!("Name: {n}")),
         Command::UpdateShot { updates, .. } => {
             let mut parts = Vec::new();
             if let Some(l) = updates.length {
@@ -343,7 +343,7 @@ fn derive_command_details(
 /// Derive preview data from an undo entry based on command type and undo data
 fn derive_preview_data(
     entry: &UndoEntry,
-    section_names: &HashMap<SectionId, Option<String>>,
+    line_names: &HashMap<LineId, Option<String>>,
 ) -> Option<PreviewData> {
     match (&entry.command, &entry.undo_data) {
         // UpdateShot - show changed fields from PreviousValues
@@ -455,10 +455,10 @@ fn derive_preview_data(
             }
         }
 
-        // UpdateSectionMetadata - show changed fields from PreviousValues, or
+        // UpdateLineMetadata - show changed fields from PreviousValues, or
         // from the per-shot record a legacy surveyor/date edit leaves.
         (
-            Command::UpdateSectionMetadata { updates, .. },
+            Command::UpdateLineMetadata { updates, .. },
             undo @ (UndoData::PreviousValues { .. } | UndoData::ShotCredits { .. }),
         ) => {
             let mut changes = Vec::new();
@@ -466,8 +466,8 @@ fn derive_preview_data(
                 UndoData::PreviousValues { values_json, .. } => values_json.clone(),
                 UndoData::ShotCredits {
                     changes,
-                    section_values,
-                } => super::history_credit::legacy_section_values(changes, section_values.as_ref()),
+                    line_values,
+                } => super::history_credit::legacy_line_values(changes, line_values.as_ref()),
                 _ => String::new(),
             };
 
@@ -572,8 +572,8 @@ fn derive_preview_data(
             }
         }
 
-        // CreateSection - show name from command
-        (Command::CreateSection { name, .. }, _) => Some(PreviewData {
+        // CreateLine - show name from command
+        (Command::CreateLine { name, .. }, _) => Some(PreviewData {
             changes: vec![FieldChange {
                 field: "Name".to_string(),
                 old_value: String::new(),
@@ -599,14 +599,14 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
-        (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
+        // DeleteLine - extract line info from ProjectSnapshotPair before snapshot
+        (Command::DeleteLine { line_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
             if let Some(snapshot) = SnapshotPreview::parse(before) {
-                snapshot.section(*section_id).map(|section| PreviewData {
+                snapshot.line(*line_id).map(|line| PreviewData {
                     changes: vec![
                         FieldChange {
                             field: "Name".to_string(),
-                            old_value: section
+                            old_value: line
                                 .name
                                 .clone()
                                 .unwrap_or_else(|| "unnamed".to_string()),
@@ -614,7 +614,7 @@ fn derive_preview_data(
                         },
                         FieldChange {
                             field: "Shots".to_string(),
-                            old_value: section.shots.len().to_string(),
+                            old_value: line.shots.len().to_string(),
                             new_value: "0".to_string(),
                         },
                     ],
@@ -690,18 +690,18 @@ fn derive_preview_data(
             })
         }
 
-        // MoveSection - show offset and section name
-        (Command::MoveSection { section_id, offset }, _) => {
+        // MoveLine - show offset and line name
+        (Command::MoveLine { line_id, offset }, _) => {
             let mut changes = vec![FieldChange {
                 field: "Offset".to_string(),
                 old_value: String::new(),
                 new_value: offset.display_offset(),
             }];
-            if let Some(Some(name)) = section_names.get(section_id) {
+            if let Some(Some(name)) = line_names.get(line_id) {
                 changes.insert(
                     0,
                     FieldChange {
-                        field: "Section".to_string(),
+                        field: "Line".to_string(),
                         old_value: String::new(),
                         new_value: name.clone(),
                     },
@@ -723,11 +723,11 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // MoveSegment - show offset and affected section count
+        // MoveSegment - show offset and affected line count
         (
             Command::MoveSegment { offset, .. },
             UndoData::SegmentMoveInfo {
-                affected_sections, ..
+                affected_lines, ..
             },
         ) => Some(PreviewData {
             changes: vec![
@@ -737,9 +737,9 @@ fn derive_preview_data(
                     new_value: offset.display_offset(),
                 },
                 FieldChange {
-                    field: "Affected sections".to_string(),
+                    field: "Affected lines".to_string(),
                     old_value: String::new(),
-                    new_value: affected_sections.len().to_string(),
+                    new_value: affected_lines.len().to_string(),
                 },
             ],
             additional_changes: 0,
@@ -755,7 +755,7 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // MergeStations - show station identifiers with section names
+        // MergeStations - show station identifiers with line names
         (
             Command::MergeStations {
                 station_a,
@@ -767,28 +767,28 @@ fn derive_preview_data(
                 FieldChange {
                     field: "Station A".to_string(),
                     old_value: String::new(),
-                    new_value: format_station_with_name(station_a, section_names),
+                    new_value: format_station_with_name(station_a, line_names),
                 },
                 FieldChange {
                     field: "Station B".to_string(),
                     old_value: String::new(),
-                    new_value: format_station_with_name(station_b, section_names),
+                    new_value: format_station_with_name(station_b, line_names),
                 },
             ],
             additional_changes: 0,
         }),
 
-        // UnmergeStations - show station identifier with section name
+        // UnmergeStations - show station identifier with line name
         (Command::UnmergeStations { station_ref }, _) => Some(PreviewData {
             changes: vec![FieldChange {
                 field: "Station".to_string(),
                 old_value: String::new(),
-                new_value: format_station_with_name(station_ref, section_names),
+                new_value: format_station_with_name(station_ref, line_names),
             }],
             additional_changes: 0,
         }),
 
-        // UnmergeStationPair - show both station identifiers with section names
+        // UnmergeStationPair - show both station identifiers with line names
         (
             Command::UnmergeStationPair {
                 station_a,
@@ -800,12 +800,12 @@ fn derive_preview_data(
                 FieldChange {
                     field: "Station A".to_string(),
                     old_value: String::new(),
-                    new_value: format_station_with_name(station_a, section_names),
+                    new_value: format_station_with_name(station_a, line_names),
                 },
                 FieldChange {
                     field: "Station B".to_string(),
                     old_value: String::new(),
-                    new_value: format_station_with_name(station_b, section_names),
+                    new_value: format_station_with_name(station_b, line_names),
                 },
             ],
             additional_changes: 0,
@@ -849,8 +849,8 @@ fn derive_preview_data(
                         old_value: String::new(),
                         new_value: format!(
                             "{} \u{2194} {}",
-                            format_station_key_with_name(&closure.station_a, section_names),
-                            format_station_key_with_name(&closure.station_b, section_names),
+                            format_station_key_with_name(&closure.station_a, line_names),
+                            format_station_key_with_name(&closure.station_b, line_names),
                         ),
                     },
                 ],
@@ -920,7 +920,7 @@ fn derive_preview_data(
             let changes: Vec<FieldChange> = commands
                 .iter()
                 .map(|cmd| {
-                    let details = derive_command_details(cmd, section_names).unwrap_or_default();
+                    let details = derive_command_details(cmd, line_names).unwrap_or_default();
                     FieldChange {
                         field: cmd.description(),
                         old_value: String::new(),
@@ -941,7 +941,7 @@ fn derive_preview_data(
 
         // Add .stalx (#674): what the add brought, counted off its own record.
         (Command::AddProjectFile { file_name, .. }, UndoData::AddedProjectContent(content)) => {
-            let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
+            let shots: usize = content.lines.iter().map(|s| s.shots.len()).sum();
             let row = |field: &str, value: String| FieldChange {
                 field: field.to_string(),
                 old_value: String::new(),
@@ -950,7 +950,7 @@ fn derive_preview_data(
             Some(PreviewData {
                 changes: vec![
                     row("File", file_name.clone()),
-                    row("Sections added", content.sections.len().to_string()),
+                    row("Lines added", content.lines.len().to_string()),
                     row("Shots added", shots.to_string()),
                 ],
                 additional_changes: 0,
@@ -973,7 +973,7 @@ fn derive_preview_data(
 pub fn entry_to_history_item(
     entry: &UndoEntry,
     index: usize,
-    section_names: &HashMap<SectionId, Option<String>>,
+    line_names: &HashMap<LineId, Option<String>>,
 ) -> UndoHistoryItem {
     UndoHistoryItem {
         index,
@@ -981,7 +981,7 @@ pub fn entry_to_history_item(
             .unwrap_or_else(|| entry.command.description()),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),
-        preview_data: derive_preview_data(entry, section_names),
+        preview_data: derive_preview_data(entry, line_names),
     }
 }
 
@@ -990,20 +990,20 @@ pub fn entry_to_history_item(
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, Coordinates, GpsCoordinates, SectionData, ShotData, ShotUpdates,
+        ClosureStrategy, Coordinates, GpsCoordinates, LineData, ShotData, ShotUpdates,
         StationRef,
     };
     use chrono::Utc;
     use std::collections::HashMap;
 
-    fn empty_names() -> HashMap<SectionId, Option<String>> {
+    fn empty_names() -> HashMap<LineId, Option<String>> {
         HashMap::new()
     }
 
     #[test]
     fn test_get_command_type() {
         assert_eq!(
-            get_command_type(&Command::CreateSection {
+            get_command_type(&Command::CreateLine {
                 name: Some("Test".to_string()),
                 surveyor: None,
                 date: None,
@@ -1011,12 +1011,12 @@ mod tests {
                 direction: None,
                 shots: vec![],
             }),
-            "create_section"
+            "create_line"
         );
 
         assert_eq!(
             get_command_type(&Command::UpdateShot {
-                section_id: 0,
+                line_id: 0,
                 shot_id: 0,
                 updates: ShotUpdates::default(),
             }),
@@ -1074,8 +1074,8 @@ mod tests {
     fn test_entry_to_history_item_with_timestamp() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::CreateSection {
-                name: Some("Test Section".to_string()),
+            command: Command::CreateLine {
+                name: Some("Test Line".to_string()),
                 surveyor: None,
                 date: None,
                 color: "#ff0000".to_string(),
@@ -1088,20 +1088,20 @@ mod tests {
 
         let item = entry_to_history_item(&entry, 0, &empty_names());
         assert_eq!(item.index, 0);
-        assert_eq!(item.description, "Create section 'Test Section'");
+        assert_eq!(item.description, "Create line 'Test Line'");
         assert!(item.timestamp.is_some());
-        assert_eq!(item.command_type, "create_section");
+        assert_eq!(item.command_type, "create_line");
         assert!(item.preview_data.is_some());
     }
 
     #[test]
     fn test_entry_to_history_item_without_timestamp() {
-        // Build a Project with section_id=5 containing 2 shots for the "before" snapshot
+        // Build a Project with line_id=5 containing 2 shots for the "before" snapshot
         let mut project = crate::models::Project::new("Test".to_string(), None);
-        // Advance next_section_id to 5
-        project.next_section_id = 5;
-        project.add_section(SectionData {
-            name: Some("Deleted Section".to_string()),
+        // Advance next_line_id to 5
+        project.next_line_id = 5;
+        project.add_line(LineData {
+            name: Some("Deleted Line".to_string()),
             surveyor: None,
             date: None,
             color: "#000".to_string(),
@@ -1113,7 +1113,7 @@ mod tests {
 
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::DeleteSection { section_id: 5 },
+            command: Command::DeleteLine { line_id: 5 },
             undo_data: UndoData::ProjectSnapshotPair {
                 before: before_json,
                 after: String::new(),
@@ -1124,12 +1124,12 @@ mod tests {
         let item = entry_to_history_item(&entry, 3, &empty_names());
         assert_eq!(item.index, 3);
         assert!(item.timestamp.is_none());
-        assert_eq!(item.command_type, "delete_section");
+        assert_eq!(item.command_type, "delete_line");
 
         let preview = item.preview_data.unwrap();
         assert_eq!(preview.changes.len(), 2);
         assert_eq!(preview.changes[0].field, "Name");
-        assert_eq!(preview.changes[0].old_value, "Deleted Section");
+        assert_eq!(preview.changes[0].old_value, "Deleted Line");
         assert_eq!(preview.changes[1].field, "Shots");
         assert_eq!(preview.changes[1].old_value, "2");
     }
@@ -1139,7 +1139,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::UpdateShot {
-                section_id: 0,
+                line_id: 0,
                 shot_id: 0,
                 updates: ShotUpdates {
                     length: Some(15.0),
@@ -1148,7 +1148,7 @@ mod tests {
                 },
             },
             undo_data: UndoData::PreviousValues {
-                section_id: 0,
+                line_id: 0,
                 shot_id: Some(0),
                 shot_uuid: None,
                 values_json: r#"{"length": 10.0, "azimuth_in": 45.0}"#.to_string(),
@@ -1248,14 +1248,14 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_data_move_section() {
+    fn test_derive_preview_data_move_line() {
         let mut names = HashMap::new();
         names.insert(2, Some("East Wing".to_string()));
 
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::MoveSection {
-                section_id: 2,
+            command: Command::MoveLine {
+                line_id: 2,
                 offset: Coordinates::new(0.0, 5.0, 0.0),
             },
             undo_data: UndoData::None,
@@ -1263,7 +1263,7 @@ mod tests {
         };
 
         let preview = derive_preview_data(&entry, &names).unwrap();
-        assert_eq!(preview.changes[0].field, "Section");
+        assert_eq!(preview.changes[0].field, "Line");
         assert_eq!(preview.changes[0].new_value, "East Wing");
         assert_eq!(preview.changes[1].field, "Offset");
         assert_eq!(preview.changes[1].new_value, "5.0m N");
@@ -1293,12 +1293,12 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::SetShotKind {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 2,
                 kind: ShotKind::Reference,
             },
             undo_data: UndoData::InverseCommand(Command::SetShotKind {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 2,
                 kind: ShotKind::Jump,
             }),
@@ -1318,7 +1318,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::SetShotKind {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 2,
                 kind: ShotKind::Jump,
             },
@@ -1379,20 +1379,20 @@ mod tests {
         assert_eq!(preview.changes[2].field, "Longitude");
     }
 
-    /// A project with one two-shot section and a zero datum on station 1 - i.e.
+    /// A project with one two-shot line and a zero datum on station 1 - i.e.
     /// a datum whose stored key is an `AfterShot(uuid)`, the shape every datum
     /// past station 0 has, so the resolution the shim does is actually exercised.
     fn project_with_a_datum_on_station_one() -> crate::models::Project {
         let mut project = crate::models::Project::new("Preview".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#123456".to_string(),
             shots: vec![ShotData::default(), ShotData::default()],
             ..Default::default()
         });
-        let section_id = project.sections[0].id;
-        // Station 1 anchors to the uuid of shot 0, which `add_section` minted.
-        let key = project.key_for_ref(StationRef::new(section_id, 1)).unwrap();
+        let line_id = project.lines[0].id;
+        // Station 1 anchors to the uuid of shot 0, which `add_line` minted.
+        let key = project.key_for_ref(StationRef::new(line_id, 1)).unwrap();
         project.zero_datums.push(crate::models::ZeroDatum {
             station_ref: key,
             gps: GpsCoordinates::new(45.0, -73.0, 0.0).unwrap(),
@@ -1405,15 +1405,15 @@ mod tests {
     /// The live `RemoveZeroDatum` capture is a `ProjectSnapshotPair`, so the
     /// coordinates the dropdown shows come out of its `before` half - and they
     /// have to survive the shim that reads it, including the key resolution
-    /// (station 1 is an `AfterShot(uuid)`, not a `SectionStart`).
+    /// (station 1 is an `AfterShot(uuid)`, not a `LineStart`).
     #[test]
     fn test_derive_preview_data_remove_zero_datum_reads_the_snapshot_pair() {
         let project = project_with_a_datum_on_station_one();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::RemoveZeroDatum {
-                station_ref: StationRef::new(section_id, 1),
+                station_ref: StationRef::new(line_id, 1),
             },
             undo_data: UndoData::ProjectSnapshotPair {
                 before: serde_json::to_string(&project).unwrap(),
@@ -1469,15 +1469,15 @@ mod tests {
         );
     }
 
-    /// The sibling arm on the same shim: `DeleteSection` reads the deleted
-    /// section's name and shot count out of the same `before` half.
+    /// The sibling arm on the same shim: `DeleteLine` reads the deleted
+    /// line's name and shot count out of the same `before` half.
     #[test]
-    fn test_derive_preview_data_delete_section_reads_the_snapshot_pair() {
+    fn test_derive_preview_data_delete_line_reads_the_snapshot_pair() {
         let project = project_with_a_datum_on_station_one();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::DeleteSection { section_id },
+            command: Command::DeleteLine { line_id },
             undo_data: UndoData::ProjectSnapshotPair {
                 before: serde_json::to_string(&project).unwrap(),
                 after: serde_json::to_string(&crate::models::Project::new(
@@ -1503,15 +1503,15 @@ mod tests {
             command: Command::Batch {
                 commands: vec![
                     Command::DeleteShot {
-                        section_id: 1,
+                        line_id: 1,
                         shot_id: 2,
                     },
                     Command::MergeStations {
                         station_a: StationRef::new(1, 0),
                         station_b: StationRef::new(2, 0),
                     },
-                    Command::MoveSection {
-                        section_id: 3,
+                    Command::MoveLine {
+                        line_id: 3,
                         offset: Coordinates::new(0.0, 5.0, 0.0),
                     },
                     Command::CloseProject,
@@ -1531,7 +1531,7 @@ mod tests {
         assert_eq!(preview.changes[1].field, "Merge stations 1:0 and 2:0");
         assert!(preview.changes[1].new_value.contains("1:0"));
         assert!(preview.changes[1].new_value.contains("2:0"));
-        assert_eq!(preview.changes[2].field, "Move section 3");
+        assert_eq!(preview.changes[2].field, "Move line 3");
         assert_eq!(preview.changes[2].new_value, "5.0m N");
         assert_eq!(preview.changes[3].field, "Close project");
         assert!(preview.changes[3].new_value.is_empty());
@@ -1543,7 +1543,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::DeleteShot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 2,
             },
             undo_data: UndoData::None,
@@ -1556,20 +1556,20 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_update_section_metadata_name_change() {
-        use crate::models::SectionUpdates;
+    fn test_derive_preview_update_line_metadata_name_change() {
+        use crate::models::LineUpdates;
 
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::UpdateSectionMetadata {
-                section_id: 1,
-                updates: SectionUpdates {
+            command: Command::UpdateLineMetadata {
+                line_id: 1,
+                updates: LineUpdates {
                     name: Some(Some("New Name".to_string())),
                     ..Default::default()
                 },
             },
             undo_data: UndoData::PreviousValues {
-                section_id: 1,
+                line_id: 1,
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r#"{"name":"Old Name"}"#.to_string(),
@@ -1587,14 +1587,14 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_update_section_metadata_multiple_fields() {
-        use crate::models::{SectionUpdates, SurveyDirection};
+    fn test_derive_preview_update_line_metadata_multiple_fields() {
+        use crate::models::{LineUpdates, SurveyDirection};
 
         let entry = UndoEntry {
             command_bytes: None,
-            command: Command::UpdateSectionMetadata {
-                section_id: 1,
-                updates: SectionUpdates {
+            command: Command::UpdateLineMetadata {
+                line_id: 1,
+                updates: LineUpdates {
                     name: Some(Some("Updated".to_string())),
                     color: Some("#00ff00".to_string()),
                     direction: Some(SurveyDirection::Out),
@@ -1602,7 +1602,7 @@ mod tests {
                 },
             },
             undo_data: UndoData::PreviousValues {
-                section_id: 1,
+                line_id: 1,
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##
@@ -1630,14 +1630,14 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_update_section_metadata_truncation() {
-        use crate::models::{SectionUpdates, SurveyDirection};
+    fn test_derive_preview_update_line_metadata_truncation() {
+        use crate::models::{LineUpdates, SurveyDirection};
 
         let entry = UndoEntry {
      command_bytes: None,
-            command: Command::UpdateSectionMetadata {
-                section_id: 1,
-                updates: SectionUpdates {
+            command: Command::UpdateLineMetadata {
+                line_id: 1,
+                updates: LineUpdates {
                     name: Some(Some("New".to_string())),
                     surveyor: Some(Some("Alice".to_string())),
                     date: Some(None),
@@ -1647,7 +1647,7 @@ mod tests {
                 },
             },
             undo_data: UndoData::PreviousValues {
-                section_id: 1,
+                line_id: 1,
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),

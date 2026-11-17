@@ -1,4 +1,4 @@
-//! `ImportSectionConfig::station_names` at the state layer: the names land on
+//! `ImportLineConfig::station_names` at the state layer: the names land on
 //! the stations they were given for, mirror with a reversed import exactly like
 //! station comments, and undo/redo of the import takes them away and back.
 
@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::models::{
-    ImportPlacement, ImportSectionConfig, Project, SectionData, ShotData, StationRef,
+    ImportPlacement, ImportLineConfig, Project, LineData, ShotData, StationRef,
 };
 use crate::persistence::Database;
 
@@ -20,15 +20,15 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> ImportSectionConfig {
+fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> ImportLineConfig {
     let pairs = |entries: &[(u32, &str)]| {
         entries
             .iter()
             .map(|(index, text)| (*index, (*text).to_string()))
             .collect()
     };
-    ImportSectionConfig {
-        section_index: 0,
+    ImportLineConfig {
+        line_index: 0,
         name: Some("A01".to_string()),
         surveyor: None,
         date: None,
@@ -47,13 +47,13 @@ fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> Imp
     }
 }
 
-fn import(config: ImportSectionConfig) -> AppState {
+fn import(config: ImportLineConfig) -> AppState {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Names".to_string(),
         location: None,
     });
-    let result = state.execute_import_sections(
+    let result = state.execute_import_lines(
         vec![config],
         Vec::new(),
         None,
@@ -65,13 +65,13 @@ fn import(config: ImportSectionConfig) -> AppState {
     state
 }
 
-/// The name of each station of the (single) imported section, in station order.
+/// The name of each station of the (single) imported line, in station order.
 fn names(project: &Project) -> Vec<Option<String>> {
-    let section = project.sections.first().unwrap();
-    (0..=section.shots.len() as u32)
+    let line = project.lines.first().unwrap();
+    (0..=line.shots.len() as u32)
         .map(|i| {
             project
-                .station_name_for_ref(StationRef::new(section.id, i))
+                .station_name_for_ref(StationRef::new(line.id, i))
                 .cloned()
         })
         .collect()
@@ -93,10 +93,10 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
         names(&project),
         named(&[Some("0"), Some("1"), Some("2"), Some("3")])
     );
-    let section = project.sections.first().unwrap().id;
+    let line = project.lines.first().unwrap().id;
     assert_eq!(
         project
-            .station_comment_for_ref(StationRef::new(section, 2))
+            .station_comment_for_ref(StationRef::new(line, 2))
             .map(String::as_str),
         Some("restriction"),
         "a name and a comment on one station are independent"
@@ -106,14 +106,14 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
     let stations = project.compute_station_coordinates();
     let middle = stations
         .iter()
-        .find(|s| s.station_ref == StationRef::new(section, 2))
+        .find(|s| s.station_ref == StationRef::new(line, 2))
         .unwrap();
     assert_eq!(middle.name.as_deref(), Some("2"));
     assert_eq!(middle.comment.as_deref(), Some("restriction"));
 
     assert!(state.undo().success);
     let undone = state.get_project_state().unwrap();
-    assert!(undone.sections.is_empty());
+    assert!(undone.lines.is_empty());
     assert!(undone.station_names.is_empty(), "undo takes the names away");
 
     assert!(state.redo().success);
@@ -146,8 +146,8 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
     }
 }
 
-/// Merging projects remaps every section id; each source's names must land on
-/// the same station of its section's NEW id, in the merged file.
+/// Merging projects remaps every line id; each source's names must land on
+/// the same station of its line's NEW id, in the merged file.
 #[test]
 fn merged_projects_keep_each_station_name_on_its_station() {
     let dir = TempDir::new().unwrap();
@@ -155,15 +155,15 @@ fn merged_projects_keep_each_station_name_on_its_station() {
     for (label, count) in [("A", 2u32), ("B", 3)] {
         let mut project = Project::new(label.to_string(), None);
         let id = project
-            .add_section(SectionData {
-                name: Some(format!("Section {label}")),
+            .add_line(LineData {
+                name: Some(format!("Line {label}")),
                 color: "#4ecdc4".to_string(),
                 shots: (0..count).map(|i| shot(f64::from(i) * 40.0, 5.0)).collect(),
                 ..Default::default()
             })
             .id;
         project.ensure_shot_uuids();
-        // Distinct per source, so a name landing in the wrong section shows.
+        // Distinct per source, so a name landing in the wrong line shows.
         for index in 0..=count {
             let key = project.key_for_ref(StationRef::new(id, index)).unwrap();
             project.station_names.insert(key, format!("{label}{index}"));
@@ -191,15 +191,15 @@ fn merged_projects_keep_each_station_name_on_its_station() {
         .load_project()
         .unwrap();
     for (label, count) in [("A", 2u32), ("B", 3)] {
-        let section = merged
-            .sections
+        let line = merged
+            .lines
             .iter()
-            .find(|s| s.name.as_deref() == Some(&format!("Section {label}")))
+            .find(|s| s.name.as_deref() == Some(&format!("Line {label}")))
             .unwrap();
         for index in 0..=count {
             assert_eq!(
                 merged
-                    .station_name_for_ref(StationRef::new(section.id, index))
+                    .station_name_for_ref(StationRef::new(line.id, index))
                     .map(String::as_str),
                 Some(format!("{label}{index}").as_str()),
                 "{label}:{index}"

@@ -83,7 +83,7 @@ describe('interleaveRows', () => {
     expect(ids(entries)).toEqual([1, 2, 3, END_DRAFT_KEY]);
   });
 
-  it('shows only end drafts for an empty section', () => {
+  it('shows only end drafts for an empty line', () => {
     expect(ids(interleaveRows([], [endDraft()]))).toEqual([END_DRAFT_KEY]);
   });
 });
@@ -143,7 +143,7 @@ describe('insertDraftsAt', () => {
     expect(ids(interleaveRows(shots, next!))).toEqual([1, -2, -4, -3, 2, 3, END_DRAFT_KEY]);
   });
 
-  it('is a no-op for an empty section', () => {
+  it('is a no-op for an empty line', () => {
     expect(insertDraftsAt([], base, 0, 1, counter())).toBeNull();
     expect(insertDraftsAt([], base, 1, 2, counter())).toBeNull();
   });
@@ -166,7 +166,7 @@ describe('materializeDraft', () => {
 });
 
 /**
- * THE blankness rule, shared by the end draft, the new-section dialog's rows and
+ * THE blankness rule, shared by the end draft, the new-line dialog's rows and
  * the submit gate. Judged by value rather than by key presence: a cleared
  * optional WRITES its key (`comment: null`, and `pitch_in: null` out of
  * `buildShotUpdates`), so counting keys read an emptied row as half-filled.
@@ -307,7 +307,7 @@ describe('commitAnchorArgs', () => {
     expect(commitAnchorArgs(endDraft(), shots)).toEqual({ afterShotId: 2 });
   });
 
-  it('appends when the section has no shots yet', () => {
+  it('appends when the line has no shots yet', () => {
     expect(commitAnchorArgs(endDraft(), [])).toEqual({});
   });
 

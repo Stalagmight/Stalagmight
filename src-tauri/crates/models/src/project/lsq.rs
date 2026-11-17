@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    gps_to_local, Coordinates, LoopClosure, SectionId, StationRef, DEFAULT_GPS_ACCURACY_M,
+    gps_to_local, Coordinates, LoopClosure, LineId, StationRef, DEFAULT_GPS_ACCURACY_M,
 };
 
 use super::Project;
@@ -59,7 +59,7 @@ impl Project {
     /// silently stop pulling at all.
     pub(super) fn gps_fix_observations(
         &self,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
     ) -> Vec<FixObservation> {
         let Some(frame) = self.frame_datum() else {
             return Vec::new();
@@ -68,7 +68,7 @@ impl Project {
             .into_iter()
             .filter_map(|zd| {
                 let station = self.resolve_key(&zd.station_ref)?;
-                if !component.contains(&station.section_id) {
+                if !component.contains(&station.line_id) {
                     return None;
                 }
                 let (east, north) = gps_to_local(&zd.gps, &frame.gps);
@@ -368,23 +368,23 @@ impl Project {
     /// to adjust is a GPS fix is solved the same way. Horizontal only.
     pub(super) fn adjust_least_squares(
         &mut self,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
         closures: &[LoopClosure],
         anchor_station: StationRef,
         config: &ClosureAdjustmentConfig,
     ) -> Result<(), String> {
         // Collect all stations in component
         let mut stations: Vec<StationRef> = Vec::new();
-        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            for idx in 0..=section.shots.len() {
-                stations.push(StationRef::new(section.id, idx as u32));
+        for line in self.lines.iter().filter(|s| component.contains(&s.id)) {
+            for idx in 0..=line.shots.len() {
+                stations.push(StationRef::new(line.id, idx as u32));
             }
         }
 
         // Precompute every component station's raw (measured) coordinates in one
-        // linear, component-scoped pass. The warm-start, group-Z and section-delta
+        // linear, component-scoped pass. The warm-start, group-Z and line-delta
         // phases below each need a station's measured position; calling
-        // `compute_station_raw_coords` per station re-walks the section from its
+        // `compute_station_raw_coords` per station re-walks the line from its
         // start (O(index)), which made the solve O(n^2) on long degree-2 chains
         // (#81). The map is owned (no borrow of `self`), so it stays valid across
         // the later `iter_mut` update phase.
@@ -428,8 +428,8 @@ impl Project {
         };
 
         for merge in &self.station_merges {
-            if component.contains(&merge.station_a.section_id)
-                && component.contains(&merge.station_b.section_id)
+            if component.contains(&merge.station_a.line_id)
+                && component.contains(&merge.station_b.line_id)
             {
                 if let (Some(a), Some(b)) = (
                     self.resolve_key(&merge.station_a),
@@ -441,8 +441,8 @@ impl Project {
         }
 
         for closure in closures {
-            if component.contains(&closure.station_a.section_id)
-                && component.contains(&closure.station_b.section_id)
+            if component.contains(&closure.station_a.line_id)
+                && component.contains(&closure.station_b.line_id)
             {
                 if let (Some(a), Some(b)) = (
                     self.resolve_key(&closure.station_a),
@@ -467,7 +467,7 @@ impl Project {
         let placement_set: HashSet<StationRef> = self
             .placement_datum_refs()
             .into_iter()
-            .filter(|sr| component.contains(&sr.section_id))
+            .filter(|sr| component.contains(&sr.line_id))
             .collect();
         let fixes = self.gps_fix_observations(component);
 
@@ -568,19 +568,19 @@ impl Project {
         // Adjacency list: for each node, list of (neighbor, weight_x, weight_y)
         let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
 
-        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            let quality = if section.quality.is_finite() && section.quality > 0.0 {
-                section.quality
+        for line in self.lines.iter().filter(|s| component.contains(&s.id)) {
+            let quality = if line.quality.is_finite() && line.quality > 0.0 {
+                line.quality
             } else {
                 1.0
             };
             let sigma_len = config.base_sigma_length_m * quality;
             let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
-            let azimuth_reference = self.azimuth_reference_for(section);
+            let azimuth_reference = self.azimuth_reference_for(line);
 
-            for (idx, shot) in section.shots.iter().enumerate() {
-                let station_i = StationRef::new(section.id, idx as u32);
-                let station_j = StationRef::new(section.id, (idx + 1) as u32);
+            for (idx, shot) in line.shots.iter().enumerate() {
+                let station_i = StationRef::new(line.id, idx as u32);
+                let station_j = StationRef::new(line.id, (idx + 1) as u32);
 
                 let root_i = *station_root
                     .get(&station_i)
@@ -840,17 +840,17 @@ impl Project {
         // so they must be skipped in the update phase.
         let spur_stations: HashSet<StationRef> = {
             let mut adj_deg: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-            for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-                for idx in 0..section.shots.len() {
-                    let si = StationRef::new(section.id, idx as u32);
-                    let sj = StationRef::new(section.id, (idx + 1) as u32);
+            for line in self.lines.iter().filter(|s| component.contains(&s.id)) {
+                for idx in 0..line.shots.len() {
+                    let si = StationRef::new(line.id, idx as u32);
+                    let sj = StationRef::new(line.id, (idx + 1) as u32);
                     adj_deg.entry(si).or_default().push(sj);
                     adj_deg.entry(sj).or_default().push(si);
                 }
             }
             for merge in &self.station_merges {
-                if component.contains(&merge.station_a.section_id)
-                    && component.contains(&merge.station_b.section_id)
+                if component.contains(&merge.station_a.line_id)
+                    && component.contains(&merge.station_b.line_id)
                 {
                     if let (Some(a), Some(b)) = (
                         self.resolve_key(&merge.station_a),
@@ -913,18 +913,18 @@ impl Project {
 
         // Update shots based on solved coordinates
         let azimuth_references = self.azimuth_reference_map();
-        for section in self
-            .sections
+        for line in self
+            .lines
             .iter_mut()
             .filter(|s| component.contains(&s.id))
         {
             let azimuth_reference = azimuth_references
-                .get(&section.id)
+                .get(&line.id)
                 .copied()
                 .unwrap_or_default();
-            for idx in 0..section.shots.len() {
-                let station_i = StationRef::new(section.id, idx as u32);
-                let station_j = StationRef::new(section.id, (idx + 1) as u32);
+            for idx in 0..line.shots.len() {
+                let station_i = StationRef::new(line.id, idx as u32);
+                let station_j = StationRef::new(line.id, (idx + 1) as u32);
 
                 // Skip spur shots - they have no loop redundancy and must
                 // not be modified by the adjustment.
@@ -974,7 +974,7 @@ impl Project {
                     coords_j.z - offset_j.2,
                 );
 
-                let shot = section
+                let shot = line
                     .shots
                     .get_mut(idx)
                     .ok_or_else(|| "Shot not found for LSQ update".to_string())?;
@@ -989,22 +989,22 @@ impl Project {
         }
 
         // Recompute coordinates now that the shots above were rewritten. The
-        // section-alignment phase below compares each station's *post-update*
+        // line-alignment phase below compares each station's *post-update*
         // position against its solved target, so it must not reuse `raw_coords`
         // (the pre-update measured snapshot). Same component-scoped O(n) batch.
         let post_update_coords = self.compute_component_raw_coords(component);
 
-        // Align each section's absolute position to solved coordinates (rigid XY translation).
-        // This prevents merged stations in different sections from drifting apart.
+        // Align each line's absolute position to solved coordinates (rigid XY translation).
+        // This prevents merged stations in different lines from drifting apart.
         // Only X and Y are compared/applied; Z (depth) is not adjusted.
-        // Keyed order, so the offsets are applied in section order rather than in
-        // hash order. Each entry targets a distinct section today, but pinning the
+        // Keyed order, so the offsets are applied in line order rather than in
+        // hash order. Each entry targets a distinct line today, but pinning the
         // order keeps that from being load-bearing (issue #413, finding 21).
-        let mut section_deltas: BTreeMap<SectionId, (f64, f64)> = BTreeMap::new();
-        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+        let mut line_deltas: BTreeMap<LineId, (f64, f64)> = BTreeMap::new();
+        for line in self.lines.iter().filter(|s| component.contains(&s.id)) {
             let mut delta_xy: Option<(f64, f64)> = None;
-            for idx in 0..=section.shots.len() {
-                let station = StationRef::new(section.id, idx as u32);
+            for idx in 0..=line.shots.len() {
+                let station = StationRef::new(line.id, idx as u32);
                 // Skip spur stations - their shots were not updated, so their
                 // current positions don't match the solved positions.
                 if spur_stations.contains(&station) {
@@ -1023,7 +1023,7 @@ impl Project {
                 if let Some((ex, ey)) = delta_xy {
                     if (ex - dx).abs() > 1e-6 || (ey - dy).abs() > 1e-6 {
                         return Err(
-                            "Least squares adjustment produced inconsistent section translation"
+                            "Least squares adjustment produced inconsistent line translation"
                                 .to_string(),
                         );
                     }
@@ -1031,17 +1031,17 @@ impl Project {
                     delta_xy = Some((dx, dy));
                 }
             }
-            // For all-spur sections (no non-spur station set a delta), derive the
+            // For all-spur lines (no non-spur station set a delta), derive the
             // translation from the merge attachment point.  That station's group
             // is shared with a loop station, so its solved position is exact.
             if delta_xy.is_none() {
                 for merge in &self.station_merges {
-                    let local_key = if merge.station_a.section_id == section.id
-                        && component.contains(&merge.station_b.section_id)
+                    let local_key = if merge.station_a.line_id == line.id
+                        && component.contains(&merge.station_b.line_id)
                     {
                         &merge.station_a
-                    } else if merge.station_b.section_id == section.id
-                        && component.contains(&merge.station_a.section_id)
+                    } else if merge.station_b.line_id == line.id
+                        && component.contains(&merge.station_a.line_id)
                     {
                         &merge.station_b
                     } else {
@@ -1062,13 +1062,13 @@ impl Project {
             }
             if let Some((dx, dy)) = delta_xy {
                 if dx.abs() > 1e-9 || dy.abs() > 1e-9 {
-                    section_deltas.insert(section.id, (dx, dy));
+                    line_deltas.insert(line.id, (dx, dy));
                 }
             }
         }
 
-        for (section_id, (dx, dy)) in section_deltas {
-            self.adjust_section_offset(section_id, dx, dy);
+        for (line_id, (dx, dy)) in line_deltas {
+            self.adjust_line_offset(line_id, dx, dy);
         }
 
         self.debug_assert_merge_alignment("adjust_loop_closures");

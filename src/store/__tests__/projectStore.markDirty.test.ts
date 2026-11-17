@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { useProjectStore } from '../projectStore';
 
 /**
- * #110: the DMP import wizard applies sections via direct `import_sections` IPC
+ * #110: the DMP import wizard applies lines via direct `import_lines` IPC
  * calls that bypass `executeCommand`, so they never set `isDirty` themselves. The
  * wizard now calls `markDirty()` after each successful batch so the imported
- * sections register as unsaved - powering autosave + the project-close guard.
+ * lines register as unsaved - powering autosave + the project-close guard.
  * (Window-close during the wizard is guarded separately, by `isImportInProgress`.)
  * This guards that primitive.
  */

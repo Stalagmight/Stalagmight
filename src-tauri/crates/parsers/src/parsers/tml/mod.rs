@@ -18,7 +18,7 @@ use ts_rs::TS;
 use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
 use crate::models::{
-    ImportClosure, ImportPlacement, ImportSectionConfig, Person, ShotData, ShotKind, SurveyCredit,
+    ImportClosure, ImportPlacement, ImportLineConfig, Person, ShotData, ShotKind, SurveyCredit,
 };
 
 use azimuth::tml_azimuth_reference;
@@ -38,7 +38,7 @@ pub use people::people_line;
 pub mod test_helpers;
 
 use linearize::{
-    collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
+    collapsed_trip_report, join_contiguous_chains, linearize_line, split_runs_at_trip_boundaries,
 };
 
 // ============================================================================
@@ -80,7 +80,7 @@ pub struct TmlFile {
     #[ts(optional)]
     pub encoding_warning: Option<String>,
     pub geo_coding: Option<TmlGeoCoding>,
-    pub sections: Vec<TmlSection>,
+    pub lines: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
 }
 
@@ -125,7 +125,7 @@ pub struct TmlGeoCoding {
     pub altitude: f64,
 }
 
-/// A linearized survey section.
+/// A linearized survey line.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct TmlSection {
@@ -138,10 +138,10 @@ pub struct TmlSection {
     pub is_branch_split: bool,
     /// Ariane ID of the first shot's FromID (for topology linking).
     pub start_ariane_id: i64,
-    /// Ariane ID of the last shot in this section.
+    /// Ariane ID of the last shot in this line.
     pub end_ariane_id: i64,
     /// Cumulative depth of the parent shot (from_id target) for correct rebasing
-    /// when a section branches mid-chain. 0.0 if the section starts from a
+    /// when a line branches mid-chain. 0.0 if the line starts from a
     /// START shot or has no parent.
     pub start_depth: f64,
 }
@@ -187,7 +187,7 @@ pub struct TmlShot {
     pub latitude: f64,
     pub longitude: f64,
     pub closure_to_id: i64,
-    pub section: String,
+    pub line: String,
 }
 
 /// Shot type in Ariane.
@@ -200,7 +200,7 @@ pub enum TmlShotType {
     Closure,
 }
 
-/// A closure linking two stations across sections, in PREVIEW coordinates.
+/// A closure linking two stations across lines, in PREVIEW coordinates.
 ///
 /// The indices are positions in [`TmlSection::shots`] as parsed - CLOSURE and
 /// excluded shots included, and no `+1` shift onto the station at the end of
@@ -214,9 +214,9 @@ pub enum TmlShotType {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct TmlClosure {
-    pub from_section_index: usize,
+    pub from_line_index: usize,
     pub from_station_index: usize,
-    pub to_section_index: usize,
+    pub to_line_index: usize,
     pub to_station_index: usize,
 }
 
@@ -231,7 +231,7 @@ struct RawShot {
     from_id: i64,
     closure_to_id: i64,
     shot_type: TmlShotType,
-    section: String,
+    line: String,
     azimuth: f64,
     length: f64,
     depth: f64,
@@ -268,7 +268,7 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"FromID" | b"FRID" => Some("from_id"),
         b"ClosureToID" | b"CID" => Some("closure_to_id"),
         b"Type" | b"TY" => Some("type"),
-        b"Section" | b"SC" => Some("section"),
+        b"Section" | b"SC" => Some("line"),
         b"Azimut" | b"AZ" => Some("azimuth"),
         b"Length" | b"LG" => Some("length"),
         b"Depth" | b"DP" => Some("depth"),
@@ -612,9 +612,9 @@ fn build_raw_shot(
         None => TmlShotType::Real,
     };
 
-    let section = strip_section_description(
+    let line = strip_section_description(
         fields
-            .get("section")
+            .get("line")
             .map(String::as_str)
             .unwrap_or_default(),
     );
@@ -641,7 +641,7 @@ fn build_raw_shot(
         from_id,
         closure_to_id: parse_i64(fields, "closure_to_id").unwrap_or(-1),
         shot_type,
-        section,
+        line,
         azimuth: parse_f64(fields, "azimuth"),
         length: parse_f64(fields, "length"),
         depth: parse_f64(fields, "depth"),
@@ -692,20 +692,21 @@ fn parse_i64(fields: &HashMap<&str, String>, key: &str) -> Result<i64> {
 }
 
 // ============================================================================
-// Section name cleanup
+// Line name cleanup
 // ============================================================================
 
-/// Strip `<SectionDescription>...</SectionDescription>` suffixes from section names.
+/// Strip `<SectionDescription>...</SectionDescription>` suffixes from Ariane
+/// section names.
 ///
 /// Ariane encodes section descriptions as entity-escaped XML appended to the
 /// section name (e.g. `"Mainline<SectionDescription>notes</SectionDescription>"`).
 /// After XML unescaping this becomes part of the text content. We strip it so
 /// that START shots (which carry the description) group with their REAL shots.
-fn strip_section_description(section: &str) -> String {
-    if let Some(idx) = section.find("<SectionDescription>") {
-        section[..idx].trim_end().to_string()
+fn strip_section_description(name: &str) -> String {
+    if let Some(idx) = name.find("<SectionDescription>") {
+        name[..idx].trim_end().to_string()
     } else {
-        section.to_string()
+        name.to_string()
     }
 }
 
@@ -749,8 +750,8 @@ fn convert_ariane_color(color_str: Option<&str>) -> String {
 
 /// Propagate GPS coordinates from START shots to their immediate successors.
 ///
-/// Ariane stores GPS on START shots (section origin markers) which carry no
-/// measurement data and are excluded from sections. To preserve the geo-reference,
+/// Ariane stores GPS on START shots (line origin markers) which carry no
+/// measurement data and are excluded from lines. To preserve the geo-reference,
 /// copy lat/lng to the first real shot(s) that follow each START shot - but only
 /// if those successors don't already have their own GPS data.
 fn propagate_start_gps(raw_shots: &mut [RawShot]) {
@@ -791,7 +792,7 @@ fn propagate_start_gps(raw_shots: &mut [RawShot]) {
 
 /// How many shots share an ID with an earlier shot.
 ///
-/// `build_sections` keys its topology index (`shot_by_id`) on the Ariane ID, so
+/// `build_lines` keys its topology index (`shot_by_id`) on the Ariane ID, so
 /// every one of these is a shot the import loses: the later shot overwrites the
 /// earlier one in the index, and the earlier one's successors reattach to the
 /// survivor. Counted here rather than fixed - which shot the file MEANT is not
@@ -802,14 +803,14 @@ fn count_duplicate_shot_ids(raw_shots: &[RawShot]) -> u32 {
     u32::try_from(duplicates).unwrap_or(u32::MAX)
 }
 
-/// Build topology and linearize into sections.
-fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>) {
+/// Build topology and linearize into lines.
+fn build_lines(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>) {
     if raw_shots.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
     // Propagate GPS coordinates from START shots to their immediate successors.
-    // Ariane places GPS data on START shots, which we later exclude from sections.
+    // Ariane places GPS data on START shots, which we later exclude from lines.
     propagate_start_gps(&mut raw_shots);
 
     // Index shots by ID
@@ -823,9 +824,9 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
         }
     }
 
-    // Group non-START shots by section name, preserving FromID chain order
-    let mut section_groups: Vec<(String, Vec<&RawShot>)> = Vec::new();
-    let mut section_map: HashMap<String, usize> = HashMap::new();
+    // Group non-START shots by line name, preserving FromID chain order
+    let mut line_groups: Vec<(String, Vec<&RawShot>)> = Vec::new();
+    let mut line_map: HashMap<String, usize> = HashMap::new();
 
     // Sort shots topologically: walk from each START shot
     let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
@@ -865,7 +866,7 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
         }
     }
 
-    // Now group ordered non-START shots by section name
+    // Now group ordered non-START shots by line name
     for &shot_id in &ordered_ids {
         let Some(shot) = shot_by_id.get(&shot_id) else {
             continue;
@@ -875,96 +876,96 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
             continue;
         }
 
-        let section_name = if shot.section.is_empty() {
+        let line_name = if shot.line.is_empty() {
             "Unnamed".to_string()
         } else {
-            shot.section.clone()
+            shot.line.clone()
         };
 
-        if let Some(&idx) = section_map.get(&section_name) {
-            section_groups[idx].1.push(shot);
+        if let Some(&idx) = line_map.get(&line_name) {
+            line_groups[idx].1.push(shot);
         } else {
-            let idx = section_groups.len();
-            section_map.insert(section_name.clone(), idx);
-            section_groups.push((section_name, vec![shot]));
+            let idx = line_groups.len();
+            line_map.insert(line_name.clone(), idx);
+            line_groups.push((line_name, vec![shot]));
         }
     }
 
     // Within each group, linearize by walking FromID chains.
-    // If branching detected (shot has multiple successors within the same section),
-    // split into separate linear sections.
-    let mut sections: Vec<TmlSection> = Vec::new();
+    // If branching detected (shot has multiple successors within the same line),
+    // split into separate linear lines.
+    let mut lines: Vec<TmlSection> = Vec::new();
 
-    for (section_name, group_shots) in &section_groups {
-        let linearized = linearize_section(section_name, group_shots, &successors, &shot_by_id);
-        sections.extend(linearized);
+    for (line_name, group_shots) in &line_groups {
+        let linearized = linearize_line(line_name, group_shots, &successors, &shot_by_id);
+        lines.extend(linearized);
     }
 
     // Sew the cuts back up where the file's own topology allows it: a chain that
     // starts exactly where another ends is the same passage under a new name
     // (#412). Must run BEFORE extract_closures, which keys closures on
-    // (section index, station index) and would otherwise index the pre-merge
+    // (line index, station index) and would otherwise index the pre-merge
     // fragments.
     //
     // The join matches a chain's start against another chain's end BY SHOT ID,
     // so it needs to know whether this file's ids are actually unique - a
     // duplicate id would splice an unrelated chain onto the wrong parent.
-    let joins = join_contiguous_chains(&mut sections, count_duplicate_shot_ids(&raw_shots));
+    let joins = join_contiguous_chains(&mut lines, count_duplicate_shot_ids(&raw_shots));
     if joins > 0 {
         tracing::debug!(joins, "Joined contiguous TML chains");
     }
 
     // Then give each COLOUR its own run: Ariane writes people, date and colour
-    // on every shot row, and a section holds one colour - the people and date
+    // on every shot row, and a line holds one colour - the people and date
     // are per-shot credit (#329) and never cut (#427).
     //
     // Strictly AFTER the join, which is decided on the chain ends the FILE has.
-    // A cut end is not one of those - it has an in-section successor by
+    // A cut end is not one of those - it has an in-line successor by
     // construction - and offering it to the join let an unrelated branch at that
     // junction splice onto the mainline's head, taking its name while the real
     // continuation stayed a separate run. The cost is that a cut tail cannot
     // absorb a same-trip chain continuing it under another name; that is the
     // behaviour this file already had, and the join's contract is worth more
     // than the extra merge.
-    let trip_cuts = split_runs_at_trip_boundaries(&mut sections);
+    let trip_cuts = split_runs_at_trip_boundaries(&mut lines);
     if trip_cuts > 0 {
         tracing::debug!(trip_cuts, "Split TML runs where the survey trip changed");
     }
 
-    // Extract closures: find CLOSURE shots and map to section:station indices
-    let closures = extract_closures(&sections, &shot_by_id);
+    // Extract closures: find CLOSURE shots and map to line:station indices
+    let closures = extract_closures(&lines, &shot_by_id);
 
-    (sections, closures)
+    (lines, closures)
 }
 
 /// Extract closure information from CLOSURE-type shots.
 fn extract_closures(
-    sections: &[TmlSection],
+    lines: &[TmlSection],
     shot_by_id: &HashMap<i64, &RawShot>,
 ) -> Vec<TmlClosure> {
-    // Build reverse index: shot ID → (section_index, station_index)
+    // Build reverse index: shot ID → (line_index, station_index)
     let mut id_to_location: HashMap<i64, (usize, usize)> = HashMap::new();
-    for (si, section) in sections.iter().enumerate() {
-        for (shot_idx, shot) in section.shots.iter().enumerate() {
+    for (si, line) in lines.iter().enumerate() {
+        for (shot_idx, shot) in line.shots.iter().enumerate() {
             id_to_location.insert(shot.id, (si, shot_idx));
         }
     }
 
     let mut closures = Vec::new();
 
-    for (si, section) in sections.iter().enumerate() {
-        for (shot_idx, shot) in section.shots.iter().enumerate() {
+    for (si, line) in lines.iter().enumerate() {
+        for (shot_idx, shot) in line.shots.iter().enumerate() {
             if shot.shot_type == TmlShotType::Closure && shot.closure_to_id >= 0 {
                 // The closure shot itself is the "from" location
-                let from_section_index = si;
+                let from_line_index = si;
                 let from_station_index = shot_idx;
 
                 // closure_to_id points to the target shot
                 if let Some(&(to_si, to_shot_idx)) = id_to_location.get(&shot.closure_to_id) {
                     closures.push(TmlClosure {
-                        from_section_index,
+                        from_line_index,
                         from_station_index,
-                        to_section_index: to_si,
+                        to_line_index: to_si,
                         to_station_index: to_shot_idx,
                     });
                 } else if shot_by_id
@@ -972,22 +973,22 @@ fn extract_closures(
                     .is_some_and(|target| target.shot_type == TmlShotType::Start)
                 {
                     // The target is a START shot, which carries no measurement
-                    // and so is in no section. Aim at the first section that
-                    // hangs off it instead. Scanning `sections` in order (rather
+                    // and so is in no line. Aim at the first line that
+                    // hangs off it instead. Scanning `lines` in order (rather
                     // than the previous scan of the `id_to_location` HashMap)
                     // is what makes the answer the same on every run when
-                    // several sections start from the same START shot.
-                    let to_section_index = sections.iter().position(|s| {
+                    // several lines start from the same START shot.
+                    let to_line_index = lines.iter().position(|s| {
                         s.shots
                             .first()
                             .is_some_and(|first| first.from_id == shot.closure_to_id)
                     });
-                    if let Some(to_si) = to_section_index {
-                        // Station 0 of the target section (first station after START)
+                    if let Some(to_si) = to_line_index {
+                        // Station 0 of the target line (first station after START)
                         closures.push(TmlClosure {
-                            from_section_index,
+                            from_line_index,
                             from_station_index,
-                            to_section_index: to_si,
+                            to_line_index: to_si,
                             to_station_index: 0,
                         });
                     }
@@ -1009,11 +1010,11 @@ const FEET_TO_METERS: f64 = 0.3048;
 ///
 /// Every length the importer carries forward passes through here, not just the
 /// shot measurements: `start_depth` is the parent station's cumulative depth and
-/// rebases the first shot of every branch section whose `DepthIn` is the `-1`
+/// rebases the first shot of every branch line whose `DepthIn` is the `-1`
 /// sentinel (see `resolve_tml_depth_in`), and the file-level absolute elevation
 /// is a length too.
 fn apply_unit_conversion(
-    sections: &mut [TmlSection],
+    lines: &mut [TmlSection],
     first_start_absolute_elevation: &mut f64,
     unit: TmlUnit,
 ) {
@@ -1023,9 +1024,9 @@ fn apply_unit_conversion(
 
     *first_start_absolute_elevation *= FEET_TO_METERS;
 
-    for section in sections.iter_mut() {
-        section.start_depth *= FEET_TO_METERS;
-        for shot in &mut section.shots {
+    for line in lines.iter_mut() {
+        line.start_depth *= FEET_TO_METERS;
+        for shot in &mut line.shots {
             shot.length *= FEET_TO_METERS;
             shot.depth *= FEET_TO_METERS;
             if shot.depth_in != -1.0 {
@@ -1065,14 +1066,14 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     let mut anomalies = metadata.anomalies;
     anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
 
-    let (mut sections, closures) = build_sections(raw_shots);
+    let (mut lines, closures) = build_lines(raw_shots);
 
     // Apply unit conversion before returning
     let mut first_start_absolute_elevation = metadata.first_start_absolute_elevation;
-    apply_unit_conversion(&mut sections, &mut first_start_absolute_elevation, unit);
+    apply_unit_conversion(&mut lines, &mut first_start_absolute_elevation, unit);
 
     // Extract geo coding from first shot with non-zero lat/lng
-    let geo_coding = sections
+    let geo_coding = lines
         .iter()
         .flat_map(|s| &s.shots)
         .find(|shot| shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON)
@@ -1083,7 +1084,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         });
 
     tracing::info!(
-        sections = sections.len(),
+        lines = lines.len(),
         closures = closures.len(),
         unit = ?unit,
         anomalies = ?anomalies,
@@ -1099,7 +1100,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         parse_anomalies: anomalies.any().then_some(anomalies),
         encoding_warning,
         geo_coding,
-        sections,
+        lines,
         closures,
     })
 }
@@ -1143,7 +1144,7 @@ pub fn tml_unit_conversion_note(unit: TmlUnit) -> Option<String> {
 }
 
 // ============================================================================
-// Conversion to ImportSectionConfig
+// Conversion to ImportLineConfig
 // ============================================================================
 
 /// `""` or `"s"` for a count, so a warning reads naturally at 1.
@@ -1171,7 +1172,7 @@ fn was_were(count: u32) -> &'static str {
 /// each one, but a log is not something the person doing the import ever sees.
 ///
 /// The counts are PARSE-time and whole-file: they precede the exclusion filter
-/// and section selection, so a coerced shot counted here may not be in the
+/// and line selection, so a coerced shot counted here may not be in the
 /// import at all. The wording says "in the file" for exactly that reason.
 ///
 /// One sentence per anomaly CLASS, never one per shot - a file with ten
@@ -1211,10 +1212,10 @@ fn push_parse_anomaly_warnings(anomalies: TmlParseAnomalies, warnings: &mut Vec<
     }
 }
 
-/// Convert a parsed TML file into `ImportSectionConfig` values ready for
-/// `execute_import_sections`.
+/// Convert a parsed TML file into `ImportLineConfig` values ready for
+/// `execute_import_lines`.
 ///
-/// A file with no sections is NOT an early return: it still produces the
+/// A file with no lines is NOT an early return: it still produces the
 /// warnings that say why (an unrecognized unit, shots the parser had to drop),
 /// and those are the only account the user gets of an import that landed
 /// nothing.
@@ -1222,38 +1223,38 @@ pub fn convert_tml_to_import_configs(
     tml: &TmlFile,
     include_excluded: bool,
     comments_on_stations: bool,
-) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+) -> Result<(Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>)> {
     convert_tml_with_options(
         tml,
         &TmlImportOptions::basic(include_excluded, comments_on_stations),
     )
 }
 
-/// [`convert_tml_to_import_configs`] with the whole option set: the per-section
+/// [`convert_tml_to_import_configs`] with the whole option set: the per-line
 /// filter and the root-placement choice the import dialog collects (#425).
 ///
 /// Not a second implementation - the shorter entry point above delegates
-/// straight here, the same way `execute_import_sections` delegates to
-/// `execute_import_sections_inner`. It exists because the callers that have no
+/// straight here, the same way `execute_import_lines` delegates to
+/// `execute_import_lines_inner`. It exists because the callers that have no
 /// user in front of them (the SpeleoDB adoption path, every round-trip test)
 /// have no selection and no placement to express, and threading two `None`s
 /// through them would say nothing.
 pub fn convert_tml_with_options(
     tml: &TmlFile,
     opts: &TmlImportOptions,
-) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+) -> Result<(Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>)> {
     let include_excluded = opts.include_excluded;
     let comments_on_stations = opts.comments_on_stations;
     let mut warnings: Vec<String> = Vec::new();
 
-    // A selection naming sections this file does not have is not fatal - it
+    // A selection naming lines this file does not have is not fatal - it
     // simply selects nothing - but silence would leave an empty import with no
     // account of itself. Unreachable from the dialog, which builds the indices
     // from the very file it is previewing.
-    let out_of_range = opts.out_of_range_selection(tml.sections.len());
+    let out_of_range = opts.out_of_range_selection(tml.lines.len());
     if out_of_range > 0 {
         warnings.push(format!(
-            "{out_of_range} selected section{} did not exist in this file and {} ignored",
+            "{out_of_range} selected line{} did not exist in this file and {} ignored",
             plural_s(out_of_range as u32),
             was_were(out_of_range as u32)
         ));
@@ -1273,87 +1274,87 @@ pub fn convert_tml_with_options(
         push_parse_anomaly_warnings(anomalies, &mut warnings);
     }
 
-    // What the per-trip section cut could not express (#427).
-    if let Some(note) = collapsed_trip_report(&tml.sections, include_excluded) {
+    // What the per-trip line cut could not express (#427).
+    if let Some(note) = collapsed_trip_report(&tml.lines, include_excluded) {
         warnings.push(note);
     }
 
     // #438: azimuths are copied VERBATIM - the fast path this convention was
-    // chosen for - and the file's `useMagneticAzimuth` becomes the section's
+    // chosen for - and the file's `useMagneticAzimuth` becomes the line's
     // declared north reference instead of arithmetic on every shot.
     let azimuth_reference = tml_azimuth_reference(tml, &mut warnings);
 
-    // Ariane shot ID → (section_index, station_index) for the SELECTED
-    // sections, plus the ids a deselection dropped. Station index = the station
-    // at the END of a shot: station 0 is the section start, shot 0 goes from
+    // Ariane shot ID → (line_index, station_index) for the SELECTED
+    // lines, plus the ids a deselection dropped. Station index = the station
+    // at the END of a shot: station 0 is the line start, shot 0 goes from
     // station 0 → 1, so shot `i` ends at station `i + 1`.
     let import_options::SelectionIndex {
         id_to_import_loc,
         deselected_ids,
-    } = build_selection_index(&tml.sections, opts);
+    } = build_selection_index(&tml.lines, opts);
 
-    let mut configs: Vec<ImportSectionConfig> = Vec::new();
-    let mut zero_shot_sections_dropped: u32 = 0;
+    let mut configs: Vec<ImportLineConfig> = Vec::new();
+    let mut zero_shot_lines_dropped: u32 = 0;
 
-    for (si, section) in tml.sections.iter().enumerate() {
-        let section_index = si as u32;
+    for (si, line) in tml.lines.iter().enumerate() {
+        let line_index = si as u32;
 
-        // A deselected section contributes nothing at all - not a config, not a
-        // dropped-section warning. The user said no; that is not an anomaly to
+        // A deselected line contributes nothing at all - not a config, not a
+        // dropped-line warning. The user said no; that is not an anomaly to
         // report back to them.
-        if !opts.includes_section(si) {
+        if !opts.includes_line(si) {
             continue;
         }
 
         // Convert shots to ShotData, using start_depth for correct rebasing
         let shot_data =
-            convert_shots_to_shot_data(&section.shots, section.start_depth, include_excluded);
+            convert_shots_to_shot_data(&line.shots, line.start_depth, include_excluded);
 
-        // Skip sections that end up with zero shots after filtering
+        // Skip lines that end up with zero shots after filtering
         if shot_data.is_empty() {
             tracing::warn!(
-                section = ?section.name,
-                "Section has no shots after filtering, dropping from import"
+                line = ?line.name,
+                "Line has no shots after filtering, dropping from import"
             );
-            zero_shot_sections_dropped += 1;
+            zero_shot_lines_dropped += 1;
             continue;
         }
 
         // When excluded shots are filtered, the effective first shot may differ
-        // from section.start_ariane_id (which is the raw first shot's from_id).
+        // from line.start_ariane_id (which is the raw first shot's from_id).
         // Find the from_id of the first non-excluded, non-CLOSURE shot as a
         // fallback for placement when start_ariane_id is itself excluded.
         let effective_start_id = if include_excluded {
             None
         } else {
-            let eff = section
+            let eff = line
                 .shots
                 .iter()
                 .find(|s| s.shot_type != TmlShotType::Closure && !s.excluded)
                 .map(|s| s.from_id);
             // Only use as fallback if different from start_ariane_id
-            eff.filter(|&id| id != section.start_ariane_id)
+            eff.filter(|&id| id != line.start_ariane_id)
         };
 
         // Determine placement: the user's root choice, then start_ariane_id
         // (preserves original topology), then effective_start_id as fallback
         // when the original from_id was excluded and can't be resolved.
         let (placement, placement_warning) = determine_placement(
-            section,
+            line,
             &PlacementInput {
-                section_index,
-                start_ariane_id: section.start_ariane_id,
+                line_index,
+                start_ariane_id: line.start_ariane_id,
                 effective_start_id,
                 id_to_import_loc: &id_to_import_loc,
                 deselected_ids: &deselected_ids,
-                // THE definition of root: the first section this loop actually
-                // creates. Every early `continue` above - a deselected section,
-                // a section the shot filter emptied - is already behind us, so
+                // THE definition of root: the first line this loop actually
+                // creates. Every early `continue` above - a deselected line,
+                // a line the shot filter emptied - is already behind us, so
                 // an empty `configs` means nothing has been placed yet.
                 // Deriving it from the selection instead (the "lowest selected
                 // index" this used to compute) disagreed with the loop exactly
-                // when the lowest-selected section was dropped for having no
-                // shots, and the user's typed datum went to a section that was
+                // when the lowest-selected line was dropped for having no
+                // shots, and the user's typed datum went to a line that was
                 // never built.
                 is_root: configs.is_empty(),
                 root_placement: opts.root_placement,
@@ -1416,15 +1417,15 @@ pub fn convert_tml_with_options(
             })
             .collect();
 
-        configs.push(ImportSectionConfig {
+        configs.push(ImportLineConfig {
             reverse: false,
-            section_index,
-            name: Some(section.name.clone()),
+            line_index,
+            name: Some(line.name.clone()),
             // The credit rides on every shot (Ariane records it per row), so
-            // the section-level template stays empty.
+            // the line-level template stays empty.
             surveyor: None,
             date: None,
-            color: section.color.clone(),
+            color: line.color.clone(),
             direction: None, // Ariane doesn't distinguish in/out direction
             quality: 1.0,
             shots,
@@ -1442,25 +1443,25 @@ pub fn convert_tml_with_options(
     // like "xxx (branch 1)" back to "xxx" if only one branch survives.
     simplify_lone_branch_names(&mut configs);
 
-    // Topologically sort configs so that any section referenced by a
+    // Topologically sort configs so that any line referenced by a
     // FromImporting placement is created before its dependent. This handles
     // forward references that arise when excluded-shot filtering changes
-    // which section a given section attaches to.
+    // which line a given line attaches to.
     topological_sort_configs(&mut configs);
 
-    // Ariane IDs that name an ENTRANCE (a START shot): they are some section's
+    // Ariane IDs that name an ENTRANCE (a START shot): they are some line's
     // parent but are no shot in the file, because START shots carry no
-    // measurement and never enter a section. Needed to tell the two reasons a
+    // measurement and never enter a line. Needed to tell the two reasons a
     // closure endpoint fails to resolve apart - "you filtered it out" and "it
     // is the entrance, which this importer has no station for".
     let shot_ids: std::collections::HashSet<i64> = tml
-        .sections
+        .lines
         .iter()
         .flat_map(|s| &s.shots)
         .map(|s| s.id)
         .collect();
     let entrance_ids: std::collections::HashSet<i64> = tml
-        .sections
+        .lines
         .iter()
         .map(|s| s.start_ariane_id)
         .filter(|id| *id >= 0 && !shot_ids.contains(id))
@@ -1474,13 +1475,13 @@ pub fn convert_tml_with_options(
     let mut closures_with_excluded_endpoints: u32 = 0;
     let mut closures_to_entrance: u32 = 0;
     let mut closures_to_deselected: u32 = 0;
-    for (si, section) in tml.sections.iter().enumerate() {
-        // A CLOSURE row inside a section the user deselected is not theirs to
+    for (si, line) in tml.lines.iter().enumerate() {
+        // A CLOSURE row inside a line the user deselected is not theirs to
         // hear about: nothing at either end of it is being imported.
-        if !opts.includes_section(si) {
+        if !opts.includes_line(si) {
             continue;
         }
-        for shot in &section.shots {
+        for shot in &line.shots {
             if shot.shot_type != TmlShotType::Closure || shot.closure_to_id < 0 {
                 continue;
             }
@@ -1488,9 +1489,9 @@ pub fn convert_tml_with_options(
             let to = id_to_import_loc.get(&shot.closure_to_id);
             if let (Some(&(from_si, from_st)), Some(&(to_si, to_st))) = (from, to) {
                 import_closures.push(ImportClosure {
-                    from_section_index: from_si,
+                    from_line_index: from_si,
                     from_station_index: from_st,
-                    to_section_index: to_si,
+                    to_line_index: to_si,
                     to_station_index: to_st,
                 });
             } else if deselected_ids.contains(&shot.from_id)
@@ -1498,11 +1499,11 @@ pub fn convert_tml_with_options(
             {
                 // Checked BEFORE the exclusion arm: a deselected endpoint is
                 // the user's own live choice, undone by re-selecting the
-                // section, and blaming their exclusion filter for it would send
+                // line, and blaming their exclusion filter for it would send
                 // them to the wrong toggle.
                 tracing::warn!(
-                    section = ?section.name,
-                    "Loop closure referenced a deselected section and was skipped"
+                    line = ?line.name,
+                    "Loop closure referenced a deselected line and was skipped"
                 );
                 closures_to_deselected = closures_to_deselected.saturating_add(1);
             } else if (from.is_none() && entrance_ids.contains(&shot.from_id))
@@ -1510,16 +1511,16 @@ pub fn convert_tml_with_options(
             {
                 // Nothing was excluded here - the closure simply ends at the
                 // entrance station, which the import does not model as a
-                // station of any section. Counted apart so the receipt stops
+                // station of any line. Counted apart so the receipt stops
                 // blaming the user's exclusion filter for it.
                 tracing::warn!(
-                    section = ?section.name,
+                    line = ?line.name,
                     "Loop closure referenced an entrance (START) station and was skipped"
                 );
                 closures_to_entrance = closures_to_entrance.saturating_add(1);
             } else {
                 tracing::warn!(
-                    section = ?section.name,
+                    line = ?line.name,
                     "Loop closure referenced an excluded station and was skipped"
                 );
                 closures_with_excluded_endpoints += 1;
@@ -1528,26 +1529,26 @@ pub fn convert_tml_with_options(
     }
 
     // Defense in depth for the class of bug the `is_root` comment above
-    // describes. The placement is applied by exactly one section, so if this
-    // conversion built no section at all it went nowhere - and a survey quietly
+    // describes. The placement is applied by exactly one line, so if this
+    // conversion built no line at all it went nowhere - and a survey quietly
     // appearing at (0, 0) after the user typed coordinates is the one outcome
     // that must never be silent. Reachable today only via an empty import
-    // (nothing selected, or every section filtered away), where the receipt is
+    // (nothing selected, or every line filtered away), where the receipt is
     // otherwise empty and this is the only line explaining it.
     if opts.root_placement.is_some() && configs.is_empty() {
         warnings
             .push("Nothing was imported, so the placement you chose was not applied".to_string());
     }
 
-    if zero_shot_sections_dropped > 0 {
+    if zero_shot_lines_dropped > 0 {
         warnings.push(format!(
-            "{zero_shot_sections_dropped} section{} had no shots after filtering and {} dropped",
-            if zero_shot_sections_dropped == 1 {
+            "{zero_shot_lines_dropped} line{} had no shots after filtering and {} dropped",
+            if zero_shot_lines_dropped == 1 {
                 ""
             } else {
                 "s"
             },
-            if zero_shot_sections_dropped == 1 {
+            if zero_shot_lines_dropped == 1 {
                 "was"
             } else {
                 "were"
@@ -1580,7 +1581,7 @@ pub fn convert_tml_with_options(
     }
     if closures_to_deselected > 0 {
         warnings.push(format!(
-            "{closures_to_deselected} loop closure{} referenced a section you did not select and \
+            "{closures_to_deselected} loop closure{} referenced a line you did not select and \
              {} skipped",
             plural_s(closures_to_deselected),
             was_were(closures_to_deselected)
@@ -1616,11 +1617,11 @@ fn branch_base(name: &str) -> &str {
 
 /// Simplify branch-suffixed names when only one branch of a group survives.
 ///
-/// During linearization, sections that branch get names like "Foo (branch 1)",
+/// During linearization, lines that branch get names like "Foo (branch 1)",
 /// "Foo (branch 2)". When excluded-shot filtering drops all shots from some
-/// branches, those empty sections are removed. If only one branch remains for
+/// branches, those empty lines are removed. If only one branch remains for
 /// a given base name, strip the suffix so it's just "Foo".
-fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
+fn simplify_lone_branch_names(configs: &mut [ImportLineConfig]) {
     // Count how many configs share each base name (name without " (branch N)")
     let mut base_counts: HashMap<String, u32> = HashMap::new();
     for c in configs.iter() {
@@ -1649,16 +1650,16 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
 /// ZeroDatum, etc.) come first, then configs whose targets have already been
 /// placed, and so on. Cycles (which shouldn't happen in valid survey data)
 /// are broken by appending remaining configs in their original order.
-fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
+fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
     if configs.len() <= 1 {
         return;
     }
 
-    // Build index mapping: section_index → position in configs vec
+    // Build index mapping: line_index → position in configs vec
     let pos_of: HashMap<u32, usize> = configs
         .iter()
         .enumerate()
-        .map(|(i, c)| (c.section_index, i))
+        .map(|(i, c)| (c.line_index, i))
         .collect();
 
     // Build dependency: for each config, which config position must come first?
@@ -1667,11 +1668,11 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         .iter()
         .map(|c| {
             if let ImportPlacement::FromImporting {
-                target_section_index,
+                target_line_index,
                 ..
             } = &c.placement
             {
-                pos_of.get(target_section_index).copied()
+                pos_of.get(target_line_index).copied()
             } else {
                 None
             }
@@ -1726,7 +1727,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
     }
 
     // Reorder configs
-    let mut old_configs: Vec<Option<ImportSectionConfig>> =
+    let mut old_configs: Vec<Option<ImportLineConfig>> =
         std::mem::take(configs).into_iter().map(Some).collect();
     *configs = order
         .into_iter()
@@ -1737,7 +1738,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
 ///
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
-/// shot in a section), `start_depth` the parent station's cumulative depth.
+/// shot in a line), `start_depth` the parent station's cumulative depth.
 ///
 /// The `-1.0` is the FILE FORMAT's marker, not this parser's invention, so a
 /// literal `-1.0` in the file means "inherit" even though -1 m is a perfectly
@@ -2102,7 +2103,7 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
@@ -2145,7 +2146,7 @@ mod tests {
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
         assert_eq!(shots.len(), 2);
-        assert_eq!(shots[1].section, "Sec A");
+        assert_eq!(shots[1].line, "Sec A");
         assert!((shots[1].azimuth - 45.0).abs() < f64::EPSILON);
         assert!((shots[1].length - 5.0).abs() < f64::EPSILON);
     }
@@ -2155,12 +2156,12 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn test_start_shots_excluded_from_sections() {
+    fn test_start_shots_excluded_from_lines() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
-                tml_shot_xml(2, 1, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
+                tml_shot_xml(2, 1, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
@@ -2168,11 +2169,11 @@ mod tests {
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
-        let (sections, _) = build_sections(raw_shots);
-        assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].shots.len(), 2);
-        // No START shot in the section
-        for shot in &sections[0].shots {
+        let (lines, _) = build_lines(raw_shots);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].shots.len(), 2);
+        // No START shot in the line
+        for shot in &lines[0].shots {
             assert_ne!(shot.shot_type, TmlShotType::Start);
         }
     }
@@ -2196,14 +2197,14 @@ mod tests {
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
-        let (sections, _) = build_sections(raw_shots);
-        assert_eq!(sections.len(), 1);
+        let (lines, _) = build_lines(raw_shots);
+        assert_eq!(lines.len(), 1);
         // First shot should have GPS from the START shot
-        let first = &sections[0].shots[0];
+        let first = &lines[0].shots[0];
         assert!((first.latitude - 20.2).abs() < f64::EPSILON);
         assert!((first.longitude - (-87.5)).abs() < f64::EPSILON);
         // Second shot should NOT have GPS (not a direct successor of START)
-        let second = &sections[0].shots[1];
+        let second = &lines[0].shots[1];
         assert!(second.latitude.abs() < f64::EPSILON);
         assert!(second.longitude.abs() < f64::EPSILON);
     }
@@ -2222,15 +2223,15 @@ mod tests {
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
-        let (sections, _) = build_sections(raw_shots);
-        let first = &sections[0].shots[0];
+        let (lines, _) = build_lines(raw_shots);
+        let first = &lines[0].shots[0];
         assert!((first.latitude - 19.0).abs() < f64::EPSILON);
         assert!((first.longitude - (-88.0)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_start_gps_produces_zero_datum_placement() {
-        // When START has GPS and it propagates, section 0 should get ZeroDatum
+        // When START has GPS and it propagates, line 0 should get ZeroDatum
         let xml = wrap_xml(
             &[
                 tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
@@ -2242,10 +2243,10 @@ mod tests {
 
         let (raw_shots, metadata) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, closures) = build_sections(raw_shots);
+        let (lines, closures) = build_lines(raw_shots);
 
         // geo_coding should be populated from propagated GPS
-        let geo_coding = sections
+        let geo_coding = lines
             .iter()
             .flat_map(|s| &s.shots)
             .find(|shot| shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON)
@@ -2264,7 +2265,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding,
-            sections,
+            lines,
             closures,
         };
 
@@ -2299,10 +2300,10 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
         // geo_coding extraction (same logic as parse_tml)
-        let geo_coding = sections
+        let geo_coding = lines
             .iter()
             .flat_map(|s| &s.shots)
             .find(|shot| shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON)
@@ -2328,7 +2329,7 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "VIRTUAL", "Section 1"),
+                tml_shot_xml(1, 0, "VIRTUAL", "Line 1"),
             ]
             .join("\n"),
         );
@@ -2336,8 +2337,8 @@ mod tests {
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
-        let (sections, _) = build_sections(raw_shots);
-        assert_eq!(sections[0].shots[0].shot_type, TmlShotType::Virtual);
+        let (lines, _) = build_lines(raw_shots);
+        assert_eq!(lines[0].shots[0].shot_type, TmlShotType::Virtual);
     }
 
     // -------------------------------------------------------------------
@@ -2375,8 +2376,8 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
+        let (lines, _) = build_lines(raw_shots);
+        let shot_data = convert_shots_to_shot_data(&lines[0].shots, 0.0, false);
 
         // Shot 1: depth_in=0 (from START, base=0), depth_out=5
         assert!((shot_data[0].depth_in - 0.0).abs() < f64::EPSILON);
@@ -2411,8 +2412,8 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
+        let (lines, _) = build_lines(raw_shots);
+        let shot_data = convert_shots_to_shot_data(&lines[0].shots, 0.0, false);
 
         // DPI=2.0 used as absolute depth_in; depth_out = 5.0 (absolute, no rebasing)
         assert!((shot_data[0].depth_in - 2.0).abs() < f64::EPSILON);
@@ -2425,7 +2426,7 @@ mod tests {
 
     #[test]
     fn test_imperial_conversion() {
-        let mut sections = vec![TmlSection {
+        let mut lines = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
                 uuid: None,
@@ -2449,7 +2450,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                section: "Test".to_string(),
+                line: "Test".to_string(),
                 credit: None,
             }],
             surveyor: None,
@@ -2462,9 +2463,9 @@ mod tests {
         }];
 
         let mut elevation = 150.0;
-        apply_unit_conversion(&mut sections, &mut elevation, TmlUnit::Imperial);
+        apply_unit_conversion(&mut lines, &mut elevation, TmlUnit::Imperial);
 
-        let shot = &sections[0].shots[0];
+        let shot = &lines[0].shots[0];
         assert!((shot.length - 10.0 * FEET_TO_METERS).abs() < 1e-6);
         assert!((shot.depth - 5.0 * FEET_TO_METERS).abs() < 1e-6);
         assert!((shot.left - 3.0 * FEET_TO_METERS).abs() < 1e-6);
@@ -2472,13 +2473,13 @@ mod tests {
         // depth_in == -1.0 should NOT be converted
         assert!((shot.depth_in - (-1.0)).abs() < f64::EPSILON);
         // The branch rebase depth and the file elevation are lengths too.
-        assert!((sections[0].start_depth - 12.0 * FEET_TO_METERS).abs() < 1e-6);
+        assert!((lines[0].start_depth - 12.0 * FEET_TO_METERS).abs() < 1e-6);
         assert!((elevation - 150.0 * FEET_TO_METERS).abs() < 1e-6);
     }
 
     #[test]
     fn test_metric_unchanged() {
-        let mut sections = vec![TmlSection {
+        let mut lines = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
                 uuid: None,
@@ -2502,7 +2503,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                section: "Test".to_string(),
+                line: "Test".to_string(),
                 credit: None,
             }],
             surveyor: None,
@@ -2515,21 +2516,21 @@ mod tests {
         }];
 
         let mut elevation = 150.0;
-        apply_unit_conversion(&mut sections, &mut elevation, TmlUnit::Metric);
+        apply_unit_conversion(&mut lines, &mut elevation, TmlUnit::Metric);
 
-        let shot = &sections[0].shots[0];
+        let shot = &lines[0].shots[0];
         assert!((shot.length - 10.0).abs() < f64::EPSILON);
         assert!((shot.depth - 5.0).abs() < f64::EPSILON);
-        assert!((sections[0].start_depth - 12.0).abs() < f64::EPSILON);
+        assert!((lines[0].start_depth - 12.0).abs() < f64::EPSILON);
         assert!((elevation - 150.0).abs() < f64::EPSILON);
     }
 
-    /// A branch section's first shot carries the `-1` DepthIn sentinel, so its
+    /// A branch line's first shot carries the `-1` DepthIn sentinel, so its
     /// entry depth comes from the parent station - a value read straight out of
     /// the file, in FEET on an imperial one. Leave it unconverted and every
     /// branch starts ~3.28x too deep, which is geometry, not presentation.
     #[test]
-    fn imperial_branch_section_starts_at_the_converted_parent_depth() {
+    fn imperial_branch_line_starts_at_the_converted_parent_depth() {
         let shots = [
             tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
             tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
@@ -2541,10 +2542,10 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 0.0, &shots));
 
         let side = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name.starts_with("Side"))
-            .expect("branch section");
+            .expect("branch line");
         assert!((side.start_depth - 10.0 * FEET_TO_METERS).abs() < 1e-6);
 
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
@@ -2722,7 +2723,7 @@ mod tests {
             .expect("a dropped shot must be recorded on the parse result");
         assert_eq!(anomalies.shots_missing_id, 1);
         // Only the ID-less shot is lost; the well-formed one still imports.
-        assert_eq!(tml.sections.iter().map(|s| s.shots.len()).sum::<usize>(), 1);
+        assert_eq!(tml.lines.iter().map(|s| s.shots.len()).sum::<usize>(), 1);
 
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(
@@ -2752,7 +2753,7 @@ mod tests {
             .expect("coerced shot types must be recorded on the parse result");
         assert_eq!(anomalies.unknown_shot_types, 2);
         // Behaviour is unchanged - they are still imported as Real.
-        assert_eq!(tml.sections[0].shots[0].shot_type, TmlShotType::Real);
+        assert_eq!(tml.lines[0].shots[0].shot_type, TmlShotType::Real);
 
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(
@@ -2837,17 +2838,17 @@ mod tests {
         assert!(warnings.is_empty(), "clean file warned: {warnings:?}");
     }
 
-    /// A file the parser could make NO section out of used to leave
+    /// A file the parser could make NO line out of used to leave
     /// `convert_tml_to_import_configs` on the first line, dropping the very
     /// warnings that explain the emptiness. It is the one import where the
     /// warnings are the entire result.
     #[test]
-    fn a_file_with_no_sections_still_reports_its_warnings() {
-        // START shots carry no measurement and form no section, so a file of
-        // nothing but a START parses to zero sections.
+    fn a_file_with_no_lines_still_reports_its_warnings() {
+        // START shots carry no measurement and form no line, so a file of
+        // nothing but a START parses to zero lines.
         let xml = wrap_xml_with("furlongs", 0.0, &tml_shot_xml(0, -1, "START", "Start"));
         let tml = parse_synthetic_tmlu(&xml);
-        assert!(tml.sections.is_empty(), "premise: no sections were built");
+        assert!(tml.lines.is_empty(), "premise: no lines were built");
 
         let (configs, closures, warnings) =
             convert_tml_to_import_configs(&tml, false, false).unwrap();
@@ -2860,7 +2861,7 @@ mod tests {
     }
 
     /// A closure whose target is the ENTRANCE resolves to no station: START
-    /// shots never enter a section. It was counted into "referenced excluded
+    /// shots never enter a line. It was counted into "referenced excluded
     /// stations", which sends the user looking through an exclusion filter
     /// that had nothing to do with it.
     #[test]
@@ -2882,13 +2883,13 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![TmlSection {
+            lines: vec![TmlSection {
                 name: "Main".to_string(),
                 shots: vec![
                     make_shot(1, 99, TmlShotType::Real, -1),
                     make_shot(2, 1, TmlShotType::Real, -1),
-                    // Closes back onto shot 99 - the START this section hangs
-                    // off, which is in no section and so in no import.
+                    // Closes back onto shot 99 - the START this line hangs
+                    // off, which is in no line and so in no import.
                     make_shot(3, 2, TmlShotType::Closure, 99),
                 ],
                 surveyor: None,
@@ -2917,12 +2918,12 @@ mod tests {
     }
 
     /// The preview's closure extraction aims a START-targeted closure at the
-    /// first section hanging off that START. It used to pick one by scanning a
+    /// first line hanging off that START. It used to pick one by scanning a
     /// HashMap, so the answer changed from run to run whenever more than one
-    /// section qualified. Repeated because that is what a random iteration
+    /// line qualified. Repeated because that is what a random iteration
     /// order looks like from the outside.
     #[test]
-    fn a_closure_to_a_start_shot_resolves_to_the_same_section_every_run() {
+    fn a_closure_to_a_start_shot_resolves_to_the_same_line_every_run() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
@@ -2947,8 +2948,8 @@ mod tests {
                     panic!("run {run}: the START-targeted closure must resolve")
                 });
             assert_eq!(
-                tml.sections[closure.to_section_index].name, "A",
-                "run {run}: the target section must be the first one hanging off the START"
+                tml.lines[closure.to_line_index].name, "A",
+                "run {run}: the target line must be the first one hanging off the START"
             );
         }
     }
@@ -2962,48 +2963,48 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
-                tml_shot_xml(2, 1, "REAL", "Section 1"),
-                tml_shot_xml(3, 2, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
+                tml_shot_xml(2, 1, "REAL", "Line 1"),
+                tml_shot_xml(3, 2, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].name, "Section 1");
-        assert!(!sections[0].is_branch_split);
-        assert_eq!(sections[0].shots.len(), 3);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].name, "Line 1");
+        assert!(!lines[0].is_branch_split);
+        assert_eq!(lines[0].shots.len(), 3);
     }
 
     #[test]
     fn test_branch_detection_and_split() {
-        // Shot 1 has two successors (2 and 3) in the same section
+        // Shot 1 has two successors (2 and 3) in the same line
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
-                tml_shot_xml(2, 1, "REAL", "Section 1"),
-                tml_shot_xml(3, 1, "REAL", "Section 1"), // branches from same shot
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
+                tml_shot_xml(2, 1, "REAL", "Line 1"),
+                tml_shot_xml(3, 1, "REAL", "Line 1"), // branches from same shot
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
         // Should split into 2 branches
-        assert!(sections.len() >= 2);
-        assert!(sections.iter().all(|s| s.is_branch_split));
+        assert!(lines.len() >= 2);
+        assert!(lines.iter().all(|s| s.is_branch_split));
         // Mainline naming rule (#412): the chain the continuation heuristic
-        // keeps walking retains the section's own name; only the deferred
+        // keeps walking retains the line's own name; only the deferred
         // side chains get "(branch N)" suffixes.
-        assert_eq!(sections[0].name, "Section 1");
-        assert!(sections[1].name.contains("branch"));
+        assert_eq!(lines[0].name, "Line 1");
+        assert!(lines[1].name.contains("branch"));
     }
 
     #[test]
@@ -3014,43 +3015,43 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
-                tml_shot_xml(2, 1, "REAL", "Section 1"),
-                tml_shot_xml(3, 2, "REAL", "Section 1"),
-                tml_shot_xml(6, 2, "VIRTUAL", "Section 1"),
-                tml_shot_xml(4, 3, "REAL", "Section 1"),
-                tml_shot_xml(5, 3, "REAL", "Section 1"),
-                tml_shot_xml(7, 6, "REAL", "Section 1"),
-                tml_shot_xml(8, 7, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
+                tml_shot_xml(2, 1, "REAL", "Line 1"),
+                tml_shot_xml(3, 2, "REAL", "Line 1"),
+                tml_shot_xml(6, 2, "VIRTUAL", "Line 1"),
+                tml_shot_xml(4, 3, "REAL", "Line 1"),
+                tml_shot_xml(5, 3, "REAL", "Line 1"),
+                tml_shot_xml(7, 6, "REAL", "Line 1"),
+                tml_shot_xml(8, 7, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        let mut id_to_section: HashMap<i64, usize> = HashMap::new();
+        let mut id_to_line: HashMap<i64, usize> = HashMap::new();
         let mut seen = std::collections::HashSet::new();
-        for (si, sec) in sections.iter().enumerate() {
+        for (si, sec) in lines.iter().enumerate() {
             for shot in &sec.shots {
                 assert!(
                     seen.insert(shot.id),
                     "shot {} emitted multiple times",
                     shot.id
                 );
-                id_to_section.insert(shot.id, si);
+                id_to_line.insert(shot.id, si);
             }
         }
 
         for id in [1_i64, 2, 3, 4, 5, 6, 7, 8] {
-            assert!(id_to_section.contains_key(&id), "missing shot {id}");
+            assert!(id_to_line.contains_key(&id), "missing shot {id}");
         }
 
-        let sec_6 = *id_to_section.get(&6).unwrap();
-        let sec_7 = *id_to_section.get(&7).unwrap();
-        let sec_8 = *id_to_section.get(&8).unwrap();
-        let sec_5 = *id_to_section.get(&5).unwrap();
+        let sec_6 = *id_to_line.get(&6).unwrap();
+        let sec_7 = *id_to_line.get(&7).unwrap();
+        let sec_8 = *id_to_line.get(&8).unwrap();
+        let sec_5 = *id_to_line.get(&5).unwrap();
 
         assert_eq!(sec_6, sec_7, "6 and 7 must stay in the same branch");
         assert_eq!(sec_7, sec_8, "7 and 8 must stay in the same branch");
@@ -3059,10 +3060,10 @@ mod tests {
             "shot 5 must not be merged into the 6→7→8 chain"
         );
 
-        let chain_6_ids: Vec<i64> = sections[sec_6].shots.iter().map(|s| s.id).collect();
+        let chain_6_ids: Vec<i64> = lines[sec_6].shots.iter().map(|s| s.id).collect();
         assert_eq!(chain_6_ids, vec![6, 7, 8], "expected preserved 6→7→8 chain");
-        assert_eq!(sections[sec_6].start_ariane_id, 2);
-        assert_eq!(sections[sec_5].start_ariane_id, 3);
+        assert_eq!(lines[sec_6].start_ariane_id, 2);
+        assert_eq!(lines[sec_5].start_ariane_id, 3);
     }
 
     /// #412: a short side stub written FIRST in the file must not steal the
@@ -3072,32 +3073,32 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(1, 0, "Line 1", 90.0, 10.0),
                 // Two-shot side stub, written before the continuation.
-                tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
-                tml_shot_xml_az_len(11, 10, "Section 1", 0.0, 2.0),
+                tml_shot_xml_az_len(10, 1, "Line 1", 0.0, 2.0),
+                tml_shot_xml_az_len(11, 10, "Line 1", 0.0, 2.0),
                 // The continuation: far more downstream length.
-                tml_shot_xml_az_len(2, 1, "Section 1", 90.0, 10.0),
-                tml_shot_xml_az_len(3, 2, "Section 1", 90.0, 10.0),
-                tml_shot_xml_az_len(4, 3, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(2, 1, "Line 1", 90.0, 10.0),
+                tml_shot_xml_az_len(3, 2, "Line 1", 90.0, 10.0),
+                tml_shot_xml_az_len(4, 3, "Line 1", 90.0, 10.0),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].name, "Section 1");
-        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].name, "Line 1");
+        let mainline_ids: Vec<i64> = lines[0].shots.iter().map(|s| s.id).collect();
         assert_eq!(
             mainline_ids,
             vec![1, 2, 3, 4],
             "mainline must continue past the stub"
         );
-        assert_eq!(sections[1].name, "Section 1 (branch 2)");
-        let stub_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        assert_eq!(lines[1].name, "Line 1 (branch 2)");
+        let stub_ids: Vec<i64> = lines[1].shots.iter().map(|s| s.id).collect();
         assert_eq!(stub_ids, vec![10, 11]);
     }
 
@@ -3110,31 +3111,31 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(1, 0, "Line 1", 90.0, 10.0),
                 // Written first, slightly longer (20 vs 18: comparable),
                 // but turns 60 degrees off the incoming heading.
-                tml_shot_xml_az_len(5, 1, "Section 1", 150.0, 10.0),
-                tml_shot_xml_az_len(6, 5, "Section 1", 150.0, 10.0),
+                tml_shot_xml_az_len(5, 1, "Line 1", 150.0, 10.0),
+                tml_shot_xml_az_len(6, 5, "Line 1", 150.0, 10.0),
                 // Written later, higher ids, but holds the heading.
-                tml_shot_xml_az_len(7, 1, "Section 1", 92.0, 9.0),
-                tml_shot_xml_az_len(8, 7, "Section 1", 92.0, 9.0),
+                tml_shot_xml_az_len(7, 1, "Line 1", 92.0, 9.0),
+                tml_shot_xml_az_len(8, 7, "Line 1", 92.0, 9.0),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].name, "Section 1");
-        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].name, "Line 1");
+        let mainline_ids: Vec<i64> = lines[0].shots.iter().map(|s| s.id).collect();
         assert_eq!(
             mainline_ids,
             vec![1, 7, 8],
             "azimuth continuity must pick the continuation"
         );
-        let side_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        let side_ids: Vec<i64> = lines[1].shots.iter().map(|s| s.id).collect();
         assert_eq!(side_ids, vec![5, 6]);
     }
 
@@ -3167,44 +3168,44 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        assert_eq!(sections.len(), 4, "one mainline + three stubs");
-        assert_eq!(sections[0].name, "Main");
-        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(lines.len(), 4, "one mainline + three stubs");
+        assert_eq!(lines[0].name, "Main");
+        let mainline_ids: Vec<i64> = lines[0].shots.iter().map(|s| s.id).collect();
         assert_eq!(
             mainline_ids,
             vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
             "the mainline must survive every T uncut"
         );
-        for section in &sections[1..] {
+        for line in &lines[1..] {
             assert!(
-                section.name.contains("(branch "),
+                line.name.contains("(branch "),
                 "stub name: {}",
-                section.name
+                line.name
             );
-            assert_eq!(section.shots.len(), 2, "each stub is two shots");
+            assert_eq!(line.shots.len(), 2, "each stub is two shots");
         }
     }
 
-    /// Same file, same sections: the continuation choice must not depend on
+    /// Same file, same lines: the continuation choice must not depend on
     /// anything with unstable iteration order.
     #[test]
     fn branch_continuation_is_deterministic() {
         let shots = [
             tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
-            tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
-            tml_shot_xml_az_len(2, 1, "Section 1", 92.0, 9.0),
-            tml_shot_xml_az_len(3, 2, "Section 1", 88.0, 9.0),
-            tml_shot_xml_az_len(20, 2, "Section 1", 150.0, 10.0),
-            tml_shot_xml_az_len(21, 20, "Section 1", 150.0, 10.0),
+            tml_shot_xml_az_len(1, 0, "Line 1", 90.0, 10.0),
+            tml_shot_xml_az_len(10, 1, "Line 1", 0.0, 2.0),
+            tml_shot_xml_az_len(2, 1, "Line 1", 92.0, 9.0),
+            tml_shot_xml_az_len(3, 2, "Line 1", 88.0, 9.0),
+            tml_shot_xml_az_len(20, 2, "Line 1", 150.0, 10.0),
+            tml_shot_xml_az_len(21, 20, "Line 1", 150.0, 10.0),
         ]
         .join("\n");
         let xml = wrap_xml(&shots);
 
         let fingerprint = |tml: &TmlFile| -> String {
-            tml.sections
+            tml.lines
                 .iter()
                 .map(|s| {
                     format!(
@@ -3222,9 +3223,9 @@ mod tests {
         // mainline would be stably WRONG and still pass. At shot 2 the walk
         // takes 20 (20.0 m downstream) over 3 (9.0 m), and the two deferred
         // chains keep the mid-chain parents that make them unjoinable.
-        const EXPECTED: &str = "Section 1|0|[1, 2, 20, 21]\n\
-                                Section 1 (branch 2)|1|[10]\n\
-                                Section 1 (branch 3)|2|[3]\n";
+        const EXPECTED: &str = "Line 1|0|[1, 2, 20, 21]\n\
+                                Line 1 (branch 2)|1|[10]\n\
+                                Line 1 (branch 3)|2|[3]\n";
 
         let first = fingerprint(&parse_synthetic_tmlu(&xml));
         assert_eq!(
@@ -3235,21 +3236,21 @@ mod tests {
             assert_eq!(
                 fingerprint(&parse_synthetic_tmlu(&xml)),
                 first,
-                "section list must be byte-identical on every parse"
+                "line list must be byte-identical on every parse"
             );
         }
     }
 
-    /// A section with several roots gives its own name to the LONGEST root,
+    /// A line with several roots gives its own name to the LONGEST root,
     /// not to whichever root the file happened to write first (#412).
     ///
     /// `choose_continuation` only decides junctions inside a chain; the roots
     /// themselves were walked in file order, so an entrance stub written first
-    /// took the section's name and the real mainline was demoted to
+    /// took the line's name and the real mainline was demoted to
     /// "(branch 2)" - the same file-order bias the continuation rule exists to
     /// remove, one level up.
     #[test]
-    fn the_longest_root_keeps_the_section_name() {
+    fn the_longest_root_keeps_the_line_name() {
         let shots = [
             // Written first, but a dead-end stub.
             tml_shot_xml_az_len(1, -1, "Sump", 90.0, 2.0),
@@ -3262,7 +3263,7 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         let named: Vec<(&str, Vec<i64>)> = tml
-            .sections
+            .lines
             .iter()
             .map(|s| (s.name.as_str(), s.shots.iter().map(|sh| sh.id).collect()))
             .collect();
@@ -3322,10 +3323,10 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         let mainline = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name == "Main")
-            .expect("the mainline keeps the section name");
+            .expect("the mainline keeps the line name");
         assert!(
             mainline.shots.iter().any(|s| s.id == 3),
             "the real continuation must stay on the mainline; got {:?}",
@@ -3334,7 +3335,7 @@ mod tests {
 
         // And the run the user actually imports is not truncated at the junction.
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
-        assert_eq!(configs.len(), 1, "a closure must not fragment the section");
+        assert_eq!(configs.len(), 1, "a closure must not fragment the line");
         assert_eq!(
             configs[0].shots.len(),
             3,
@@ -3356,10 +3357,10 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&degenerate));
         let mainline = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name == "Main")
-            .expect("the mainline keeps the section name");
+            .expect("the mainline keeps the line name");
         assert!(
             mainline.shots.iter().any(|s| s.id == 3),
             "a closure must not win on azimuth either; got {:?}",
@@ -3381,10 +3382,10 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&inflated));
         let mainline = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name == "Main")
-            .expect("the mainline keeps the section name");
+            .expect("the mainline keeps the line name");
         assert_eq!(
             mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![1, 3, 4],
@@ -3399,19 +3400,19 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
-                tml_shot_xml(2, 3, "REAL", "Section 1"),
-                tml_shot_xml(3, 2, "REAL", "Section 1"),
-                tml_shot_xml(4, 4, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
+                tml_shot_xml(2, 3, "REAL", "Line 1"),
+                tml_shot_xml(3, 2, "REAL", "Line 1"),
+                tml_shot_xml(4, 4, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        let ids: Vec<i64> = sections
+        let ids: Vec<i64> = lines
             .iter()
             .flat_map(|s| s.shots.iter().map(|shot| shot.id))
             .collect();
@@ -3466,13 +3467,13 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, closures) = build_sections(raw_shots);
+        let (lines, closures) = build_lines(raw_shots);
 
         assert_eq!(closures.len(), 1);
         let cl = &closures[0];
         // Closure shot 3 is in Sec B, pointing to shot 1 in Sec A
         assert_eq!(
-            sections[cl.to_section_index].shots[cl.to_station_index].id,
+            lines[cl.to_line_index].shots[cl.to_station_index].id,
             1
         );
     }
@@ -3482,14 +3483,14 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(1, 0, "REAL", "Line 1"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (_, closures) = build_sections(raw_shots);
+        let (_, closures) = build_lines(raw_shots);
 
         assert!(closures.is_empty());
     }
@@ -3503,8 +3504,8 @@ mod tests {
         let xml = wrap_xml("");
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, closures) = build_sections(raw_shots);
-        assert!(sections.is_empty());
+        let (lines, closures) = build_lines(raw_shots);
+        assert!(lines.is_empty());
         assert!(closures.is_empty());
     }
 
@@ -3512,7 +3513,7 @@ mod tests {
     /// must be an error, not a survey with nothing in it.
     ///
     /// Without the fix `Event::Eof` just breaks the loop: this returns
-    /// `Ok(([], _))`, the import reports "0 sections - 0 shots", walks the user
+    /// `Ok(([], _))`, the import reports "0 lines - 0 shots", walks the user
     /// into creating a project, and lands them in an empty one with no hint
     /// that the file is damaged.
     #[test]
@@ -3553,7 +3554,7 @@ mod tests {
     }
 
     /// A file that genuinely holds no shots is not damaged, and must keep
-    /// reaching the zero-section receipt instead of being refused. Both
+    /// reaching the zero-line receipt instead of being refused. Both
     /// spellings of an empty `<Data>` count.
     #[test]
     fn a_complete_document_with_no_shots_still_parses() {
@@ -3586,8 +3587,8 @@ mod tests {
         );
 
         let tml = parse_synthetic_tmlu(&wrap_xml(&shot));
-        assert_eq!(tml.sections.len(), 1);
-        assert_eq!(tml.sections[0].shots.len(), 1);
+        assert_eq!(tml.lines.len(), 1);
+        assert_eq!(tml.lines[0].shots.len(), 1);
     }
 
     #[test]
@@ -3598,7 +3599,7 @@ mod tests {
 
     /// `<Type>` spellings other than Ariane's upper case must still be
     /// recognised. Without the fix `start` falls through to the unknown-type
-    /// path and is imported as an ordinary shot, inventing a second section.
+    /// path and is imported as an ordinary shot, inventing a second line.
     #[test]
     fn shot_type_spellings_are_case_insensitive() {
         let xml = wrap_xml(
@@ -3611,9 +3612,9 @@ mod tests {
         );
 
         let tml = parse_synthetic_tmlu(&xml);
-        assert_eq!(tml.sections.len(), 1, "the START shot must not become one");
-        assert_eq!(tml.sections[0].shots.len(), 2);
-        assert_eq!(tml.sections[0].shots[1].shot_type, TmlShotType::Virtual);
+        assert_eq!(tml.lines.len(), 1, "the START shot must not become one");
+        assert_eq!(tml.lines[0].shots.len(), 2);
+        assert_eq!(tml.lines[0].shots[1].shot_type, TmlShotType::Virtual);
     }
 
     /// The two boolean elements are compared against the literal `"true"`;
@@ -3637,7 +3638,7 @@ mod tests {
 
         let tml = parse_synthetic_tmlu(&xml);
         assert!(tml.use_magnetic_azimuth);
-        assert!(tml.sections[0].shots[1].excluded);
+        assert!(tml.lines[0].shots[1].excluded);
     }
 
     /// `-1.0` is the FORMAT's "same as the previous shot" marker, not this
@@ -3657,8 +3658,8 @@ mod tests {
         );
 
         let tml = parse_synthetic_tmlu(&xml);
-        let section = &tml.sections[0];
-        let shots = convert_shots_to_shot_data(&section.shots, section.start_depth, false);
+        let line = &tml.lines[0];
+        let shots = convert_shots_to_shot_data(&line.shots, line.start_depth, false);
 
         assert!(
             shots[0].depth_in.abs() < f64::EPSILON,
@@ -3673,51 +3674,51 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Multi-section topology
+    // Multi-line topology
     // -------------------------------------------------------------------
 
-    /// Two declared sections running in SERIES are one linear passage, so they
+    /// Two declared lines running in SERIES are one linear passage, so they
     /// import as one config (#412).
     ///
-    /// This is the whole of the cross-section join: B's first shot hangs off
+    /// This is the whole of the cross-line join: B's first shot hangs off
     /// A's LAST shot, so B's station 0 already IS A's final station and one
     /// polyline holds both. The names are not thrown away - the merged run is
-    /// called "Section A + Section B", because nothing else in an
-    /// `ImportSectionConfig` can carry the fact that the surveyor named these
+    /// called "Line A + Line B", because nothing else in an
+    /// `ImportLineConfig` can carry the fact that the surveyor named these
     /// separately.
     ///
-    /// A file whose sections branch instead of running in series is untouched;
+    /// A file whose lines branch instead of running in series is untouched;
     /// `test_branch_leftovers_preserve_parent_child_topology` covers that.
     #[test]
-    fn sections_running_in_series_import_as_one_named_run() {
+    fn lines_running_in_series_import_as_one_named_run() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section A"),
-                tml_shot_xml(2, 1, "REAL", "Section A"),
-                tml_shot_xml(3, 2, "REAL", "Section B"),
-                tml_shot_xml(4, 3, "REAL", "Section B"),
+                tml_shot_xml(1, 0, "REAL", "Line A"),
+                tml_shot_xml(2, 1, "REAL", "Line A"),
+                tml_shot_xml(3, 2, "REAL", "Line B"),
+                tml_shot_xml(4, 3, "REAL", "Line B"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        assert_eq!(sections.len(), 1, "series sections join into one run");
-        assert_eq!(sections[0].name, "Section A + Section B");
+        assert_eq!(lines.len(), 1, "series lines join into one run");
+        assert_eq!(lines[0].name, "Line A + Line B");
         assert_eq!(
-            sections[0].shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            lines[0].shots.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![1, 2, 3, 4],
             "the join keeps file order, so the run stays a valid import sequence"
         );
         assert_eq!(
-            sections[0].start_ariane_id, 0,
+            lines[0].start_ariane_id, 0,
             "the merged run still starts where the parent chain did"
         );
         assert_eq!(
-            sections[0].end_ariane_id, 4,
+            lines[0].end_ariane_id, 4,
             "and ends where the absorbed chain did"
         );
     }
@@ -3726,29 +3727,29 @@ mod tests {
     // Import config conversion
     // -------------------------------------------------------------------
 
-    /// Cross-section `FromImporting` placement, on a section that BRANCHES off
+    /// Cross-line `FromImporting` placement, on a line that BRANCHES off
     /// mid-chain.
     ///
-    /// Section B hangs off shot 1, which is mid-Section-A, so the two stay
+    /// Line B hangs off shot 1, which is mid-Line-A, so the two stay
     /// separate configs and the topology has to be carried by placement - the
     /// case this test exists for. (Were B parented on A's LAST shot the two
     /// would join into one run instead; see
-    /// `sections_running_in_series_import_as_one_named_run`.)
+    /// `lines_running_in_series_import_as_one_named_run`.)
     #[test]
     fn test_convert_to_import_configs() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section A"),
-                tml_shot_xml(2, 1, "REAL", "Section A"),
-                tml_shot_xml(3, 1, "REAL", "Section B"),
+                tml_shot_xml(1, 0, "REAL", "Line A"),
+                tml_shot_xml(2, 1, "REAL", "Line A"),
+                tml_shot_xml(3, 1, "REAL", "Line B"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, metadata) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, closures) = build_sections(raw_shots);
+        let (lines, closures) = build_lines(raw_shots);
 
         let tml = TmlFile {
             cave_name: metadata.cave_name,
@@ -3759,7 +3760,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections,
+            lines,
             closures,
         };
 
@@ -3767,24 +3768,24 @@ mod tests {
             .unwrap_or_else(|_| (Vec::new(), Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 2);
 
-        // First section → Origin (no GPS)
+        // First line → Origin (no GPS)
         assert!(matches!(configs[0].placement, ImportPlacement::Origin));
-        assert_eq!(configs[0].section_index, 0);
+        assert_eq!(configs[0].line_index, 0);
 
-        // Second section → FromImporting (linked via topology)
-        // Section B's first shot (ID=3) has FromID=1, the 1st shot in Section A.
+        // Second line → FromImporting (linked via topology)
+        // Line B's first shot (ID=3) has FromID=1, the 1st shot in Line A.
         // Shot ID=1 is at import shot index 0, so it ends at station 1.
         match &configs[1].placement {
             ImportPlacement::FromImporting {
                 import_station,
-                target_section_index,
+                target_line_index,
                 target_station_index,
             } => {
                 assert_eq!(
                     *import_station, 0,
                     "import_station should be 0 (first station)"
                 );
-                assert_eq!(*target_section_index, 0, "should link to section 0");
+                assert_eq!(*target_line_index, 0, "should link to line 0");
                 assert_eq!(
                     *target_station_index, 1,
                     "should link to station 1 (end of shot ID=1)"
@@ -3809,8 +3810,8 @@ mod tests {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section A"),
-                tml_shot_xml(2, 1, "REAL", "Section A"),
+                tml_shot_xml(1, 0, "REAL", "Line A"),
+                tml_shot_xml(2, 1, "REAL", "Line A"),
             ]
             .join("\n"),
         );
@@ -3821,17 +3822,17 @@ mod tests {
         assert_eq!(tml.unit, TmlUnit::Metric);
         assert!(tml.use_magnetic_azimuth);
         assert!((tml.first_start_absolute_elevation - 100.0).abs() < f64::EPSILON);
-        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.lines.len(), 1);
 
-        let section = &tml.sections[0];
-        assert_eq!(section.name, "Section A");
-        assert_eq!(section.shots.len(), 2);
-        assert_eq!(section.shots[0].shot_type, TmlShotType::Real);
-        assert_eq!(section.shots[0].color, "#8f6112");
-        assert_eq!(section.shots[0].explorer.as_deref(), Some("Tester"));
-        assert!((section.shots[0].azimuth - 90.0).abs() < f64::EPSILON);
-        assert!((section.shots[0].length - 10.0).abs() < f64::EPSILON);
-        assert!((section.shots[0].depth - 5.0).abs() < f64::EPSILON);
+        let line = &tml.lines[0];
+        assert_eq!(line.name, "Line A");
+        assert_eq!(line.shots.len(), 2);
+        assert_eq!(line.shots[0].shot_type, TmlShotType::Real);
+        assert_eq!(line.shots[0].color, "#8f6112");
+        assert_eq!(line.shots[0].explorer.as_deref(), Some("Tester"));
+        assert!((line.shots[0].azimuth - 90.0).abs() < f64::EPSILON);
+        assert!((line.shots[0].length - 10.0).abs() < f64::EPSILON);
+        assert!((line.shots[0].depth - 5.0).abs() < f64::EPSILON);
     }
 
     /// The same document as a plain `.tmlu` on disk: the extension picks the
@@ -3841,15 +3842,15 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(1, 0, "REAL", "Line A"),
             ]
             .join("\n"),
         ));
 
         assert_eq!(tml.cave_name, "Test Cave");
-        assert_eq!(tml.sections.len(), 1);
-        assert_eq!(tml.sections[0].shots.len(), 1);
-        assert!((tml.sections[0].shots[0].length - 10.0).abs() < f64::EPSILON);
+        assert_eq!(tml.lines.len(), 1);
+        assert_eq!(tml.lines[0].shots.len(), 1);
+        assert!((tml.lines[0].shots[0].length - 10.0).abs() < f64::EPSILON);
     }
 
     // -------------------------------------------------------------------
@@ -3880,7 +3881,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "Test".to_string(),
+            line: "Test".to_string(),
             credit: None,
         }];
 
@@ -3912,7 +3913,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "Test".to_string(),
+            line: "Test".to_string(),
             credit: None,
         }];
 
@@ -4036,7 +4037,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "Test".to_string(),
+            line: "Test".to_string(),
             credit: None,
         };
 
@@ -4090,7 +4091,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                section: "Test".to_string(),
+                line: "Test".to_string(),
                 credit: None,
             },
             TmlShot {
@@ -4115,7 +4116,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                section: "Test".to_string(),
+                line: "Test".to_string(),
                 credit: None,
             },
             TmlShot {
@@ -4140,7 +4141,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                section: "Test".to_string(),
+                line: "Test".to_string(),
                 credit: None,
             },
         ];
@@ -4160,8 +4161,8 @@ mod tests {
     }
 
     #[test]
-    fn test_all_excluded_section_dropped_from_configs() {
-        // Section where every shot is excluded → should be dropped entirely
+    fn test_all_excluded_line_dropped_from_configs() {
+        // Line where every shot is excluded → should be dropped entirely
         let make_shot = |id, from_id, excluded| TmlShot {
             uuid: None,
             id,
@@ -4184,7 +4185,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "S".to_string(),
+            line: "S".to_string(),
             credit: None,
         };
 
@@ -4197,7 +4198,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![
+            lines: vec![
                 TmlSection {
                     name: "Good".to_string(),
                     shots: vec![make_shot(1, 0, false)],
@@ -4224,19 +4225,19 @@ mod tests {
             closures: Vec::new(),
         };
 
-        // With excluded filtered out, section "AllExcluded" has 0 shots → dropped
+        // With excluded filtered out, line "AllExcluded" has 0 shots → dropped
         let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Good"));
 
-        // With excluded included, both sections present
+        // With excluded included, both lines present
         let (configs, _closures, _) = convert_tml_to_import_configs(&tml, true, false).unwrap();
         assert_eq!(configs.len(), 2);
     }
 
     #[test]
-    fn test_zero_shot_section_and_filtered_closure_surface_receipt_warnings() {
-        // Same all-excluded-section shape as the test above, plus a CLOSURE shot
+    fn test_zero_shot_line_and_filtered_closure_surface_receipt_warnings() {
+        // Same all-excluded-line shape as the test above, plus a CLOSURE shot
         // whose target station was excluded (and so never made it into
         // `id_to_import_loc`), exercising both converter-level warnings at once.
         let make_shot = |id, from_id, shot_type, excluded, closure_to_id| TmlShot {
@@ -4261,7 +4262,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id,
-            section: "S".to_string(),
+            line: "S".to_string(),
             credit: None,
         };
 
@@ -4274,7 +4275,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![
+            lines: vec![
                 TmlSection {
                     name: "Good".to_string(),
                     shots: vec![
@@ -4312,7 +4313,7 @@ mod tests {
 
         let (configs, closures, warnings) =
             convert_tml_to_import_configs(&tml, false, false).unwrap();
-        assert_eq!(configs.len(), 1, "the all-excluded section must be dropped");
+        assert_eq!(configs.len(), 1, "the all-excluded line must be dropped");
         assert!(
             closures.is_empty(),
             "the closure whose endpoint was excluded must be skipped"
@@ -4321,7 +4322,7 @@ mod tests {
             warnings
                 .iter()
                 .any(|w| w.contains("had no shots after filtering")),
-            "expected a zero-shot-section warning, got: {warnings:?}"
+            "expected a zero-shot-line warning, got: {warnings:?}"
         );
         assert!(
             warnings
@@ -4357,7 +4358,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "S".to_string(),
+            line: "S".to_string(),
             credit: None,
         };
 
@@ -4370,7 +4371,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![
+            lines: vec![
                 TmlSection {
                     name: "Gallery (branch 1)".to_string(),
                     shots: vec![make_shot(1, 0, false), make_shot(2, 1, false)],
@@ -4412,14 +4413,14 @@ mod tests {
     #[test]
     fn test_excluded_leading_shots_placement() {
         // Real-world scenario modeled after Ariane data:
-        //   Section A (index 0): shots 1,2 - main line
-        //   Section C (index 1): shot 10 (from_id=2) - virtual jump chain
-        //   Section B (index 2): excluded shot 5 (from_id=3, where 3 is excluded),
-        //     then non-excluded shot 6 (from_id=10 → section C's last shot)
+        //   Line A (index 0): shots 1,2 - main line
+        //   Line C (index 1): shot 10 (from_id=2) - virtual jump chain
+        //   Line B (index 2): excluded shot 5 (from_id=3, where 3 is excluded),
+        //     then non-excluded shot 6 (from_id=10 → line C's last shot)
         //
         // start_ariane_id for B = 3 (excluded shot, not in id_to_import_loc).
         // Placement must fall back to effective_start_id = shot 6's from_id = 10
-        // (in section C), and topological sort must reorder C before B even though
+        // (in line C), and topological sort must reorder C before B even though
         // C has a higher raw index than expected.
         let make_shot = |id: i64, from_id: i64, excluded: bool| TmlShot {
             uuid: None,
@@ -4443,7 +4444,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            section: "S".to_string(),
+            line: "S".to_string(),
             credit: None,
         };
 
@@ -4456,8 +4457,8 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![
-                // Section A (index 0): shots 1,2
+            lines: vec![
+                // Line A (index 0): shots 1,2
                 TmlSection {
                     name: "A".to_string(),
                     shots: vec![make_shot(1, -1, false), make_shot(2, 1, false)],
@@ -4469,13 +4470,13 @@ mod tests {
                     end_ariane_id: 2,
                     start_depth: 0.0,
                 },
-                // Section B (index 1): excluded shot 5 (from_id=3, excluded),
-                // then non-excluded shot 6 (from_id=10 → section C)
+                // Line B (index 1): excluded shot 5 (from_id=3, excluded),
+                // then non-excluded shot 6 (from_id=10 → line C)
                 TmlSection {
                     name: "B".to_string(),
                     shots: vec![
                         make_shot(5, 3, true),   // excluded, from_id=3 is also excluded
-                        make_shot(6, 10, false), // kept, from_id=10 is in section C
+                        make_shot(6, 10, false), // kept, from_id=10 is in line C
                     ],
                     surveyor: None,
                     date: None,
@@ -4485,7 +4486,7 @@ mod tests {
                     end_ariane_id: 6,
                     start_depth: 0.0,
                 },
-                // Section C (index 2): shot 10 (from_id=2) - comes after B in raw order
+                // Line C (index 2): shot 10 (from_id=2) - comes after B in raw order
                 TmlSection {
                     name: "C".to_string(),
                     shots: vec![make_shot(10, 2, false)],
@@ -4510,18 +4511,18 @@ mod tests {
         assert_eq!(configs[1].name.as_deref(), Some("C"));
         assert_eq!(configs[2].name.as_deref(), Some("B"));
 
-        // Section B should attach to section C's shot 10
+        // Line B should attach to line C's shot 10
         let b_config = &configs[2];
         match &b_config.placement {
             ImportPlacement::FromImporting {
                 import_station,
-                target_section_index,
+                target_line_index,
                 target_station_index,
             } => {
                 assert_eq!(*import_station, 0);
                 assert_eq!(
-                    *target_section_index, 2,
-                    "should reference section C (raw index 2)"
+                    *target_line_index, 2,
+                    "should reference line C (raw index 2)"
                 );
                 assert_eq!(
                     *target_station_index, 1,
@@ -4553,7 +4554,7 @@ mod tests {
     #[test]
     fn test_section_description_grouping() {
         // START shot has SectionDescription suffix, REAL shots don't.
-        // After stripping, they should group into the same section.
+        // After stripping, they should group into the same line.
         let xml = wrap_xml(&format!(
             "{}\n{}\n{}",
             r#"<SurveyData><ID>0</ID><FromID>-1</FromID><Type>START</Type>
@@ -4578,44 +4579,44 @@ mod tests {
 
         let (raw_shots, _) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, _) = build_sections(raw_shots);
+        let (lines, _) = build_lines(raw_shots);
 
-        // Should be 1 section (MySec) with 2 shots (START excluded)
+        // Should be 1 line (MySec) with 2 shots (START excluded)
         assert_eq!(
-            sections.len(),
+            lines.len(),
             1,
-            "Expected 1 section, got {}: {:?}",
-            sections.len(),
-            sections.iter().map(|s| &s.name).collect::<Vec<_>>()
+            "Expected 1 line, got {}: {:?}",
+            lines.len(),
+            lines.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
-        assert_eq!(sections[0].name, "MySec");
-        assert_eq!(sections[0].shots.len(), 2);
+        assert_eq!(lines[0].name, "MySec");
+        assert_eq!(lines[0].shots.len(), 2);
     }
 
-    /// Test mid-section branching topology (not just end-of-section).
-    /// Verifies that when section C branches from the MIDDLE of section A,
+    /// Test mid-line branching topology (not just end-of-line).
+    /// Verifies that when line C branches from the MIDDLE of line A,
     /// the target_station_index correctly points to the station at the END
     /// of the referenced shot.
     #[test]
-    fn test_mid_section_branching_topology() {
+    fn test_mid_line_branching_topology() {
         // A: START → shot1 → shot2 → shot3 → shot4
-        // B: branches from shot2 (mid-section)
+        // B: branches from shot2 (mid-line)
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
-                tml_shot_xml(1, 0, "REAL", "Section A"),
-                tml_shot_xml(2, 1, "REAL", "Section A"),
-                tml_shot_xml(3, 2, "REAL", "Section A"),
-                tml_shot_xml(4, 3, "REAL", "Section A"),
-                tml_shot_xml(5, 2, "REAL", "Section B"), // branches from shot 2 (mid-section A)
-                tml_shot_xml(6, 5, "REAL", "Section B"),
+                tml_shot_xml(1, 0, "REAL", "Line A"),
+                tml_shot_xml(2, 1, "REAL", "Line A"),
+                tml_shot_xml(3, 2, "REAL", "Line A"),
+                tml_shot_xml(4, 3, "REAL", "Line A"),
+                tml_shot_xml(5, 2, "REAL", "Line B"), // branches from shot 2 (mid-line A)
+                tml_shot_xml(6, 5, "REAL", "Line B"),
             ]
             .join("\n"),
         );
 
         let (raw_shots, metadata) =
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
-        let (sections, closures) = build_sections(raw_shots);
+        let (lines, closures) = build_lines(raw_shots);
 
         let tml = TmlFile {
             cave_name: metadata.cave_name,
@@ -4626,27 +4627,27 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections,
+            lines,
             closures,
         };
 
         let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-        assert_eq!(configs.len(), 2, "Should have 2 sections");
+        assert_eq!(configs.len(), 2, "Should have 2 lines");
 
-        // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)
+        // Line A: 4 shots → 5 stations (0, 1, 2, 3, 4)
         // Shot ID=2 at import_idx=1 → station_after=2
         assert_eq!(configs[0].shots.len(), 4);
         assert!(matches!(configs[0].placement, ImportPlacement::Origin));
 
-        // Section B: from_id=2 → end of shot ID=2 = station 2 of section A
+        // Line B: from_id=2 → end of shot ID=2 = station 2 of line A
         match &configs[1].placement {
             ImportPlacement::FromImporting {
                 import_station,
-                target_section_index,
+                target_line_index,
                 target_station_index,
             } => {
                 assert_eq!(*import_station, 0);
-                assert_eq!(*target_section_index, 0);
+                assert_eq!(*target_line_index, 0);
                 assert_eq!(
                     *target_station_index, 2,
                     "Should link to station 2 (end of shot ID=2 at import_idx=1)"
@@ -4657,14 +4658,14 @@ mod tests {
     }
 
     /// End-to-end coordinate verification: parse a real TML file, import all
-    /// sections into a Project, compute station coordinates, and compare
+    /// lines into a Project, compute station coordinates, and compare
     /// against independently calculated expected values.
     ///
     /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
     #[test]
     #[ignore]
     fn parse_tml_naharon_coordinates() {
-        use crate::models::{ImportPlacement, Project, SectionData, StationRef};
+        use crate::models::{ImportPlacement, Project, LineData, StationRef};
 
         let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
             "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
@@ -4684,12 +4685,12 @@ mod tests {
         let (configs, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(!configs.is_empty(), "Should produce import configs");
 
-        // 3. Create a project and import all sections
+        // 3. Create a project and import all lines
         let mut project = Project::new("Test Import".into(), None);
         let mut created_ids: HashMap<u32, u32> = HashMap::new();
 
         for config in &configs {
-            let section_data = SectionData {
+            let line_data = LineData {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
                 date: config.date,
@@ -4698,14 +4699,14 @@ mod tests {
                 quality: config.quality,
                 shots: config.shots.clone(),
             };
-            let section_id = project.add_section(section_data).id;
-            created_ids.insert(config.section_index, section_id);
+            let line_id = project.add_line(line_data).id;
+            created_ids.insert(config.line_index, line_id);
 
             match &config.placement {
                 ImportPlacement::Origin => {}
                 ImportPlacement::ZeroDatum { station_index, .. } => {
                     // First datum station goes to origin; offset so that station is at (0,0)
-                    let station_ref = StationRef::new(section_id, *station_index);
+                    let station_ref = StationRef::new(line_id, *station_index);
                     let current = project
                         .compute_station_raw_coords(station_ref)
                         .expect("station coords for zero datum");
@@ -4713,8 +4714,8 @@ mod tests {
                     let offset_y = -current.y;
                     if offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9 {
                         project
-                            .section_offsets
-                            .insert(section_id, (offset_x, offset_y));
+                            .line_offsets
+                            .insert(line_id, (offset_x, offset_y));
                     }
                 }
                 ImportPlacement::FromExisting { .. } => {
@@ -4722,14 +4723,14 @@ mod tests {
                 }
                 ImportPlacement::FromImporting {
                     import_station,
-                    target_section_index,
+                    target_line_index,
                     target_station_index,
                 } => {
-                    let target_section_id = *created_ids
-                        .get(target_section_index)
-                        .expect("target section should exist");
-                    let import_ref = StationRef::new(section_id, *import_station);
-                    let target_ref = StationRef::new(target_section_id, *target_station_index);
+                    let target_line_id = *created_ids
+                        .get(target_line_index)
+                        .expect("target line should exist");
+                    let import_ref = StationRef::new(line_id, *import_station);
+                    let target_ref = StationRef::new(target_line_id, *target_station_index);
                     project
                         .merge_stations(import_ref, target_ref)
                         .expect("merge should succeed");
@@ -4738,25 +4739,25 @@ mod tests {
             }
         }
 
-        // 4. Verify per-section relative coordinates
-        //    For each section, compute station coords independently from shot data
+        // 4. Verify per-line relative coordinates
+        //    For each line, compute station coords independently from shot data
         //    and compare against compute_station_raw_coords (relative to station 0).
-        for section in &project.sections {
+        for line in &project.lines {
             let base = project
-                .compute_station_raw_coords(StationRef::new(section.id, 0))
+                .compute_station_raw_coords(StationRef::new(line.id, 0))
                 .expect("base station coords");
 
             let mut expected_x = 0.0_f64;
             let mut expected_y = 0.0_f64;
 
-            // Through the section's own reference, not the raw reading (#438).
+            // Through the line's own reference, not the raw reading (#438).
             // The two coincide for a fixture whose correction is zero, which is
             // exactly why the raw form would rot: the day this oracle is pointed
             // at a georeferenced file it would silently start comparing a
             // magnetic walk against a corrected one and report the declination
             // as a coordinate bug.
-            let azimuth_reference = project.azimuth_reference_for(section);
-            for (i, shot) in section.shots.iter().enumerate() {
+            let azimuth_reference = project.azimuth_reference_for(line);
+            for (i, shot) in line.shots.iter().enumerate() {
                 let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let h = shot.horizontal_length();
                 expected_x += h * azi_rad.sin();
@@ -4764,7 +4765,7 @@ mod tests {
 
                 let station_idx = (i + 1) as u32;
                 let actual = project
-                    .compute_station_raw_coords(StationRef::new(section.id, station_idx))
+                    .compute_station_raw_coords(StationRef::new(line.id, station_idx))
                     .expect("station coords");
 
                 let rel_x = actual.x - base.x;
@@ -4772,8 +4773,8 @@ mod tests {
 
                 assert!(
                     (rel_x - expected_x).abs() < 1e-6 && (rel_y - expected_y).abs() < 1e-6,
-                    "Section '{}' station {}: expected rel ({:.6}, {:.6}), got ({:.6}, {:.6})",
-                    section.name.as_deref().unwrap_or("?"),
+                    "Line '{}' station {}: expected rel ({:.6}, {:.6}), got ({:.6}, {:.6})",
+                    line.name.as_deref().unwrap_or("?"),
                     station_idx,
                     expected_x,
                     expected_y,
@@ -4789,18 +4790,18 @@ mod tests {
         //    station (ID=75) using: h = sqrt(length² - dz²), dx = h·sin(azi),
         //    dy = h·cos(azi), with cumulative depth propagation.
         //
-        //    Format: (section_name, station_index, expected_x, expected_y, expected_depth)
+        //    Format: (line_name, station_index, expected_x, expected_y, expected_depth)
         //    Coordinates are relative to the START station at (0, 0).
-        //    Since the import places the first section at Origin, all coords are
+        //    Since the import places the first line at Origin, all coords are
         //    in that same frame (modulo ZeroDatum GPS offset which only shifts XY).
 
-        // Find the section containing the START station (first section, placed at origin
+        // Find the line containing the START station (first line, placed at origin
         // or ZeroDatum). We compare coordinates RELATIVE to that origin.
         // Get the offset applied by ZeroDatum so we can subtract it.
-        let first_section_id = *created_ids.get(&configs[0].section_index).unwrap();
+        let first_line_id = *created_ids.get(&configs[0].line_index).unwrap();
         let origin_offset = project
-            .section_offsets
-            .get(&first_section_id)
+            .line_offsets
+            .get(&first_line_id)
             .copied()
             .unwrap_or((0.0, 0.0));
 
@@ -4808,7 +4809,7 @@ mod tests {
         // Expected coordinates computed independently from raw TML data
         // (Python traversal of shot graph from START station at origin)
         struct Expected {
-            section: &'static str,
+            line: &'static str,
             station: u32,
             x: f64,
             y: f64,
@@ -4818,7 +4819,7 @@ mod tests {
         let expectations = [
             // Reel to Mainline Cx: station 0 = START at origin
             Expected {
-                section: "Reel to Mainline Cx",
+                line: "Reel to Mainline Cx",
                 station: 0,
                 x: 0.0,
                 y: 0.0,
@@ -4826,7 +4827,7 @@ mod tests {
             },
             // Reel to Mainline Cx: station 13 = end of shot 88
             Expected {
-                section: "Reel to Mainline Cx",
+                line: "Reel to Mainline Cx",
                 station: 13,
                 x: -30.7455,
                 y: 69.9489,
@@ -4834,7 +4835,7 @@ mod tests {
             },
             // Bypass south: station 11 = end of shot 68
             Expected {
-                section: "Bypass south",
+                line: "Bypass south",
                 station: 11,
                 x: -21.7235,
                 y: 176.5525,
@@ -4842,7 +4843,7 @@ mod tests {
             },
             // Haloline (branch 2): station 30 = end of shot 264
             Expected {
-                section: "Haloline (branch 2)",
+                line: "Haloline (branch 2)",
                 station: 30,
                 x: -58.9147,
                 y: 413.9500,
@@ -4852,38 +4853,38 @@ mod tests {
 
         let tolerance = 0.05; // 5cm tolerance for absolute coordinates
         for exp in &expectations {
-            // Section names in the import may differ slightly (our parser strips
+            // Line names in the import may differ slightly (our parser strips
             // SectionDescription suffixes and may split at branches). Try to find
-            // the section; skip if the parser organized it differently.
-            let section_opt = project
-                .sections
+            // the line; skip if the parser organized it differently.
+            let line_opt = project
+                .lines
                 .iter()
-                .find(|s| s.name.as_deref() == Some(exp.section));
-            let Some(section) = section_opt else {
-                eprintln!("  Skipping absolute check: section '{}' not found (parser may have renamed it)", exp.section);
+                .find(|s| s.name.as_deref() == Some(exp.line));
+            let Some(line) = line_opt else {
+                eprintln!("  Skipping absolute check: line '{}' not found (parser may have renamed it)", exp.line);
                 continue;
             };
-            if exp.station as usize > section.shots.len() {
-                eprintln!("  Skipping absolute check: section '{}' station {} out of range (has {} shots)",
-                    exp.section, exp.station, section.shots.len());
+            if exp.station as usize > line.shots.len() {
+                eprintln!("  Skipping absolute check: line '{}' station {} out of range (has {} shots)",
+                    exp.line, exp.station, line.shots.len());
                 continue;
             }
             let c = project
-                .compute_station_raw_coords(StationRef::new(section.id, exp.station))
-                .unwrap_or_else(|| panic!("Coords for {}:{}", exp.section, exp.station));
+                .compute_station_raw_coords(StationRef::new(line.id, exp.station))
+                .unwrap_or_else(|| panic!("Coords for {}:{}", exp.line, exp.station));
             let (rx, ry) = (c.x - origin_offset.0, c.y - origin_offset.1);
 
             assert!(
                 (rx - exp.x).abs() < tolerance && (ry - exp.y).abs() < tolerance,
                 "Absolute coords mismatch for '{}' station {}: expected ({:.4}, {:.4}), got ({:.4}, {:.4}), delta=({:.4}, {:.4})",
-                exp.section, exp.station, exp.x, exp.y, rx, ry,
+                exp.line, exp.station, exp.x, exp.y, rx, ry,
                 rx - exp.x, ry - exp.y,
             );
             // Depth check with wider tolerance (averaging can shift depth slightly)
             assert!(
                 (c.z - exp.depth).abs() < 0.5,
                 "Depth mismatch for '{}' station {}: expected {:.4}, got {:.4}",
-                exp.section,
+                exp.line,
                 exp.station,
                 exp.depth,
                 c.z,
@@ -4922,10 +4923,10 @@ mod tests {
         assert!(!closures.is_empty(), "Should have parsed loop closures");
 
         eprintln!(
-            "Naharon TML coordinate test passed: {} sections, {} merges, {} total stations verified",
-            project.sections.len(),
+            "Naharon TML coordinate test passed: {} lines, {} merges, {} total stations verified",
+            project.lines.len(),
             project.station_merges.len(),
-            project.sections.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
+            project.lines.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
         );
     }
 
@@ -4934,7 +4935,7 @@ mod tests {
     // never reach the project, on EITHER setting.
     // ------------------------------------------------------------------
 
-    /// One section, one shot, whose TML `<Comment>` carries `field`.
+    /// One line, one shot, whose TML `<Comment>` carries `field`.
     fn tml_with_shot_comment(field: Option<String>) -> TmlFile {
         let mut shot = sample_tml_shot();
         shot.comment = field;
@@ -4947,7 +4948,7 @@ mod tests {
             parse_anomalies: None,
             encoding_warning: None,
             geo_coding: None,
-            sections: vec![TmlSection {
+            lines: vec![TmlSection {
                 name: "S".to_string(),
                 shots: vec![shot],
                 surveyor: None,
@@ -4963,7 +4964,7 @@ mod tests {
     }
 
     /// Import `field` with the given `comments_on_stations`, returning the one
-    /// shot's comment and the section's station comments.
+    /// shot's comment and the line's station comments.
     fn import_comment(
         field: Option<String>,
         comments_on_stations: bool,
@@ -5096,22 +5097,22 @@ mod tests {
     /// The point of the split is that only ONE of these classes could ever be
     /// merged away into a neighbouring config: a chain whose parent shot is the
     /// LAST shot of the chain that contains it. Every other class attaches
-    /// mid-chain, and a `models::Section` is a strictly linear polyline
-    /// (`Section::shots` is consumed positionally; every cross-reference into a
-    /// section is a single `station_index`), so a mid-chain attachment has no
+    /// mid-chain, and a `models::Line` is a strictly linear polyline
+    /// (`Line::shots` is consumed positionally; every cross-reference into a
+    /// line is a single `station_index`), so a mid-chain attachment has no
     /// representation inside one config.
     #[derive(Default, Debug, PartialEq, Eq)]
     struct ChainOrigins {
         /// Parent is a START shot, so there is no parent chain at all.
         entrance_root: usize,
-        /// Parent shot is in a DIFFERENT declared section.
-        cross_section_root: usize,
-        /// Parent shot is in the same declared section AND ends its chain -
-        /// the only in-section merge a linear config could express.
-        in_section_parent_is_chain_end: usize,
-        /// Parent shot is in the same declared section but sits mid-chain.
-        in_section_parent_mid_chain: usize,
-        /// Of `cross_section_root`, those whose parent ends its chain.
+        /// Parent shot is in a DIFFERENT declared line.
+        cross_line_root: usize,
+        /// Parent shot is in the same declared line AND ends its chain -
+        /// the only in-line merge a linear config could express.
+        in_line_parent_is_chain_end: usize,
+        /// Parent shot is in the same declared line but sits mid-chain.
+        in_line_parent_mid_chain: usize,
+        /// Of `cross_line_root`, those whose parent ends its chain.
         cross_root_at_parent_chain_end: usize,
         /// Chains that share a start station with an earlier chain: a "V" that
         /// one reversed-then-concatenated linear run could express.
@@ -5130,29 +5131,29 @@ mod tests {
             Some(i) if n.ends_with(')') => n[..i].to_string(),
             _ => n.to_string(),
         };
-        let mut shot_section: HashMap<i64, String> = HashMap::new();
+        let mut shot_line: HashMap<i64, String> = HashMap::new();
         let mut ends_a_chain: std::collections::HashSet<i64> = std::collections::HashSet::new();
         let mut chains_per_start: HashMap<i64, usize> = HashMap::new();
         // Which chain ENDS at a given shot id, so a candidate can be compared
         // against the exact chain it would be appended to.
         let mut chain_ending_at: HashMap<i64, usize> = HashMap::new();
         let mut chains_by_start: HashMap<i64, Vec<usize>> = HashMap::new();
-        for (idx, section) in tml.sections.iter().enumerate() {
-            for shot in &section.shots {
-                shot_section.insert(shot.id, shot.section.clone());
+        for (idx, line) in tml.lines.iter().enumerate() {
+            for shot in &line.shots {
+                shot_line.insert(shot.id, shot.line.clone());
             }
-            if let Some(last) = section.shots.last() {
+            if let Some(last) = line.shots.last() {
                 ends_a_chain.insert(last.id);
                 chain_ending_at.insert(last.id, idx);
             }
-            *chains_per_start.entry(section.start_ariane_id).or_insert(0) += 1;
+            *chains_per_start.entry(line.start_ariane_id).or_insert(0) += 1;
             chains_by_start
-                .entry(section.start_ariane_id)
+                .entry(line.start_ariane_id)
                 .or_default()
                 .push(idx);
         }
         let trip_metadata_matches = |a: usize, b: usize| {
-            let (x, y) = (&tml.sections[a], &tml.sections[b]);
+            let (x, y) = (&tml.lines[a], &tml.lines[b]);
             x.surveyor == y.surveyor && x.date == y.date && x.color == y.color
         };
 
@@ -5164,24 +5165,24 @@ mod tests {
                 - chains_per_start.values().filter(|&&n| n >= 2).count(),
             ..ChainOrigins::default()
         };
-        for (idx, section) in tml.sections.iter().enumerate() {
-            let parent_ends_chain = ends_a_chain.contains(&section.start_ariane_id);
-            match shot_section.get(&section.start_ariane_id) {
+        for (idx, line) in tml.lines.iter().enumerate() {
+            let parent_ends_chain = ends_a_chain.contains(&line.start_ariane_id);
+            match shot_line.get(&line.start_ariane_id) {
                 None => out.entrance_root += 1,
-                Some(parent_section) if *parent_section != base_of(&section.name) => {
-                    out.cross_section_root += 1;
+                Some(parent_line) if *parent_line != base_of(&line.name) => {
+                    out.cross_line_root += 1;
                     if parent_ends_chain {
                         out.cross_root_at_parent_chain_end += 1;
                         if chain_ending_at
-                            .get(&section.start_ariane_id)
+                            .get(&line.start_ariane_id)
                             .is_some_and(|&parent| trip_metadata_matches(parent, idx))
                         {
                             out.cross_root_at_chain_end_metadata_match += 1;
                         }
                     }
                 }
-                Some(_) if parent_ends_chain => out.in_section_parent_is_chain_end += 1,
-                Some(_) => out.in_section_parent_mid_chain += 1,
+                Some(_) if parent_ends_chain => out.in_line_parent_is_chain_end += 1,
+                Some(_) => out.in_line_parent_mid_chain += 1,
             }
         }
 
@@ -5208,10 +5209,10 @@ mod tests {
     /// Synthetic multi-root, multi-T topology, entirely in-code:
     ///
     /// ```text
-    ///   section "Main":   1 -> 2 -> 3 -> 4 -> 5      (mainline, from entrance)
+    ///   line "Main":   1 -> 2 -> 3 -> 4 -> 5      (mainline, from entrance)
     ///                          |         `-> 8 -> 9  (T at 4)
     ///                          `-> 6 -> 7            (T at 2)
-    ///   section "Side":  10 -> 11                    (root parented into Main)
+    ///   line "Side":  10 -> 11                    (root parented into Main)
     /// ```
     ///
     /// The continuation rule sends the walk through the LONGER downstream leg
@@ -5244,18 +5245,18 @@ mod tests {
 
         let origins = classify_chain_origins(&tml);
         assert_eq!(
-            origins.in_section_parent_is_chain_end, 0,
-            "a deferred in-section branch never attaches at a chain END, so the \
+            origins.in_line_parent_is_chain_end, 0,
+            "a deferred in-line branch never attaches at a chain END, so the \
              'merge into the parent chain's config' rule has zero candidates; \
              origins were {origins:?}"
         );
         assert_eq!(
-            origins.in_section_parent_mid_chain, 2,
+            origins.in_line_parent_mid_chain, 2,
             "both Ts (at shot 2 and shot 4) defer a chain that hangs off a \
              mid-mainline shot; origins were {origins:?}"
         );
         assert_eq!(
-            origins.cross_section_root, 1,
+            origins.cross_line_root, 1,
             "\"Side\" is parented into \"Main\", the boundary #412 leaves alone"
         );
 
@@ -5263,10 +5264,10 @@ mod tests {
         // continuation heuristic buys, and it is what keeps the parent shot
         // mid-chain rather than at a chain end.
         let mainline = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name == "Main")
-            .expect("the mainline keeps the section's own name");
+            .expect("the mainline keeps the line's own name");
         assert_eq!(
             mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5],
@@ -5276,16 +5277,16 @@ mod tests {
         // Every shot is emitted exactly once across the fragments, and the
         // fragment count is exactly the linear-chain count - there is no
         // representation that could make it smaller without changing
-        // `models::Section` from a polyline into a tree.
+        // `models::Line` from a polyline into a tree.
         let mut ids: Vec<i64> = tml
-            .sections
+            .lines
             .iter()
             .flat_map(|s| &s.shots)
             .map(|s| s.id)
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, (1..=11).collect::<Vec<_>>());
-        assert_eq!(tml.sections.len(), 4, "Main + 2 deferred Ts + Side");
+        assert_eq!(tml.lines.len(), 4, "Main + 2 deferred Ts + Side");
     }
 
     /// The contiguous join drops the fragment count by exactly the chains that
@@ -5347,14 +5348,14 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
-        let names: Vec<&str> = tml.sections.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = tml.lines.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
             vec!["Trunk + Deep", "Trunk (branch 2)", "Stub"],
             "only the series chain is absorbed, and it says so in the name"
         );
 
-        let merged = &tml.sections[0];
+        let merged = &tml.lines[0];
         assert_eq!(
             merged
                 .shots
@@ -5372,14 +5373,14 @@ mod tests {
         // still a polyline - the invariant every consumer of a TmlSection
         // assumes and nothing else in the pipeline checks.
         let mut ids: Vec<i64> = tml
-            .sections
+            .lines
             .iter()
             .flat_map(|s| &s.shots)
             .map(|s| s.id)
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, (1..=10).collect::<Vec<_>>());
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
 
         // The one remaining candidate class is gone: nothing else runs in
         // series, so a second pass would find nothing to do.
@@ -5390,7 +5391,7 @@ mod tests {
         );
 
         // Closure endpoints index the MERGED run. Shot 5 is the 5th importable
-        // shot of section 0, so it ends at station 5 - a number that only comes
+        // shot of line 0, so it ends at station 5 - a number that only comes
         // out right if the merge happened before the closure was resolved.
         let (configs, closures, _) =
             convert_tml_to_import_configs(&tml, false, false).expect("convert");
@@ -5403,20 +5404,20 @@ mod tests {
         assert_eq!(closures.len(), 1);
         assert_eq!(
             (
-                closures[0].from_section_index,
+                closures[0].from_line_index,
                 closures[0].from_station_index
             ),
             (0, 5),
             "the closure's near end is re-indexed against the merged run"
         );
         assert_eq!(
-            (closures[0].to_section_index, closures[0].to_station_index),
+            (closures[0].to_line_index, closures[0].to_station_index),
             (1, 2),
             "and its far end still points at the untouched branch"
         );
     }
 
-    /// Section names and shot ids for the join-refusal fixtures: "A" is a
+    /// Line names and shot ids for the join-refusal fixtures: "A" is a
     /// two-shot chain from the entrance, "B" continues from A's LAST shot.
     /// Every refusal test below is this same shape with one thing changed, so
     /// what the test is about is the difference and nothing else.
@@ -5431,7 +5432,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -5441,7 +5442,7 @@ mod tests {
             TripShot {
                 id: 4,
                 from_id: 3,
-                section: "B",
+                line: "B",
                 depth: 12.0,
                 explorer,
                 date,
@@ -5454,8 +5455,8 @@ mod tests {
         parse_synthetic_tmlu(&wrap_xml(&shots))
     }
 
-    fn section_names(tml: &TmlFile) -> Vec<&str> {
-        tml.sections.iter().map(|s| s.name.as_str()).collect()
+    fn line_names(tml: &TmlFile) -> Vec<&str> {
+        tml.lines.iter().map(|s| s.name.as_str()).collect()
     }
 
     /// The seam has to be a station the import actually keeps.
@@ -5464,14 +5465,14 @@ mod tests {
     /// the same filter, so joining onto an EXCLUDED tail would resolve the
     /// absorbed leg's first `depth_in` from the previous SURVIVING station -
     /// translating the whole leg - and the result would change with the
-    /// include-excluded toggle, which section splitting must be invariant to.
+    /// include-excluded toggle, which line splitting must be invariant to.
     #[test]
     fn the_join_refuses_a_seam_the_import_would_filter_out() {
         let tml = series_a_b(
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 excluded: true,
                 depth: 9.0,
                 ..TripShot::default()
@@ -5481,7 +5482,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 depth: 11.0,
                 depth_in: -1.0,
                 ..TripShot::default()
@@ -5489,7 +5490,7 @@ mod tests {
         );
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A", "B"],
             "an excluded tail is not a station, so it is not a seam"
         );
@@ -5514,14 +5515,14 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..TripShot::default()
             },
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 explorer: "Somebody Else",
                 date: "2025-02-02",
                 color: "0x112233ff",
@@ -5531,11 +5532,11 @@ mod tests {
         );
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A", "B"],
             "a different colour must not be merged away"
         );
-        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+        assert_eq!(tml.lines[1].surveyor.as_deref(), Some("Somebody Else"));
     }
 
     /// People and dates are per-shot credit (#329), so a chain surveyed by
@@ -5547,14 +5548,14 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..TripShot::default()
             },
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 explorer: "Somebody Else",
                 date: "2025-02-02",
                 depth: 11.0,
@@ -5562,7 +5563,7 @@ mod tests {
             },
         );
 
-        assert_eq!(section_names(&tml), vec!["A + B"]);
+        assert_eq!(line_names(&tml), vec!["A + B"]);
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         let last = configs[0].shots.last().expect("shots").credit();
         assert_eq!(
@@ -5577,13 +5578,13 @@ mod tests {
         );
     }
 
-    /// One declared Ariane section, two trips: a chain surveyed by a second
+    /// One declared Ariane line, two trips: a chain surveyed by a second
     /// team on a second day used to import entirely under the FIRST shot's
     /// surveyor, date and colour, with the rest dropped silently (#427).
     #[test]
-    fn a_run_that_changes_trip_mid_chain_is_cut_into_one_section_per_trip() {
+    fn a_run_that_changes_trip_mid_chain_is_cut_into_one_line_per_trip() {
         let second_trip = TripShot {
-            section: "A",
+            line: "A",
             explorer: "Ada Lovelace",
             date: "2025-03-04",
             color: "0x11223344",
@@ -5593,7 +5594,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -5601,7 +5602,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..TripShot::default()
             }
@@ -5624,20 +5625,20 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
-        assert_eq!(section_names(&tml), vec!["A", "A (trip 2)"]);
-        assert_eq!(tml.sections[0].surveyor.as_deref(), Some("Tester"));
-        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(line_names(&tml), vec!["A", "A (trip 2)"]);
+        assert_eq!(tml.lines[0].surveyor.as_deref(), Some("Tester"));
+        assert_eq!(tml.lines[1].surveyor.as_deref(), Some("Ada Lovelace"));
         assert_eq!(
-            tml.sections[1].date,
+            tml.lines[1].date,
             NaiveDate::from_ymd_opt(2025, 3, 4),
             "the second trip keeps its own date, not the chain head's"
         );
         assert_ne!(
-            tml.sections[0].color, tml.sections[1].color,
+            tml.lines[0].color, tml.lines[1].color,
             "and its own colour"
         );
-        assert_eq!(tml.sections[0].shots.len(), 2);
-        assert_eq!(tml.sections[1].shots.len(), 2);
+        assert_eq!(tml.lines[0].shots.len(), 2);
+        assert_eq!(tml.lines[1].shots.len(), 2);
 
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
@@ -5647,7 +5648,7 @@ mod tests {
                 configs[1].placement,
                 ImportPlacement::FromImporting {
                     import_station: 0,
-                    target_section_index: 0,
+                    target_line_index: 0,
                     target_station_index: 2,
                 }
             ),
@@ -5669,7 +5670,7 @@ mod tests {
             matches!(
                 unfiltered[1].placement,
                 ImportPlacement::FromImporting {
-                    target_section_index: 0,
+                    target_line_index: 0,
                     target_station_index: 2,
                     ..
                 }
@@ -5693,7 +5694,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -5701,7 +5702,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 excluded: true,
                 explorer: "Ada Lovelace",
                 date: "2025-03-04",
@@ -5713,7 +5714,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "A",
+                line: "A",
                 depth: 11.0,
                 ..TripShot::default()
             }
@@ -5723,7 +5724,7 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A"],
             "an excluded shot is not a station, so it is no seam to cut at"
         );
@@ -5747,9 +5748,9 @@ mod tests {
         let note = included
             .iter()
             .find(|w| w.contains("recorded a different"))
-            .expect("the colour a section holds once does collapse, which the receipt must say");
+            .expect("the colour a line holds once does collapse, which the receipt must say");
         assert!(
-            note.starts_with("1 shot at 1 colour change in 1 section recorded a different colour"),
+            note.starts_with("1 shot at 1 colour change in 1 line recorded a different colour"),
             "the report names the counts and the field: {note}"
         );
     }
@@ -5764,7 +5765,7 @@ mod tests {
                 TripShot {
                     id,
                     from_id: id - 1,
-                    section: "A",
+                    line: "A",
                     explorer: &explorer,
                     date: &date,
                     color: &color,
@@ -5782,12 +5783,12 @@ mod tests {
         format!("0x{:06x}ff", n * 0x0101)
     }
 
-    /// The round trip that broke (#329): one section whose shots carry three
+    /// The round trip that broke (#329): one line whose shots carry three
     /// different teams and days, in one colour, exported to Ariane and read
-    /// back. The people and date are per-shot credit, so it is ONE section
+    /// back. The people and date are per-shot credit, so it is ONE line
     /// again, every shot with exactly its own credit, and nothing to report.
     #[test]
-    fn a_run_with_three_credit_trips_in_one_colour_stays_one_section() {
+    fn a_run_with_three_credit_trips_in_one_colour_stays_one_line() {
         let tml = one_chain(6, |id| {
             let trip = (id - 1) / 2 + 1; // 1,1,2,2,3,3
             (
@@ -5797,7 +5798,7 @@ mod tests {
             )
         });
 
-        assert_eq!(section_names(&tml), vec!["A"]);
+        assert_eq!(line_names(&tml), vec!["A"]);
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert_eq!(configs.len(), 1);
@@ -5826,7 +5827,7 @@ mod tests {
     }
 
     /// A date per shot ROW - a data-entry timestamp, or a crafted file - would
-    /// mint one section per shot from one declared name. The cut is capped, and
+    /// mint one line per shot from one declared name. The cut is capped, and
     /// what the cap refuses to cut is reported rather than dropped.
     #[test]
     fn the_cut_is_capped_and_the_rest_is_reported() {
@@ -5842,16 +5843,16 @@ mod tests {
         });
 
         assert_eq!(
-            tml.sections.len(),
+            tml.lines.len(),
             MAX_TRIP_CUTS_PER_RUN + 1,
             "one part per cut, plus the head - never one per shot"
         );
         assert_eq!(
-            tml.sections[MAX_TRIP_CUTS_PER_RUN].shots.len(),
+            tml.lines[MAX_TRIP_CUTS_PER_RUN].shots.len(),
             11,
             "everything past the cap stays on the last part"
         );
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
 
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
@@ -5865,21 +5866,21 @@ mod tests {
             last.len(),
             "every uncut shot kept its own date"
         );
-        // ...but not its own colour, which a section holds once: reported.
+        // ...but not its own colour, which a line holds once: reported.
         let note = warnings
             .iter()
             .find(|w| w.contains("recorded a different"))
             .expect("the colours the cap could not cut are reported");
         assert!(
-            note.starts_with("10 shots at 10 colour changes in 1 section"),
+            note.starts_with("10 shots at 10 colour changes in 1 line"),
             "{note}"
         );
     }
 
     /// The per-run cap alone bounds the wrong denominator: a file chooses how
-    /// many RUNS it has as well as how many trips each holds. Sections are the
-    /// numerator of the `section_id * FEATURE_ID_STRIDE` shot-id encode, which
-    /// holds only below 42_950 sections, so the budget is file-wide too.
+    /// many RUNS it has as well as how many trips each holds. Lines are the
+    /// numerator of the `line_id * FEATURE_ID_STRIDE` shot-id encode, which
+    /// holds only below 42_950 lines, so the budget is file-wide too.
     #[test]
     fn the_cut_budget_is_file_wide_not_only_per_run() {
         // Enough runs that the per-run cap alone would let them all through:
@@ -5896,7 +5897,7 @@ mod tests {
                         // Each run starts from the entrance, so they are
                         // separate runs rather than one chain.
                         from_id: if seq == 0 { -1 } else { id - 1 },
-                        section: "A",
+                        line: "A",
                         explorer: "Tester",
                         color: &nth_colour(seq + 1),
                         depth: seq as f64,
@@ -5908,19 +5909,19 @@ mod tests {
         }
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
 
-        let cuts = tml.sections.len() - runs as usize;
+        let cuts = tml.lines.len() - runs as usize;
         assert_eq!(
             cuts,
             MAX_TRIP_CUTS_PER_FILE,
             "the file-wide budget is spent exactly once, however many runs ask \
-             for it (got {} sections over {runs} runs)",
-            tml.sections.len()
+             for it (got {} lines over {runs} runs)",
+            tml.lines.len()
         );
         assert!(
-            tml.sections.len() < 42_950,
-            "and the result stays inside the shot-id encode's section range"
+            tml.lines.len() < 42_950,
+            "and the result stays inside the shot-id encode's line range"
         );
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
 
         // What the budget refused to cut collapses onto its part's colour,
         // and the receipt says so rather than dropping it in silence.
@@ -5950,13 +5951,13 @@ mod tests {
         );
 
         // The property the constants exist for: a shot id is
-        // `section_id * FEATURE_ID_STRIDE + seq`, so the sections a file ends
+        // `line_id * FEATURE_ID_STRIDE + seq`, so the lines a file ends
         // up with must stay inside the u32 encode.
         for runs in [0, 1, 100, 38_000, 38_853, 40_000, 42_948, 42_949, 60_000] {
             let total = runs + linearize::cut_budget(runs);
             assert!(
                 total <= 42_949 || runs > 42_949,
-                "{runs} runs + {} cuts = {total} sections, past the id space",
+                "{runs} runs + {} cuts = {total} lines, past the id space",
                 linearize::cut_budget(runs)
             );
         }
@@ -5977,23 +5978,23 @@ mod tests {
         });
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A", "A (trip 2)", "A (trip 3)"],
             "the suffix counts parts, and the head keeps the declared name"
         );
         let ids: Vec<Vec<i64>> = tml
-            .sections
+            .lines
             .iter()
             .map(|s| s.shots.iter().map(|shot| shot.id).collect())
             .collect();
         assert_eq!(ids, vec![vec![1, 2], vec![3, 4], vec![5, 6]]);
-        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Team 3"));
+        assert_eq!(tml.lines[2].surveyor.as_deref(), Some("Team 3"));
 
         let (configs, _, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert!(
             !warnings.iter().any(|w| w.contains("recorded a different")),
-            "every trip got its own section, so nothing collapsed: {warnings:?}"
+            "every trip got its own line, so nothing collapsed: {warnings:?}"
         );
         // `one_chain` gives shot N depth N, so part 3 must rebase on shot 4.
         assert!(
@@ -6005,7 +6006,7 @@ mod tests {
             matches!(
                 configs[2].placement,
                 ImportPlacement::FromImporting {
-                    target_section_index: 1,
+                    target_line_index: 1,
                     target_station_index: 2,
                     ..
                 }
@@ -6042,14 +6043,14 @@ mod tests {
         let tml = parse_synthetic_tmlu(&xml);
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["Main", "Main (branch 2)", "Main (branch 2) (trip 2)"]
         );
         assert!(
-            tml.sections[2].is_branch_split,
+            tml.lines[2].is_branch_split,
             "a cut part of a branch is still that branch"
         );
-        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Ada"));
+        assert_eq!(tml.lines[2].surveyor.as_deref(), Some("Ada"));
 
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         let cut = configs
@@ -6063,27 +6064,27 @@ mod tests {
         assert!(
             matches!(
                 configs[cut].placement,
-                ImportPlacement::FromImporting { target_section_index, target_station_index: 1, .. }
-                    if target_section_index as usize == branch
+                ImportPlacement::FromImporting { target_line_index, target_station_index: 1, .. }
+                    if target_line_index as usize == branch
             ),
             "the cut part hangs off the BRANCH's own tail, not the mainline: {:?}",
             configs[cut].placement
         );
     }
 
-    /// A file may itself declare a section called "A (trip 2)". Nothing in the
-    /// import keys on a section NAME - grouping keys on the file's own
+    /// A file may itself declare a line called "A (trip 2)". Nothing in the
+    /// import keys on a line NAME - grouping keys on the file's own
     /// `<Section>` text before any suffix exists, placement and closures key on
     /// Ariane ids, and `simplify_lone_branch_names` only rewrites "(branch N)"
     /// names - so the collision is accepted and shown as-is, exactly as a file
-    /// declaring two sections with one name always has been.
+    /// declaring two lines with one name always has been.
     #[test]
     fn a_declared_name_that_collides_with_a_cut_suffix_is_accepted() {
         let shots = [
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -6091,7 +6092,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 explorer: "Ada",
                 color: "0x112233ff",
                 depth: 9.0,
@@ -6101,7 +6102,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "A (trip 2)",
+                line: "A (trip 2)",
                 explorer: "Ada",
                 color: "0x112233ff",
                 depth: 11.0,
@@ -6113,12 +6114,12 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A", "A (trip 2)", "A (trip 2)"],
             "the minted suffix collides with the declared name, and both stand"
         );
         let ids: Vec<Vec<i64>> = tml
-            .sections
+            .lines
             .iter()
             .map(|s| s.shots.iter().map(|shot| shot.id).collect())
             .collect();
@@ -6130,20 +6131,20 @@ mod tests {
             matches!(
                 configs[2].placement,
                 ImportPlacement::FromImporting {
-                    target_section_index: 1,
+                    target_line_index: 1,
                     target_station_index: 1,
                     ..
                 }
             ),
-            "the declared section resolves onto the CUT part by Ariane id, not \
-             onto whichever section shares its name: {:?}",
+            "the declared line resolves onto the CUT part by Ariane id, not \
+             onto whichever line shares its name: {:?}",
             configs[2].placement
         );
     }
 
     /// A run whose HEAD shot is excluded must not be named after it: under the
     /// default toggle that shot is not imported, so every shot that IS imported
-    /// disagreed with its own section and the receipt reported a loss that had
+    /// disagreed with its own line and the receipt reported a loss that had
     /// not happened.
     #[test]
     fn a_run_takes_its_trip_from_the_first_shot_that_can_be_a_station() {
@@ -6151,7 +6152,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 excluded: true,
                 explorer: "T1",
                 date: "2025-01-01",
@@ -6163,7 +6164,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 explorer: "T2",
                 date: "2025-02-02",
                 depth: 9.0,
@@ -6173,7 +6174,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "A",
+                line: "A",
                 explorer: "T2",
                 date: "2025-02-02",
                 depth: 11.0,
@@ -6184,9 +6185,9 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
-        assert_eq!(section_names(&tml), vec!["A"]);
+        assert_eq!(line_names(&tml), vec!["A"]);
         assert_eq!(
-            tml.sections[0].surveyor.as_deref(),
+            tml.lines[0].surveyor.as_deref(),
             Some("T2"),
             "the excluded head names nothing"
         );
@@ -6206,7 +6207,7 @@ mod tests {
             TripShot {
                 id,
                 from_id: id - 1,
-                section: "A",
+                line: "A",
                 excluded,
                 explorer,
                 color,
@@ -6226,8 +6227,8 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
-        assert_eq!(section_names(&tml), vec!["A"]);
-        assert_eq!(tml.sections[0].surveyor.as_deref(), Some("Team One"));
+        assert_eq!(line_names(&tml), vec!["A"]);
+        assert_eq!(tml.lines[0].surveyor.as_deref(), Some("Team One"));
 
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         let note = warnings
@@ -6235,7 +6236,7 @@ mod tests {
             .find(|w| w.contains("recorded a different"))
             .expect("three shots did lose their colour");
         assert!(
-            note.starts_with("3 shots at 1 colour change in 1 section recorded a different colour"),
+            note.starts_with("3 shots at 1 colour change in 1 line recorded a different colour"),
             "three shots on ONE collapsed trip is one change: {note}"
         );
     }
@@ -6277,12 +6278,12 @@ mod tests {
     fn the_trip_cut_leaves_a_single_trip_mainline_whole() {
         let one_trip = mainline_through_a_t(false);
         assert_eq!(
-            section_names(&one_trip),
+            line_names(&one_trip),
             vec!["Main", "Main (branch 2)"],
             "the mainline survives its T uncut and the stub stays a branch"
         );
         assert_eq!(
-            one_trip.sections[0]
+            one_trip.lines[0]
                 .shots
                 .iter()
                 .map(|s| s.id)
@@ -6292,13 +6293,13 @@ mod tests {
 
         let two_trips = mainline_through_a_t(true);
         assert_eq!(
-            section_names(&two_trips),
+            line_names(&two_trips),
             vec!["Main", "Main (trip 2)", "Main (branch 2)"],
             "one cut, where the trip changed"
         );
-        assert_eq!(two_trips.sections[1].surveyor.as_deref(), Some("Ada"));
+        assert_eq!(two_trips.lines[1].surveyor.as_deref(), Some("Ada"));
         assert_eq!(
-            two_trips.sections[1]
+            two_trips.lines[1]
                 .shots
                 .iter()
                 .map(|s| s.id)
@@ -6308,7 +6309,7 @@ mod tests {
     }
 
     /// The cut runs AFTER the join, because a cut end is not a chain end: it
-    /// has an in-section successor by construction. Offering it to the join let
+    /// has an in-line successor by construction. Offering it to the join let
     /// the stub at the junction splice onto the mainline's head - taking the
     /// mainline's name, with the real continuation left as a separate run.
     #[test]
@@ -6316,12 +6317,12 @@ mod tests {
         let tml = mainline_through_a_t(true);
 
         assert!(
-            !tml.sections.iter().any(|s| s.name.contains(" + ")),
+            !tml.lines.iter().any(|s| s.name.contains(" + ")),
             "nothing in this file is a series continuation: {:?}",
-            section_names(&tml)
+            line_names(&tml)
         );
         assert_eq!(
-            tml.sections[2]
+            tml.lines[2]
                 .shots
                 .iter()
                 .map(|s| s.id)
@@ -6329,14 +6330,14 @@ mod tests {
             vec![20, 21],
             "the stub stays its own branch instead of being absorbed"
         );
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
     }
 
     /// The cost of that order, pinned so it is a decision and not a surprise: a
     /// chain continuing a CUT tail under its own name is no longer joinable to
     /// it, because the join saw the run before the cut and compared its head.
     #[test]
-    fn a_chain_continuing_a_cut_tail_stays_its_own_section() {
+    fn a_chain_continuing_a_cut_tail_stays_its_own_line() {
         let second_trip = TripShot {
             explorer: "Ada Lovelace",
             date: "2025-03-04",
@@ -6347,7 +6348,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -6355,7 +6356,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..second_trip
             }
@@ -6363,7 +6364,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 depth: 11.0,
                 ..second_trip
             }
@@ -6372,10 +6373,10 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
-        assert_eq!(section_names(&tml), vec!["A", "A (trip 2)", "B"]);
-        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Ada Lovelace"));
-        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Ada Lovelace"));
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(line_names(&tml), vec!["A", "A (trip 2)", "B"]);
+        assert_eq!(tml.lines[1].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(tml.lines[2].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
     }
 
     /// Ariane's `Explorer` is one element holding two roles. The surveyor half
@@ -6399,7 +6400,7 @@ mod tests {
             &TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 explorer: &explorer,
                 ..TripShot::default()
             }
@@ -6424,7 +6425,7 @@ mod tests {
             TripShot {
                 id,
                 from_id: id - 1,
-                section: "A",
+                line: "A",
                 explorer,
                 depth: id as f64,
                 ..TripShot::default()
@@ -6448,7 +6449,7 @@ mod tests {
             .join("\n"),
         );
         let tml = parse_synthetic_tmlu(&xml);
-        let shots: Vec<&TmlShot> = tml.sections.iter().flat_map(|s| s.shots.iter()).collect();
+        let shots: Vec<&TmlShot> = tml.lines.iter().flat_map(|s| s.shots.iter()).collect();
         let people = |shot: &TmlShot| {
             let credit = shot.credit.clone().unwrap_or_default();
             let names = |list: &[Person]| list.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
@@ -6490,13 +6491,13 @@ mod tests {
                 &TripShot {
                     id: 1,
                     from_id: -1,
-                    section: "A",
+                    line: "A",
                     explorer,
                     ..TripShot::default()
                 }
                 .xml(),
             );
-            parse_synthetic_tmlu(&xml).sections[0].surveyor.clone()
+            parse_synthetic_tmlu(&xml).lines[0].surveyor.clone()
         };
         let elements = |explorer: &str, surveyor: &str| {
             format!("&lt;Explorer&gt;{explorer}&lt;/Explorer&gt;&lt;Surveyor&gt;{surveyor}&lt;/Surveyor&gt;")
@@ -6513,7 +6514,7 @@ mod tests {
             "an unfilled explorer half must not take the surveyor with it"
         );
         // Explorers alone, in the legacy text's explorers-only form, so the
-        // section template keeps the role.
+        // line template keeps the role.
         assert_eq!(
             surveyor_of(&elements("nh", "unknown")).as_deref(),
             Some("nh /")
@@ -6549,7 +6550,7 @@ mod tests {
         assert_eq!(surveyor_of("NONE"), None);
 
         // The PLAIN compound form gets the same per-half rules. It used to be
-        // kept verbatim, so Ariane's placeholder rode into the section surveyor
+        // kept verbatim, so Ariane's placeholder rode into the line surveyor
         // and back out through the export.
         assert_eq!(
             surveyor_of("nh / ds").as_deref(),
@@ -6579,7 +6580,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 depth: 5.0,
                 ..TripShot::default()
             }
@@ -6587,7 +6588,7 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..TripShot::default()
             }
@@ -6595,7 +6596,7 @@ mod tests {
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 depth: 11.0,
                 ..TripShot::default()
             }
@@ -6603,7 +6604,7 @@ mod tests {
             TripShot {
                 id: 4,
                 from_id: 3,
-                section: "B",
+                line: "B",
                 depth: 12.0,
                 ..TripShot::default()
             }
@@ -6615,7 +6616,7 @@ mod tests {
             TripShot {
                 id: 9,
                 from_id: -1,
-                section: "C",
+                line: "C",
                 depth: 3.0,
                 ..TripShot::default()
             }
@@ -6623,7 +6624,7 @@ mod tests {
             TripShot {
                 id: 9,
                 from_id: -1,
-                section: "D",
+                line: "D",
                 depth: 3.0,
                 ..TripShot::default()
             }
@@ -6638,9 +6639,9 @@ mod tests {
             "the fixture must actually trip the duplicate-id tally"
         );
         assert!(
-            !section_names(&tml).iter().any(|n| n.contains(" + ")),
+            !line_names(&tml).iter().any(|n| n.contains(" + ")),
             "no join may happen on a file with reused ids; got {:?}",
-            section_names(&tml)
+            line_names(&tml)
         );
     }
 
@@ -6662,7 +6663,7 @@ mod tests {
             TripShot {
                 id: 1,
                 from_id: -1,
-                section: "A",
+                line: "A",
                 uuid: Some(SHARED),
                 depth: 5.0,
                 ..TripShot::default()
@@ -6671,16 +6672,16 @@ mod tests {
             TripShot {
                 id: 2,
                 from_id: 1,
-                section: "A",
+                line: "A",
                 depth: 9.0,
                 ..TripShot::default()
             }
             .xml(),
-            // Same UUID as shot 1: legal across sections, so A/B backs off.
+            // Same UUID as shot 1: legal across lines, so A/B backs off.
             TripShot {
                 id: 3,
                 from_id: 2,
-                section: "B",
+                line: "B",
                 uuid: Some(SHARED),
                 depth: 11.0,
                 ..TripShot::default()
@@ -6689,7 +6690,7 @@ mod tests {
             TripShot {
                 id: 4,
                 from_id: 3,
-                section: "B",
+                line: "B",
                 depth: 12.0,
                 ..TripShot::default()
             }
@@ -6697,7 +6698,7 @@ mod tests {
             TripShot {
                 id: 5,
                 from_id: 4,
-                section: "C",
+                line: "C",
                 depth: 14.0,
                 ..TripShot::default()
             }
@@ -6705,7 +6706,7 @@ mod tests {
             TripShot {
                 id: 6,
                 from_id: 5,
-                section: "C",
+                line: "C",
                 depth: 16.0,
                 ..TripShot::default()
             }
@@ -6715,11 +6716,11 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         assert_eq!(
-            section_names(&tml),
+            line_names(&tml),
             vec!["A", "B + C"],
             "the backed-off chain re-enters as a root and keeps its own tail"
         );
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
 
         let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
         assert_eq!(configs.len(), 2);
@@ -6732,13 +6733,13 @@ mod tests {
         match &configs[1].placement {
             ImportPlacement::FromImporting {
                 import_station,
-                target_section_index,
+                target_line_index,
                 target_station_index,
             } => {
                 assert_eq!(
                     (
                         *import_station,
-                        *target_section_index,
+                        *target_line_index,
                         *target_station_index
                     ),
                     (0, 0, 2),
@@ -6752,7 +6753,7 @@ mod tests {
     /// A merged name is bounded and sanitised, and the branch-suffix stripper
     /// does not eat half of one.
     ///
-    /// Section names come from the file, so an attacker-controlled name can be
+    /// Line names come from the file, so an attacker-controlled name can be
     /// arbitrarily long and can carry control characters; three of them
     /// concatenated flows to the wizard's fragment list and to log lines. And
     /// `simplify_lone_branch_names` used to `rfind(" (branch ")` anywhere in
@@ -6773,14 +6774,14 @@ mod tests {
         );
         assert_eq!(branch_base("Plain"), "Plain");
 
-        // Five sections in series under long, control-character-bearing names.
+        // Five lines in series under long, control-character-bearing names.
         let long = "N".repeat(400);
         let shots: Vec<String> = (1..=5)
             .map(|i| {
                 TripShot {
                     id: i,
                     from_id: if i == 1 { -1 } else { i - 1 },
-                    section: &format!("{long}\u{7}{i}"),
+                    line: &format!("{long}\u{7}{i}"),
                     depth: 5.0 * f64::from(u32::try_from(i).unwrap_or(0)),
                     ..TripShot::default()
                 }
@@ -6789,8 +6790,8 @@ mod tests {
             .collect();
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
 
-        assert_eq!(tml.sections.len(), 1, "all five run in series");
-        let name = &tml.sections[0].name;
+        assert_eq!(tml.lines.len(), 1, "all five run in series");
+        let name = &tml.lines[0].name;
         assert!(
             !name.chars().any(char::is_control),
             "control characters must not reach a merged label"
@@ -6808,11 +6809,11 @@ mod tests {
 
     /// The series join must not manufacture a duplicate shot UUID.
     ///
-    /// A file can repeat one `<UUID>` in two of its sections. The import keeps
-    /// the id in the first section and gives the second a derived one (core
-    /// test `the_same_uuid_in_two_sections_of_one_file_stays_in_the_first_section`).
-    /// Joining those two sections would instead turn the repeat into a
-    /// duplicate WITHIN one section, and `ensure_unique_shot_uuids` keeps the
+    /// A file can repeat one `<UUID>` in two of its lines. The import keeps
+    /// the id in the first line and gives the second a derived one (core
+    /// test `the_same_uuid_in_two_lines_of_one_file_stays_in_the_first_line`).
+    /// Joining those two lines would instead turn the repeat into a
+    /// duplicate WITHIN one line, and `ensure_unique_shot_uuids` keeps the
     /// FIRST and re-mints the second at random - changing the identity of a
     /// shot that had one from the file and moving every station
     /// cross-reference anchored on it.
@@ -6822,7 +6823,7 @@ mod tests {
     #[test]
     fn the_join_backs_off_rather_than_duplicate_a_shot_uuid() {
         const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
-        let with_uuid = |id: i64, from_id: i64, section: &str, uuid: &str| {
+        let with_uuid = |id: i64, from_id: i64, line: &str, uuid: &str| {
             format!(
                 r"<SurveyData>
     <ID>{id}</ID>
@@ -6830,7 +6831,7 @@ mod tests {
     <UUID>{uuid}</UUID>
     <ClosureToID>-1</ClosureToID>
     <Type>REAL</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>5.0</Depth>
@@ -6862,12 +6863,12 @@ mod tests {
         .join("\n");
         let tml = parse_synthetic_tmlu(&wrap_xml(&clashing));
         assert_eq!(
-            tml.sections
+            tml.lines
                 .iter()
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["A", "B"],
-            "a cross-section UUID repeat is legal, so the join must back off"
+            "a cross-line UUID repeat is legal, so the join must back off"
         );
 
         // The identical topology with distinct UUIDs still joins, so the guard
@@ -6882,7 +6883,7 @@ mod tests {
         let joined = parse_synthetic_tmlu(&wrap_xml(&distinct));
         assert_eq!(
             joined
-                .sections
+                .lines
                 .iter()
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>(),
@@ -6934,7 +6935,7 @@ mod tests {
         let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
 
         let branch = tml
-            .sections
+            .lines
             .iter()
             .find(|s| s.name != "Main")
             .expect("the T defers one branch");
@@ -6955,14 +6956,14 @@ mod tests {
         // Mainline is [1, 2, 3]; shot 3 is its 3rd importable shot, so it ends
         // at station 3. The branch is [4]; shot 4 ends at its station 1. Exact
         // pairs, not merely "different": a closure that resolved to the right
-        // sections and the wrong stations would pass an inequality check.
+        // lines and the wrong stations would pass an inequality check.
         assert_eq!(
-            (closure.from_section_index, closure.from_station_index),
+            (closure.from_line_index, closure.from_station_index),
             (1, 1),
             "the closure's near end is the branch tip"
         );
         assert_eq!(
-            (closure.to_section_index, closure.to_station_index),
+            (closure.to_line_index, closure.to_station_index),
             (0, 3),
             "and its far end is the mainline station it ties back to"
         );
@@ -7024,10 +7025,10 @@ mod tests {
         );
 
         // Whatever the counts, every emitted run must still be a polyline.
-        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+        assert_eq!(linearize::first_linearity_violation(&tml.lines), None);
     }
 
-    /// Baseline harness for #412: how many linear sections the importer
+    /// Baseline harness for #412: how many linear lines the importer
     /// produces from a real file, and how small the fragments are.
     ///
     /// Run with:
@@ -7042,7 +7043,7 @@ mod tests {
         let path = Path::new(&path_str);
         let tml = parse_tml(path).expect("parse");
         let file_names: std::collections::BTreeSet<String> = tml
-            .sections
+            .lines
             .iter()
             .map(|s| {
                 let n = s.name.as_str();
@@ -7054,15 +7055,15 @@ mod tests {
             .collect();
         let origins = classify_chain_origins(&tml);
         eprintln!(
-            "ORIGIN sections={} entrance_root={} cross_section_root={} \
-             in_section_parent_is_chain_end={} in_section_parent_mid_chain={} \
+            "ORIGIN lines={} entrance_root={} cross_line_root={} \
+             in_line_parent_is_chain_end={} in_line_parent_mid_chain={} \
              cross_root_at_parent_chain_end={} sibling_v_merge_savings={} \
              cross_root_at_chain_end_metadata_match={} sibling_v_metadata_match={}",
-            tml.sections.len(),
+            tml.lines.len(),
             origins.entrance_root,
-            origins.cross_section_root,
-            origins.in_section_parent_is_chain_end,
-            origins.in_section_parent_mid_chain,
+            origins.cross_line_root,
+            origins.in_line_parent_is_chain_end,
+            origins.in_line_parent_mid_chain,
             origins.cross_root_at_parent_chain_end,
             origins.sibling_v_merge_savings,
             origins.cross_root_at_chain_end_metadata_match,
@@ -7075,7 +7076,7 @@ mod tests {
         sizes.sort_unstable();
         let tiny = sizes.iter().filter(|&&n| n <= 2).count();
         eprintln!(
-            "FRAG {}: file_section_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
+            "FRAG {}: file_line_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
             path_str,
             file_names.len(),
             configs.len(),

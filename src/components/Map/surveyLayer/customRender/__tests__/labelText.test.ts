@@ -4,11 +4,11 @@ import {
   formatStationLabel,
   formatStationNameLabel,
   STATION_NAME_LABEL_MAX_CHARS,
-  formatSectionLabel,
+  formatLineLabel,
   formatCommentLabel,
   resolveShotLabelColor,
   resolveStationLabelColor,
-  resolveSectionLabelColor,
+  resolveLineLabelColor,
   type LabelColorContext,
 } from '../labelText';
 import type { DepthRange } from '../../displayColor';
@@ -16,7 +16,7 @@ import type { MapThemeColors } from '../../../../../utils/themeColors';
 
 /**
  * Label TEXT + COLOR helper tests (#customRender labels, Phase 1). These are the
- * single source of shot/station/section label strings and colors for the custom
+ * single source of shot/station/line label strings and colors for the custom
  * label renderer, so the tests pin the exact string + color each mode produces.
  */
 
@@ -87,18 +87,18 @@ describe('labelText helpers (units)', () => {
     expect(emoji).toBe(`${'\u{1F30A}'.repeat(STATION_NAME_LABEL_MAX_CHARS - 1)}\u2026`);
   });
 
-  it('formats a station label as its index; section as its name (empty for null)', () => {
+  it('formats a station label as its index; line as its name (empty for null)', () => {
     expect(formatStationLabel(7)).toBe('7');
-    expect(formatSectionLabel('Alpha')).toBe('Alpha');
-    expect(formatSectionLabel(null)).toBe('');
+    expect(formatLineLabel('Alpha')).toBe('Alpha');
+    expect(formatLineLabel(null)).toBe('');
     expect(formatCommentLabel('hi there')).toBe('hi there');
   });
 
-  it('flat mode -> labelColor; section -> its own color', () => {
+  it('flat mode -> labelColor; line -> its own color', () => {
     const flat = ctxFor(false);
     expect(resolveShotLabelColor(1.5, flat)).toBe(THEME.labelColor);
     expect(resolveStationLabelColor(-1, flat)).toBe(THEME.labelColor);
-    expect(resolveSectionLabelColor('#4ecdc4')).toBe('#4ecdc4');
+    expect(resolveLineLabelColor('#4ecdc4')).toBe('#4ecdc4');
   });
 
   it('depth mode -> the ramp color (a hex string), not labelColor', () => {

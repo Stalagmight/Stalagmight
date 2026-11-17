@@ -10,7 +10,7 @@ import type { DistanceField } from '../../types/project';
 import type { SurveyData } from '../../types/survey-data';
 
 describe('encodeFeatureId', () => {
-  it('matches the features.ts formula sectionId * STRIDE + scopedId', () => {
+  it('matches the features.ts formula lineId * STRIDE + scopedId', () => {
     expect(encodeFeatureId(5, 17)).toBe(5 * FEATURE_ID_STRIDE + 17);
     expect(encodeFeatureId(0, 0)).toBe(0);
     expect(encodeFeatureId(2, 3)).toBe(200003);
@@ -18,28 +18,28 @@ describe('encodeFeatureId', () => {
 });
 
 describe('buildDistanceFeatureState', () => {
-  // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: empty (st0 only).
-  // SoA shape: section metadata (shotOffset/shotCount) + a flat shotIds array.
+  // Line 1: shots id10 (st0→st1), id11 (st1→st2). Line 2: empty (st0 only).
+  // SoA shape: line metadata (shotOffset/shotCount) + a flat shotIds array.
   const data = {
-    sections: [
+    lines: [
       { id: 1, shotOffset: 0, shotCount: 2 },
       { id: 2, shotOffset: 2, shotCount: 0 },
     ],
     shotIds: new Uint32Array([10, 11]),
-  } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
+  } as unknown as Pick<SurveyData, 'lines' | 'shotIds'>;
 
   const field: DistanceField = {
     station_refs: [
-      { section_id: 1, station_index: 0 },
-      { section_id: 1, station_index: 1 },
-      { section_id: 1, station_index: 2 },
-      { section_id: 2, station_index: 0 },
+      { line_id: 1, station_index: 0 },
+      { line_id: 1, station_index: 1 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 2, station_index: 0 },
     ],
     distances: [0, 10, null, 5], // st(1,2) unreachable
     max_reachable: 10,
   };
 
-  it('maps each station to its own distance, keyed by encodeFeatureId(section, index)', () => {
+  it('maps each station to its own distance, keyed by encodeFeatureId(line, index)', () => {
     const { stations } = buildDistanceFeatureState(data, field);
     expect(stations.get(encodeFeatureId(1, 0))).toBe(0);
     expect(stations.get(encodeFeatureId(1, 1))).toBe(10);

@@ -1,19 +1,19 @@
 /**
- * Component test - the TML export unanchored-section notice (#411).
+ * Component test - the TML export unanchored-line notice (#411).
  *
  * The original defect: exporting a project with no zero datum raised an alarming modal
- * ("Some sections will be discarded") listing every section, with no way to act on it.
+ * ("Some lines will be discarded") listing every line, with no way to act on it.
  *
  * A later review round found the premise itself was wrong: `build_export_shots`
- * (src-tauri/src/export/tml.rs) never discards a section. And the notice must not
+ * (src-tauri/src/export/tml.rs) never discards a line. And the notice must not
  * claim entrance topology either: entrance-hood is merge-derived in the exporter
  * while this dialog classifies by zero-datum reachability - two predicates that
  * disagree in both directions (see the comment above the AlertDialog in
  * ExportControls.tsx). So the copy states only the true consequence - no GPS
- * reading places those sections, which export at the spot the map shows (#741) -
+ * reading places those lines, which export at the spot the map shows (#741) -
  * and it must (a) name the real fix (Set Zero Datum, via
  * the station context menu), and (b) distinguish "nothing in this project is
- * anchored" from "some sections aren't" - from the ACTUAL unanchored-section
+ * anchored" from "some lines aren't" - from the ACTUAL unanchored-line
  * count, not from `zero_datums.length` (a datum whose station no longer resolves
  * anchors nothing, but still has `zero_datums.length > 0`).
  */
@@ -44,23 +44,23 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
 import type { Project } from '../../types/ipc/Project';
-import type { Section } from '../../types/ipc/Section';
+import type { Line } from '../../types/ipc/Line';
 import type { ZeroDatum } from '../../types/ipc/ZeroDatum';
 
-const section = (id: number, name: string | null = null): Section =>
-  ({ id, name, shots: [] }) as unknown as Section;
+const line = (id: number, name: string | null = null): Line =>
+  ({ id, name, shots: [] }) as unknown as Line;
 
 const ZERO_DATUM: ZeroDatum = {
-  station_ref: { section_id: 1, station_index: 0 },
+  station_ref: { line_id: 1, station_index: 0 },
   gps: { latitude: 1, longitude: 2, depth_reference: 0 },
   role: 'Placement',
   is_entrance: true,
 };
 
-const buildProject = (sections: Section[], zero_datums: ZeroDatum[]): Project =>
-  ({ sections, zero_datums } as unknown as Project);
+const buildProject = (lines: Line[], zero_datums: ZeroDatum[]): Project =>
+  ({ lines, zero_datums } as unknown as Project);
 
-let getAnchoredSectionIds: ReturnType<typeof vi.fn>;
+let getAnchoredLineIds: ReturnType<typeof vi.fn>;
 let exportTml: ReturnType<typeof vi.fn>;
 
 const baseProps = {
@@ -75,17 +75,17 @@ const baseProps = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getAnchoredSectionIds = vi.fn();
+  getAnchoredLineIds = vi.fn();
   exportTml = vi.fn(async () => undefined);
   vi.mocked(saveDialog).mockResolvedValue('/tmp/out.tml');
 });
 
-describe('TML export unanchored-section notice', () => {
-  it('names the fix and says every section is unanchored when the project has no zero datum at all', async () => {
-    getAnchoredSectionIds.mockResolvedValue([]);
+describe('TML export unanchored-line notice', () => {
+  it('names the fix and says every line is unanchored when the project has no zero datum at all', async () => {
+    getAnchoredLineIds.mockResolvedValue([]);
     useProjectStore.setState({
-      project: buildProject([section(1), section(2)], []),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2)], []),
+      getAnchoredLineIds,
       exportTml,
     });
 
@@ -93,7 +93,7 @@ describe('TML export unanchored-section notice', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
-    expect(dialog).toHaveTextContent('No section is connected to a zero datum');
+    expect(dialog).toHaveTextContent('No line is connected to a zero datum');
     expect(dialog).toHaveTextContent('Set Zero Datum');
     expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
     // The two claims the copy must make / must not make: nothing is discarded,
@@ -105,12 +105,12 @@ describe('TML export unanchored-section notice', () => {
   });
 
   it('uses the all-unanchored wording when a zero datum exists but resolves nothing (#411 regression)', async () => {
-    // zero_datums.length > 0, but its station no longer resolves: get_anchored_section_ids
+    // zero_datums.length > 0, but its station no longer resolves: get_anchored_line_ids
     // returns []. The title must follow the unanchored COUNT, not zero_datums.length.
-    getAnchoredSectionIds.mockResolvedValue([]);
+    getAnchoredLineIds.mockResolvedValue([]);
     useProjectStore.setState({
-      project: buildProject([section(1), section(2), section(3)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2), line(3)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportTml,
     });
 
@@ -118,15 +118,15 @@ describe('TML export unanchored-section notice', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
-    expect(dialog).toHaveTextContent('No section is connected to a zero datum');
+    expect(dialog).toHaveTextContent('No line is connected to a zero datum');
     expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
   });
 
-  it('names the fix and gives a count when only some sections are unanchored', async () => {
-    getAnchoredSectionIds.mockResolvedValue([1]);
+  it('names the fix and gives a count when only some lines are unanchored', async () => {
+    getAnchoredLineIds.mockResolvedValue([1]);
     useProjectStore.setState({
-      project: buildProject([section(1), section(2), section(3)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2), line(3)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportTml,
     });
 
@@ -134,19 +134,19 @@ describe('TML export unanchored-section notice', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
-    expect(dialog).toHaveTextContent('2 of 3 sections');
+    expect(dialog).toHaveTextContent('2 of 3 lines');
     expect(dialog).toHaveTextContent('Set Zero Datum');
-    expect(dialog).not.toHaveTextContent('No section is connected to a zero datum');
+    expect(dialog).not.toHaveTextContent('No line is connected to a zero datum');
     expect(dialog).toHaveTextContent('Nothing is discarded');
     expect(dialog).not.toHaveTextContent('entrance');
     expect(saveDialog).not.toHaveBeenCalled();
   });
 
-  it('uses singular wording for exactly one unanchored section', async () => {
-    getAnchoredSectionIds.mockResolvedValue([1]);
+  it('uses singular wording for exactly one unanchored line', async () => {
+    getAnchoredLineIds.mockResolvedValue([1]);
     useProjectStore.setState({
-      project: buildProject([section(1), section(2)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportTml,
     });
 
@@ -158,14 +158,14 @@ describe('TML export unanchored-section notice', () => {
     // `parseMissingKeyHandler`) and as '' in production - either way this
     // positive assertion on the actual singular text catches it, where a mere
     // absence check would not.
-    expect(dialog).toHaveTextContent('1 of 2 sections is not connected');
+    expect(dialog).toHaveTextContent('1 of 2 lines is not connected');
   });
 
-  it('does not show the notice when every section is anchored', async () => {
-    getAnchoredSectionIds.mockResolvedValue([1, 2]);
+  it('does not show the notice when every line is anchored', async () => {
+    getAnchoredLineIds.mockResolvedValue([1, 2]);
     useProjectStore.setState({
-      project: buildProject([section(1), section(2)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportTml,
     });
 
@@ -195,8 +195,8 @@ describe('export save-picker cancel (#560)', () => {
     const exportCsv = vi.fn(async () => undefined);
     const onComplete = vi.fn();
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportCsv,
     });
 
@@ -213,8 +213,8 @@ describe('export save-picker cancel (#560)', () => {
     const exportImage = vi.fn(async () => undefined);
     const onComplete = vi.fn();
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportImage,
     });
 
@@ -230,12 +230,12 @@ describe('export save-picker cancel (#560)', () => {
   it('TML "continue anyway" re-entry: still does not complete on a cancelled picker', async () => {
     // The unanchored-warning "Continue" path re-enters handleExport with
     // skipTmlAnchorCheck - it must obey the same cancel guard as the direct path.
-    getAnchoredSectionIds.mockResolvedValue([]);
+    getAnchoredLineIds.mockResolvedValue([]);
     const exportTmlFn = vi.fn(async () => undefined);
     const onComplete = vi.fn();
     useProjectStore.setState({
-      project: buildProject([section(1), section(2)], []),
-      getAnchoredSectionIds,
+      project: buildProject([line(1), line(2)], []),
+      getAnchoredLineIds,
       exportTml: exportTmlFn,
     });
 
@@ -276,8 +276,8 @@ describe('export failure surface', () => {
       throw new Error('Cannot export over the open project file');
     });
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportCsv,
     });
 
@@ -301,8 +301,8 @@ describe('export failure surface', () => {
       throw undefined;
     });
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportCsv,
     });
 
@@ -318,8 +318,8 @@ describe('export failure surface', () => {
   it('stays silent when the export succeeds', async () => {
     const exportCsv = vi.fn(async () => undefined);
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportCsv,
     });
 
@@ -335,10 +335,10 @@ describe('export failure surface', () => {
     // here would report one that did not happen. See the comment on the catch in
     // ExportControls.tsx.
     const exportTmlOk = vi.fn(async () => undefined);
-    getAnchoredSectionIds.mockRejectedValue(new Error('anchored ids IPC exploded'));
+    getAnchoredLineIds.mockRejectedValue(new Error('anchored ids IPC exploded'));
     useProjectStore.setState({
-      project: buildProject([section(1)], [ZERO_DATUM]),
-      getAnchoredSectionIds,
+      project: buildProject([line(1)], [ZERO_DATUM]),
+      getAnchoredLineIds,
       exportTml: exportTmlOk,
     });
 

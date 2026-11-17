@@ -26,8 +26,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
           closures_removed_across_one_shot: [
             {
               closure_id: 3n,
-              station_a: { section_id: 0, station_index: 1 },
-              station_b: { section_id: 0, station_index: 5 },
+              station_a: { line_id: 0, station_index: 1 },
+              station_b: { line_id: 0, station_index: 5 },
             },
           ],
         }}
@@ -52,8 +52,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
           closures_removed_across_one_shot: [
             {
               closure_id: 4n,
-              station_a: { section_id: 0, station_index: 2 },
-              station_b: { section_id: 0, station_index: 6 },
+              station_a: { line_id: 0, station_index: 2 },
+              station_b: { line_id: 0, station_index: 6 },
             },
           ],
         }}

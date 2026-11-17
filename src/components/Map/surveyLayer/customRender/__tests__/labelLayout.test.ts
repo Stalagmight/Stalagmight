@@ -61,8 +61,8 @@ describe('shapeLabel counts + empty handling', () => {
     const atlas = makeAtlas();
     expect(shapeLabel('', LABEL_KIND.SHOT_LABEL, atlas).glyphCount).toBe(0);
     expect(shapeLabel('   ', LABEL_KIND.STATION_COMMENT, atlas).glyphCount).toBe(0);
-    // A non-wrapping empty section name is also zero glyphs.
-    expect(shapeLabel('', LABEL_KIND.SECTION_NAME, atlas).glyphCount).toBe(0);
+    // A non-wrapping empty line name is also zero glyphs.
+    expect(shapeLabel('', LABEL_KIND.LINE_NAME, atlas).glyphCount).toBe(0);
   });
 
   it('renders an unknown codepoint as an ordinary quad (fallback box, no crash)', () => {
@@ -104,9 +104,9 @@ describe('shapeLabel anchor + offset math', () => {
     expect(g.yBot).toBeGreaterThan(0);
   });
 
-  it('centers a section name and sits it above the anchor (bottom-anchored)', () => {
+  it('centers a line name and sits it above the anchor (bottom-anchored)', () => {
     const atlas = makeAtlas();
-    const s = shapeLabel('AA', LABEL_KIND.SECTION_NAME, atlas);
+    const s = shapeLabel('AA', LABEL_KIND.LINE_NAME, atlas);
     // Two 0.5em glyphs -> 1em line, centered on x=0 -> spans about [-0.5, 0.5].
     const xs = s.glyphs.map((g) => (g.xL + g.xR) / 2);
     expect(Math.min(...xs)).toBeLessThan(0);
@@ -252,7 +252,7 @@ describe('LABEL_KIND_LAYOUT parity table', () => {
   it('carries the stock anchor/offset/max-width per kind', () => {
     expect(LABEL_KIND_LAYOUT[LABEL_KIND.SHOT_LABEL]).toMatchObject({ h: 'center', v: 'top', offsetEm: [0, 0.5], maxWidthEm: Infinity });
     expect(LABEL_KIND_LAYOUT[LABEL_KIND.STATION_LABEL]).toMatchObject({ h: 'left', v: 'bottom', offsetEm: [0.8, -0.8] });
-    expect(LABEL_KIND_LAYOUT[LABEL_KIND.SECTION_NAME]).toMatchObject({ h: 'center', v: 'bottom', offsetEm: [0, -1.2] });
+    expect(LABEL_KIND_LAYOUT[LABEL_KIND.LINE_NAME]).toMatchObject({ h: 'center', v: 'bottom', offsetEm: [0, -1.2] });
     expect(LABEL_KIND_LAYOUT[LABEL_KIND.STATION_COMMENT]).toMatchObject({ v: 'top', offsetEm: [0, 1.5], maxWidthEm: COMMENT_MAX_WIDTH_EM });
     expect(LABEL_KIND_LAYOUT[LABEL_KIND.SHOT_COMMENT].maxWidthEm).toBe(COMMENT_MAX_WIDTH_EM);
   });
@@ -303,22 +303,22 @@ describe('ShapeCache', () => {
   it('bounds the cache to its max, evicting the oldest (LRU)', () => {
     const atlas = makeAtlas();
     const cache = new ShapeCache(2);
-    const s0 = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
-    cache.get(LABEL_KIND.SECTION_NAME, 'b', atlas);
-    cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // evicts 'a' (oldest)
+    const s0 = cache.get(LABEL_KIND.LINE_NAME, 'a', atlas);
+    cache.get(LABEL_KIND.LINE_NAME, 'b', atlas);
+    cache.get(LABEL_KIND.LINE_NAME, 'c', atlas); // evicts 'a' (oldest)
     expect(cache.size).toBe(2);
     // 'a' was evicted → a fresh shape (new object) on the next request.
-    const s0again = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
+    const s0again = cache.get(LABEL_KIND.LINE_NAME, 'a', atlas);
     expect(s0again).not.toBe(s0);
   });
 
   it('a cache HIT refreshes recency so it survives a later eviction (LRU touch)', () => {
     const atlas = makeAtlas();
     const cache = new ShapeCache(2);
-    const a = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
-    cache.get(LABEL_KIND.SECTION_NAME, 'b', atlas);
-    cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas); // touch 'a' → now newest
-    cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
-    expect(cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas)).toBe(a); // 'a' survived
+    const a = cache.get(LABEL_KIND.LINE_NAME, 'a', atlas);
+    cache.get(LABEL_KIND.LINE_NAME, 'b', atlas);
+    cache.get(LABEL_KIND.LINE_NAME, 'a', atlas); // touch 'a' → now newest
+    cache.get(LABEL_KIND.LINE_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
+    expect(cache.get(LABEL_KIND.LINE_NAME, 'a', atlas)).toBe(a); // 'a' survived
   });
 });

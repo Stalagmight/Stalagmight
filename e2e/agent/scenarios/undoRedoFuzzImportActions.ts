@@ -10,9 +10,9 @@
  *
  * ## Why imports belong under the undo/redo oracle at all
  *
- * `import_sections` and the four `execute_*_import` commands push ONE undo entry
- * covering an arbitrary number of new sections, placements, station comments and
- * (for `import_sections`) in-place edits to shots that were already there. That
+ * `import_lines` and the four `execute_*_import` commands push ONE undo entry
+ * covering an arbitrary number of new lines, placements, station comments and
+ * (for `import_lines`) in-place edits to shots that were already there. That
  * is the widest single command in the app, and it is a `ProjectSnapshotPair` -
  * the entry family findings 8 and 11 both lived in. The per-depth snapshot oracle
  * this scenario already runs is exactly the instrument for it: an import whose
@@ -25,13 +25,13 @@
  *
  * ## The three payload shapes, and what each one is FOR
  *
- * 1. `importSectionsSynthetic` - fully synthetic `ImportSectionConfig` batches:
- *    0..6 sections, boundary geometry, duplicate names inside one batch, all six
+ * 1. `importLinesSynthetic` - fully synthetic `ImportLineConfig` batches:
+ *    0..6 lines, boundary geometry, duplicate names inside one batch, all six
  *    `ImportPlacement` variants (including refs the digest says are NOT live -
- *    the shape a placement takes when it names a section the run has since
+ *    the shape a placement takes when it names a line the run has since
  *    deleted), `reverse`, `station_comments` and all three `VirtualShotMode`s.
- * 2. `importSectionsNonFinite` - the same, with one guarded field poisoned.
- * 3. `importSectionsWithOverlap` - `existing_shot_updates`, the DMP wizard's
+ * 2. `importLinesNonFinite` - the same, with one guarded field poisoned.
+ * 3. `importLinesWithOverlap` - `existing_shot_updates`, the DMP wizard's
  *    overlap interpolation, driven straight at the command.
  *
  * ## What "non-finite" actually reaches Rust, and why that is the right test
@@ -40,7 +40,7 @@
  * `null`, and that applies identically to the WebDriver bridge these args cross
  * and to the real `invoke` the wizard calls - which is the entire premise of
  * `src/utils/importPayloadGuard.ts` ("it serializes to `null`, and Rust's serde
- * rejects the whole batch with an error that names no section, no row and no
+ * rejects the whole batch with an error that names no line, no row and no
  * field"). So what this generator tests is the receiving end of that guard:
  *
  *   - A REQUIRED number (`length`, `azimuth_in`, `azimuth_out`, `depth_in`,
@@ -107,7 +107,7 @@
  * goes back to zero, this note is wrong again.
  *
  * `suggest_import_placement` DOES have a store action, and its non-empty return
- * is reached from here - see `createMotifSection` / `probeSuggestMotif` at the
+ * is reached from here - see `createMotifLine` / `probeSuggestMotif` at the
  * end of the catalog.
  */
 import type { ScenarioContext } from './framework';
@@ -122,7 +122,7 @@ import {
   pickStationRef,
   randomShotData,
   roundedFloat,
-  sortedSections,
+  sortedLines,
   toRef,
   type ActionGenerator,
 } from './undoRedoFuzzActions';
@@ -159,17 +159,17 @@ const COMPASS_FORMATS: readonly SurveyFileFormat[] = ['dat', 'dat', 'mak'];
 const WALLS_FORMATS: readonly SurveyFileFormat[] = ['srv', 'srv', 'wpj'];
 
 /**
- * Cap on the shots one `importSections` call may carry, across every section.
+ * Cap on the shots one `importLines` call may carry, across every line.
  *
  * Not a style choice: the canonical snapshot is re-serialized and compared at
  * EVERY step, so a run that imports 400 shots pays for them on every remaining
- * iteration. Sections stay cheap and numerous instead, which is the axis that
+ * iteration. Lines stay cheap and numerous instead, which is the axis that
  * finds placement and undo bugs.
  */
 const MAX_IMPORT_SHOTS = 24;
 
-/** Sections one synthetic batch may carry. Zero is a deliberate boundary. */
-const MAX_IMPORT_SECTIONS = 6;
+/** Lines one synthetic batch may carry. Zero is a deliberate boundary. */
+const MAX_IMPORT_LINES = 6;
 
 /**
  * Required `ShotData` numbers - `f64` in Rust, so `null` fails deserialization
@@ -208,12 +208,12 @@ function fakeHash(ctx: ScenarioContext): string {
 }
 
 /**
- * A date the way `ImportSectionConfig` wants it, or one of the two shapes that
+ * A date the way `ImportLineConfig` wants it, or one of the two shapes that
  * are not.
  *
  * `null` is legal and means "no date". `''` is NOT: `date` is
  * `Option<NaiveDate>` and chrono parses an empty string as `TOO_SHORT`, whose
- * Display is literally `premature end of input` - the whole `import_sections`
+ * Display is literally `premature end of input` - the whole `import_lines`
  * call then fails at Tauri's argument layer. That was issue #478, found through
  * the wizard; drawing it here asserts the same refusal on the route that
  * BYPASSES the wizard's normalisation.
@@ -229,29 +229,29 @@ function drawDate(ctx: ScenarioContext): string | null {
 /**
  * A `StationRef` the digest says is NOT live.
  *
- * The interesting placement target is a station that WAS there: a section the
- * run deleted two moves ago, or a station index past the end of a section a
+ * The interesting placement target is a station that WAS there: a line the
+ * run deleted two moves ago, or a station index past the end of a line a
  * range-delete shortened. Both are ids in exactly this shape - plausible,
  * addressable, and no longer resolvable - and the import must refuse or ignore
- * them rather than place a section against nothing.
+ * them rather than place a line against nothing.
  */
 function staleRef(ctx: ScenarioContext, state: TargetingDigest): StationRefShape {
-  const sections = sortedSections(state);
-  if (sections.length === 0 || chance(ctx, 0.3)) {
-    const highest = sections.reduce((max, section) => Math.max(max, section[0]), 0);
-    return { section_id: highest + ctx.randInt(1, 40), station_index: ctx.randInt(0, 5) };
+  const lines = sortedLines(state);
+  if (lines.length === 0 || chance(ctx, 0.3)) {
+    const highest = lines.reduce((max, line) => Math.max(max, line[0]), 0);
+    return { line_id: highest + ctx.randInt(1, 40), station_index: ctx.randInt(0, 5) };
   }
-  const section = ctx.pick(sections);
+  const line = ctx.pick(lines);
   // Station count is shots + 1, so anything at or above that is off the end.
   return {
-    section_id: section[0],
-    station_index: section[1].length + 1 + ctx.randInt(0, 8),
+    line_id: line[0],
+    station_index: line[1].length + 1 + ctx.randInt(0, 8),
   };
 }
 
 /** Mirrors `src/types/ipc/StationRef.ts`. Restated, never imported - see the actions header. */
 interface StationRefShape {
-  section_id: number;
+  line_id: number;
   station_index: number;
 }
 
@@ -265,7 +265,7 @@ function drawCoordinates(ctx: ScenarioContext): Record<string, number> {
  * One `ImportPlacement`, drawn across all six variants
  * (`src/types/ipc/ImportPlacement.ts`).
  *
- * `sectionIndex` is this config's own index in the batch and `stationCount` its
+ * `lineIndex` is this config's own index in the batch and `stationCount` its
  * station count, so `from_importing` can name a SIBLING in the same batch (the
  * import-to-import case) and every `*_station` index can be drawn both in range
  * and out of it.
@@ -273,7 +273,7 @@ function drawCoordinates(ctx: ScenarioContext): Record<string, number> {
 function drawPlacement(
   ctx: ScenarioContext,
   state: TargetingDigest,
-  sectionIndex: number,
+  lineIndex: number,
   stationCount: number,
 ): { placement: Record<string, unknown>; label: string } {
   const station = (): number => (chance(ctx, 0.25) ? ctx.randInt(stationCount, stationCount + 6) : ctx.randInt(0, Math.max(0, stationCount - 1)));
@@ -310,7 +310,7 @@ function drawPlacement(
     const existing = target();
     return {
       placement: { type: 'from_existing', import_station: station(), existing_station: existing },
-      label: `fromExisting(${existing.section_id}/${existing.station_index})`,
+      label: `fromExisting(${existing.line_id}/${existing.station_index})`,
     };
   }
   if (kind === 'from_importing') {
@@ -320,7 +320,7 @@ function drawPlacement(
       placement: {
         type: 'from_importing',
         import_station: station(),
-        target_section_index: ctx.randInt(0, Math.max(0, sectionIndex)),
+        target_line_index: ctx.randInt(0, Math.max(0, lineIndex)),
         target_station_index: ctx.randInt(0, 4),
       },
       label: 'fromImporting',
@@ -340,24 +340,24 @@ function drawPlacement(
     const snapped = target();
     return {
       placement: { type: 'manual_snap', align_station_index: station(), snapped_to_station: snapped },
-      label: `manualSnap(${snapped.section_id}/${snapped.station_index})`,
+      label: `manualSnap(${snapped.line_id}/${snapped.station_index})`,
     };
   }
   return { placement: { type: 'origin' }, label: 'origin' };
 }
 
 /**
- * One `ImportSectionConfig`.
+ * One `ImportLineConfig`.
  *
  * `shotBudget` is what is left of `MAX_IMPORT_SHOTS` for the whole batch, so a
- * many-section draw stays affordable by giving every section fewer shots rather
- * than by refusing to draw the section at all - the section COUNT is the axis
+ * many-line draw stays affordable by giving every line fewer shots rather
+ * than by refusing to draw the line at all - the line COUNT is the axis
  * that exercises placement, and it is the one worth keeping.
  */
-function drawSectionConfig(
+function drawLineConfig(
   ctx: ScenarioContext,
   state: TargetingDigest,
-  sectionIndex: number,
+  lineIndex: number,
   shotBudget: number,
   duplicateName: string | null,
 ): { config: Record<string, unknown>; label: string; shots: number } {
@@ -365,7 +365,7 @@ function drawSectionConfig(
   const shots: Record<string, unknown>[] = [];
   for (let i = 0; i < shotCount; i++) shots.push(randomShotData(ctx));
   const stationCount = shotCount + 1;
-  const { placement, label: placementLabel } = drawPlacement(ctx, state, sectionIndex, stationCount);
+  const { placement, label: placementLabel } = drawPlacement(ctx, state, lineIndex, stationCount);
   const comments: [number, string][] = [];
   if (chance(ctx, 0.4)) {
     const count = ctx.randInt(1, 2);
@@ -379,10 +379,10 @@ function drawSectionConfig(
   const name = duplicateName ?? (chance(ctx, 0.1) ? null : biasedText(ctx, `v3-import-${ctx.randInt(1000, 9999)}`));
   return {
     config: {
-      // Occasionally NOT this config's position: `section_index` is what the
+      // Occasionally NOT this config's position: `line_index` is what the
       // receipt and the placement graph key on, so a duplicated or out-of-range
       // one is a shape the command has to survive.
-      section_index: chance(ctx, 0.1) ? ctx.randInt(0, MAX_IMPORT_SECTIONS + 2) : sectionIndex,
+      line_index: chance(ctx, 0.1) ? ctx.randInt(0, MAX_IMPORT_LINES + 2) : lineIndex,
       name,
       surveyor: chance(ctx, 0.7) ? biasedText(ctx, `v3-surveyor-${ctx.randInt(1, 9)}`) : null,
       date: drawDate(ctx),
@@ -399,20 +399,20 @@ function drawSectionConfig(
   };
 }
 
-/** A whole `importSections` batch: 0..MAX_IMPORT_SECTIONS configs under one shot cap. */
+/** A whole `importLines` batch: 0..MAX_IMPORT_LINES configs under one shot cap. */
 function drawBatch(
   ctx: ScenarioContext,
   state: TargetingDigest,
 ): { configs: Record<string, unknown>[]; label: string } {
-  // Zero sections is a real case, not a degenerate one: the command returns an
+  // Zero lines is a real case, not a degenerate one: the command returns an
   // EMPTY receipt and pushes nothing, and it is the only route to that branch.
-  const count = chance(ctx, 0.08) ? 0 : ctx.randInt(1, MAX_IMPORT_SECTIONS);
+  const count = chance(ctx, 0.08) ? 0 : ctx.randInt(1, MAX_IMPORT_LINES);
   const duplicate = chance(ctx, 0.2) ? biasedText(ctx, `v3-dup-${ctx.randInt(0, 99)}`) : null;
   const configs: Record<string, unknown>[] = [];
   const labels: string[] = [];
   let budget = MAX_IMPORT_SHOTS;
   for (let i = 0; i < count; i++) {
-    const drawn = drawSectionConfig(ctx, state, i, budget, duplicate);
+    const drawn = drawLineConfig(ctx, state, i, budget, duplicate);
     budget -= drawn.shots;
     configs.push(drawn.config);
     labels.push(drawn.label);
@@ -421,8 +421,8 @@ function drawBatch(
 }
 
 /**
- * The middle args every `importSections` call shares, in the store action's
- * order: `fileHash`, `sectionHashes`, `virtualShotMode`.
+ * The middle args every `importLines` call shares, in the store action's
+ * order: `fileHash`, `lineHashes`, `virtualShotMode`.
  *
  * `existingShotUpdates` is NOT among them and is deliberately the action's LAST
  * parameter rather than the command's third: inserting it in the command's
@@ -433,8 +433,8 @@ function drawBatch(
  */
 function importTail(ctx: ScenarioContext, configs: readonly unknown[]): unknown[] {
   const fileHash = chance(ctx, 0.25) ? fakeHash(ctx) : null;
-  const sectionHashes = chance(ctx, 0.2) ? configs.map(() => fakeHash(ctx)) : null;
-  return [fileHash, sectionHashes, ctx.pick(VIRTUAL_SHOT_MODES)];
+  const lineHashes = chance(ctx, 0.2) ? configs.map(() => fakeHash(ctx)) : null;
+  return [fileHash, lineHashes, ctx.pick(VIRTUAL_SHOT_MODES)];
 }
 
 /**
@@ -465,21 +465,21 @@ function poisonShot(
  *
  * The wizard picks an `OverlapMode` (`import_data` / `existing_data` /
  * `interpolate` / `keep_both`) and `applyAllOverlapTreatments` turns it into two
- * things: edits to the IMPORT section's shots, and `ExistingShotUpdate`s against
+ * things: edits to the IMPORT line's shots, and `ExistingShotUpdate`s against
  * shots already in the project. Only the second half crosses the IPC boundary,
  * so the four modes are not four wire shapes - they are four DENSITIES of
  * updates over the same shape, and this draws across that range:
  *
- *   - `keep_both`  -> no updates at all, sections carry everything;
+ *   - `keep_both`  -> no updates at all, lines carry everything;
  *   - `import_data`-> the existing shots are overwritten wholesale;
  *   - `interpolate`-> a few fields per shot;
  *   - `existing_data` -> the import side is trimmed, updates are empty.
  *
  * The case worth the most is the one the wizard's `useMemo` GREYS OUT: a range
- * whose section is anchored on both sides. The frontend refuses to offer it; the
+ * whose line is anchored on both sides. The frontend refuses to offer it; the
  * backend has to refuse it INDEPENDENTLY, and it does (`command_import.rs`
  * collects zero datums, datum-backed merges and aligned closures into
- * `anchor_indices` and skips the whole section when one sits on each side). That
+ * `anchor_indices` and skips the whole line when one sits on each side). That
  * parity is only tested if something sends the payload the UI will not, which is
  * what this does.
  */
@@ -508,7 +508,7 @@ function drawExistingShotUpdates(
     // not one `mustBeRejected` has an opinion about. See its header.
     if (chance(ctx, 0.15)) patch[ctx.pick(UPDATE_NUMBER_FIELDS)] = Number.NaN;
     updates.push({
-      section_id: target.sectionId,
+      line_id: target.lineId,
       // A shot id that resolves to nothing is silently skipped by the backend
       // (`find(|s| s.id == update.shot_id)`), which is a documented shape rather
       // than a refusal - so the model must see the command SUCCEED and the
@@ -516,7 +516,7 @@ function drawExistingShotUpdates(
       shot_id: chance(ctx, 0.2) ? target.shotId + 100000 : target.shotId,
       updates: patch,
     });
-    parts.push(`${target.sectionId}:${target.shotId}`);
+    parts.push(`${target.lineId}:${target.shotId}`);
   }
   return { updates, label: parts.length === 0 ? 'noUpdates' : parts.join('+') };
 }
@@ -569,14 +569,14 @@ function missingFileRel(ctx: ScenarioContext): string {
  * generators, which is asserted in `undoRedoFuzzImportActions.test.ts`).
  */
 export function mustBeRejected(action: string, args: readonly unknown[]): string | null {
-  if (action !== 'importSections') return null;
-  const sections = args[0];
-  if (!Array.isArray(sections)) return null;
-  for (let i = 0; i < sections.length; i++) {
-    const config = sections[i] as Record<string, unknown> | null;
+  if (action !== 'importLines') return null;
+  const lines = args[0];
+  if (!Array.isArray(lines)) return null;
+  for (let i = 0; i < lines.length; i++) {
+    const config = lines[i] as Record<string, unknown> | null;
     if (config === null || typeof config !== 'object') continue;
     if (config.date === '') {
-      return `sections[${i}].date is "" - Option<NaiveDate> parses it as TOO_SHORT ` +
+      return `lines[${i}].date is "" - Option<NaiveDate> parses it as TOO_SHORT ` +
         '("premature end of input"), so Tauri refuses the whole call (issue #478)';
     }
     const shots = config.shots;
@@ -587,7 +587,7 @@ export function mustBeRejected(action: string, args: readonly unknown[]): string
       for (const field of REQUIRED_SHOT_NUMBERS) {
         const value = shot[field];
         if (typeof value === 'number' && Number.isFinite(value)) continue;
-        return `sections[${i}].shots[${s}].${field} is ${JSON.stringify(value ?? null)} - ` +
+        return `lines[${i}].shots[${s}].${field} is ${JSON.stringify(value ?? null)} - ` +
           'a required f64 cannot be null/NaN/Infinity, so serde refuses the call before it runs';
       }
     }
@@ -595,9 +595,9 @@ export function mustBeRejected(action: string, args: readonly unknown[]): string
   // NOT CLAIMED, and the reason is measured rather than assumed: a non-finite
   // in an `existing_shot_updates` PATCH.
   //
-  // `execute_import_sections` does refuse one by name, before any mutation
+  // `execute_import_lines` does refuse one by name, before any mutation
   // (`all_finite()`, with its own Rust test at
-  // `test_execute_import_sections_rejects_non_finite_shot_update`). It cannot
+  // `test_execute_import_lines_rejects_non_finite_shot_update`). It cannot
   // fire for anything that crossed JSON, though. Every `ShotUpdates` field is
   // `Option<f64>` (or `Option<Option<f64>>`) with `#[serde(default)]`
   // (models/shot.rs), `JSON.stringify` spells `NaN` and `Infinity` `null`, and
@@ -620,20 +620,20 @@ export function mustBeRejected(action: string, args: readonly unknown[]): string
  */
 export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
   {
-    name: 'importSectionsSynthetic',
+    name: 'importLinesSynthetic',
     weight: 8,
     since: 'v3',
     build(ctx, state) {
       const { configs, label } = drawBatch(ctx, state);
       return {
-        action: 'importSections',
+        action: 'importLines',
         args: [configs, ...importTail(ctx, configs), null],
-        label: `importSections(${label})`,
+        label: `importLines(${label})`,
       };
     },
   },
   {
-    name: 'importSectionsNonFinite',
+    name: 'importLinesNonFinite',
     weight: 3,
     since: 'v3',
     build(ctx, state) {
@@ -641,23 +641,23 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
       const poisoned = poisonShot(ctx, configs);
       if (poisoned === null) return null;
       return {
-        action: 'importSections',
+        action: 'importLines',
         args: [configs, ...importTail(ctx, configs), null],
-        label: `importSections(${label},POISON=${poisoned})`,
+        label: `importLines(${label},POISON=${poisoned})`,
       };
     },
   },
   {
-    name: 'importSectionsWithOverlap',
+    name: 'importLinesWithOverlap',
     weight: 5,
     since: 'v3',
     build(ctx, state) {
       const { configs, label } = drawBatch(ctx, state);
       const { updates, label: updateLabel } = drawExistingShotUpdates(ctx, state);
       return {
-        action: 'importSections',
+        action: 'importLines',
         args: [configs, ...importTail(ctx, configs), null, updates],
-        label: `importSections(${label},overlap=${updateLabel})`,
+        label: `importLines(${label},overlap=${updateLabel})`,
       };
     },
   },
@@ -731,7 +731,7 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
       for (let i = 0; i < count; i++) {
         const { placement } = drawPlacement(ctx, state, i, 1);
         placements.push({
-          section_index: i,
+          line_index: i,
           placement,
           name: chance(ctx, 0.3) ? null : biasedText(ctx, `gpx-${ctx.randInt(0, 999)}`),
           color: ctx.pick(COLORS),
@@ -802,13 +802,13 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
     },
   },
   {
-    name: 'probeSectionHashes',
+    name: 'probeLineHashes',
     weight: 2,
     since: 'v3',
     build(ctx) {
       const count = ctx.randInt(0, 4);
       const hashes = Array.from({ length: count }, () => fakeHash(ctx));
-      return { action: 'checkSectionHashes', args: [hashes], label: `checkSectionHashes(n=${count})` };
+      return { action: 'checkLineHashes', args: [hashes], label: `checkLineHashes(n=${count})` };
     },
   },
   {
@@ -832,7 +832,7 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
       // mark dirty, mirror the SpeleoDB flag, return true. It must NOT save, and
       // a save with no undo entry is exactly what the model would catch.
       //
-      // The guard reads the digest directly rather than through `pickSection`,
+      // The guard reads the digest directly rather than through `pickLine`,
       // which would consume a draw for a decision that has no randomness in it.
       if (state.s.length === 0) return null;
       return { action: 'saveAfterImport', args: [], label: 'saveAfterImport()' };
@@ -848,7 +848,7 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
   // `undoRedoFuzz.ts`'s header predates these two.
   {
     /**
-     * Create a section whose shots are a MOTIF the suggestion probe can match.
+     * Create a line whose shots are a MOTIF the suggestion probe can match.
      *
      * `probeSuggestPlacement` feeds `suggest_import_placement` freshly random
      * shots, and the suggester matches shot-for-shot inside hard cutoffs - 25
@@ -862,14 +862,14 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
      * `key` so its partner can rebuild the same run without any shared state -
      * generators have to stay pure, because the shrinker re-derives every step.
      */
-    name: 'createMotifSection',
+    name: 'createMotifLine',
     weight: 2,
     since: 'v3',
     build(ctx) {
       const key = ctx.randInt(0, MOTIF_KEYS - 1);
       const shots = motifShots(key, 0);
       return {
-        action: 'createSection',
+        action: 'createLine',
         args: [
           {
             name: `motif-${key}`,
@@ -881,13 +881,13 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
             shots,
           },
         ],
-        label: `createSection(motif=${key}, shots=${shots.length})`,
+        label: `createLine(motif=${key}, shots=${shots.length})`,
       };
     },
   },
   {
     /**
-     * Ask for a placement using a motif some `createMotifSection` may have
+     * Ask for a placement using a motif some `createMotifLine` may have
      * planted, jittered well inside the cutoffs above.
      *
      * Returns an empty list until its partner has run, which is fine and is the
@@ -919,7 +919,7 @@ export function importGeneratorNames(): string[] {
 // Motifs: a target the suggestion probe can actually match
 // ---------------------------------------------------------------------------
 
-/** How many distinct motifs `createMotifSection` and `probeSuggestMotif` share. */
+/** How many distinct motifs `createMotifLine` and `probeSuggestMotif` share. */
 export const MOTIF_KEYS = 4;
 
 /**

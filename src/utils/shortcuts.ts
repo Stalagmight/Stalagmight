@@ -556,7 +556,7 @@ const ACTION_NAME_KEYS: Record<string, string> = {
   toggle_satellite: 'settings.shortcuts.actions.toggleSatellite',
   toggle_station_labels: 'settings.shortcuts.actions.toggleStationLabels',
   toggle_shot_labels: 'settings.shortcuts.actions.toggleShotLabels',
-  toggle_section_labels: 'settings.shortcuts.actions.toggleSectionLabels',
+  toggle_line_labels: 'settings.shortcuts.actions.toggleSectionLabels',
   fit_to_bounds: 'settings.shortcuts.actions.fitToBounds',
   zoom_in: 'settings.shortcuts.actions.zoomIn',
   zoom_out: 'settings.shortcuts.actions.zoomOut',

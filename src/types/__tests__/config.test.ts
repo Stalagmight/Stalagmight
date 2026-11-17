@@ -7,9 +7,9 @@ import { describe, it, expect } from 'vitest';
 import {
   defaultConfig,
   lightDisplayDefaults,
-  lightSectionColorDefaults,
+  lightLineColorDefaults,
   getThemedDisplayDefaults,
-  getThemedSectionColorDefaults,
+  getThemedLineColorDefaults,
   mapCanvasFor,
   type Config,
   type StationConfig,
@@ -38,7 +38,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig).toHaveProperty('general');
       expect(defaultConfig).toHaveProperty('units');
       expect(defaultConfig).toHaveProperty('display');
-      expect(defaultConfig).toHaveProperty('section_colors');
+      expect(defaultConfig).toHaveProperty('line_colors');
       expect(defaultConfig).toHaveProperty('map');
       expect(defaultConfig).toHaveProperty('validation');
       expect(defaultConfig).toHaveProperty('export');
@@ -326,26 +326,26 @@ describe('theme-aware display defaults', () => {
       expect(lightDisplayDefaults).toHaveProperty('font_size');
     });
 
-    it('no longer carries the dead depth_gradient section (#380)', () => {
+    it('no longer carries the dead depth_gradient line (#380)', () => {
       expect(lightDisplayDefaults).not.toHaveProperty('depth_gradient');
       expect(getThemedDisplayDefaults('dark')).not.toHaveProperty('depth_gradient');
     });
   });
 
-  describe('lightSectionColorDefaults', () => {
+  describe('lightLineColorDefaults', () => {
     it('has 8 palette colors', () => {
-      expect(lightSectionColorDefaults.palette).toHaveLength(8);
+      expect(lightLineColorDefaults.palette).toHaveLength(8);
     });
 
     it('has all valid hex colors', () => {
-      for (const color of lightSectionColorDefaults.palette) {
+      for (const color of lightLineColorDefaults.palette) {
         expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
       }
     });
 
     it('has different colors from dark palette', () => {
-      const darkPalette = defaultConfig.section_colors.palette;
-      const lightPalette = lightSectionColorDefaults.palette;
+      const darkPalette = defaultConfig.line_colors.palette;
+      const lightPalette = lightLineColorDefaults.palette;
       // At least some colors should differ between themes
       const hasDifference = lightPalette.some((c, i) => c !== darkPalette[i]);
       expect(hasDifference).toBe(true);
@@ -384,20 +384,20 @@ describe('theme-aware display defaults', () => {
     });
   });
 
-  describe('getThemedSectionColorDefaults', () => {
+  describe('getThemedLineColorDefaults', () => {
     it('returns dark palette for dark theme', () => {
-      const result = getThemedSectionColorDefaults('dark');
-      expect(result.palette).toEqual(defaultConfig.section_colors.palette);
+      const result = getThemedLineColorDefaults('dark');
+      expect(result.palette).toEqual(defaultConfig.line_colors.palette);
     });
 
     it('returns light palette for light theme', () => {
-      const result = getThemedSectionColorDefaults('light');
-      expect(result.palette).toEqual(lightSectionColorDefaults.palette);
+      const result = getThemedLineColorDefaults('light');
+      expect(result.palette).toEqual(lightLineColorDefaults.palette);
     });
 
     it('returns deep copies (not references)', () => {
-      const result1 = getThemedSectionColorDefaults('dark');
-      const result2 = getThemedSectionColorDefaults('dark');
+      const result1 = getThemedLineColorDefaults('dark');
+      const result2 = getThemedLineColorDefaults('dark');
       expect(result1.palette).not.toBe(result2.palette);
     });
   });
@@ -438,7 +438,7 @@ describe('themed defaults are legible on the canvas they are drawn on', () => {
     for (const theme of ALL_THEMES) {
       const canvasIsLight = luminance(mapCanvasFor(theme)) > 0.5;
       const usesLightDefaults =
-        getThemedSectionColorDefaults(theme).palette[0] === lightSectionColorDefaults.palette[0];
+        getThemedLineColorDefaults(theme).palette[0] === lightLineColorDefaults.palette[0];
       expect(
         usesLightDefaults,
         `${theme}: canvas ${mapCanvasFor(theme)} is ${canvasIsLight ? 'light' : 'dark'} but it ` +
@@ -447,17 +447,17 @@ describe('themed defaults are legible on the canvas they are drawn on', () => {
     }
   });
 
-  // #357 item 9. A section keeps whatever colour it was created with - per-project
+  // #357 item 9. A line keeps whatever colour it was created with - per-project
   // user data, never rewritten on a theme flip - so the only place this can be
   // fixed is what a NEW project seeds. Every colour that seed can hand out has to
   // be legible on the canvas of the theme it was seeded under.
-  it.each(ALL_THEMES)('%s: every seedable section colour clears 3:1 on its canvas', (theme) => {
+  it.each(ALL_THEMES)('%s: every seedable line colour clears 3:1 on its canvas', (theme) => {
     const canvas = mapCanvasFor(theme);
-    for (const color of getThemedSectionColorDefaults(theme).palette) {
+    for (const color of getThemedLineColorDefaults(theme).palette) {
       const ratio = contrast(color, canvas);
       expect(
         ratio,
-        `${theme}: section colour ${color} on ${canvas} is ${ratio.toFixed(2)}:1, below ${FLOOR}:1`
+        `${theme}: line colour ${color} on ${canvas} is ${ratio.toFixed(2)}:1, below ${FLOOR}:1`
       ).toBeGreaterThanOrEqual(FLOOR);
     }
   });
@@ -476,13 +476,13 @@ describe('themed defaults are legible on the canvas they are drawn on', () => {
   it('would reject the values these two guards were added for', () => {
     // Proves neither guard is vacuous. Both of these shipped: `#22d3ee` was the
     // light theme's own measure-path default, and `#c7873a` was an entry of the
-    // "light" section palette. Measured on the light canvas they were written for.
+    // "light" line palette. Measured on the light canvas they were written for.
     const lightCanvas = themeTokens.light['--cc-map-background'];
     expect(contrast('#22d3ee', lightCanvas)).toBeLessThan(2);
     expect(contrast('#c7873a', lightCanvas)).toBeLessThan(FLOOR);
     // ...and the dark palette on the light canvas, which is what item 9 describes
     // a light-mode user actually seeing today for an already-created project.
-    for (const color of defaultConfig.section_colors.palette) {
+    for (const color of defaultConfig.line_colors.palette) {
       expect(contrast(color, lightCanvas)).toBeLessThan(FLOOR);
     }
   });

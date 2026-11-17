@@ -7,14 +7,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
-import type { StationRef, SectionId, ShotId, ShotKind } from '../../types/project';
+import type { StationRef, LineId, ShotId, ShotKind } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
 import {
   combinePreview,
   queryCombineCandidates,
-  queryCombineCandidateForSections,
-} from '../../utils/combineSections';
+  queryCombineCandidateForLines,
+} from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
@@ -123,13 +123,13 @@ function buildPlanMenuItems(
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, multiSelection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToLine, multiSelection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
     dialogData: s.dialogData,
     openDialog: s.openDialog,
     setActiveTool: s.setActiveTool,
     setMergeStationA: s.setMergeStationA,
-    triggerZoomToSection: s.triggerZoomToSection,
+    triggerZoomToLine: s.triggerZoomToLine,
     multiSelection: s.multiSelection,
     geometryMode: s.geometryMode,
     appMode: s.appMode,
@@ -162,14 +162,14 @@ export default function ContextMenu() {
     const field = gas.reachField ?? gas.lastReachField;
     const route = new Set<string>();
     for (const leg of field?.route ?? []) {
-      route.add(`${leg.from.section_id}:${leg.from.station_index}`);
-      route.add(`${leg.to.section_id}:${leg.to.station_index}`);
+      route.add(`${leg.from.line_id}:${leg.from.station_index}`);
+      route.add(`${leg.to.line_id}:${leg.to.station_index}`);
     }
     planMenuRouteRef.current = { slots: field?.stage_drop_bars.length ?? 0, route };
   }
   const stageDropCount = planMenuRouteRef.current.slots;
   const planRouteHasStation = (r: StationRef): boolean =>
-    planMenuRouteRef.current?.route.has(`${r.section_id}:${r.station_index}`) ?? false;
+    planMenuRouteRef.current?.route.has(`${r.line_id}:${r.station_index}`) ?? false;
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -177,31 +177,31 @@ export default function ContextMenu() {
 
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Combine Sections (Survey only): offered on a section END station, and on a
-  // section when exactly two sections are selected. Whether the two can be
+  // Combine Lines (Survey only): offered on a line END station, and on a
+  // line when exactly two lines are selected. Whether the two can be
   // combined, and why not, is the backend's answer, asked once when the menu
   // opens; `undefined` while it is in flight.
-  const selectedSectionIds = [
+  const selectedLineIds = [
     ...new Set(
       multiSelection
-        .filter((s) => s.type === 'section' && s.sectionId !== undefined)
-        .map((s) => s.sectionId as SectionId)
+        .filter((s) => s.type === 'line' && s.lineId !== undefined)
+        .map((s) => s.lineId as LineId)
     ),
   ];
   const combineKey = ((): string | null => {
-    const menuTarget = dialogData.target as { type?: string; ref?: StationRef; sectionId?: SectionId } | undefined;
+    const menuTarget = dialogData.target as { type?: string; ref?: StationRef; lineId?: LineId } | undefined;
     if (appMode !== 'survey' || !menuTarget) return null;
     if (menuTarget.type === 'station' && menuTarget.ref) {
-      const { section_id, station_index } = menuTarget.ref;
-      const shots = project?.sections.find((s) => s.id === section_id)?.shots.length;
+      const { line_id, station_index } = menuTarget.ref;
+      const shots = project?.lines.find((s) => s.id === line_id)?.shots.length;
       return shots !== undefined && (station_index === 0 || station_index === shots)
-        ? `station:${section_id}:${station_index}`
+        ? `station:${line_id}:${station_index}`
         : null;
     }
-    if (menuTarget.type === 'section' && menuTarget.sectionId !== undefined) {
-      const [a, b] = selectedSectionIds;
-      return selectedSectionIds.length === 2 && selectedSectionIds.includes(menuTarget.sectionId)
-        ? `sections:${a}:${b}`
+    if (menuTarget.type === 'line' && menuTarget.lineId !== undefined) {
+      const [a, b] = selectedLineIds;
+      return selectedLineIds.length === 2 && selectedLineIds.includes(menuTarget.lineId)
+        ? `lines:${a}:${b}`
         : null;
     }
     return null;
@@ -217,8 +217,8 @@ export default function ContextMenu() {
     const [kind, x, y] = combineKey.split(':').slice(0, 3);
     const query: Promise<CombineCandidate[]> =
       kind === 'station'
-        ? queryCombineCandidates({ section_id: Number(x), station_index: Number(y) })
-        : queryCombineCandidateForSections(Number(x), Number(y)).then((c) => (c ? [c] : []));
+        ? queryCombineCandidates({ line_id: Number(x), station_index: Number(y) })
+        : queryCombineCandidateForLines(Number(x), Number(y)).then((c) => (c ? [c] : []));
     query.then(
       (candidates) => {
         if (live) setCombineAnswer({ key: combineKey, candidates });
@@ -236,46 +236,46 @@ export default function ContextMenu() {
    * The combine row, always with a hint line (visible under the label, and as
    * its tooltip): "Checking...", the reason it is disabled, or what it joins.
    * Whether it is offered is known synchronously (an END station, or exactly
-   * two selected sections), so the row is always there from the first render:
+   * two selected lines), so the row is always there from the first render:
    * disabled with "Checking..." while the backend's answer is in flight, then
    * enabled, or disabled with the reason. Inserting it only once the answer
    * arrived shifted every row below it under the pointer (and moved the whole
    * menu, whose `top` follows `items.length`), the same hazard the stage-drop
    * count above is frozen against. Its label may change in place.
    *
-   * On a station, by how many sections end at the point:
-   * - two: one row, "Combine Section With <the other>...", opening the dialog;
-   * - three: "Combine Sections..." with a submenu of every pair ("A with B");
-   * - four or more: "Combine Sections..." > "A with..." > the others, nested.
-   * Sections are "combined", never "merged": merging is what stations do.
-   * The first-named section is the one the dialog keeps by default. Each
+   * On a station, by how many lines end at the point:
+   * - two: one row, "Combine Line With <the other>...", opening the dialog;
+   * - three: "Combine Lines..." with a submenu of every pair ("A with B");
+   * - four or more: "Combine Lines..." > "A with..." > the others, nested.
+   * Lines are "combined", never "merged": merging is what stations do.
+   * The first-named line is the one the dialog keeps by default. Each
    * pair is enabled, or disabled with its own reason.
    */
   const combineItems = (label: string): ContextMenuItem[] => {
     if (!combineKey) return [];
     const disabled = (hint: string): ContextMenuItem[] => [{ label, action: () => {}, disabled: true, hint }];
     if (combineCandidates === undefined) {
-      return disabled('Checking which sections meet here...');
+      return disabled('Checking which lines meet here...');
     }
     const [combineCandidate] = combineCandidates;
     if (combineCandidate === undefined) {
       return disabled(
-        combineKey.startsWith('sections')
-          ? 'These sections cannot be combined'
-          : 'No other section ends at this station'
+        combineKey.startsWith('lines')
+          ? 'These lines cannot be combined'
+          : 'No other line ends at this station'
       );
     }
-    // Refused outright, or neither section can be the kept one.
+    // Refused outright, or neither line can be the kept one.
     const blockedOf = (c: CombineCandidate) =>
       c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-    const name = (id: SectionId) => project?.sections.find((s) => s.id === id)?.name?.trim() || `Section ${id}`;
-    const open = (c: CombineCandidate, keep: SectionId) => () => {
-      openDialog('combine-sections', { candidate: c, keep, preview: combinePreview(c) });
+    const name = (id: LineId) => project?.lines.find((s) => s.id === id)?.name?.trim() || `Line ${id}`;
+    const open = (c: CombineCandidate, keep: LineId) => () => {
+      openDialog('combine-lines', { candidate: c, keep, preview: combinePreview(c) });
     };
     const howTheyMeet = (c: CombineCandidate) =>
       c.join_kind === 'closure' ? 'Across a loop closure' : c.join_kind === 'merged' ? 'Merged here' : 'Side by side here';
-    if (combineKey.startsWith('sections')) {
-      const { section_a: a, section_b: b } = combineCandidate;
+    if (combineKey.startsWith('lines')) {
+      const { line_a: a, line_b: b } = combineCandidate;
       const across = combineCandidate.join_kind === 'closure' ? ', across a loop closure' : '';
       const blocked = blockedOf(combineCandidate);
       return [
@@ -288,44 +288,44 @@ export default function ContextMenu() {
       ];
     }
     const clicked = Number(combineKey.split(':')[1]);
-    const shotsOf = (c: CombineCandidate, id: SectionId) => (c.section_a === id ? c.shot_count_a : c.shot_count_b);
-    const otherOf = (c: CombineCandidate, id: SectionId) => (c.section_a === id ? c.section_b : c.section_a);
-    // Every section at the point, the clicked one first.
-    const sections: SectionId[] = [clicked];
+    const shotsOf = (c: CombineCandidate, id: LineId) => (c.line_a === id ? c.shot_count_a : c.shot_count_b);
+    const otherOf = (c: CombineCandidate, id: LineId) => (c.line_a === id ? c.line_b : c.line_a);
+    // Every line at the point, the clicked one first.
+    const lines: LineId[] = [clicked];
     for (const c of combineCandidates) {
-      for (const id of [c.section_a, c.section_b]) if (!sections.includes(id)) sections.push(id);
+      for (const id of [c.line_a, c.line_b]) if (!lines.includes(id)) lines.push(id);
     }
-    if (sections.length === 2) {
+    if (lines.length === 2) {
       const partner = otherOf(combineCandidate, clicked);
       const blocked = blockedOf(combineCandidate);
       return [
         {
-          label: `Combine Section With ${name(partner)}...`,
+          label: `Combine Line With ${name(partner)}...`,
           action: open(combineCandidate, clicked),
           disabled: blocked !== null,
           hint: blocked ?? howTheyMeet(combineCandidate),
         },
       ];
     }
-    const pairOf = (x: SectionId, y: SectionId) =>
-      combineCandidates.find((c) => (c.section_a === x && c.section_b === y) || (c.section_a === y && c.section_b === x));
-    const pairRow = (rowLabel: string, c: CombineCandidate, keep: SectionId): ContextMenuItem => ({
+    const pairOf = (x: LineId, y: LineId) =>
+      combineCandidates.find((c) => (c.line_a === x && c.line_b === y) || (c.line_a === y && c.line_b === x));
+    const pairRow = (rowLabel: string, c: CombineCandidate, keep: LineId): ContextMenuItem => ({
       label: rowLabel,
       action: open(c, keep),
       disabled: blockedOf(c) !== null,
       hint: blockedOf(c) ?? howTheyMeet(c),
     });
     let submenu: ContextMenuItem[];
-    if (sections.length === 3) {
-      // Every pair, the clicked section's first.
+    if (lines.length === 3) {
+      // Every pair, the clicked line's first.
       submenu = combineCandidates.map((c) => {
-        const first = c.section_a === clicked || c.section_b === clicked ? clicked : c.section_a;
+        const first = c.line_a === clicked || c.line_b === clicked ? clicked : c.line_a;
         return pairRow(`${name(first)} with ${name(otherOf(c, first))}`, c, first);
       });
     } else {
-      // Each section, then whom it can be combined with.
-      submenu = sections.flatMap((first) => {
-        const rows = sections.flatMap((second) => {
+      // Each line, then whom it can be combined with.
+      submenu = lines.flatMap((first) => {
+        const rows = lines.flatMap((second) => {
           const c = second === first ? undefined : pairOf(first, second);
           if (!c) return [];
           const shots = shotsOf(c, second);
@@ -341,8 +341,8 @@ export default function ContextMenu() {
         action: () => {},
         hint:
           openCount === 0
-            ? `None of the ${sections.length} sections ending here can be combined`
-            : `${sections.length} sections end here`,
+            ? `None of the ${lines.length} lines ending here can be combined`
+            : `${lines.length} lines end here`,
         submenu,
       },
     ];
@@ -354,9 +354,9 @@ export default function ContextMenu() {
     // right-click: it records where on the shot the pointer actually landed so
     // Insert Station can pre-place the station there. Absent for the data-table
     // menu, which has no click position on the line.
-    | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT?: number }
-    | { type: 'section'; sectionId: SectionId }
-    | { type: 'datatable-shot'; sectionId: SectionId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; sectionName: string }
+    | { type: 'shot'; lineId: LineId; shotId: ShotId; alongT?: number }
+    | { type: 'line'; lineId: LineId }
+    | { type: 'datatable-shot'; lineId: LineId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; lineName: string }
     | null;
   const position = dialogData.position as { x: number; y: number } | undefined;
 
@@ -414,44 +414,44 @@ export default function ContextMenu() {
 
   // Get shot data for toggle reference
   const shot = target?.type === 'shot'
-    ? project?.sections
-        .find((s) => s.id === target.sectionId)
+    ? project?.lines
+        .find((s) => s.id === target.lineId)
         ?.shots.find((sh) => sh.id === target.shotId)
     : null;
   /** The shot's current kind, defaulting to permanent when no shot resolves. */
   const shotKind: ShotKind = shot?.kind ?? 'Normal';
 
   const sameStationRef = (a: StationRef, b: StationRef): boolean => (
-    a.section_id === b.section_id && a.station_index === b.station_index
+    a.line_id === b.line_id && a.station_index === b.station_index
   );
 
   /**
-   * Reverse entries for a section-targeting menu (#24).
+   * Reverse entries for a line-targeting menu (#24).
    *
-   * Always offers the right-clicked section. When the user has several sections
+   * Always offers the right-clicked line. When the user has several lines
    * multi-selected (and the target is one of them), a second entry reverses the
    * whole selection in one go - separate entries rather than one ambiguous item,
-   * so it is always obvious how many sections are about to change.
+   * so it is always obvious how many lines are about to change.
    */
-  const reverseItems = (sectionId: SectionId): ContextMenuItem[] => {
-    // Deduped so the count the menu label promises matches the sections it acts
+  const reverseItems = (lineId: LineId): ContextMenuItem[] => {
+    // Deduped so the count the menu label promises matches the lines it acts
     // on. Defence in depth on the behaviour: a repeat is NOT a silent no-op - it
-    // reverses the section twice, and the backend parity-reduces such a pair out
-    // of `reversed_sections` (see `Command::reversed_section_ids`) precisely
+    // reverses the line twice, and the backend parity-reduces such a pair out
+    // of `reversed_lines` (see `Command::reversed_line_ids`) precisely
     // because the second reverse is a real renumbering that cancels the first.
     const items: ContextMenuItem[] = [
       {
-        label: 'Reverse Section',
+        label: 'Reverse Line',
         action: () => {
-          openDialog('reverse-section', { sectionIds: [sectionId] });
+          openDialog('reverse-line', { lineIds: [lineId] });
         },
       },
     ];
-    if (selectedSectionIds.length > 1 && selectedSectionIds.includes(sectionId)) {
+    if (selectedLineIds.length > 1 && selectedLineIds.includes(lineId)) {
       items.push({
-        label: `Reverse ${selectedSectionIds.length} Sections`,
+        label: `Reverse ${selectedLineIds.length} Lines`,
         action: () => {
-          openDialog('reverse-section', { sectionIds: selectedSectionIds });
+          openDialog('reverse-line', { lineIds: selectedLineIds });
         },
       });
     }
@@ -462,8 +462,8 @@ export default function ContextMenu() {
     if (!target) return [];
 
     if (target.type === 'station') {
-      const sectionId = target.ref.section_id;
-      const stationSection = project?.sections.find((s) => s.id === sectionId);
+      const lineId = target.ref.line_id;
+      const stationLine = project?.lines.find((s) => s.id === lineId);
       const currentStation = stations.find((station) => sameStationRef(station.station_ref, target.ref));
       const mergedStations = currentStation?.merged_with ?? [];
       const directClosures = (() => {
@@ -480,15 +480,15 @@ export default function ContextMenu() {
         }
         return Array.from(deduped.values());
       })();
-      const totalShots = stationSection?.shots.length ?? 0;
+      const totalShots = stationLine?.shots.length ?? 0;
       const isFirstStation = target.ref.station_index === 0;
       const isLastStation = target.ref.station_index === totalShots;
 
       // Get geometry from neighbor shot for add-shot defaults
       const neighborShot = isFirstStation
-        ? stationSection?.shots[0]
+        ? stationLine?.shots[0]
         : isLastStation
-          ? stationSection?.shots[totalShots - 1]
+          ? stationLine?.shots[totalShots - 1]
           : undefined;
       const stationSourceGeometry = neighborShot ? {
         azimuth_in: neighborShot.azimuth_in,
@@ -573,7 +573,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: sectionId,
+                line_id: lineId,
                 station_index: 0,
               },
               prependMode: true,
@@ -591,7 +591,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: sectionId,
+                line_id: lineId,
                 station_index: totalShots,
               },
               appendMode: true,
@@ -617,30 +617,30 @@ export default function ContextMenu() {
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
-      items.push(...combineItems('Combine Sections...'));
+      items.push(...combineItems('Combine Lines...'));
       if (!isFirstStation && !isLastStation) {
         items.push({
-          label: 'Split Section Here',
+          label: 'Split Line Here',
           action: () => {
-            openDialog('split-section-here', {
-              sectionId,
+            openDialog('split-line-here', {
+              lineId,
               at: { type: 'station', station_index: target.ref.station_index },
-              label: formatStationIdWithName(sectionId, target.ref.station_index, currentStation?.name),
+              label: formatStationIdWithName(lineId, target.ref.station_index, currentStation?.name),
             });
           },
         });
       }
       items.push({
-        label: 'Edit Section',
+        label: 'Edit Line',
         action: () => {
-          openDialog('edit-section', { sectionId });
+          openDialog('edit-line', { lineId });
         },
       });
-      items.push(...reverseItems(sectionId));
+      items.push(...reverseItems(lineId));
       items.push({
-        label: 'Delete Section',
+        label: 'Delete Line',
         action: () => {
-          openDialog('confirm-delete', { type: 'section', sectionId });
+          openDialog('confirm-delete', { type: 'line', lineId });
         },
         danger: true,
       });
@@ -657,12 +657,12 @@ export default function ContextMenu() {
     }
 
     if (target.type === 'shot') {
-      const section = project?.sections.find((s) => s.id === target.sectionId);
-      const shotIndex = section?.shots.findIndex((sh) => sh.id === target.shotId) ?? -1;
-      const totalShots = section?.shots.length ?? 0;
+      const line = project?.lines.find((s) => s.id === target.lineId);
+      const shotIndex = line?.shots.findIndex((sh) => sh.id === target.shotId) ?? -1;
+      const totalShots = line?.shots.length ?? 0;
       const isFirst = shotIndex === 0 && totalShots > 0;
       const isLast = shotIndex >= 0 && shotIndex === totalShots - 1;
-      const sourceShot = shotIndex >= 0 ? section?.shots[shotIndex] : undefined;
+      const sourceShot = shotIndex >= 0 ? line?.shots[shotIndex] : undefined;
       const sourceGeometry = sourceShot ? {
         azimuth_in: sourceShot.azimuth_in,
         azimuth_out: sourceShot.azimuth_out,
@@ -676,17 +676,17 @@ export default function ContextMenu() {
         {
           label: 'Edit Shot',
           action: () => {
-            openDialog('edit-shot', { sectionId: target.sectionId, shotId: target.shotId });
+            openDialog('edit-shot', { lineId: target.lineId, shotId: target.shotId });
           },
         },
         {
           label: 'Insert Station...',
           action: () => {
             openDialog('insert-station', {
-              sectionId: target.sectionId,
+              lineId: target.lineId,
               shotId: target.shotId,
               shotLength: sourceShot?.length ?? 0,
-              sectionName: section?.name ?? `Section ${target.sectionId}`,
+              lineName: line?.name ?? `Line ${target.lineId}`,
               // Only set from a map right-click; the dialog prefills the exact
               // clicked spot when present and starts blank otherwise.
               alongT: target.type === 'shot' ? target.alongT : undefined,
@@ -695,13 +695,13 @@ export default function ContextMenu() {
           disabled: !sourceShot || !canSplitShot(sourceShot.length),
         },
         {
-          label: 'Split Section Here',
+          label: 'Split Line Here',
           action: () => {
             if (!sourceShot || target.alongT === undefined) return;
-            openDialog('split-section-here', {
-              sectionId: target.sectionId,
+            openDialog('split-line-here', {
+              lineId: target.lineId,
               at: { type: 'shot', shot_id: target.shotId, distance: target.alongT * sourceShot.length },
-              label: formatShotId(target.sectionId, shotIndex + 1),
+              label: formatShotId(target.lineId, shotIndex + 1),
             });
           },
           disabled: !sourceShot || target.alongT === undefined,
@@ -720,7 +720,7 @@ export default function ContextMenu() {
               : `Mark as ${SHOT_KIND_MENU_LABEL[kind]}`,
           action: async () => {
             trackContextMenuAction('set-shot-kind', 'context-menu');
-            await setShotKind(target.sectionId, target.shotId, kind);
+            await setShotKind(target.lineId, target.shotId, kind);
             trackDialogComplete('context-menu');
             closeDialog();
           },
@@ -734,7 +734,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: target.sectionId,
+                line_id: target.lineId,
                 station_index: 0,
               },
               prependMode: true,
@@ -752,7 +752,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: target.sectionId,
+                line_id: target.lineId,
                 station_index: totalShots,
               },
               appendMode: true,
@@ -765,34 +765,34 @@ export default function ContextMenu() {
 
       items.push({ label: '', action: () => {}, separator: true });
       items.push({
-        label: 'Edit Section',
+        label: 'Edit Line',
         action: () => {
-          openDialog('edit-section', { sectionId: target.sectionId });
+          openDialog('edit-line', { lineId: target.lineId });
         },
       });
-      items.push(...reverseItems(target.sectionId));
+      items.push(...reverseItems(target.lineId));
       items.push({
-        label: 'Delete Section',
+        label: 'Delete Line',
         action: () => {
-          openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
+          openDialog('confirm-delete', { type: 'line', lineId: target.lineId });
         },
         danger: true,
       });
       items.push({ label: '', action: () => {}, separator: true });
       // Position-aware Delete Shot using shared helper.
-      // Disabled when section/shot lookup fails (stale target).
+      // Disabled when line/shot lookup fails (stale target).
       const canDelete = shotIndex >= 0 && totalShots > 0;
       items.push({
         label: 'Delete Shot',
         action: () => {
           if (!canDelete) return;
           const { dialog, data } = getDeleteShotDialog(
-            target.sectionId,
+            target.lineId,
             target.shotId,
             isFirst,
             isLast,
             totalShots,
-            section?.name ?? `Section ${target.sectionId}`,
+            line?.name ?? `Line ${target.lineId}`,
           );
           openDialog(dialog, data);
         },
@@ -803,35 +803,35 @@ export default function ContextMenu() {
       return items;
     }
 
-    if (target.type === 'section') {
+    if (target.type === 'line') {
       return [
         {
-          label: 'Edit Section',
+          label: 'Edit Line',
           action: () => {
-            openDialog('edit-section', { sectionId: target.sectionId });
+            openDialog('edit-line', { lineId: target.lineId });
           },
         },
-        ...reverseItems(target.sectionId),
-        ...combineItems(`Combine ${selectedSectionIds.length} Sections...`),
+        ...reverseItems(target.lineId),
+        ...combineItems(`Combine ${selectedLineIds.length} Lines...`),
         {
           label: 'Adjust Position...',
           action: () => {
-            openDialog('section-adjust', { sectionId: target.sectionId });
+            openDialog('line-adjust', { lineId: target.lineId });
           },
         },
         {
-          label: 'Zoom to Section',
+          label: 'Zoom to Line',
           action: () => {
-            triggerZoomToSection(target.sectionId);
+            triggerZoomToLine(target.lineId);
             trackDialogComplete('context-menu');
             closeDialog();
           },
         },
         { label: '', action: () => {}, separator: true },
         {
-          label: 'Delete Section',
+          label: 'Delete Line',
           action: () => {
-            openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
+            openDialog('confirm-delete', { type: 'line', lineId: target.lineId });
           },
           danger: true,
         },
@@ -842,8 +842,8 @@ export default function ContextMenu() {
       const items: ContextMenuItem[] = [];
 
       // Look up the source shot for geometry copying
-      const sourceSection = project?.sections.find((s) => s.id === target.sectionId);
-      const sourceShot = sourceSection?.shots.find((sh) => sh.id === target.shotId);
+      const sourceLine = project?.lines.find((s) => s.id === target.lineId);
+      const sourceShot = sourceLine?.shots.find((sh) => sh.id === target.shotId);
       // Copy geometry only (azimuth, depth, pitch) - not temperature/marker_index
       const sourceGeometry = sourceShot ? {
         azimuth_in: sourceShot.azimuth_in,
@@ -861,7 +861,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: target.sectionId,
+                line_id: target.lineId,
                 station_index: 0,
               },
               prependMode: true,
@@ -879,7 +879,7 @@ export default function ContextMenu() {
           action: () => {
             openDialog('draw-shot', {
               fromStation: {
-                section_id: target.sectionId,
+                line_id: target.lineId,
                 station_index: target.totalShots,
               },
               appendMode: true,
@@ -900,12 +900,12 @@ export default function ContextMenu() {
         label: 'Delete Shot',
         action: () => {
           const { dialog, data } = getDeleteShotDialog(
-            target.sectionId,
+            target.lineId,
             target.shotId,
             target.isFirst,
             target.isLast,
             target.totalShots,
-            target.sectionName,
+            target.lineName,
           );
           openDialog(dialog, data);
         },
@@ -926,14 +926,14 @@ export default function ContextMenu() {
         return <EntityEditSymbol entity="station" size={18} />;
       case 'Edit Shot':
         return <EntityEditSymbol entity="shot" size={18} />;
-      case 'Edit Section':
-        return <EntityEditSymbol entity="section" size={18} />;
-      case 'Reverse Section':
-        return <EntityReverseSymbol entity="section" size={18} />;
+      case 'Edit Line':
+        return <EntityEditSymbol entity="line" size={18} />;
+      case 'Reverse Line':
+        return <EntityReverseSymbol entity="line" size={18} />;
       case 'Insert Station...':
         return <EntityAddSymbol entity="station" size={18} />;
-      case 'Split Section Here':
-        return <EntityUnlinkSymbol entity="section" size={18} />;
+      case 'Split Line Here':
+        return <EntityUnlinkSymbol entity="line" size={18} />;
       case 'Merge With...':
         return <ToolGlyph tool="merge" size={16} />;
       case 'Unmerge Stations':
@@ -955,23 +955,23 @@ export default function ContextMenu() {
         return <EntityReferenceUnmarkSymbol entity="shot" size={18} />;
       case 'Set Zero Datum':
         return <EntityDatumSymbol entity="station" size={18} />;
-      case 'Delete Section':
-        return <EntityDeleteSymbol entity="section" size={18} />;
+      case 'Delete Line':
+        return <EntityDeleteSymbol entity="line" size={18} />;
       case 'Delete Station':
         return <EntityDeleteSymbol entity="station" size={18} />;
       case 'Delete Shot':
         return <EntityDeleteSymbol entity="shot" size={18} />;
       case 'Adjust Position...':
-        return <EntityMoveSymbol entity="section" size={18} />;
-      case 'Zoom to Section':
+        return <EntityMoveSymbol entity="line" size={18} />;
+      case 'Zoom to Line':
         return <ToolGlyph tool="zoom" size={16} />;
       default:
-        // "Reverse N Sections" carries the count in its label, so it can't be a
+        // "Reverse N Lines" carries the count in its label, so it can't be a
         // literal case.
         if (label.startsWith('Reverse ')) {
-          return <EntityReverseSymbol entity="section" size={18} />;
+          return <EntityReverseSymbol entity="line" size={18} />;
         }
-        // "Combine Sections...", "Combine Section With <name>..." and "Combine 2 Sections...".
+        // "Combine Lines...", "Combine Line With <name>..." and "Combine 2 Lines...".
         if (label.startsWith('Combine ')) {
           return <ToolGlyph tool="merge" size={16} />;
         }
@@ -1000,9 +1000,9 @@ export default function ContextMenu() {
         : [];
   } else {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
-    // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
+    // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
-    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
+    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line']);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
       return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)

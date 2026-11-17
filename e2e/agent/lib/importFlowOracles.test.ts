@@ -11,7 +11,7 @@
  * keeps moving after a receipt appears - an `undo` interjection lands, a second
  * file is imported - and an accounting oracle measured across those is a test of
  * the walk rather than of the receipt. Measured, on the campaign's seed-8 cell:
- * a Walls import whose receipt correctly said "1 section - 7 shots" was reported
+ * a Walls import whose receipt correctly said "1 line - 7 shots" was reported
  * as a 0/0 delta because an undo interjection two moves later had taken it back.
  */
 import * as fs from 'fs';
@@ -44,7 +44,7 @@ import {
 const bounds = (over: Partial<FlowBounds> = {}): FlowBounds => ({
   snapshot: null,
   undoDepth: 0,
-  sections: 0,
+  lines: 0,
   shots: 0,
   projectDir: null,
   leftovers: [],
@@ -52,8 +52,8 @@ const bounds = (over: Partial<FlowBounds> = {}): FlowBounds => ({
 });
 
 const claim = (over: Partial<ReceiptClaim> = {}): ReceiptClaim => ({
-  summary: '1 section - 7 shots',
-  sections: 1,
+  summary: '1 line - 7 shots',
+  lines: 1,
   shots: 7,
   shown: 0,
   more: 0,
@@ -81,7 +81,7 @@ const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => (
   boundary: false,
   inv: [],
   undo: 0,
-  sections: 0,
+  lines: 0,
   shots: 0,
   receipt: null,
   dirty: false,
@@ -102,18 +102,18 @@ const throwsOracleError = (what: () => unknown, matching: RegExp): void => {
 
 describe('parseReceiptSummary', () => {
   it('reads the counts positionally, not by label', () => {
-    expect(parseReceiptSummary('1 section - 7 shots')).toEqual({ sections: 1, shots: 7 });
-    expect(parseReceiptSummary('2 sections - 12 shots - 3 loops')).toEqual({ sections: 2, shots: 12 });
+    expect(parseReceiptSummary('1 line - 7 shots')).toEqual({ lines: 1, shots: 7 });
+    expect(parseReceiptSummary('2 lines - 12 shots - 3 loops')).toEqual({ lines: 2, shots: 12 });
   });
 
   it('survives a grouped thousands separator', () => {
-    expect(parseReceiptSummary('1 section - 1,234 shots')).toEqual({ sections: 1, shots: 1234 });
-    expect(parseReceiptSummary("3 sections - 12'000 shots")).toEqual({ sections: 3, shots: 12000 });
+    expect(parseReceiptSummary('1 line - 1,234 shots')).toEqual({ lines: 1, shots: 1234 });
+    expect(parseReceiptSummary("3 lines - 12'000 shots")).toEqual({ lines: 3, shots: 12000 });
   });
 
   it('returns nulls rather than a guess when the text is not that shape', () => {
-    expect(parseReceiptSummary('imported')).toEqual({ sections: null, shots: null });
-    expect(parseReceiptSummary('1 section')).toEqual({ sections: 1, shots: null });
+    expect(parseReceiptSummary('imported')).toEqual({ lines: null, shots: null });
+    expect(parseReceiptSummary('1 line')).toEqual({ lines: 1, shots: null });
   });
 });
 
@@ -125,12 +125,12 @@ describe('receiptClaimFrom', () => {
   it('carries the rendering counts alongside the parsed summary', () => {
     const got = receiptClaimFrom(
       digest({
-        receipt: { summary: '2 sections - 9 shots', shown: 3, more: 4, hasDetails: true, unitConversion: false },
+        receipt: { summary: '2 lines - 9 shots', shown: 3, more: 4, hasDetails: true, unitConversion: false },
       }),
     );
     expect(got).toEqual({
-      summary: '2 sections - 9 shots',
-      sections: 2,
+      summary: '2 lines - 9 shots',
+      lines: 2,
       shots: 9,
       shown: 3,
       more: 4,
@@ -168,13 +168,13 @@ describe('checkReceipt (F4)', () => {
 
 describe('checkAccounting (F3)', () => {
   it('passes when the delta is what the receipt claimed', () => {
-    expect(() => checkAccounting(claim(), bounds({ sections: 2, shots: 10 }), { sections: 3, shots: 17 })).not.toThrow();
+    expect(() => checkAccounting(claim(), bounds({ lines: 2, shots: 10 }), { lines: 3, shots: 17 })).not.toThrow();
   });
 
   it('fails when it is not, and says both numbers', () => {
     throwsOracleError(
-      () => checkAccounting(claim(), bounds({ sections: 2, shots: 10 }), { sections: 3, shots: 12 }),
-      /receipt:\s+1 section\(s\), 7 shot\(s\)[\s\S]*project:\s+1 section\(s\), 2 shot\(s\)/,
+      () => checkAccounting(claim(), bounds({ lines: 2, shots: 10 }), { lines: 3, shots: 12 }),
+      /receipt:\s+1 line\(s\), 7 shot\(s\)[\s\S]*project:\s+1 line\(s\), 2 shot\(s\)/,
     );
   });
 
@@ -184,28 +184,28 @@ describe('checkAccounting (F3)', () => {
     // reads 0/0, and F3 must not care - that is the walk's doing, not the
     // receipt's. The caller passes the counts read from the receipt's own
     // digest, which is what makes this true.
-    const atReceipt = { sections: 1, shots: 7 };
-    expect(() => checkAccounting(claim(), bounds({ sections: 0, shots: 0 }), atReceipt)).not.toThrow();
+    const atReceipt = { lines: 1, shots: 7 };
+    expect(() => checkAccounting(claim(), bounds({ lines: 0, shots: 0 }), atReceipt)).not.toThrow();
   });
 
   it('still fails a receipt that disagreed with the project the moment it was made', () => {
     throwsOracleError(
-      () => checkAccounting(claim(), bounds({ sections: 0, shots: 0 }), { sections: 0, shots: 0 }),
+      () => checkAccounting(claim(), bounds({ lines: 0, shots: 0 }), { lines: 0, shots: 0 }),
       /F3 ACCOUNTING/,
     );
   });
 
   it('checks nothing when the summary did not parse', () => {
-    expect(() => checkAccounting(claim({ sections: null }), bounds(), { sections: 9, shots: 9 })).not.toThrow();
-    expect(() => checkAccounting(claim({ shots: null }), bounds(), { sections: 9, shots: 9 })).not.toThrow();
+    expect(() => checkAccounting(claim({ lines: null }), bounds(), { lines: 9, shots: 9 })).not.toThrow();
+    expect(() => checkAccounting(claim({ shots: null }), bounds(), { lines: 9, shots: 9 })).not.toThrow();
   });
 
   it('treats the no-project sentinel as no measurement, and as zero before', () => {
     // -1 is "no project open", not a count. Measured with one, there is nothing
     // to compare; measured BEFORE, the flow created the project and it started
     // empty - subtracting the sentinel would make every count one too many.
-    expect(() => checkAccounting(claim(), bounds(), { sections: -1, shots: -1 })).not.toThrow();
-    expect(() => checkAccounting(claim(), bounds({ sections: -1, shots: -1 }), { sections: 1, shots: 7 })).not.toThrow();
+    expect(() => checkAccounting(claim(), bounds(), { lines: -1, shots: -1 })).not.toThrow();
+    expect(() => checkAccounting(claim(), bounds({ lines: -1, shots: -1 }), { lines: 1, shots: 7 })).not.toThrow();
   });
 });
 
@@ -244,8 +244,8 @@ describe('checkPushed (F1)', () => {
 
   it('fails an import that landed with no undo entry behind it', () => {
     throwsOracleError(
-      () => checkPushed('imported', bounds({ undoDepth: 4 }), bounds({ undoDepth: 4, sections: 1 }), 'flow 1'),
-      /imported sections but pushed no undo entry/,
+      () => checkPushed('imported', bounds({ undoDepth: 4 }), bounds({ undoDepth: 4, lines: 1 }), 'flow 1'),
+      /imported lines but pushed no undo entry/,
     );
   });
 
@@ -331,7 +331,7 @@ describe('leftoverTempNames', () => {
 
 describe('checkIpcContract (S6)', () => {
   const REJECTION =
-    'ERROR invalid args `payload` for command `import_sections`: invalid type: null, expected a sequence';
+    'ERROR invalid args `payload` for command `import_lines`: invalid type: null, expected a sequence';
 
   it('finds an argument-deserialization rejection in the log ring', () => {
     expect(ipcArgRejections(['INFO opened project', REJECTION])).toEqual([REJECTION]);
@@ -339,7 +339,7 @@ describe('checkIpcContract (S6)', () => {
   });
 
   it('ignores a command that RAN and reported a problem properly', () => {
-    const reported = ['WARN import_sections returned success=false: no valid sections found'];
+    const reported = ['WARN import_lines returned success=false: no valid lines found'];
     expect(ipcArgRejections(reported)).toEqual([]);
     expect(() => checkIpcContract(reported, 'walls import')).not.toThrow();
   });
@@ -348,13 +348,13 @@ describe('checkIpcContract (S6)', () => {
 describe('captureReceipt (F3 capture ordering)', () => {
   const digestWith = (
     summary: string | null,
-    sections: number,
+    lines: number,
     shots: number,
     projectFile: string | null = '/tmp/a.stalx',
   ): ImportScreenDigest =>
     ({
       receipt: summary === null ? null : { summary, shown: 0, more: 0, hasDetails: false, unitConversion: false },
-      sections,
+      lines,
       shots,
       projectFile,
     }) as unknown as ImportScreenDigest;
@@ -363,26 +363,26 @@ describe('captureReceipt (F3 capture ordering)', () => {
     // The whole point. Reading them at the end of the flow compares the receipt
     // against a project that later moved - a second import, an undo
     // interjection - and F3 then reports a receipt that was telling the truth.
-    const captured = captureReceipt(emptyReceiptCapture(), digestWith('2 sections - 9 shots', 12, 40), false);
-    expect(captured.claim?.sections).toBe(2);
-    expect(captured.atReceipt).toEqual({ sections: 12, shots: 40 });
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('2 lines - 9 shots', 12, 40), false);
+    expect(captured.claim?.lines).toBe(2);
+    expect(captured.atReceipt).toEqual({ lines: 12, shots: 40 });
   });
 
   it('FIRST wins: a second receipt in one flow does not overwrite the first', () => {
-    const first = captureReceipt(emptyReceiptCapture(), digestWith('2 sections - 9 shots', 12, 40), false);
-    const second = captureReceipt(first, digestWith('7 sections - 70 shots', 99, 500), true);
+    const first = captureReceipt(emptyReceiptCapture(), digestWith('2 lines - 9 shots', 12, 40), false);
+    const second = captureReceipt(first, digestWith('7 lines - 70 shots', 99, 500), true);
     expect(second).toBe(first);
-    expect(second.claim?.sections).toBe(2);
-    expect(second.atReceipt).toEqual({ sections: 12, shots: 40 });
+    expect(second.claim?.lines).toBe(2);
+    expect(second.atReceipt).toEqual({ lines: 12, shots: 40 });
     expect(second.historyTouchedBeforeReceipt).toBe(false);
   });
 
   it('records whether history had already been touched when the receipt appeared', () => {
     // If an undo or a save ran first, the counts are not the ones the import
     // produced, and F3 skips rather than guesses.
-    const touched = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8), true);
+    const touched = captureReceipt(emptyReceiptCapture(), digestWith('1 line - 3 shots', 5, 8), true);
     expect(touched.historyTouchedBeforeReceipt).toBe(true);
-    const clean = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8), false);
+    const clean = captureReceipt(emptyReceiptCapture(), digestWith('1 line - 3 shots', 5, 8), false);
     expect(clean.historyTouchedBeforeReceipt).toBe(false);
   });
 
@@ -397,12 +397,12 @@ describe('captureReceipt (F3 capture ordering)', () => {
     // projects then suppressed an oracle whose claim and counts were both
     // already fixed on the original project. Same mistake `atReceipt` exists to
     // avoid, one field over, so it is captured at the same instant.
-    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8, '/tmp/first.stalx'), false);
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 line - 3 shots', 5, 8, '/tmp/first.stalx'), false);
     expect(captured.projectFileAtReceipt).toBe('/tmp/first.stalx');
 
     // The swap arrives afterwards: FIRST WINS keeps the receipt's own project,
     // so the skip compares `before` against `/tmp/first.stalx` and F3 runs.
-    const afterSwap = captureReceipt(captured, digestWith('9 sections - 90 shots', 99, 99, '/tmp/second.stalx'), true);
+    const afterSwap = captureReceipt(captured, digestWith('9 lines - 90 shots', 99, 99, '/tmp/second.stalx'), true);
     expect(afterSwap).toBe(captured);
     expect(afterSwap.projectFileAtReceipt).toBe('/tmp/first.stalx');
   });
@@ -410,7 +410,7 @@ describe('captureReceipt (F3 capture ordering)', () => {
   it('carries a null project file rather than inventing one', () => {
     // No project open, or one never saved. `before.projectFile !== null` is what
     // gates the skip, so a null here must not read as a swap.
-    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8, null), false);
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 line - 3 shots', 5, 8, null), false);
     expect(captured.projectFileAtReceipt).toBeNull();
     expect(emptyReceiptCapture().projectFileAtReceipt).toBeNull();
   });

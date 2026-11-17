@@ -16,7 +16,7 @@ beforeEach(() => {
     dialogData: { path: '/tmp/cave.stalx', name: 'My Cave' },
   });
   useProjectStore.setState({
-    deleteProject: vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] })),
+    deleteProject: vi.fn(async () => ({ success: true, warnings: [], error: null, line_ids: [] })),
   });
 });
 

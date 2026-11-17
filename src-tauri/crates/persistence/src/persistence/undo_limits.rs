@@ -3,7 +3,7 @@
 /// Full mode bypasses the entry-count window (`undo_history_limit` /
 /// `undo_persist_limit`) so the project keeps its whole edit history since the last
 /// commit - but "unbounded" is not safe here, because a single `Delete shot`,
-/// `Delete section`, `Reverse section` or `Batch` (every import) stores a
+/// `Delete line`, `Reverse line` or `Batch` (every import) stores a
 /// `UndoData::ProjectSnapshotPair`: TWO whole-project JSON snapshots. Measured on a
 /// project-shaped payload, a 5,000-shot project is ~2.1 MB of JSON per snapshot, so
 /// one such entry is ~4.2 MB - and this history rides in every SpeleoDB commit, which

@@ -15,7 +15,7 @@ interface ClosureChoice {
 }
 
 function sameStationRef(a: StationRef, b: StationRef): boolean {
-  return a.section_id === b.section_id && a.station_index === b.station_index;
+  return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 export default function RemoveClosureDialog() {
@@ -67,12 +67,12 @@ export default function RemoveClosureDialog() {
   );
 
   const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
+    const line = project?.lines.find((item) => item.id === ref.line_id);
+    const lineLabel = line?.name?.trim() || `Line ${ref.line_id}`;
     return (
       <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
+        <EntityBlob entity="station">{formatStationId(ref.line_id, ref.station_index)}</EntityBlob>
+        <EntityBlob entity="line">{lineLabel}</EntityBlob>
       </span>
     );
   };

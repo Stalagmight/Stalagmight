@@ -5,7 +5,7 @@
 //! their own zero datum, its two endpoints metres (or kilometres) apart: each
 //! half was pinned to its datum, so the merge stayed torn open. Since #741 the
 //! later datum of a merge-connected group is a GPS fix, which never holds its
-//! section in raw geometry, so the offset re-solve on open would heal such a
+//! line in raw geometry, so the offset re-solve on open would heal such a
 //! tear by translating the later piece off its GPS by the whole tear, with no
 //! undo and no word to the user.
 //!
@@ -23,13 +23,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{ClosureStrategy, LoopClosure, SectionId, StationRef};
+use crate::{ClosureStrategy, LoopClosure, LineId, StationRef};
 
 use super::Project;
 
 impl Project {
     /// Index of the first merge that a past bug promoted out of a loop closure:
-    /// a rigid cross-section merge that is visibly torn open and, with every OTHER
+    /// a rigid cross-line merge that is visibly torn open and, with every OTHER
     /// torn merge also set aside, still separates two independently
     /// zero-datum-anchored merge components. `None` when there is none.
     ///
@@ -58,16 +58,16 @@ impl Project {
     /// across the whole demotion scan (see [`Self::demote_double_anchoring_merges`]).
     fn first_double_anchoring_merge(
         &self,
-        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        local: &HashMap<LineId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
     ) -> Option<usize> {
-        // The torn set: every cross-section merge the offset solver has visibly
+        // The torn set: every cross-line merge the offset solver has visibly
         // failed to satisfy. An aligned merge is doing its job, and an unmeasurable
         // one (`endpoint_gap` = None, broken geometry) is not evidence of anything.
         let mut torn: Vec<usize> = Vec::new();
         for (index, merge) in self.station_merges.iter().enumerate() {
-            // Same-section merges are physically meaningless (test-only).
-            if merge.station_a.section_id == merge.station_b.section_id {
+            // Same-line merges are physically meaningless (test-only).
+            if merge.station_a.line_id == merge.station_b.line_id {
                 continue;
             }
             let Some((_, _, gap)) =
@@ -95,10 +95,10 @@ impl Project {
         // anchored halves are demoted one per pass until the tear is healed.
         torn.into_iter().find(|&index| {
             let merge = &self.station_merges[index];
-            let (a_section, b_section) = (merge.station_a.section_id, merge.station_b.section_id);
-            !components.same_component(a_section, b_section)
-                && components.is_anchored(a_section)
-                && components.is_anchored(b_section)
+            let (a_line, b_line) = (merge.station_a.line_id, merge.station_b.line_id);
+            !components.same_component(a_line, b_line)
+                && components.is_anchored(a_line)
+                && components.is_anchored(b_line)
         })
     }
 
@@ -124,10 +124,10 @@ impl Project {
 
         // Loop-invariant across every pass, so both tables are built once and
         // reused: a demotion only removes a merge and adds (or softens) a loop
-        // closure. It never touches shots, section offsets, or station offsets,
-        // which are the only inputs to the per-section local-coordinate walk and
+        // closure. It never touches shots, line offsets, or station offsets,
+        // which are the only inputs to the per-line local-coordinate walk and
         // the resolved station-offset map.
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
 
         let mut demoted = 0;
@@ -253,7 +253,7 @@ impl Project {
         demoted
     }
 
-    /// Label every section with its merge-only component in the HYPOTHETICAL
+    /// Label every line with its merge-only component in the HYPOTHETICAL
     /// graph that drops the merges at the indices in `skip`, and record which of
     /// those components an anchor still reaches.
     ///
@@ -271,37 +271,37 @@ impl Project {
     /// half look anchored when nothing holds it in place.
     ///
     /// Walks `station_merges` into a throwaway local adjacency rather than going
-    /// through the memoized [`Self::get_merged_section_ids`]: the shared memo
+    /// through the memoized [`Self::get_merged_line_ids`]: the shared memo
     /// describes the merges that actually exist, and answering a "what if these
     /// merges were gone" question must never mutate the project or that memo.
     pub(crate) fn merge_components_excluding(
         &self,
         skip: &HashSet<usize>,
     ) -> ExcludedMergeComponents {
-        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        let mut adjacency: HashMap<LineId, Vec<LineId>> = HashMap::new();
         for (i, m) in self.station_merges.iter().enumerate() {
             if skip.contains(&i) {
                 continue;
             }
             adjacency
-                .entry(m.station_a.section_id)
+                .entry(m.station_a.line_id)
                 .or_default()
-                .push(m.station_b.section_id);
+                .push(m.station_b.line_id);
             adjacency
-                .entry(m.station_b.section_id)
+                .entry(m.station_b.line_id)
                 .or_default()
-                .push(m.station_a.section_id);
+                .push(m.station_a.line_id);
         }
 
-        // Roots: every section in the project, then any section a surviving merge
+        // Roots: every line in the project, then any line a surviving merge
         // names that the project does not hold (a dangling endpoint in a project
-        // opened for repair). Nothing is left unlabelled, so a section that
+        // opened for repair). Nothing is left unlabelled, so a line that
         // participates in no surviving merge is its own singleton component and
         // both accessors answer for it.
-        let mut component_of: HashMap<SectionId, usize> = HashMap::new();
+        let mut component_of: HashMap<LineId, usize> = HashMap::new();
         let mut next_component = 0usize;
-        let roots: Vec<SectionId> = self
-            .sections
+        let roots: Vec<LineId> = self
+            .lines
             .iter()
             .map(|s| s.id)
             .chain(adjacency.keys().copied())
@@ -332,7 +332,7 @@ impl Project {
             let Some(sr) = self.resolve_key(&zd.station_ref) else {
                 continue;
             };
-            if let Some(&component) = component_of.get(&sr.section_id) {
+            if let Some(&component) = component_of.get(&sr.line_id) {
                 anchored.insert(component);
             }
         }
@@ -344,30 +344,30 @@ impl Project {
     }
 }
 
-/// Merge-only connected components of every section in a project, computed as if
+/// Merge-only connected components of every line in a project, computed as if
 /// some set of merges did not exist, plus which components hold at least one
 /// resolved zero datum. Built by [`Project::merge_components_excluding`].
 pub(crate) struct ExcludedMergeComponents {
-    /// section id -> the index of its component in the hypothetical graph.
-    component_of: HashMap<SectionId, usize>,
+    /// line id -> the index of its component in the hypothetical graph.
+    component_of: HashMap<LineId, usize>,
     /// Component indices reached by at least one resolved zero datum.
     anchored: HashSet<usize>,
 }
 
 impl ExcludedMergeComponents {
     /// True when `a` and `b` are still merge-connected with the excluded merges
-    /// gone. A section this graph does not know is connected to nothing.
-    pub(crate) fn same_component(&self, a: SectionId, b: SectionId) -> bool {
+    /// gone. A line this graph does not know is connected to nothing.
+    pub(crate) fn same_component(&self, a: LineId, b: LineId) -> bool {
         match (self.component_of.get(&a), self.component_of.get(&b)) {
             (Some(x), Some(y)) => x == y,
             _ => false,
         }
     }
 
-    /// True when `section`'s component holds at least one resolved zero datum.
-    pub(crate) fn is_anchored(&self, section: SectionId) -> bool {
+    /// True when `line`'s component holds at least one resolved zero datum.
+    pub(crate) fn is_anchored(&self, line: LineId) -> bool {
         self.component_of
-            .get(&section)
+            .get(&line)
             .is_some_and(|c| self.anchored.contains(c))
     }
 }

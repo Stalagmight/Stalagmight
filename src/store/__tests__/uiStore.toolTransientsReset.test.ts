@@ -22,15 +22,15 @@ const armedState = () => ({
   activeTool: 'move_comment' as const,
   moveCommentSource: {
     type: 'shot' as const,
-    sectionId: 2,
+    lineId: 2,
     shotId: 7,
     comment: 'stale comment from project A',
   },
-  mergeStationA: { section_id: 1, station_index: 3 },
-  mergeStationB: { section_id: 1, station_index: 4 },
+  mergeStationA: { line_id: 1, station_index: 3 },
+  mergeStationB: { line_id: 1, station_index: 4 },
   commentTarget: {
     type: 'shot' as const,
-    sectionId: 2,
+    lineId: 2,
     shotId: 7,
     screenPos: { x: 10, y: 20 },
     currentComment: 'stale',
@@ -39,13 +39,13 @@ const armedState = () => ({
   // owns MEASURE_CLEARED itself (not via the setView() that follows it).
   measureStart: {
     kind: 'station' as const,
-    section_id: 1,
+    line_id: 1,
     station_index: 0,
     coords: { x: 0, y: 0, z: 0 },
   },
   measureEnd: {
     kind: 'station' as const,
-    section_id: 1,
+    line_id: 1,
     station_index: 5,
     coords: { x: 1, y: 1, z: 0 },
   },

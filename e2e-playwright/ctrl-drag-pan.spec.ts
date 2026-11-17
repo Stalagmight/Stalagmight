@@ -5,12 +5,12 @@ import {
   getMapCenter,
   getSelection,
   seedNavigationTools,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForDrawnStations,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
   type StationScreenPos,
 } from './helpers/app';
 
@@ -30,7 +30,7 @@ async function middleDrag(page: Page, startX: number, startY: number, endX: numb
 }
 
 /** Three stations, from two shots, for the Ctrl+click selection cases. */
-const SELECTION_SEEDS: SectionSeed[] = [
+const SELECTION_SEEDS: LineSeed[] = [
   {
     name: 'Toggler',
     direction: 'in',
@@ -42,7 +42,7 @@ const SELECTION_SEEDS: SectionSeed[] = [
 ];
 
 /**
- * The multi-selection, as `sectionId:stationIndex` keys. `getSelection` reads the
+ * The multi-selection, as `lineId:stationIndex` keys. `getSelection` reads the
  * single "current" selection; Shift/Ctrl+click build the LIST beside it, which is
  * what a toggle has to be asserted against.
  */
@@ -54,7 +54,7 @@ async function getMultiSelectionKeys(page: Page): Promise<string[]> {
           getState: () => {
             multiSelection: Array<{
               type: string;
-              stationRef?: { section_id: number; station_index: number };
+              stationRef?: { line_id: number; station_index: number };
             }>;
           };
         };
@@ -62,7 +62,7 @@ async function getMultiSelectionKeys(page: Page): Promise<string[]> {
     }).__E2E_TEST__;
     return (stores?.uiStore.getState().multiSelection ?? []).map((s) =>
       s.type === 'station' && s.stationRef
-        ? `${s.stationRef.section_id}:${s.stationRef.station_index}`
+        ? `${s.stationRef.line_id}:${s.stationRef.station_index}`
         : s.type,
     );
   });
@@ -307,7 +307,7 @@ test.describe('Ctrl+Drag Panning', () => {
    */
   test.describe('Ctrl+Click Selection Toggle', () => {
     test('Ctrl/Cmd+click removes a selected station and adds an unselected one', async ({ page }) => {
-      await seedProjectWithSections(page, SELECTION_SEEDS);
+      await seedProjectWithLines(page, SELECTION_SEEDS);
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
       await waitForDrawnStations(page, 3);
@@ -330,7 +330,7 @@ test.describe('Ctrl+Drag Panning', () => {
       expect(Math.hypot(a!.x - b!.x, a!.y - b!.y)).toBeGreaterThan(30);
       expect(Math.hypot(b!.x - c!.x, b!.y - c!.y)).toBeGreaterThan(30);
 
-      const key = (s: StationScreenPos) => `${s.sectionId}:${s.stationIndex}`;
+      const key = (s: StationScreenPos) => `${s.lineId}:${s.stationIndex}`;
 
       // Build a two-station multi-selection with the gesture that always worked.
       await clickStationWith(page, box, a!, 'Shift');
@@ -351,7 +351,7 @@ test.describe('Ctrl+Drag Panning', () => {
       // The complement of the case above, and the reason the takeover is measured
       // in travel rather than dropped altogether: pressing Ctrl ON a station and
       // dragging must still pan, not add it to the selection.
-      await seedProjectWithSections(page, SELECTION_SEEDS);
+      await seedProjectWithLines(page, SELECTION_SEEDS);
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
       await waitForDrawnStations(page, 3);

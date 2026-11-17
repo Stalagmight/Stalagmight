@@ -1150,7 +1150,7 @@ export default function GlobalView() {
                         location={item.project.location}
                         filePath={item.filePath}
                         modifiedAt={item.project.modified_at}
-                        sectionCount={item.project.section_count}
+                        lineCount={item.project.line_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
                         speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates, remoteSummaries)}

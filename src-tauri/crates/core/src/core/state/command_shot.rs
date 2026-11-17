@@ -2,7 +2,7 @@ use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
     shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep,
-    Project, RemovedClosure, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
+    Project, RemovedClosure, LineId, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
     CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
 };
 
@@ -131,7 +131,7 @@ pub(super) fn remove_closures_newly_across_one_shot(
 impl AppState {
     pub(super) fn create_shot(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         mut data: ShotData,
         after_shot_id: Option<ShotId>,
         before_shot_id: Option<ShotId>,
@@ -170,44 +170,44 @@ impl AppState {
 
         // Compute the real shot index for validation messages
         let shot_index = {
-            let Some(section) = project.sections.iter().find(|s| s.id == section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            let Some(line) = project.lines.iter().find(|s| s.id == line_id) else {
+                return CommandResult::failure(format!("Line {line_id} not found"));
             };
 
-            if section.shots.len() >= max_shots {
+            if line.shots.len() >= max_shots {
                 return CommandResult::failure(format!(
-                    "Section {section_id} has reached the maximum of {max_shots} shots"
+                    "Line {line_id} has reached the maximum of {max_shots} shots"
                 ));
             }
 
             if let Some(before_id) = before_shot_id {
-                section
+                line
                     .shots
                     .iter()
                     .position(|shot| shot.id == before_id)
                     .unwrap_or(0)
             } else if let Some(after_id) = after_shot_id {
-                section
+                line
                     .shots
                     .iter()
                     .position(|shot| shot.id == after_id)
                     .map_or(0, |pos| pos + 1)
             } else {
-                section.shots.len()
+                line.shots.len()
             }
         };
 
         if data.length == 0.0 {
             return CommandResult::failure(format!(
                 "Shot {}:{} has zero length",
-                section_id,
+                line_id,
                 shot_index + 1
             ));
         }
         if data.length < 0.0 {
             return CommandResult::failure(format!(
                 "Shot {}:{} has negative length: {:.1}m",
-                section_id,
+                line_id,
                 shot_index + 1,
                 data.length
             ));
@@ -218,25 +218,25 @@ impl AppState {
         // neighbour's - the shot before the insert point, or the next one when
         // inserting at the start. Here, at the FORWARD executor only: redo and
         // restore replay the recorded shot, credit included, through the
-        // `Section` methods.
+        // `Line` methods.
         //
-        // The FIRST shot of a shot-less section takes the legacy surveyor/date
-        // the section kept (`Section::legacy_surveyor`) instead, and the
-        // section lets it go below; the undo gives it back
+        // The FIRST shot of a shot-less line takes the legacy surveyor/date
+        // the line kept (`Line::legacy_surveyor`) instead, and the
+        // line lets it go below; the undo gives it back
         // (`CreatedShotSnapshot::consumed_legacy`).
         if data.credit().is_empty() {
-            if let Some(section) = project.get_section(section_id) {
-                if section.shots.is_empty() {
+            if let Some(line) = project.get_line(line_id) {
+                if line.shots.is_empty() {
                     data.credit = SurveyCredit::from_legacy(
-                        section.legacy_surveyor.as_deref(),
-                        section.legacy_date,
+                        line.legacy_surveyor.as_deref(),
+                        line.legacy_date,
                     )
                     .stored()
                     .map(std::sync::Arc::new);
                 } else {
                     let neighbour = match shot_index.checked_sub(1) {
-                        Some(previous) => section.shots.get(previous),
-                        None => section.shots.first(),
+                        Some(previous) => line.shots.get(previous),
+                        None => line.shots.first(),
                     };
                     data.credit = neighbour.and_then(|shot| shot.credit.clone());
                 }
@@ -248,28 +248,28 @@ impl AppState {
         warnings.extend(Validator::validate_shot(
             &data,
             &project.validation,
-            section_id,
+            line_id,
             shot_index,
         ));
 
         let shot = if let Some(before_id) = before_shot_id {
-            project.insert_shot_before(section_id, before_id, data, None, None)
+            project.insert_shot_before(line_id, before_id, data, None, None)
         } else if let Some(after_id) = after_shot_id {
-            project.insert_shot_after(section_id, after_id, data, None, None)
+            project.insert_shot_after(line_id, after_id, data, None, None)
         } else {
-            project.add_shot(section_id, data)
+            project.add_shot(line_id, data)
         };
 
         if let Some(new_shot) = shot {
             let new_shot_id = new_shot.id;
-            if let Some(section) = project.get_section_mut(section_id) {
-                section.legacy_surveyor = None;
-                section.legacy_date = None;
+            if let Some(line) = project.get_line_mut(line_id) {
+                line.legacy_surveyor = None;
+                line.legacy_date = None;
             }
             tracing::debug!(
-                section_id,
+                line_id,
                 shot_id = new_shot_id,
-                purpose = "add shot to section",
+                purpose = "add shot to line",
                 "Shot created"
             );
             let result = CommandResult::success().with_shot_id(new_shot_id);
@@ -285,11 +285,11 @@ impl AppState {
 
     pub(super) fn update_shot(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         updates: ShotUpdates,
     ) -> CommandResult {
-        self.write_shot_values(section_id, shot_id, updates, true)
+        self.write_shot_values(line_id, shot_id, updates, true)
     }
 
     /// [`Self::update_shot`] for an INVERSE: the same write, with the
@@ -315,16 +315,16 @@ impl AppState {
     /// and should still be refused.
     pub(super) fn restore_shot_values(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         updates: ShotUpdates,
     ) -> CommandResult {
-        self.write_shot_values(section_id, shot_id, updates, false)
+        self.write_shot_values(line_id, shot_id, updates, false)
     }
 
     fn write_shot_values(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         updates: ShotUpdates,
         enforce_frozen: bool,
@@ -357,21 +357,21 @@ impl AppState {
         // whose undo re-enters here with only `kind` set; the fallback failed it,
         // `undo_inner`'s epilogue pushed the entry straight back, and every older
         // entry was sealed off forever (#413).
-        if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if section.shots.iter().any(|s| s.id == shot_id) {
+        if let Some(line) = project.lines.iter().find(|s| s.id == line_id) {
+            if line.shots.iter().any(|s| s.id == shot_id) {
                 if let Some(new_length) = updates.length {
                     if new_length == 0.0 {
                         return CommandResult::failure(format!(
                             "Shot {}:{} has zero length",
-                            section_id,
-                            shot_display_position(shot_id, section_id)
+                            line_id,
+                            shot_display_position(shot_id, line_id)
                         ));
                     }
                     if new_length < 0.0 {
                         return CommandResult::failure(format!(
                             "Shot {}:{} has negative length: {:.1}m",
-                            section_id,
-                            shot_display_position(shot_id, section_id),
+                            line_id,
+                            shot_display_position(shot_id, line_id),
                             new_length
                         ));
                     }
@@ -380,7 +380,7 @@ impl AppState {
                 // Reject geometry edits on frozen shots
                 if enforce_frozen
                     && updates.touches_geometry()
-                    && project.is_shot_frozen_by_id(section_id, shot_id)
+                    && project.is_shot_frozen_by_id(line_id, shot_id)
                 {
                     return CommandResult::failure(
                         "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
@@ -398,29 +398,29 @@ impl AppState {
         // data carries no offsets, so the translation is unundoable (#413
         // finding 26).
         let hold_anchor_at = if updates.touches_geometry() {
-            project.datum_anchor_position(section_id)
+            project.datum_anchor_position(line_id)
         } else {
             None
         };
-        if project.update_shot(section_id, shot_id, &updates).is_some() {
+        if project.update_shot(line_id, shot_id, &updates).is_some() {
             // Realign merge group offsets if geometry changed (keeps locked
             // stations pinned: merge points, zero datums)
             if updates.touches_geometry() {
-                project.realign_after_shot_edit(section_id, hold_anchor_at);
+                project.realign_after_shot_edit(line_id, hold_anchor_at);
             }
             tracing::debug!(
-                section_id,
+                line_id,
                 shot_id,
                 purpose = "update shot measurements",
                 "Shot updated"
             );
             CommandResult::success()
         } else {
-            CommandResult::failure(format!("Shot {section_id}:{shot_id} not found"))
+            CommandResult::failure(format!("Shot {line_id}:{shot_id} not found"))
         }
     }
 
-    pub(super) fn delete_shot(&self, section_id: SectionId, shot_id: ShotId) -> CommandResult {
+    pub(super) fn delete_shot(&self, line_id: LineId, shot_id: ShotId) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -434,14 +434,14 @@ impl AppState {
         // frozen-geometry guard; the resolve-flow UI also gates this option. Runs
         // BEFORE the shift-blocked check so a frozen shot reports the clear frozen
         // message rather than the misleading "Use split instead."
-        if project.is_shot_frozen_by_id(section_id, shot_id) {
+        if project.is_shot_frozen_by_id(line_id, shot_id) {
             return CommandResult::failure(
                 "Cannot delete a frozen shot. This shot is part of an adjusted survey network."
                     .to_string(),
             );
         }
 
-        if let Ok(impact) = project.preview_delete_shot(section_id, shot_id) {
+        if let Ok(impact) = project.preview_delete_shot(line_id, shot_id) {
             if impact.shift_blocked {
                 let reasons = if impact.shift_blocked_reasons.is_empty() {
                     "Shift geometry is not allowed for this shot.".to_string()
@@ -454,10 +454,10 @@ impl AppState {
 
         let closures_before = project.closures_before_edit();
         let closures_before_sweep = project.closures_before_sweep();
-        match project.remove_shot_with_rewire_reporting(section_id, shot_id) {
+        match project.remove_shot_with_rewire_reporting(line_id, shot_id) {
             Ok((_, _, swept_away)) => {
                 tracing::debug!(
-                    section_id,
+                    line_id,
                     shot_id,
                     purpose = "remove shot and rewire geometry",
                     "Shot deleted"
@@ -504,36 +504,36 @@ impl AppState {
     /// The guards keep applying to a USER delete: `Command::DeleteShot` still
     /// runs `delete_shot`, guards and all.
     ///
-    /// `appended_into_empty_section` is the recorded shape of the insert being
+    /// `appended_into_empty_line` is the recorded shape of the insert being
     /// undone (both anchors absent and position 0 - an `add_shot` append into a
-    /// section that had no shots); it is re-checked against the live section
+    /// line that had no shots); it is re-checked against the live line
     /// before it is honored.
-    /// Give a section that is shot-less again the legacy pair its first shot
+    /// Give a line that is shot-less again the legacy pair its first shot
     /// took (the undo of that shot's creation).
     pub(super) fn restore_consumed_legacy(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         pair: &(Option<String>, Option<chrono::NaiveDate>),
     ) {
         let mut guard = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(section) = guard
+        if let Some(line) = guard
             .as_mut()
-            .and_then(|p| p.get_section_mut(section_id))
+            .and_then(|p| p.get_line_mut(line_id))
             .filter(|s| s.shots.is_empty())
         {
-            section.legacy_surveyor.clone_from(&pair.0);
-            section.legacy_date = pair.1;
+            line.legacy_surveyor.clone_from(&pair.0);
+            line.legacy_date = pair.1;
         }
     }
 
     pub(super) fn remove_created_shot(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
-        appended_into_empty_section: bool,
+        appended_into_empty_line: bool,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -544,31 +544,31 @@ impl AppState {
         };
 
         // The one insert `remove_shot_with_rewire` is not the inverse of: an
-        // append into an EMPTY section, whose `pos == 0` compensation displaces
-        // the section and drops its station-0 refs (#413, finding 3). Every
-        // other shape it mirrors exactly - an append into a non-empty section
+        // append into an EMPTY line, whose `pos == 0` compensation displaces
+        // the line and drops its station-0 refs (#413, finding 3). Every
+        // other shape it mirrors exactly - an append into a non-empty line
         // leaves no station beyond the deletion point, so `anchored_sides_of_edit`
         // sees no anchored tail and compensates nothing; a mid-chain insert and a
         // prepend are undone by the same offset arithmetic that made them.
         let sole_shot = project
-            .get_section(section_id)
-            .is_some_and(|section| section.shots.len() == 1 && section.shots[0].id == shot_id);
-        let removed = if appended_into_empty_section && sole_shot {
+            .get_line(line_id)
+            .is_some_and(|line| line.shots.len() == 1 && line.shots[0].id == shot_id);
+        let removed = if appended_into_empty_line && sole_shot {
             project
-                .remove_appended_first_shot(section_id, shot_id)
+                .remove_appended_first_shot(line_id, shot_id)
                 .map(|_| ())
         } else {
             project
-                .remove_shot_with_rewire(section_id, shot_id)
+                .remove_shot_with_rewire(line_id, shot_id)
                 .map(|_| ())
         };
 
         match removed {
             Ok(()) => {
                 tracing::debug!(
-                    section_id,
+                    line_id,
                     shot_id,
-                    appended_into_empty_section = appended_into_empty_section && sole_shot,
+                    appended_into_empty_line = appended_into_empty_line && sole_shot,
                     purpose = "undo a shot creation",
                     "Created shot removed"
                 );
@@ -580,14 +580,14 @@ impl AppState {
 
     pub(super) fn set_shot_kind(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         kind: ShotKind,
     ) -> CommandResult {
         self.with_project_mut(|project| {
-            if project.set_shot_kind(section_id, shot_id, kind).is_some() {
+            if project.set_shot_kind(line_id, shot_id, kind).is_some() {
                 tracing::info!(
-                    section_id,
+                    line_id,
                     shot_id,
                     kind = kind.label(),
                     purpose = "set shot kind (permanent/jump/reference)",
@@ -595,7 +595,7 @@ impl AppState {
                 );
                 CommandResult::success()
             } else {
-                CommandResult::failure(format!("Shot {section_id}:{shot_id} not found"))
+                CommandResult::failure(format!("Shot {line_id}:{shot_id} not found"))
             }
         })
     }

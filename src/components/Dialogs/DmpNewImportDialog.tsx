@@ -4,11 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
+import type { DmpFile, CrossLineSuggestion, ImportLineForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { DistanceField, Project, Station, ShotData } from '../../types/project';
 import type { Person } from '../../types/ipc.generated';
-import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
+import type { ImportLineConfig as BackendImportLineConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
@@ -18,19 +18,19 @@ import { WizardMapPanel } from './WizardMapPanel';
 // a mocked module cannot supply a plain number the render arithmetic needs.
 import { WIZARD_MAP_PANEL_MAX_WIDTH as MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
 import { WizardScrollBody } from './WizardScrollBody';
-import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
+import LinePreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextLineGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './LinePreview';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
-import { SectionMetadataForm, listPeopleProps } from '../common/SectionMetadataForm';
+import { LineMetadataForm, listPeopleProps } from '../common/LineMetadataForm';
 import { SuggestionSectionSettings } from './SuggestionSectionSettings';
 import { SegmentPlacementModes, type SegmentPlacementMode } from './SegmentPlacementModes';
 import {
-  buildZeroDatumSectionConfig,
+  buildZeroDatumLineConfig,
   DMP_AZIMUTH_REFERENCE,
   finalizePlacementForReverse,
   stationNamesForEmittedShots,
-} from '../../utils/importSectionConfig';
+} from '../../utils/importLineConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore, projectSwitched } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -49,7 +49,7 @@ import {
 } from '../../utils/overlapHelpers';
 import {
   type VirtualConnection,
-  type ExistingSectionGeoEntry,
+  type ExistingLineGeoEntry,
   buildAdjacency,
   computeDmpBfsContext,
   stationPositionFromShotLines,
@@ -57,19 +57,19 @@ import {
   computeUnreachableSegments,
   computeSegmentLayout,
 } from '../../utils/segmentContext';
-import { sectionColorPalette } from '../../utils/colors';
+import { lineColorPalette } from '../../utils/colors';
 import { debugLog } from '../../utils/debugLog';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
-  buildPlacementSectionData,
+  buildPlacementLineData,
   findReverseImportConnection,
   importCreditFields,
   redirectDeletedTargets,
   resolveImportPeople,
-  resolveImportSectionDate,
-  type SectionEditState,
+  resolveImportLineDate,
+  type LineEditState,
   type ConfirmedOverlapInfo,
 } from '../../utils/batchImportHelpers';
 import {
@@ -87,14 +87,14 @@ import {
 } from '../common/emittedShots';
 import {
   applyAllOverlapTreatments,
-  backendExistingShotUpdatesForSections,
-  removeExistingShotUpdatesForSections,
+  backendExistingShotUpdatesForLines,
+  removeExistingShotUpdatesForLines,
   type ExistingShotUpdateLocal,
 } from '../../utils/overlapTreatment';
 import {
   NonFiniteShotError,
   assertSendableShots,
-  findIncompleteSections,
+  findIncompleteLines,
 } from '../../utils/importPayloadGuard';
 import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { blankEditableShot } from '../common/editableShot';
@@ -110,14 +110,14 @@ interface DmpNewImportDialogProps {
   zeroDatumConfig?: ZeroDatumConfigResult | undefined;
   onCancel: () => void;
   onBack: () => void;
-  onComplete: (newSectionIds?: number[], receipt?: ImportReceipt) => void;
+  onComplete: (newLineIds?: number[], receipt?: ImportReceipt) => void;
   /** Saved state to restore after returning from manual map placement. */
   savedManualPlacingState?: SavedManualPlacingState | undefined;
   /** If true, immediately start map placement when the dialog opens in manual placing phase. */
   autoStartManualPlacement?: boolean;
 }
 
-/** Mirror both frontend stores after a direct `import_sections` mutation. */
+/** Mirror both frontend stores after a direct `import_lines` mutation. */
 export function markSuccessfulDmpImportDirty(
   markProjectDirty = useProjectStore.getState().markDirty,
   markForwardEdit = useSpeleoStore.getState().markForwardEdit,
@@ -126,7 +126,7 @@ export function markSuccessfulDmpImportDirty(
   markForwardEdit();
 }
 
-// SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
+// LineEditState and ConfirmedOverlapInfo imported from batchImportHelpers
 
 /** A refusal from the payload guard is already written for the user; anything
  *  else reaching a catch here is a raw failure with no better wording. */
@@ -138,18 +138,18 @@ function importErrorMessage(e: unknown): string {
 
 /** A placement decision made during the manual_placing phase for a segment. */
 export type DirectPlacement = {
-  anchorSectionIndex: number;   // DMP file section index (anchor within segment)
-  anchorStationIndex: number;   // station within that section, in EMITTED numbering
+  anchorLineIndex: number;   // index into the DMP file's survey lines (anchor within segment)
+  anchorStationIndex: number;   // station within that line, in EMITTED numbering
   placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
 };
 
 export type SkippedSuggestionPlacement = {
-  suggestion: CrossSectionSuggestion;
+  suggestion: CrossLineSuggestion;
   mergeImportStation: number;
   mergeExistingStation: number;
 };
 
-type SavedSkippedSuggestionEntry = CrossSectionSuggestion | SkippedSuggestionPlacement;
+type SavedSkippedSuggestionEntry = CrossLineSuggestion | SkippedSuggestionPlacement;
 
 function normalizeSkippedSuggestionEntry(entry: SavedSkippedSuggestionEntry): SkippedSuggestionPlacement {
   if (
@@ -162,7 +162,7 @@ function normalizeSkippedSuggestionEntry(entry: SavedSkippedSuggestionEntry): Sk
     return entry as SkippedSuggestionPlacement;
   }
 
-  const suggestion = entry as CrossSectionSuggestion;
+  const suggestion = entry as CrossLineSuggestion;
   return {
     suggestion,
     mergeImportStation: suggestion.importStationIndex,
@@ -175,11 +175,11 @@ export interface SavedManualPlacingState {
   connections: VirtualConnection[];
   skippedIndices: number[];
   segmentQueue: number[][];
-  segmentAnchor: { sectionIndex: number; stationIndex: number };
+  segmentAnchor: { lineIndex: number; stationIndex: number };
   directPlacements: DirectPlacement[];
   skippedSuggestions: Array<[number, SavedSkippedSuggestionEntry]>;
   segmentSkipCounts: Array<[string, number]>;
-  sectionEdits: Array<[number, SectionEditState]>;
+  lineEdits: Array<[number, LineEditState]>;
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
   existingShotUpdates?: ExistingShotUpdateLocal[];
   earlyImported?: Array<[number, number]>;
@@ -197,28 +197,28 @@ export interface SavedManualPlacingState {
    */
   importedReceipts?: ImportReceipt[];
   /**
-   * Every project `section_id` this wizard run has created so far (#487
+   * Every project `line_id` this wizard run has created so far (#487
    * residue 2).
    *
    * Same carry, same reason, as `importedReceipts` above - and the same
    * consequence when it is missing: the reopened instance completes with an
-   * empty list, App.tsx's `if (newSectionIds?.length)` is false, and
+   * empty list, App.tsx's `if (newLineIds?.length)` is false, and
    * `suggest_orphan_placements` is never called. So the manual-placement route
    * silently skipped orphan detection that the direct route always ran.
    *
-   * It is also what `withdrawImportedSections` needs to be able to undo a run
+   * It is also what `withdrawImportedLines` needs to be able to undo a run
    * that crossed the handoff. Optional for the same reason: an older saved
    * state (or a test) has none, and absent reads as "nothing imported yet".
    */
-  importedSectionIds?: number[];
+  importedLineIds?: number[];
   /**
    * The `created_at` of the project those ids were created in.
    *
    * Nothing clears `dialogData` when the open project changes, so this struct
-   * can outlive the project it describes - and section ids are small
+   * can outlive the project it describes - and line ids are small
    * per-project integers, so every one of them would RESOLVE against whatever
    * is open instead. Carried so the withdrawal can refuse rather than delete
-   * same-numbered sections in the wrong survey. Optional: a state saved by an
+   * same-numbered lines in the wrong survey. Optional: a state saved by an
    * older build has none, and absent means "unknown", which never refuses.
    */
   projectKey?: string | null;
@@ -226,13 +226,13 @@ export interface SavedManualPlacingState {
   discardedIndices?: number[];
 }
 
-// ─── Effective section helpers ────────────────────────────────────────────────
+// ─── Effective line helpers ────────────────────────────────────────────────
 
 /**
  * Build a DmpSection reflecting edits (deleted shots removed, interpolated
- * values applied). Falls back to the raw section when no edits exist.
+ * values applied). Falls back to the raw line when no edits exist.
  */
-function buildEffectiveDmpSection(raw: DmpSection, edits: SectionEditState | undefined): DmpSection {
+function buildEffectiveDmpSection(raw: DmpSection, edits: LineEditState | undefined): DmpSection {
   if (!edits) return raw;
   return {
     ...editableShotsToDmpSection(raw, edits.shots),
@@ -243,22 +243,22 @@ function buildEffectiveDmpSection(raw: DmpSection, edits: SectionEditState | und
 
 /**
  * Adjust VirtualConnection station indices to account for deleted shots in
- * edited sections (so layout offsets align with post-treatment geometry).
+ * edited lines (so layout offsets align with post-treatment geometry).
  */
 function adjustConnectionsForEdits(
   connections: VirtualConnection[],
-  sectionEdits: Map<number, SectionEditState>,
+  lineEdits: Map<number, LineEditState>,
 ): VirtualConnection[] {
   return connections.map(conn => {
-    const importEdits = sectionEdits.get(conn.importSectionIndex);
+    const importEdits = lineEdits.get(conn.importLineIndex);
     const adjustedImport = importEdits
       ? adjustStationForDeletedShots(importEdits.shots, conn.importStationIndex)
       : conn.importStationIndex;
 
     const adjustedTarget =
       conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null
-        ? (sectionEdits.get(conn.targetImportIndex)
-            ? adjustStationForDeletedShots(sectionEdits.get(conn.targetImportIndex)!.shots, conn.targetImportStationIndex)
+        ? (lineEdits.get(conn.targetImportIndex)
+            ? adjustStationForDeletedShots(lineEdits.get(conn.targetImportIndex)!.shots, conn.targetImportStationIndex)
             : conn.targetImportStationIndex)
         : conn.targetImportStationIndex;
 
@@ -332,8 +332,8 @@ function collectImportConnectedComponents(
  * Build batch import configs from virtual connections + BFS order.
  *
  * Throws {@link NonFiniteShotError} rather than serializing a row that holds no
- * measurement, and reports every reachable section that produced no shots at
- * all in `emptySections` - both are sections that used to leave here silently
+ * measurement, and reports every reachable line that produced no shots at
+ * all in `emptyLines` - both are lines that used to leave here silently
  * and fail (or vanish) somewhere the user could not read.
  *
  * Exported for tests only - the dialog is its sole production caller.
@@ -343,22 +343,22 @@ export function buildBatchImport(
   zeroDatumIndex: number | null,
   dmpFile: DmpFile,
   selectionConfig: DmpSelectionConfig,
-  sectionEdits?: Map<number, SectionEditState>,
-  fullPool?: CrossSectionSuggestion[],
+  lineEdits?: Map<number, LineEditState>,
+  fullPool?: CrossLineSuggestion[],
   directPlacements?: DirectPlacement[],
   alreadyImported?: Map<number, number>,
   deferImportConnectedTo?: Set<number>,
   resolvedTheme = 'dark',
 ): {
-  configs: BackendImportSectionConfig[];
+  configs: BackendImportLineConfig[];
   unreachable: number[];
   emittedDmpIndices: number[];
-  emptySections: number[];
+  emptyLines: number[];
 } {
-  const palette = sectionColorPalette(resolvedTheme);
+  const palette = lineColorPalette(resolvedTheme);
   // Reachable, selected, and emitted nothing. A set because the emit loop makes
   // several passes over the same order.
-  const emptySections = new Set<number>();
+  const emptyLines = new Set<number>();
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
@@ -366,41 +366,41 @@ export function buildBatchImport(
     ? collectImportConnectedComponents(deferImportConnectedTo, adjacency)
     : new Set<number>();
 
-  // Direct placement map: section index → ImportPlacement (for manual_placing phase)
+  // Direct placement map: line index → ImportPlacement (for manual_placing phase)
   const directPlacementMap = new Map<number, ImportPlacement>();
   if (directPlacements) {
     for (const dp of directPlacements) {
-      directPlacementMap.set(dp.anchorSectionIndex, dp.placement);
+      directPlacementMap.set(dp.anchorLineIndex, dp.placement);
     }
   }
 
-  // Sections connected to existing project sections (anchors)
+  // Lines connected to existing project lines (anchors)
   const anchored = new Set<number>();
   if (zeroDatumIndex != null) anchored.add(zeroDatumIndex);
   for (const c of allConnections) {
-    if (c.targetType === 'existing' && !deferredImportSet.has(c.importSectionIndex)) {
-      anchored.add(c.importSectionIndex);
+    if (c.targetType === 'existing' && !deferredImportSet.has(c.importLineIndex)) {
+      anchored.add(c.importLineIndex);
     }
   }
-  // Direct placements also anchor their sections
+  // Direct placements also anchor their lines
   for (const dp of directPlacements ?? []) {
-    if (!deferredImportSet.has(dp.anchorSectionIndex)) {
-      anchored.add(dp.anchorSectionIndex);
+    if (!deferredImportSet.has(dp.anchorLineIndex)) {
+      anchored.add(dp.anchorLineIndex);
     }
   }
 
-  // BFS from anchored sections
+  // BFS from anchored lines
   let reachableOrder = bfsReachable(anchored, adjacency, deferredImportSet);
   let reachableSet = new Set(reachableOrder);
 
   // Find disconnected components with confirmed connections but no anchor.
   // For each, look for an existing-target suggestion in the full pool to create a fallback anchor.
   if (fullPool && fullPool.length > 0) {
-    const connectedSections = new Set(allConnections.map((c) => c.importSectionIndex));
-    const unreachableConnected = Array.from(connectedSections).filter((idx) => !reachableSet.has(idx));
+    const connectedLines = new Set(allConnections.map((c) => c.importLineIndex));
+    const unreachableConnected = Array.from(connectedLines).filter((idx) => !reachableSet.has(idx));
 
     if (unreachableConnected.length > 0) {
-      // Group unreachable connected sections into components via BFS on adjacency
+      // Group unreachable connected lines into components via BFS on adjacency
       const visited = new Set<number>();
       for (const seed of unreachableConnected) {
         if (visited.has(seed)) continue;
@@ -419,15 +419,15 @@ export function buildBatchImport(
           }
         }
 
-        // Find best existing-target suggestion for any section in this component
+        // Find best existing-target suggestion for any line in this component
         const componentSet = new Set(component);
-        let bestExisting: CrossSectionSuggestion | null = null;
+        let bestExisting: CrossLineSuggestion | null = null;
         for (const s of fullPool) {
           if (
             s.targetType === 'existing' &&
-            s.existingSectionId != null &&
-            componentSet.has(s.importSectionIndex) &&
-            !deferredImportSet.has(s.importSectionIndex)
+            s.existingLineId != null &&
+            componentSet.has(s.importLineIndex) &&
+            !deferredImportSet.has(s.importLineIndex)
           ) {
             if (!bestExisting || s.score > bestExisting.score) {
               bestExisting = s;
@@ -438,14 +438,14 @@ export function buildBatchImport(
         if (bestExisting) {
           // Create a fallback connection to anchor this component
           const fallbackConn: VirtualConnection = {
-            importSectionIndex: bestExisting.importSectionIndex,
+            importLineIndex: bestExisting.importLineIndex,
             importStationIndex: bestExisting.importStationIndex,
             targetType: 'existing',
-            existingSectionId: bestExisting.existingSectionId!,
+            existingLineId: bestExisting.existingLineId!,
             existingStationIndex: bestExisting.existingStationIndex,
           };
           allConnections.push(fallbackConn);
-          anchored.add(bestExisting.importSectionIndex);
+          anchored.add(bestExisting.importLineIndex);
         }
       }
 
@@ -462,20 +462,20 @@ export function buildBatchImport(
   // Build connection map - fallback 'existing' connections override original 'importing' ones
   const connectionMap = new Map<number, VirtualConnection>();
   for (const c of allConnections) {
-    const existing = connectionMap.get(c.importSectionIndex);
+    const existing = connectionMap.get(c.importLineIndex);
     if (!existing || c.targetType === 'existing') {
-      connectionMap.set(c.importSectionIndex, c);
+      connectionMap.set(c.importLineIndex, c);
     }
   }
 
-  // Track which sections are already emitted (by section_index) and their position in configs[]
+  // Track which lines are already emitted (by line_index) and their position in configs[]
   const emittedPosition = new Map<number, number>();
 
-  const configs: BackendImportSectionConfig[] = [];
+  const configs: BackendImportLineConfig[] = [];
   const sortedSelected = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
 
   // Multi-pass: BFS order may not match dependency order for fallback-anchored
-  // components, so retry sections whose from_importing target wasn't emitted yet.
+  // components, so retry lines whose from_importing target wasn't emitted yet.
   let lastConfigCount = -1;
   while (configs.length > lastConfigCount) {
     lastConfigCount = configs.length;
@@ -483,20 +483,20 @@ export function buildBatchImport(
       if (emittedPosition.has(idx)) continue;
       // Skip zero datum - already imported
       if (idx === zeroDatumIndex) continue;
-      // Skip sections already imported in a previous batch (early import)
+      // Skip lines already imported in a previous batch (early import)
       if (alreadyImported?.has(idx)) continue;
-      // Skipped sections and their import-to-import connected components are
+      // Skipped lines and their import-to-import connected components are
       // deferred from early import so manual placement can move the whole group.
       if (deferredImportSet.has(idx)) continue;
 
-      const section = dmpFile.sections[idx];
-      if (!section) continue;
+      const line = dmpFile.lines[idx];
+      if (!line) continue;
 
-      const edits = sectionEdits?.get(idx);
+      const edits = lineEdits?.get(idx);
 
       // Use edited shots if available, otherwise fall back to DMP data. The
       // emitted rows are kept as well as converted: their MNemo station numbers
-      // become the section's station names.
+      // become the line's station names.
       let emittedShots: EditableShot[];
       let backendShots: ShotData[];
       if (edits) {
@@ -511,12 +511,12 @@ export function buildBatchImport(
         backendShots = emittedShots.map(editableShotToShotData);
         if (deletedCount > 0) {
           debugLog(
-            `[buildBatchImport] Section ${idx} "${section.name}": ${edits.shots.length} total shots, ${deletedCount} deleted, ${backendShots.length} emitted`,
+            `[buildBatchImport] Line ${idx} "${line.name}": ${edits.shots.length} total shots, ${deletedCount} deleted, ${backendShots.length} emitted`,
           );
         }
         // Compare edited shots to original DMP data to detect interpolation
         if (import.meta.env.DEV) {
-          const origShots = convertToEditableShots(section.shots);
+          const origShots = convertToEditableShots(line.shots);
           let modifiedCount = 0;
           const aliveEdited = edits.shots.filter(s => !s.isDeleted);
           for (const edited of aliveEdited) {
@@ -538,34 +538,34 @@ export function buildBatchImport(
             }
           }
           if (modifiedCount > 0) {
-            debugLog(`[buildBatchImport] Section ${idx} "${section.name}": ${modifiedCount} shots have INTERPOLATED values`);
+            debugLog(`[buildBatchImport] Line ${idx} "${line.name}": ${modifiedCount} shots have INTERPOLATED values`);
           }
         }
       } else {
-        emittedShots = convertToEditableShots(section.shots);
+        emittedShots = convertToEditableShots(line.shots);
         backendShots = emittedShots.map(editableShotToShotData);
-        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
+        debugLog(`[buildBatchImport] Line ${idx} "${line.name}": no edits, using ${backendShots.length} DMP shots`);
       }
       if (backendShots.length === 0) {
         // Reported, not just logged: the `unreachable` list names what was never
-        // placed, so a section that WAS placed and then emitted nothing fell
+        // placed, so a line that WAS placed and then emitted nothing fell
         // through both and disappeared between the wizard and the map. Anything
         // anchored to it stalls the emit loop and disappears with it.
-        emptySections.add(idx);
-        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - 0 shots after filtering deleted`);
+        emptyLines.add(idx);
+        debugLog(`[buildBatchImport] Line ${idx} "${line.name}": SKIPPED - 0 shots after filtering deleted`);
         continue;
       }
       // The gates upstream ask the user to finish a half-filled row; this asks
       // whether the payload can be sent at all, which has to hold for every
       // route into this builder. A NaN here serializes to null and Rust rejects
       // the whole batch naming nothing.
-      assertSendableShots(backendShots, idx, edits?.name ?? section.name);
+      assertSendableShots(backendShots, idx, edits?.name ?? line.name);
 
       // Check for direct placement first (from manual_placing phase)
       const directPlacement = directPlacementMap.get(idx);
       let conn = connectionMap.get(idx);
 
-      // Fallback: section is only the TARGET of an import-to-import connection
+      // Fallback: line is only the TARGET of an import-to-import connection
       if (!directPlacement && !conn) {
         conn = findReverseImportConnection(idx, allConnections, emittedPosition);
         // Also check if the reverse target was already imported in a previous batch
@@ -573,22 +573,22 @@ export function buildBatchImport(
           for (const c of allConnections) {
             if (c.targetType !== 'importing') continue;
             if (c.targetImportIndex !== idx) continue;
-            if (!alreadyImported.has(c.importSectionIndex)) continue;
+            if (!alreadyImported.has(c.importLineIndex)) continue;
             conn = {
-              importSectionIndex: idx,
+              importLineIndex: idx,
               importStationIndex: c.targetImportStationIndex ?? 0,
               targetType: 'importing',
-              targetImportIndex: c.importSectionIndex,
+              targetImportIndex: c.importLineIndex,
               targetImportStationIndex: c.importStationIndex,
             };
             break;
           }
         }
         if (!conn) {
-          debugLog(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - no connection or direct placement`);
+          debugLog(`[buildBatchImport] Line ${idx} "${line.name}": SKIPPED - no connection or direct placement`);
           continue;
         }
-        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": using reverse import connection → ${conn.targetImportIndex}`);
+        debugLog(`[buildBatchImport] Line ${idx} "${line.name}": using reverse import connection → ${conn.targetImportIndex}`);
       }
 
       let placement: ImportPlacement;
@@ -601,21 +601,21 @@ export function buildBatchImport(
           ? adjustStationForDeletedShots(edits.shots, conn!.importStationIndex)
           : conn!.importStationIndex;
 
-        if (conn!.targetType === 'existing' && conn!.existingSectionId != null && conn!.existingStationIndex != null) {
+        if (conn!.targetType === 'existing' && conn!.existingLineId != null && conn!.existingStationIndex != null) {
           placement = {
             type: 'from_existing',
             import_station: adjustedImportStation,
             existing_station: {
-              section_id: conn!.existingSectionId,
+              line_id: conn!.existingLineId,
               station_index: conn!.existingStationIndex,
             },
           };
         } else if (conn!.targetType === 'importing' && conn!.targetImportIndex != null && conn!.targetImportStationIndex != null) {
           // Check if the target was already imported in a previous batch
-          const alreadyImportedSectionId = alreadyImported?.get(conn!.targetImportIndex);
-          if (alreadyImportedSectionId != null) {
-            // Convert from_importing → from_existing using the real section_id
-            const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
+          const alreadyImportedLineId = alreadyImported?.get(conn!.targetImportIndex);
+          if (alreadyImportedLineId != null) {
+            // Convert from_importing → from_existing using the real line_id
+            const targetEdits = lineEdits?.get(conn!.targetImportIndex);
             const adjTargetStn = targetEdits
               ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex!)
               : conn!.targetImportStationIndex!;
@@ -623,7 +623,7 @@ export function buildBatchImport(
               type: 'from_existing',
               import_station: adjustedImportStation,
               existing_station: {
-                section_id: alreadyImportedSectionId,
+                line_id: alreadyImportedLineId,
                 station_index: adjTargetStn,
               },
             };
@@ -631,7 +631,7 @@ export function buildBatchImport(
           // The target must already be emitted in configs[]
           let targetPos = emittedPosition.get(conn!.targetImportIndex);
           if (targetPos == null) {
-            // Primary target not yet emitted - try reversed connection to an already-emitted section
+            // Primary target not yet emitted - try reversed connection to an already-emitted line
             const reverseConn = findReverseImportConnection(idx, allConnections, emittedPosition);
             if (reverseConn) {
               conn = reverseConn;
@@ -641,7 +641,7 @@ export function buildBatchImport(
               // Check if the reverse target was already imported
               const reverseAlreadyId = alreadyImported?.get(conn.targetImportIndex!);
               if (reverseAlreadyId != null) {
-                const targetEdits2 = sectionEdits?.get(conn.targetImportIndex!);
+                const targetEdits2 = lineEdits?.get(conn.targetImportIndex!);
                 const adjTargetStn2 = targetEdits2
                   ? adjustStationForDeletedShots(targetEdits2.shots, conn.targetImportStationIndex!)
                   : conn.targetImportStationIndex!;
@@ -649,7 +649,7 @@ export function buildBatchImport(
                   type: 'from_existing',
                   import_station: adjustedImportStation2,
                   existing_station: {
-                    section_id: reverseAlreadyId,
+                    line_id: reverseAlreadyId,
                     station_index: adjTargetStn2,
                   },
                 };
@@ -659,34 +659,34 @@ export function buildBatchImport(
                 // Shouldn't happen - findReverseImportConnection checks emittedPosition
                 continue;
               }
-              const targetEdits2 = sectionEdits?.get(conn.targetImportIndex!);
+              const targetEdits2 = lineEdits?.get(conn.targetImportIndex!);
               const adjustedTargetStation2 = targetEdits2
                 ? adjustStationForDeletedShots(targetEdits2.shots, conn.targetImportStationIndex!)
                 : conn.targetImportStationIndex!;
               placement = {
                 type: 'from_importing',
                 import_station: adjustedImportStation2,
-                target_section_index: targetPos,
+                target_line_index: targetPos,
                 target_station_index: adjustedTargetStation2,
               };
               }
             } else {
               // No reverse available - will retry in next pass
               debugLog(
-                `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED - target import ${conn!.targetImportIndex} not yet emitted`,
+                `[buildBatchImport] Line ${idx} "${line.name}": DEFERRED - target import ${conn!.targetImportIndex} not yet emitted`,
               );
               continue;
             }
           } else {
             // Target is emitted - original code path
-            const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
+            const targetEdits = lineEdits?.get(conn!.targetImportIndex);
             const adjustedTargetStation = targetEdits
               ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex)
               : conn!.targetImportStationIndex;
             placement = {
               type: 'from_importing',
               import_station: adjustedImportStation,
-              target_section_index: targetPos,
+              target_line_index: targetPos,
               target_station_index: adjustedTargetStation,
             };
           }
@@ -697,28 +697,28 @@ export function buildBatchImport(
       }
 
       // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
-      const sectionName = edits?.name ?? section.name;
+      const lineName = edits?.name ?? line.name;
       const people = resolveImportPeople(edits, selectionConfig);
-      // `resolveImportSectionDate`, not the raw `??` chain plus a trailing
+      // `resolveImportLineDate`, not the raw `??` chain plus a trailing
       // `|| null`: a cleared date has to leave as null on EVERY emitter, and
       // the rule is stated once (#478 - see the helper).
-      const dateStr = resolveImportSectionDate(edits?.date, selectionConfig.defaultDate, section.date);
+      const dateStr = resolveImportLineDate(edits?.date, selectionConfig.defaultDate, line.date);
       const selectedPos = sortedSelected.indexOf(idx);
       const colorValue = (edits?.color || null) ?? palette[(selectedPos >= 0 ? selectedPos : 0) % palette.length] ?? '#4ecdc4';
-      const directionValue = edits?.direction ?? section.direction;
+      const directionValue = edits?.direction ?? line.direction;
       const qualityValue = edits?.quality ?? 1.0;
       const reverseValue = edits?.reverse ?? false;
 
-      // #24 / q14: the backend reverses before creating the section, so every
+      // #24 / q14: the backend reverses before creating the line, so every
       // placement index must address the post-reverse order - on BOTH sides of a
       // connection. A directPlacement was not derived from `conn`, so it passes
       // no connection at all (see finalizePlacementForReverse).
-      const finalPlacement = finalizePlacementForReverse(placement, reverseValue, backendShots.length, directPlacement ? null : conn, sectionEdits);
+      const finalPlacement = finalizePlacementForReverse(placement, reverseValue, backendShots.length, directPlacement ? null : conn, lineEdits);
 
-      const config: BackendImportSectionConfig = {
-        section_index: configs.length,
-        name: sectionName,
-        // The section's people and date override every imported shot.
+      const config: BackendImportLineConfig = {
+        line_index: configs.length,
+        name: lineName,
+        // The line's people and date override every imported shot.
         ...importCreditFields(people, dateStr),
         color: colorValue,
         direction: directionValue,
@@ -738,7 +738,7 @@ export function buildBatchImport(
     }
   }
 
-  // Unreachable = connected sections not in reachableSet + sections with no connection at all
+  // Unreachable = connected lines not in reachableSet + lines with no connection at all
   const allSelected = Array.from(selectionConfig.selectedIndices);
   const unreachable = allSelected.filter(
     (idx) => idx !== zeroDatumIndex && (deferredImportSet.has(idx) || !reachableSet.has(idx)),
@@ -754,23 +754,23 @@ export function buildBatchImport(
       else existingCount++;
     }
     for (const _dp of directPlacements ?? []) directCount++;
-    const editedSections = sectionEdits ? Array.from(sectionEdits.keys()).length : 0;
+    const editedLines = lineEdits ? Array.from(lineEdits.keys()).length : 0;
     debugLog(
       `[buildBatchImport] SUMMARY: ${configs.length} configs emitted, ${unreachable.length} unreachable,`,
       `connections: ${existingCount} existing + ${importingCount} importing + ${directCount} direct,`,
-      `sectionEdits has ${editedSections} entries`,
+      `lineEdits has ${editedLines} entries`,
     );
-    // Flag reachable sections that were never emitted (stuck in DEFERRED loop or skipped)
+    // Flag reachable lines that were never emitted (stuck in DEFERRED loop or skipped)
     for (const idx of reachableOrder) {
       if (idx === zeroDatumIndex) continue;
       if (!emittedPosition.has(idx)) {
-        const s = dmpFile.sections[idx];
-        const ed = sectionEdits?.get(idx);
+        const s = dmpFile.lines[idx];
+        const ed = lineEdits?.get(idx);
         const alive = ed ? ed.shots.filter(sh => !sh.isDeleted).length : s?.shots.length ?? 0;
         const hasConn = connectionMap.has(idx);
         const hasDirect = directPlacementMap.has(idx);
         debugLog(
-          `[buildBatchImport] ⚠ Section ${idx} "${s?.name}" REACHABLE but NOT EMITTED:`,
+          `[buildBatchImport] ⚠ Line ${idx} "${s?.name}" REACHABLE but NOT EMITTED:`,
           `alive=${alive} hasConn=${hasConn} hasDirect=${hasDirect}`,
           hasConn ? `conn=${JSON.stringify(connectionMap.get(idx))}` : '',
         );
@@ -778,18 +778,18 @@ export function buildBatchImport(
     }
   }
 
-  // A reachable section that never got emitted is stuck in the DEFERRED loop
+  // A reachable line that never got emitted is stuck in the DEFERRED loop
   // or was silently skipped - a genuinely unexpected condition worth production
   // signal (debugLog.ts: "keep console.warn for genuinely unexpected runtime
   // conditions"), unlike the trace-only diagnostics above. Index/count only,
-  // never a section NAME or `JSON.stringify`'d connection - both are
+  // never a line NAME or `JSON.stringify`'d connection - both are
   // file-controlled content that must not reach a production console log.
   //
   // #535: `!emittedPosition.has(idx)` alone is a superset of "gap" - it is
-  // ALSO true of every section that was legitimately handled elsewhere:
+  // ALSO true of every line that was legitimately handled elsewhere:
   // already emitted in an earlier batch (`alreadyImported`, skipped before
   // `emittedPosition.set` at the top of the loop), or reachable but empty
-  // (`emptySections`, already surfaced via `reportEmptySections`). Manual
+  // (`emptyLines`, already surfaced via `reportEmptyLines`). Manual
   // placement calls `buildBatchImport` fresh on every step with the FULL
   // accumulated graph, so `alreadyImported` alone grows by one on every
   // successful step - counting it here made the warning fire on every healthy
@@ -807,11 +807,11 @@ export function buildBatchImport(
       !emittedPosition.has(idx) &&
       !alreadyImported?.has(idx) &&
       !deferredImportSet.has(idx) &&
-      !emptySections.has(idx),
+      !emptyLines.has(idx),
   ).length;
   if (unemittedReachableCount > 0) {
     console.warn(
-      `[buildBatchImport] ${unemittedReachableCount} reachable section(s) were not emitted`,
+      `[buildBatchImport] ${unemittedReachableCount} reachable line(s) were not emitted`,
     );
   }
 
@@ -819,7 +819,7 @@ export function buildBatchImport(
     configs,
     unreachable,
     emittedDmpIndices: Array.from(emittedPosition.keys()),
-    emptySections: Array.from(emptySections),
+    emptyLines: Array.from(emptyLines),
   };
 }
 
@@ -860,16 +860,16 @@ export default function DmpNewImportDialog({
   const [manualPreviewRef, manualPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
-  const importSections = useProjectStore((s) => s.importSections);
+  const importLines = useProjectStore((s) => s.importLines);
   const executeBatch = useProjectStore((s) => s.executeBatch);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
-  // #357 item 9: seed new sections from the palette legible on this theme's
-  // MAP CANVAS, not its chrome - a section keeps whatever color it was
-  // created with, so this only ever affects colors handed to NEW sections.
-  const sectionPalette = useMemo(() => sectionColorPalette(resolvedTheme), [resolvedTheme]);
+  // #357 item 9: seed new lines from the palette legible on this theme's
+  // MAP CANVAS, not its chrome - a line keeps whatever color it was
+  // created with, so this only ever affects colors handed to NEW lines.
+  const linePalette = useMemo(() => lineColorPalette(resolvedTheme), [resolvedTheme]);
 
   // Shorthand for restoring state
   const saved = savedManualPlacingState;
@@ -879,8 +879,8 @@ export default function DmpNewImportDialog({
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
     saved ? new Set(saved.skippedIndices) : new Set()
   );
-  const [currentSuggestion, setCurrentSuggestion] = useState<CrossSectionSuggestion | null>(null);
-  const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
+  const [currentSuggestion, setCurrentSuggestion] = useState<CrossLineSuggestion | null>(null);
+  const [alternatives, setAlternatives] = useState<CrossLineSuggestion[]>([]);
   const [showAlternatives, setShowAlternatives] = useState(true);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -924,11 +924,11 @@ export default function DmpNewImportDialog({
     config?.import?.overlap_mode ?? 'import_data'
   );
 
-  // Section editing state
-  const [editState, setEditState] = useState<SectionEditState | null>(null);
+  // Line editing state
+  const [editState, setEditState] = useState<LineEditState | null>(null);
   /** The live edit state, for actions that must not read a captured copy - see
    *  refuseIncompleteShots. */
-  const editStateRef = useRef<SectionEditState | null>(null);
+  const editStateRef = useRef<LineEditState | null>(null);
   editStateRef.current = editState;
   /** Rows a mutator produced earlier in the CURRENT event, before React has
    *  rendered them. Cleared on every render - by then `editStateRef` holds them
@@ -936,16 +936,16 @@ export default function DmpNewImportDialog({
    *  result rather than from the array on screen. */
   const pendingShotsRef = useRef<EditableShot[] | null>(null);
   pendingShotsRef.current = null;
-  // Tracks which import section index the current editState was loaded for.
-  // Used to prevent the sync effect from writing stale editState to the wrong section
+  // Tracks which import line index the current editState was loaded for.
+  // Used to prevent the sync effect from writing stale editState to the wrong line
   // when currentSuggestion changes before editState catches up.
-  const [editStateForSection, setEditStateForSection] = useState<number | null>(null);
-  /** Which section `editStateRef` currently holds, as a ref: the gate below has
+  const [editStateForLine, setEditStateForLine] = useState<number | null>(null);
+  /** Which line `editStateRef` currently holds, as a ref: the gate below has
    *  to pair the two, and a captured pairing is the stale-closure bug again. */
-  const editStateForSectionRef = useRef<number | null>(null);
-  editStateForSectionRef.current = editStateForSection;
-  const sectionEditsRef = useRef<Map<number, SectionEditState>>(
-    saved ? new Map(saved.sectionEdits) : new Map()
+  const editStateForLineRef = useRef<number | null>(null);
+  editStateForLineRef.current = editStateForLine;
+  const lineEditsRef = useRef<Map<number, LineEditState>>(
+    saved ? new Map(saved.lineEdits) : new Map()
   );
   const confirmedOverlapsRef = useRef<Map<number, ConfirmedOverlapInfo>>(
     saved ? new Map(saved.confirmedOverlaps ?? []) : new Map()
@@ -957,14 +957,14 @@ export default function DmpNewImportDialog({
 
   // Unified segment context (import-side DMP BFS + existing anchors, target-side geometry)
   const [segmentContext, setSegmentContext] = useState<{
-    importSide: ContextSectionGeometry[];
-    targetSide: ContextSectionGeometry[];
+    importSide: ContextLineGeometry[];
+    targetSide: ContextLineGeometry[];
   } | null>(null);
 
-  // Cache all cross-section suggestions from startup calculation
-  const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
+  // Cache all cross-line suggestions from startup calculation
+  const suggestionPoolRef = useRef<CrossLineSuggestion[]>([]);
   // Keep full pool (unfiltered) so buildBatchImport can find existing-target anchors
-  const fullPoolRef = useRef<CrossSectionSuggestion[]>([]);
+  const fullPoolRef = useRef<CrossLineSuggestion[]>([]);
   const temporalDistanceCacheRef = useRef<Map<string, number>>(new Map());
   const temporalDistanceFetchedOriginsRef = useRef<Set<string>>(new Set());
 
@@ -974,40 +974,40 @@ export default function DmpNewImportDialog({
 
   const [segmentPlacementMode, setSegmentPlacementMode] = useState<SegmentPlacementMode>('manual');
   const [segmentAnchor, setSegmentAnchor] = useState<{
-    sectionIndex: number; stationIndex: number;
+    lineIndex: number; stationIndex: number;
   } | null>(saved?.segmentAnchor ?? null);
 
-  // Preview anchor tracks which station the SectionPreview highlights.
+  // Preview anchor tracks which station the LinePreview highlights.
   // Follows dropdown hover; reverts to segmentAnchor on dropdown close.
   const [previewAnchor, setPreviewAnchor] = useState<{
-    sectionIndex: number; stationIndex: number;
+    lineIndex: number; stationIndex: number;
   } | null>(saved?.segmentAnchor ?? null);
   const segmentAnchorRef = useRef(segmentAnchor);
 
   // Commit a new anchor: updates committed value, preview, and ref together.
-  const commitSegmentAnchor = useCallback((anchor: { sectionIndex: number; stationIndex: number } | null) => {
+  const commitSegmentAnchor = useCallback((anchor: { lineIndex: number; stationIndex: number } | null) => {
     setSegmentAnchor(anchor);
     setPreviewAnchor(anchor);
     segmentAnchorRef.current = anchor;
   }, []);
 
-  // When a section dropdown hovers an option, preview it on the map;
+  // When a line dropdown hovers an option, preview it on the map;
   // when dropdown closes without selection, revert to the committed anchor.
   // Uses ref (not state) to avoid stale-closure race conditions.
-  const handleAnchorSectionHover = useCallback((value: string | null) => {
+  const handleAnchorLineHover = useCallback((value: string | null) => {
     if (value !== null) {
-      setPreviewAnchor({ sectionIndex: Number(value), stationIndex: 0 });
+      setPreviewAnchor({ lineIndex: Number(value), stationIndex: 0 });
     } else {
       setPreviewAnchor(segmentAnchorRef.current);
     }
   }, []);
 
-  // Same for station dropdown hover - reads current section from ref.
+  // Same for station dropdown hover - reads current line from ref.
   const handleAnchorStationHover = useCallback((value: string | null) => {
     if (value !== null) {
       const current = segmentAnchorRef.current;
       if (current) {
-        setPreviewAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(value) });
+        setPreviewAnchor({ lineIndex: current.lineIndex, stationIndex: Number(value) });
       }
     } else {
       setPreviewAnchor(segmentAnchorRef.current);
@@ -1028,8 +1028,8 @@ export default function DmpNewImportDialog({
    *  downstream of the one clicked, and a pick past the emitted end made
    *  `merge_stations` refuse the whole batch. */
   const emittedAnchorStation = useCallback(
-    (anchor: { sectionIndex: number; stationIndex: number }): number => {
-      const edits = sectionEditsRef.current.get(anchor.sectionIndex);
+    (anchor: { lineIndex: number; stationIndex: number }): number => {
+      const edits = lineEditsRef.current.get(anchor.lineIndex);
       return edits ? toEmittedStationIndex(edits.shots, anchor.stationIndex) : anchor.stationIndex;
     },
     []
@@ -1039,18 +1039,18 @@ export default function DmpNewImportDialog({
    *  rows, so a dot below a blank row is numbered one lower than the row the
    *  user is looking at in the grid. */
   const visibleAnchorStation = useCallback(
-    (sectionIndex: number, emittedStationIndex: number): number => {
-      const edits = sectionEditsRef.current.get(sectionIndex);
+    (lineIndex: number, emittedStationIndex: number): number => {
+      const edits = lineEditsRef.current.get(lineIndex);
       return edits ? fromEmittedStationIndex(edits.shots, emittedStationIndex) : emittedStationIndex;
     },
     []
   );
 
   // Per-mode state for manual_placing
-  const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
+  const [fromExistingLineId, setFromExistingLineId] = useState<number | null>(null);
   const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
 
-  // Track original suggestions for sections skipped during suggesting phase
+  // Track original suggestions for lines skipped during suggesting phase
   const skippedSuggestionsRef = useRef<Map<number, SkippedSuggestionPlacement>>(
     new Map((saved?.skippedSuggestions ?? []).map(([idx, entry]) => [idx, normalizeSkippedSuggestionEntry(entry)]))
   );
@@ -1058,7 +1058,7 @@ export default function DmpNewImportDialog({
   // Accumulated direct placements for manual_placing phase
   const directPlacementsRef = useRef<DirectPlacement[]>(saved?.directPlacements ?? []);
 
-  // DMP index → project section_id for sections imported during early import
+  // DMP index → project line_id for lines imported during early import
   const earlyImportedRef = useRef<Map<number, number>>(
     saved?.earlyImported ? new Map(saved.earlyImported) : new Map()
   );
@@ -1082,21 +1082,21 @@ export default function DmpNewImportDialog({
   // Prevent re-entering early-import transition before state updates land.
   const transitionToPlacingInFlightRef = useRef(false);
 
-  // Accumulate all section IDs created during import for post-import orphan
+  // Accumulate all line IDs created during import for post-import orphan
   // detection - seeded from the saved state for the same reason the receipts
   // below are, and with a sharper failure when it is not: an empty list here
   // reaches App.tsx as "this import created nothing", which skips
   // `suggest_orphan_placements` altogether.
-  const importedSectionIdsRef = useRef<number[]>([...(saved?.importedSectionIds ?? [])]);
+  const importedLineIdsRef = useRef<number[]>([...(saved?.importedLineIds ?? [])]);
   // WHICH project those ids belong to, carried with them. `created_at` is the
   // identity `executeCommand`'s own staleness guard uses: immutable for the life
   // of a project, unlike `file_path`. Read once (the ref keeps its first value).
   const importProjectKeyRef = useRef<string | null>(
     saved?.projectKey ?? useProjectStore.getState().project?.created_at ?? null
   );
-  // Accumulate the import_receipt from each import_sections call (early/segment/
+  // Accumulate the import_receipt from each import_lines call (early/segment/
   // late/pending) into one #391 summary for the whole wizard run, keyed by
-  // constant file-level provenance (source label/name/total sections) spread
+  // constant file-level provenance (source label/name/total lines) spread
   // into every call below.
   //
   // Seeded from the saved state (#487): manual map placement CLOSES this dialog
@@ -1110,7 +1110,7 @@ export default function DmpNewImportDialog({
   const dmpProvenance = {
     sourceLabel: 'MNemo DMP',
     sourceFileName: extractFilename(dmpFilePath ?? ''),
-    sectionsFound: dmpFile.sections.length,
+    linesFound: dmpFile.lines.length,
   };
 
   // Refs to avoid stale closures
@@ -1119,7 +1119,7 @@ export default function DmpNewImportDialog({
   const skippedIndicesRef = useRef(skippedIndices);
   skippedIndicesRef.current = skippedIndices;
 
-  const chooseSegmentAnchorSection = useCallback((segment: number[]): number => {
+  const chooseSegmentAnchorLine = useCallback((segment: number[]): number => {
     return segment.find((idx) => skippedIndicesRef.current.has(idx)) ?? segment[0]!;
   }, []);
 
@@ -1128,29 +1128,29 @@ export default function DmpNewImportDialog({
     [selectionConfig.selectedIndices]
   );
 
-  // Section currently being edited in the right-side editor panel.
-  // In suggesting mode this follows the current suggestion section.
-  // In manual placing mode this follows the selected segment anchor section.
-  const activeEditableSectionIndex = useMemo(() => {
-    if (currentSuggestion) return currentSuggestion.importSectionIndex;
-    if (phase === 'manual_placing' && segmentAnchor) return segmentAnchor.sectionIndex;
+  // Line currently being edited in the right-side editor panel.
+  // In suggesting mode this follows the current suggestion line.
+  // In manual placing mode this follows the selected segment anchor line.
+  const activeEditableLineIndex = useMemo(() => {
+    if (currentSuggestion) return currentSuggestion.importLineIndex;
+    if (phase === 'manual_placing' && segmentAnchor) return segmentAnchor.lineIndex;
     return null;
   }, [currentSuggestion, phase, segmentAnchor]);
 
   const totalSelected = selectedIndices.length;
 
-  // Set of section indices that already have a connection
+  // Set of line indices that already have a connection
   const connectedIndices = useMemo(() => {
-    return new Set(connections.map((c) => c.importSectionIndex));
+    return new Set(connections.map((c) => c.importLineIndex));
   }, [connections]);
 
   // Compute import shot count for current suggestion
   const importShotCount = useMemo(() => {
     if (!currentSuggestion) return 0;
-    const section = dmpFile.sections[currentSuggestion.importSectionIndex];
-    if (!section) return 0;
-    return section.shots.filter((s) => s.shot_type === 'Standard').length;
-  }, [currentSuggestion, dmpFile.sections]);
+    const line = dmpFile.lines[currentSuggestion.importLineIndex];
+    if (!line) return 0;
+    return line.shots.filter((s) => s.shot_type === 'Standard').length;
+  }, [currentSuggestion, dmpFile.lines]);
 
   // Compute merge options for the current suggestion
   const mergeOptions = useMemo(() => {
@@ -1171,23 +1171,23 @@ export default function DmpNewImportDialog({
     }
   }, [currentSuggestion, mergeOptions]);
 
-  // Check if the current suggestion targets an existing section that is doubly-anchored
+  // Check if the current suggestion targets an existing line that is doubly-anchored
   // (modified overlap shots sit between two positional constraints). When true, only
   // 'existing_data' and 'keep_both' are valid - interpolation / import_data would break
   // a closure or zero-datum constraint.
   //
   // A merge/closure is only an anchor if the partner can independently reach a zero datum
-  // without going through this section.  A merge to a free-floating section is NOT a
+  // without going through this line.  A merge to a free-floating line is NOT a
   // positional constraint - the partner can follow via cascading offset adjustments.
   const isTargetDoublyAnchored = useMemo(() => {
     if (!currentSuggestion) return false;
-    if (currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) return false;
+    if (currentSuggestion.targetType !== 'existing' || currentSuggestion.existingLineId == null) return false;
     if (currentSuggestion.matchedShots === 0) return false;
 
     const project = useProjectStore.getState().project;
     if (!project) return false;
 
-    const sid = currentSuggestion.existingSectionId;
+    const sid = currentSuggestion.existingLineId;
 
     // BFS: can `start` reach a placement zero datum via merges + aligned
     // closures without traversing through `excluded`? A GPS fix pins nothing in
@@ -1200,24 +1200,24 @@ export default function DmpNewImportDialog({
         if (current === excluded) continue;
         if (visited.has(current)) continue;
         visited.add(current);
-        if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.section_id === current)) {
+        if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.line_id === current)) {
           return true;
         }
         for (const m of project.station_merges) {
-          if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
-            queue.push(m.station_b.section_id);
+          if (m.station_a.line_id === current && !visited.has(m.station_b.line_id)) {
+            queue.push(m.station_b.line_id);
           }
-          if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
-            queue.push(m.station_a.section_id);
+          if (m.station_b.line_id === current && !visited.has(m.station_a.line_id)) {
+            queue.push(m.station_a.line_id);
           }
         }
         for (const c of project.loop_closures) {
           if (!c.is_aligned) continue;
-          if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
-            queue.push(c.station_b.section_id);
+          if (c.station_a.line_id === current && !visited.has(c.station_b.line_id)) {
+            queue.push(c.station_b.line_id);
           }
-          if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
-            queue.push(c.station_a.section_id);
+          if (c.station_b.line_id === current && !visited.has(c.station_a.line_id)) {
+            queue.push(c.station_a.line_id);
           }
         }
       }
@@ -1235,29 +1235,29 @@ export default function DmpNewImportDialog({
       maxShot = currentSuggestion.existingStationIndex - 1;
     }
 
-    // Collect anchor station indices on the target section.
+    // Collect anchor station indices on the target line.
     // Placement zero datums are always anchors (a GPS fix is not, #741).
     // Merges/closures are only anchors if the partner is independently
     // datum-backed.
     const anchors: number[] = [];
 
     for (const zd of project.zero_datums) {
-      if (zd.role === 'Placement' && zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+      if (zd.role === 'Placement' && zd.station_ref.line_id === sid) anchors.push(zd.station_ref.station_index);
     }
     for (const m of project.station_merges) {
-      if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
+      if (m.station_a.line_id === sid && hasDatumPathExcluding(m.station_b.line_id, sid)) {
         anchors.push(m.station_a.station_index);
       }
-      if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
+      if (m.station_b.line_id === sid && hasDatumPathExcluding(m.station_a.line_id, sid)) {
         anchors.push(m.station_b.station_index);
       }
     }
     for (const c of project.loop_closures) {
       if (!c.is_aligned) continue;
-      if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
+      if (c.station_a.line_id === sid && hasDatumPathExcluding(c.station_b.line_id, sid)) {
         anchors.push(c.station_a.station_index);
       }
-      if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
+      if (c.station_b.line_id === sid && hasDatumPathExcluding(c.station_a.line_id, sid)) {
         anchors.push(c.station_b.station_index);
       }
     }
@@ -1277,34 +1277,34 @@ export default function DmpNewImportDialog({
     let cancelled = false;
 
     const compute = async () => {
-      const importIdx = currentSuggestion.importSectionIndex;
-      const importSide: ContextSectionGeometry[] = [];
-      const targetSide: ContextSectionGeometry[] = [];
-      const coveredExistingSectionIds = new Set<number>();
+      const importIdx = currentSuggestion.importLineIndex;
+      const importSide: ContextLineGeometry[] = [];
+      const targetSide: ContextLineGeometry[] = [];
+      const coveredExistingLineIds = new Set<number>();
 
-      // Store raw segment geometry so we can position DMP sections relative to existing ones.
-      // Maps existing section ID → { shotLines, frameOffsetX/Y, side }
-      const existingSectionGeo = new Map<number, ExistingSectionGeoEntry>();
+      // Store raw segment geometry so we can position DMP lines relative to existing ones.
+      // Maps existing line ID → { shotLines, frameOffsetX/Y, side }
+      const existingLineGeo = new Map<number, ExistingLineGeoEntry>();
 
       // Import-side BFS through importing-type connections
       const importExclude = new Set<number>();
       if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
         importExclude.add(currentSuggestion.targetImportIndex);
       }
-      const importBfs = computeDmpBfsContext(importIdx, importExclude, connections, dmpFile.sections);
+      const importBfs = computeDmpBfsContext(importIdx, importExclude, connections, dmpFile.lines);
       importSide.push(...importBfs.dmpContext);
 
       // Target-side handling
       let targetBfsVisited: Set<number> | undefined;
-      if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingSectionId != null) {
-        // Fetch segment geometry for the existing target section
+      if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingLineId != null) {
+        // Fetch segment geometry for the existing target line
         try {
-          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId }, { purpose: 'fetch segment geometry for target section' });
+          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { lineId: currentSuggestion.existingLineId }, { purpose: 'fetch segment geometry for target line' });
           if (cancelled) return;
 
-          for (const s of result.sections) {
-            coveredExistingSectionIds.add(s.section_id);
-            existingSectionGeo.set(s.section_id, {
+          for (const s of result.lines) {
+            coveredExistingLineIds.add(s.line_id);
+            existingLineGeo.set(s.line_id, {
               shotLines: s.shot_lines,
               frameOffsetX: 0,
               frameOffsetY: 0,
@@ -1312,15 +1312,15 @@ export default function DmpNewImportDialog({
             });
           }
 
-          const ctx: ContextSectionGeometry[] = result.sections
-            .filter((s) => s.section_id !== currentSuggestion.existingSectionId)
+          const ctx: ContextLineGeometry[] = result.lines
+            .filter((s) => s.line_id !== currentSuggestion.existingLineId)
             .map((s) => ({
               color: s.color,
               shots: s.shot_lines
-                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-                .map((line) => ({
-                  from: [line[0]![0]!, line[0]![1]!] as [number, number],
-                  to: [line[1]![0]!, line[1]![1]!] as [number, number],
+                .filter((polyline) => polyline.length >= 2 && polyline[0]!.length >= 2 && polyline[1]!.length >= 2)
+                .map((polyline) => ({
+                  from: [polyline[0]![0]!, polyline[0]![1]!] as [number, number],
+                  to: [polyline[1]![0]!, polyline[1]![1]!] as [number, number],
                 })),
             }))
             .filter((s) => s.shots.length > 0);
@@ -1332,20 +1332,20 @@ export default function DmpNewImportDialog({
       } else if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
         // Target-side DMP BFS
         const targetExclude = new Set<number>([importIdx]);
-        const targetBfs = computeDmpBfsContext(currentSuggestion.targetImportIndex, targetExclude, connections, dmpFile.sections);
+        const targetBfs = computeDmpBfsContext(currentSuggestion.targetImportIndex, targetExclude, connections, dmpFile.lines);
         targetSide.push(...targetBfs.dmpContext);
         targetBfsVisited = targetBfs.visitedIndices;
 
         // Process target-side existing anchors
         for (const anchor of targetBfs.existingAnchors) {
-          if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
-          coveredExistingSectionIds.add(anchor.existingSectionId);
+          if (coveredExistingLineIds.has(anchor.existingLineId)) continue;
+          coveredExistingLineIds.add(anchor.existingLineId);
 
           try {
-            const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for anchor section' });
+            const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { lineId: anchor.existingLineId }, { purpose: 'fetch segment geometry for anchor line' });
             if (cancelled) return;
 
-            const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
+            const anchorGeo = result.lines.find((s) => s.line_id === anchor.existingLineId);
             if (!anchorGeo) continue;
 
             const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
@@ -1354,10 +1354,10 @@ export default function DmpNewImportDialog({
             const dx = anchor.x - mergePos.x;
             const dy = anchor.y - mergePos.y;
 
-            for (const s of result.sections) {
-              if (coveredExistingSectionIds.has(s.section_id)) continue;
-              coveredExistingSectionIds.add(s.section_id);
-              existingSectionGeo.set(s.section_id, {
+            for (const s of result.lines) {
+              if (coveredExistingLineIds.has(s.line_id)) continue;
+              coveredExistingLineIds.add(s.line_id);
+              existingLineGeo.set(s.line_id, {
                 shotLines: s.shot_lines,
                 frameOffsetX: dx,
                 frameOffsetY: dy,
@@ -1365,10 +1365,10 @@ export default function DmpNewImportDialog({
               });
 
               const shots = s.shot_lines
-                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-                .map((line) => ({
-                  from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
-                  to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
+                .filter((polyline) => polyline.length >= 2 && polyline[0]!.length >= 2 && polyline[1]!.length >= 2)
+                .map((polyline) => ({
+                  from: [polyline[0]![0]! + dx, polyline[0]![1]! + dy] as [number, number],
+                  to: [polyline[1]![0]! + dx, polyline[1]![1]! + dy] as [number, number],
                 }));
 
               if (shots.length > 0) targetSide.push({ color: s.color, shots });
@@ -1381,14 +1381,14 @@ export default function DmpNewImportDialog({
 
       // Process import-side existing anchors
       for (const anchor of importBfs.existingAnchors) {
-        if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
-        coveredExistingSectionIds.add(anchor.existingSectionId);
+        if (coveredExistingLineIds.has(anchor.existingLineId)) continue;
+        coveredExistingLineIds.add(anchor.existingLineId);
 
         try {
-          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for import-side anchor' });
+          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { lineId: anchor.existingLineId }, { purpose: 'fetch segment geometry for import-side anchor' });
           if (cancelled) return;
 
-          const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
+          const anchorGeo = result.lines.find((s) => s.line_id === anchor.existingLineId);
           if (!anchorGeo) continue;
 
           const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
@@ -1397,10 +1397,10 @@ export default function DmpNewImportDialog({
           const dx = anchor.x - mergePos.x;
           const dy = anchor.y - mergePos.y;
 
-          for (const s of result.sections) {
-            if (coveredExistingSectionIds.has(s.section_id)) continue;
-            coveredExistingSectionIds.add(s.section_id);
-            existingSectionGeo.set(s.section_id, {
+          for (const s of result.lines) {
+            if (coveredExistingLineIds.has(s.line_id)) continue;
+            coveredExistingLineIds.add(s.line_id);
+            existingLineGeo.set(s.line_id, {
               shotLines: s.shot_lines,
               frameOffsetX: dx,
               frameOffsetY: dy,
@@ -1408,10 +1408,10 @@ export default function DmpNewImportDialog({
             });
 
             const shots = s.shot_lines
-              .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-              .map((line) => ({
-                from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
-                to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
+              .filter((polyline) => polyline.length >= 2 && polyline[0]!.length >= 2 && polyline[1]!.length >= 2)
+              .map((polyline) => ({
+                from: [polyline[0]![0]! + dx, polyline[0]![1]! + dy] as [number, number],
+                to: [polyline[1]![0]! + dx, polyline[1]![1]! + dy] as [number, number],
               }));
 
             if (shots.length > 0) importSide.push({ color: s.color, shots });
@@ -1421,17 +1421,17 @@ export default function DmpNewImportDialog({
         }
       }
 
-      // Bridge discovery: find DMP sections with confirmed existing connections
-      // to sections we have geometry for, but not yet shown by BFS.
-      // This handles the case where DMP sections A and B both connect to existing X
+      // Bridge discovery: find DMP lines with confirmed existing connections
+      // to lines we have geometry for, but not yet shown by BFS.
+      // This handles the case where DMP lines A and B both connect to existing X
       // but have no importing-type edge between them.
       const shownDmpIndices = new Set(importBfs.visitedIndices);
       if (targetBfsVisited) {
         for (const idx of targetBfsVisited) shownDmpIndices.add(idx);
       }
 
-      // Bridge discovery: find DMP sections connected through shared existing sections
-      const bridged = discoverBridgedDmpSections(connections, shownDmpIndices, existingSectionGeo, dmpFile.sections);
+      // Bridge discovery: find DMP lines connected through shared existing lines
+      const bridged = discoverBridgedDmpSections(connections, shownDmpIndices, existingLineGeo, dmpFile.lines);
       importSide.push(...bridged.importSide);
       targetSide.push(...bridged.targetSide);
 
@@ -1445,20 +1445,20 @@ export default function DmpNewImportDialog({
 
     compute();
     return () => { cancelled = true; };
-  }, [currentSuggestion, connections, dmpFile.sections]);
+  }, [currentSuggestion, connections, dmpFile.lines]);
 
-  // Initialize / restore section edit state when active editable section changes.
+  // Initialize / restore line edit state when active editable line changes.
   useEffect(() => {
-    if (activeEditableSectionIndex == null) {
-      setEditStateForSection(null);
+    if (activeEditableLineIndex == null) {
+      setEditStateForLine(null);
       setEditState(null);
       return;
     }
 
-    const idx = activeEditableSectionIndex;
+    const idx = activeEditableLineIndex;
 
     // Restore from ref if previously edited
-    const existing = sectionEditsRef.current.get(idx);
+    const existing = lineEditsRef.current.get(idx);
     if (existing) {
       // Re-wrapped in the DEV guard (unlike the trivial-argument sites nearby):
       // `debugLog` itself no-ops in production, but JS evaluates a function's
@@ -1467,74 +1467,74 @@ export default function DmpNewImportDialog({
       // skips the work, not the no-op.
       if (import.meta.env.DEV) {
         debugLog(
-          `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
+          `[init-effect] RESTORE line=${idx} from lineEditsRef`,
           `shots.length=${existing.shots.length}`,
           `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
         );
       }
-      // The counter is per section, and only the initialize branch below used to
-      // seed it: coming back to a section after editing a SHORTER one handed out
-      // temp ids this section had already used, so two rows shared a key and the
+      // The counter is per line, and only the initialize branch below used to
+      // seed it: coming back to a line after editing a SHORTER one handed out
+      // temp ids this line had already used, so two rows shared a key and the
       // grid painted one row's marks on the other.
       nextTempIdRef.current =
         existing.shots.reduce((max, s) => Math.max(max, s.tempId ?? 0), existing.shots.length) + 1;
-      setEditStateForSection(idx);
+      setEditStateForLine(idx);
       setEditState(existing);
       return;
     }
 
     // Initialize from DMP data + selectionConfig defaults
-    const section = dmpFile.sections[idx];
-    if (!section) {
-      setEditStateForSection(null);
+    const line = dmpFile.lines[idx];
+    if (!line) {
+      setEditStateForLine(null);
       setEditState(null);
       return;
     }
 
-    const shots = convertToEditableShots(section.shots);
+    const shots = convertToEditableShots(line.shots);
     nextTempIdRef.current = shots.length + 1;
     debugLog(
-      `[init-effect] INITIALIZE section=${idx} "${section.name}"`,
-      `dmpShots=${section.shots.length} standardShots=${shots.length}`,
+      `[init-effect] INITIALIZE line=${idx} "${line.name}"`,
+      `dmpShots=${line.shots.length} standardShots=${shots.length}`,
     );
 
     // Color based on position in selection order (matches zero datum dialog)
     const selectedPos = selectedIndices.indexOf(idx);
-    const newState: SectionEditState = {
-      name: section.name,
+    const newState: LineEditState = {
+      name: line.name,
       ...resolveImportPeople(undefined, selectionConfig),
-      date: selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? '',
-      color: sectionPalette[(selectedPos >= 0 ? selectedPos : 0) % sectionPalette.length] ?? '#4ecdc4',
-      direction: section.direction === 'out' ? 'out' : 'in',
+      date: selectionConfig.defaultDate ?? line.date?.split(/[T ]/)[0] ?? '',
+      color: linePalette[(selectedPos >= 0 ? selectedPos : 0) % linePalette.length] ?? '#4ecdc4',
+      direction: line.direction === 'out' ? 'out' : 'in',
       quality: 1.0,
       reverse: false,
       shots,
     };
 
-    sectionEditsRef.current.set(idx, newState);
-    setEditStateForSection(idx);
+    lineEditsRef.current.set(idx, newState);
+    setEditStateForLine(idx);
     setEditState(newState);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEditableSectionIndex]);
+  }, [activeEditableLineIndex]);
 
-  // Keep sectionEditsRef in sync with editState changes (user edits to shots/metadata).
-  // Guard: only write when editState actually belongs to the active edit section.
-  // Without this guard, when the active section changes, this effect can briefly fire
-  // with stale editState from the previous section before setEditState takes effect.
+  // Keep lineEditsRef in sync with editState changes (user edits to shots/metadata).
+  // Guard: only write when editState actually belongs to the active edit line.
+  // Without this guard, when the active line changes, this effect can briefly fire
+  // with stale editState from the previous line before setEditState takes effect.
   useEffect(() => {
-    if (!editState || activeEditableSectionIndex == null) return;
-    if (editStateForSection !== activeEditableSectionIndex) {
+    if (!editState || activeEditableLineIndex == null) return;
+    if (editStateForLine !== activeEditableLineIndex) {
       debugLog(
-        `[sync-effect] SKIPPED stale write: editStateFor=${editStateForSection} !== active=${activeEditableSectionIndex}`,
+        `[sync-effect] SKIPPED stale write: editStateFor=${editStateForLine} !== active=${activeEditableLineIndex}`,
       );
       return;
     }
     debugLog(
-      `[sync-effect] WRITING sectionEditsRef[${activeEditableSectionIndex}]`,
+      `[sync-effect] WRITING lineEditsRef[${activeEditableLineIndex}]`,
       `editState.shots.length=${editState.shots.length}`,
     );
-    sectionEditsRef.current.set(activeEditableSectionIndex, editState);
-  }, [editState, activeEditableSectionIndex, editStateForSection]);
+    lineEditsRef.current.set(activeEditableLineIndex, editState);
+  }, [editState, activeEditableLineIndex, editStateForLine]);
 
   // Compute frozen shot indices - matched overlap shots that must not be deleted
   const frozenShotIndices = useMemo(() => {
@@ -1567,19 +1567,19 @@ export default function DmpNewImportDialog({
     // Get target shots for data replacement
     let targetShots: TargetShotLike[] | null = null;
     if (overlapMode !== 'import_data' && overlapMode !== 'keep_both') {
-      const { targetType, existingSectionId, targetImportIndex, existingStationIndex } = currentSuggestion;
+      const { targetType, existingLineId, targetImportIndex, existingStationIndex } = currentSuggestion;
 
-      if (targetType === 'existing' && existingSectionId != null) {
+      if (targetType === 'existing' && existingLineId != null) {
         const currentProject = useProjectStore.getState().project;
-        const targetSection = currentProject?.sections.find((s) => s.id === existingSectionId);
-        if (targetSection) targetShots = targetSection.shots;
+        const targetLine = currentProject?.lines.find((s) => s.id === existingLineId);
+        if (targetLine) targetShots = targetLine.shots;
       } else if (targetType === 'importing' && targetImportIndex != null) {
-        const targetEdits = sectionEditsRef.current.get(targetImportIndex);
+        const targetEdits = lineEditsRef.current.get(targetImportIndex);
         if (targetEdits) {
           // Station space - see the note on the other target-shot build.
           targetShots = targetEdits.shots.filter(isEmittedShot);
         } else {
-          const targetDmpSection = dmpFile.sections[targetImportIndex];
+          const targetDmpSection = dmpFile.lines[targetImportIndex];
           if (targetDmpSection) {
             targetShots = convertToEditableShots(targetDmpSection.shots);
           }
@@ -1643,7 +1643,7 @@ export default function DmpNewImportDialog({
       // import_data: keep import values as-is
       return shot;
     });
-  }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
+  }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.lines]);
 
   /**
    * Rows the keep-both view DERIVES as Reference.
@@ -1674,12 +1674,12 @@ export default function DmpNewImportDialog({
     return indices;
   }, [overlapMode, editState, currentSuggestion]);
 
-  // Section edit callbacks
-  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number | boolean) => {
+  // Line edit callbacks
+  const handleMetadataChange = useCallback((field: keyof LineEditState, value: string | number | boolean) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
   }, []);
 
-  // A section without its own lists (one overlap treatment created) shows,
+  // A line without its own lists (one overlap treatment created) shows,
   // and starts editing from, the step-1 defaults.
   const handlePeopleChange = useCallback(
     (role: 'surveyors' | 'explorers', next: (prev: Person[]) => Person[]) => {
@@ -1690,7 +1690,7 @@ export default function DmpNewImportDialog({
     },
     [selectionConfig],
   );
-  const sectionPeopleProps = useMemo(
+  const linePeopleProps = useMemo(
     () => (editState ? listPeopleProps(resolveImportPeople(editState, selectionConfig), handlePeopleChange) : null),
     [editState, selectionConfig, handlePeopleChange],
   );
@@ -1738,7 +1738,7 @@ export default function DmpNewImportDialog({
       setEditState((prev) => (prev ? { ...prev, shots: mutate(prev.shots) } : prev));
 
       const anchor = segmentAnchorRef.current;
-      if (delta === 0 || !anchor || anchor.sectionIndex !== activeEditableSectionIndex) return;
+      if (delta === 0 || !anchor || anchor.lineIndex !== activeEditableLineIndex) return;
       const at = visibleBefore(before, arrayIndex);
       const survivorsAfter = visibleShotCount(before) + delta;
       const stationIndex =
@@ -1746,10 +1746,10 @@ export default function DmpNewImportDialog({
           ? reanchorAfterRunDelete(anchor.stationIndex, at, -delta, survivorsAfter)
           : reanchorStation(anchor.stationIndex, at, delta, survivorsAfter);
       if (stationIndex !== anchor.stationIndex) {
-        commitSegmentAnchor({ sectionIndex: anchor.sectionIndex, stationIndex });
+        commitSegmentAnchor({ lineIndex: anchor.lineIndex, stationIndex });
       }
     },
-    [activeEditableSectionIndex, commitSegmentAnchor, currentShots]
+    [activeEditableLineIndex, commitSegmentAnchor, currentShots]
   );
 
   /** Blank rows to insert, each with its own temp id. */
@@ -1787,7 +1787,7 @@ export default function DmpNewImportDialog({
 
   /** Say so when a row cannot go: the wizard freezes the matched overlap rows,
    *  and refusing them in silence left them on screen while the grid cleared the
-   *  selection as though they had been deleted. Same wording as the edit-section
+   *  selection as though they had been deleted. Same wording as the edit-line
    *  grid, which refuses for the same reason. */
   const refuseFrozenDelete = useCallback((count: number) => {
     useUIStore
@@ -1844,11 +1844,11 @@ export default function DmpNewImportDialog({
     }
   }, [isTargetDoublyAnchored, overlapMode, handleOverlapModeChange]);
 
-  // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
-  const computeDefaultMergeOffset = useCallback((suggestion: CrossSectionSuggestion): number => {
-    const section = dmpFile.sections[suggestion.importSectionIndex];
-    const importShotCount = section
-      ? section.shots.filter((s) => s.shot_type === 'Standard').length
+  // Pick the next suggestion from the cached pool, filtering out connected/skipped lines.
+  const computeDefaultMergeOffset = useCallback((suggestion: CrossLineSuggestion): number => {
+    const line = dmpFile.lines[suggestion.importLineIndex];
+    const importShotCount = line
+      ? line.shots.filter((s) => s.shot_type === 'Standard').length
       : 0;
     const options = computeMergeOptions(suggestion, importShotCount);
     if (suggestion.preferredMergeOffset != null) {
@@ -1856,17 +1856,17 @@ export default function DmpNewImportDialog({
       if (preferred) return preferred.offset;
     }
     return options[options.length - 1]?.offset ?? 0;
-  }, [dmpFile.sections]);
+  }, [dmpFile.lines]);
 
-  const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {
-    const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current, dmpFile.sections);
+  const ensureTemporalDistances = useCallback(async (pool: CrossLineSuggestion[]) => {
+    const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current, dmpFile.lines);
     const missing = anchors.filter((ref) => {
-      const key = `${ref.section_id}:${ref.station_index}`;
+      const key = `${ref.line_id}:${ref.station_index}`;
       return !temporalDistanceFetchedOriginsRef.current.has(key);
     });
 
     await Promise.all(missing.map(async (origin) => {
-      const key = `${origin.section_id}:${origin.station_index}`;
+      const key = `${origin.line_id}:${origin.station_index}`;
       try {
         const field = await invokeIpc<DistanceField>(
           'get_station_distances_from',
@@ -1885,7 +1885,7 @@ export default function DmpNewImportDialog({
   }, []);
 
   const pickFromPool = useCallback(async () => {
-    const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+    const connected = new Set(connectionsRef.current.map((c) => c.importLineIndex));
     const skipped = skippedIndicesRef.current;
 
     // Build reverse map: for each import-to-import connection, record who targets whom.
@@ -1895,17 +1895,17 @@ export default function DmpNewImportDialog({
       if (c.targetType === 'importing' && c.targetImportIndex != null) {
         let s = importingTargets.get(c.targetImportIndex);
         if (!s) { s = new Set(); importingTargets.set(c.targetImportIndex, s); }
-        s.add(c.importSectionIndex);
+        s.add(c.importLineIndex);
       }
     }
 
-    // Filter pool to only remaining sections, excluding cycle-forming connections
+    // Filter pool to only remaining lines, excluding cycle-forming connections
     const pool = suggestionPoolRef.current.filter((s) => {
-      if (connected.has(s.importSectionIndex) || skipped.has(s.importSectionIndex)) return false;
+      if (connected.has(s.importLineIndex) || skipped.has(s.importLineIndex)) return false;
       // Skip import-to-import suggestions that would create a direct cycle:
-      // if the target already has an importing connection pointing back to this section
+      // if the target already has an importing connection pointing back to this line
       if (s.targetType === 'importing' && s.targetImportIndex != null) {
-        const sourcesTargetingMe = importingTargets.get(s.importSectionIndex);
+        const sourcesTargetingMe = importingTargets.get(s.importLineIndex);
         if (sourcesTargetingMe?.has(s.targetImportIndex)) return false;
       }
       return true;
@@ -1917,7 +1917,7 @@ export default function DmpNewImportDialog({
     await ensureTemporalDistances(pool);
     const reranked = rerankSuggestionsByTemporalPlan(
       pool,
-      dmpFile.sections,
+      dmpFile.lines,
       connectionsRef.current,
       temporalDistanceCacheRef.current,
     );
@@ -1934,28 +1934,28 @@ export default function DmpNewImportDialog({
     setCurrentSuggestion(top);
     setAlternatives(
       reranked.suggestions
-        .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
+        .filter((s) => s !== top && s.importLineIndex === top.importLineIndex)
         .slice(0, 4)
     );
     return true;
-  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances]);
+  }, [computeDefaultMergeOffset, dmpFile.lines, ensureTemporalDistances]);
 
-  /** A section that reached the emit loop and produced nothing would otherwise
+  /** A line that reached the emit loop and produced nothing would otherwise
    *  disappear between the wizard and the map: it is not in the `unreachable`
    *  report either, which lists only what was never placed. */
-  const reportEmptySections = useCallback((indices: number[]) => {
+  const reportEmptyLines = useCallback((indices: number[]) => {
     if (indices.length === 0) return;
     const names = indices.map(
-      (i) => sectionEditsRef.current.get(i)?.name ?? dmpFile.sections[i]?.name ?? `Section ${i}`,
+      (i) => lineEditsRef.current.get(i)?.name ?? dmpFile.lines[i]?.name ?? `Line ${i}`,
     );
     useUIStore.getState().showToast(
       t('dmpWizard.toasts.emptySections', { names: names.join(', ') }),
       TOAST_KEYS.DMP_WIZARD_EMPTY_SECTIONS,
       'warning',
     );
-  }, [dmpFile.sections, t]);
+  }, [dmpFile.lines, t]);
 
-  // Transition from suggesting phase: import reachable sections immediately (early import),
+  // Transition from suggesting phase: import reachable lines immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
   const transitionToPlacingOrManual = useCallback(async () => {
     if (transitionToPlacingInFlightRef.current) return;
@@ -1972,7 +1972,7 @@ export default function DmpNewImportDialog({
           existingShotUpdates = applyAllOverlapTreatments(
             fullPoolRef.current,
             confirmedOverlapsRef.current,
-            sectionEditsRef.current,
+            lineEditsRef.current,
             dmpFile,
             overlapMode,
           );
@@ -1982,71 +1982,71 @@ export default function DmpNewImportDialog({
         // 2. Redirect connections targeting deleted overlap zones
         redirectDeletedTargets(
           connectionsRef.current,
-          sectionEditsRef.current,
+          lineEditsRef.current,
           confirmedOverlapsRef.current,
           fullPoolRef.current,
         );
 
-        // 3. Build batch import configs for reachable sections
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+        // 3. Build batch import configs for reachable lines
+        const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
         let emittedDmpIndices: number[];
-        let configs: BackendImportSectionConfig[];
-        let emptySections: number[];
-        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
+        let configs: BackendImportLineConfig[];
+        let emptyLines: number[];
+        ({ configs, unreachable, emittedDmpIndices, emptyLines } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
           selectionConfig,
-          sectionEditsRef.current,
+          lineEditsRef.current,
           fullPoolRef.current,
           directPlacementsRef.current,
           undefined,
           skippedIndicesRef.current,
           resolvedTheme,
         ));
-        reportEmptySections(emptySections);
+        reportEmptyLines(emptyLines);
 
-        // 4. Import reachable sections immediately
+        // 4. Import reachable lines immediately
         if (configs.length > 0) {
           const emittedSet = new Set(emittedDmpIndices);
-          const earlyExistingShotUpdates = backendExistingShotUpdatesForSections(
+          const earlyExistingShotUpdates = backendExistingShotUpdatesForLines(
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
-            sections: configs,
+          const result = await invokeIpc<CommandResult>('import_lines', {
+            lines: configs,
             fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
+            lineHashes: selectionConfig.lineHashes ?? null,
             existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
             ...dmpProvenance,
-          }, { purpose: 'import reachable sections (early import)' });
+          }, { purpose: 'import reachable lines (early import)' });
 
           if (!result.success) {
             setError(result.error ?? 'Import failed');
             return;
           }
 
-          if (result.section_ids.length > 0) {
-            importedSectionIdsRef.current.push(...result.section_ids);
+          if (result.line_ids.length > 0) {
+            importedLineIdsRef.current.push(...result.line_ids);
           }
           if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
           await refreshProjectState();
-          // Imports bypass executeCommand, so mark dirty ourselves - the sections
+          // Imports bypass executeCommand, so mark dirty ourselves - the lines
           // then register as unsaved (autosave + the project-close guard);
           // window-close is guarded separately by isImportInProgress (App.tsx) (#110).
           markSuccessfulDmpImportDirty();
 
-          // Build DMP index -> section_id mapping for late import.
+          // Build DMP index -> line_id mapping for late import.
           // Use backend response ordering directly; it matches submitted configs.
           for (let i = 0; i < emittedDmpIndices.length; i++) {
-            const sectionId = result.section_ids[i];
-            if (sectionId != null) {
-              earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
+            const lineId = result.line_ids[i];
+            if (lineId != null) {
+              earlyImportedRef.current.set(emittedDmpIndices[i]!, lineId);
             }
           }
-          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+          existingShotUpdatesRef.current = removeExistingShotUpdatesForLines(
             existingShotUpdatesRef.current,
             emittedSet,
           );
@@ -2059,21 +2059,21 @@ export default function DmpNewImportDialog({
         setIsImporting(false);
       }
 
-      // 5. Check for unreachable sections
+      // 5. Check for unreachable lines
       if (unreachable.length > 0) {
         const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
         if (segments.length > 0) {
           setSegmentQueue(segments);
           segmentSkipCountRef.current = new Map();
 
-          // Initialize anchor to first section's station 0
+          // Initialize anchor to first line's station 0
           const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
+          commitSegmentAnchor({ lineIndex: chooseSegmentAnchorLine(firstSegment), stationIndex: 0 });
           setSegmentPlacementMode('manual');
           setAutoStartManualPlacementPending(true);
           // The shot table follows the suggestion first and nothing ever cleared
           // it, so entering manual placing with an exhausted pool left the grid
-          // editing the last SUGGESTED section while the anchor named another.
+          // editing the last SUGGESTED line while the anchor named another.
           setCurrentSuggestion(null);
 
           setPhase('manual_placing');
@@ -2083,24 +2083,24 @@ export default function DmpNewImportDialog({
 
       // No unreachable - all done
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+      onComplete(importedLineIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
     } finally {
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, reportEmptySections, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, reportEmptyLines, resolvedTheme]);
 
-  // On mount: import zero datum section and fire suggest_all_import_placements
+  // On mount: import zero datum line and fire suggest_all_import_placements
   useEffect(() => {
     if (importStartedRef.current) return;
     importStartedRef.current = true;
 
     const init = async () => {
-      // 1. Import zero datum section if provided (this is the anchor)
+      // 1. Import zero datum line if provided (this is the anchor)
       if (zeroDatumConfig) {
         setIsImporting(true);
-        const { sectionIndex } = zeroDatumConfig;
-        const config: BackendImportSectionConfig = buildZeroDatumSectionConfig(zeroDatumConfig);
+        const { lineIndex } = zeroDatumConfig;
+        const config: BackendImportLineConfig = buildZeroDatumLineConfig(zeroDatumConfig);
 
         // 'AllReferences', not Auto (#27): the DMP parser only ever emits
         // Normal shots, so every virtual shot reaching this import is one the
@@ -2116,8 +2116,8 @@ export default function DmpNewImportDialog({
         // TRAP the user in a wizard with Cancel and Back both disabled.
         let result: CommandResult;
         try {
-          result = await importSections(
-            [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance,
+          result = await importLines(
+            [config], selectionConfig.fileHash, selectionConfig.lineHashes, 'AllReferences', dmpProvenance,
           );
         } catch (e) {
           setError(importErrorMessage(e));
@@ -2127,74 +2127,74 @@ export default function DmpNewImportDialog({
         }
 
         if (!result.success) {
-          setError(result.error ?? 'Failed to import zero datum section');
+          setError(result.error ?? 'Failed to import zero datum line');
           return;
         }
 
-        if (result.section_ids.length > 0) {
-          importedSectionIdsRef.current.push(...result.section_ids);
+        if (result.line_ids.length > 0) {
+          importedLineIdsRef.current.push(...result.line_ids);
         }
         if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
-        // Snap-fit to the newly placed zero datum section
+        // Snap-fit to the newly placed zero datum line
         useUIStore.getState().triggerFitToBounds({ snap: true });
 
-        // Check if only 1 section was selected - we're done
-        if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
+        // Check if only 1 line was selected - we're done
+        if (selectedIndices.length === 1 && selectedIndices[0] === lineIndex) {
           setPhase('done');
           return;
         }
       } else {
         // No zero datum - check if we can suggest
         const existingProject = useProjectStore.getState().project;
-        const hasExistingSections = (existingProject?.sections.length ?? 0) > 0;
+        const hasExistingLines = (existingProject?.lines.length ?? 0) > 0;
 
-        if (!hasExistingSections && selectedIndices.length <= 1) {
+        if (!hasExistingLines && selectedIndices.length <= 1) {
           setPhase('done');
           return;
         }
       }
 
-      // 2. Fire suggest_all_import_placements with all remaining sections
+      // 2. Fire suggest_all_import_placements with all remaining lines
       setIsCalculating(true);
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
 
-      const remainingSections: ImportSectionForSuggestion[] = [];
+      const remainingLines: ImportLineForSuggestion[] = [];
       for (const idx of selectedIndices) {
         if (idx === zeroDatumIdx) continue;
-        const section = dmpFile.sections[idx];
-        if (!section) continue;
+        const line = dmpFile.lines[idx];
+        if (!line) continue;
 
-        const editableShots = convertToEditableShots(section.shots);
+        const editableShots = convertToEditableShots(line.shots);
         const shotData: ShotData[] = editableShots.map(editableShotToShotData);
         if (shotData.length === 0) continue;
 
-        remainingSections.push({
+        remainingLines.push({
           index: idx,
-          name: section.name,
+          name: line.name,
           shots: shotData,
           // Scored in the frame these readings are actually in (#438). Without
-          // it the backend falls back to the project default, and a DMP section
-          // would be matched against an existing Compass section across a
+          // it the backend falls back to the project default, and a DMP line
+          // would be matched against an existing Compass line across a
           // declination - a real overlap scoring as a mismatch.
-          // camelCase here, snake_case on `ImportSectionConfig`: the two IPC
+          // camelCase here, snake_case on `ImportLineConfig`: the two IPC
           // structs differ in their serde rename, and the generated types are
           // the authority.
           azimuthReference: DMP_AZIMUTH_REFERENCE,
         });
       }
 
-      if (remainingSections.length === 0) {
+      if (remainingLines.length === 0) {
         setIsCalculating(false);
         setPhase('done');
         return;
       }
 
       try {
-        const suggestions = await invokeIpc<CrossSectionSuggestion[]>(
+        const suggestions = await invokeIpc<CrossLineSuggestion[]>(
           'suggest_all_import_placements',
-          { importSections: remainingSections },
-          { purpose: 'suggest import placements for remaining sections' },
+          { importLines: remainingLines },
+          { purpose: 'suggest import placements for remaining lines' },
         );
 
         suggestionPoolRef.current = suggestions;
@@ -2207,7 +2207,7 @@ export default function DmpNewImportDialog({
       setIsCalculating(false);
 
       if (!(await pickFromPool())) {
-        // No suggestions at all - check for unreachable sections
+        // No suggestions at all - check for unreachable lines
         transitionToPlacingOrManual();
         return;
       }
@@ -2229,24 +2229,24 @@ export default function DmpNewImportDialog({
     const importPendingSegment = async () => {
       setIsImporting(true);
       try {
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
+        const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
+        const { configs, emittedDmpIndices, emptyLines } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
           selectionConfig,
-          sectionEditsRef.current,
+          lineEditsRef.current,
           fullPoolRef.current,
           directPlacementsRef.current,
           earlyImportedRef.current,
           undefined,
           resolvedTheme,
         );
-        reportEmptySections(emptySections);
+        reportEmptyLines(emptyLines);
 
-        // Filter to only the sections in the pending segment, remapping from_importing indices
+        // Filter to only the lines in the pending segment, remapping from_importing indices
         const pendingSet = new Set(saved.pendingSegmentImport);
-        const segmentConfigs: BackendImportSectionConfig[] = [];
+        const segmentConfigs: BackendImportLineConfig[] = [];
         const segmentDmpIndices: number[] = [];
         // Map original config position → new position in segmentConfigs
         const posRemap = new Map<number, number>();
@@ -2254,38 +2254,38 @@ export default function DmpNewImportDialog({
           const dmpIdx = emittedDmpIndices[i];
           if (dmpIdx != null && pendingSet.has(dmpIdx)) {
             posRemap.set(i, segmentConfigs.length);
-            segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
+            segmentConfigs.push({ ...configs[i]!, line_index: segmentConfigs.length });
             segmentDmpIndices.push(dmpIdx);
           }
         }
-        // Remap from_importing target_section_index to new positions
+        // Remap from_importing target_line_index to new positions
         for (const cfg of segmentConfigs) {
           if (cfg.placement.type === 'from_importing') {
-            const oldTarget = (cfg.placement as { target_section_index: number }).target_section_index;
+            const oldTarget = (cfg.placement as { target_line_index: number }).target_line_index;
             const newTarget = posRemap.get(oldTarget);
             if (newTarget != null) {
-              (cfg.placement as { target_section_index: number }).target_section_index = newTarget;
+              (cfg.placement as { target_line_index: number }).target_line_index = newTarget;
             }
           }
         }
 
         if (segmentConfigs.length > 0) {
-          const pendingExistingShotUpdates = backendExistingShotUpdatesForSections(
+          const pendingExistingShotUpdates = backendExistingShotUpdatesForLines(
             existingShotUpdatesRef.current,
             pendingSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
-            sections: segmentConfigs,
+          const result = await invokeIpc<CommandResult>('import_lines', {
+            lines: segmentConfigs,
             fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
+            lineHashes: selectionConfig.lineHashes ?? null,
             existingShotUpdates: pendingExistingShotUpdates.length > 0 ? pendingExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
             ...dmpProvenance,
-          }, { purpose: 'import segment sections' });
+          }, { purpose: 'import segment lines' });
 
           if (result.success) {
-            if (result.section_ids.length > 0) {
-              importedSectionIdsRef.current.push(...result.section_ids);
+            if (result.line_ids.length > 0) {
+              importedLineIdsRef.current.push(...result.line_ids);
             }
             if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
@@ -2293,12 +2293,12 @@ export default function DmpNewImportDialog({
             markSuccessfulDmpImportDirty();
 
             for (let i = 0; i < segmentDmpIndices.length; i++) {
-              const sectionId = result.section_ids[i];
-              if (sectionId != null) {
-                earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
+              const lineId = result.line_ids[i];
+              if (lineId != null) {
+                earlyImportedRef.current.set(segmentDmpIndices[i]!, lineId);
               }
             }
-            existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current = removeExistingShotUpdatesForLines(
               existingShotUpdatesRef.current,
               pendingSet,
             );
@@ -2315,7 +2315,7 @@ export default function DmpNewImportDialog({
       // placing phase which would race with isImporting state.
       if (segmentQueue.length === 0) {
         trackDialogComplete('dmp-import-new');
-        onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+        onComplete(importedLineIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
       }
     };
 
@@ -2331,7 +2331,7 @@ export default function DmpNewImportDialog({
     }
   }, [phase, segmentQueue.length, saved?.pendingSegmentImport?.length]);
 
-  // Handle 'placing' phase - late import of remaining sections after manual_placing.
+  // Handle 'placing' phase - late import of remaining lines after manual_placing.
   // Overlap treatment and connection redirect already happened during early import.
   useEffect(() => {
     if (phase !== 'placing') return;
@@ -2343,52 +2343,52 @@ export default function DmpNewImportDialog({
 
       let unreachable: number[] = [];
       try {
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        let configs: BackendImportSectionConfig[];
+        const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
+        let configs: BackendImportLineConfig[];
         let emittedDmpIndices: number[];
-        let emptySections: number[];
-        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
+        let emptyLines: number[];
+        ({ configs, unreachable, emittedDmpIndices, emptyLines } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
           selectionConfig,
-          sectionEditsRef.current,
+          lineEditsRef.current,
           fullPoolRef.current,
           directPlacementsRef.current,
           earlyImportedRef.current,
           undefined,
           resolvedTheme,
         ));
-        reportEmptySections(emptySections);
+        reportEmptyLines(emptyLines);
 
         if (configs.length > 0) {
           const emittedSet = new Set(emittedDmpIndices);
-          const lateExistingShotUpdates = backendExistingShotUpdatesForSections(
+          const lateExistingShotUpdates = backendExistingShotUpdatesForLines(
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
-            sections: configs,
+          const result = await invokeIpc<CommandResult>('import_lines', {
+            lines: configs,
             fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
+            lineHashes: selectionConfig.lineHashes ?? null,
             existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
             ...dmpProvenance,
-          }, { purpose: 'import remaining sections (late import)' });
+          }, { purpose: 'import remaining lines (late import)' });
 
           if (!result.success) {
             setError(result.error ?? 'Late import failed');
             return;
           }
 
-          if (result.section_ids.length > 0) {
-            importedSectionIdsRef.current.push(...result.section_ids);
+          if (result.line_ids.length > 0) {
+            importedLineIdsRef.current.push(...result.line_ids);
           }
           if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
           await refreshProjectState();
           markSuccessfulDmpImportDirty();
-          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+          existingShotUpdatesRef.current = removeExistingShotUpdatesForLines(
             existingShotUpdatesRef.current,
             emittedSet,
           );
@@ -2410,10 +2410,10 @@ export default function DmpNewImportDialog({
           segmentSkipCountRef.current = new Map();
 
           const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
+          commitSegmentAnchor({ lineIndex: chooseSegmentAnchorLine(firstSegment), stationIndex: 0 });
           const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
           setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-          setFromExistingSectionId(null);
+          setFromExistingLineId(null);
           setFromExistingStationIdx(0);
           setAutoStartManualPlacementPending(true);
           setError(null);
@@ -2424,20 +2424,20 @@ export default function DmpNewImportDialog({
       }
 
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+      onComplete(importedLineIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
     };
 
     doLateImport();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, placingRetry]);
 
-  // Handle 'done' phase (only reached when no sections to place)
+  // Handle 'done' phase (only reached when no lines to place)
   useEffect(() => {
     if (phase !== 'done') return;
     if (isImporting || isCalculating) return;
 
     const remaining = selectedIndices.filter(
-      (idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.sectionIndex
+      (idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.lineIndex
     );
 
     if (remaining.length > 0) {
@@ -2447,10 +2447,10 @@ export default function DmpNewImportDialog({
         segmentSkipCountRef.current = new Map();
 
         const firstSegment = segments[0]!;
-        commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
+        commitSegmentAnchor({ lineIndex: chooseSegmentAnchorLine(firstSegment), stationIndex: 0 });
         const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
         setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-        setFromExistingSectionId(null);
+        setFromExistingLineId(null);
         setFromExistingStationIdx(0);
         setAutoStartManualPlacementPending(true);
         setError(null);
@@ -2463,43 +2463,43 @@ export default function DmpNewImportDialog({
     trackDialogComplete('dmp-import-new');
     // With the receipt, like the other three completion sites (#487). This one
     // is reached after the zero-datum import has already banked one - a
-    // single-selected-section file, or a selection with nothing left to
+    // single-selected-line file, or a selection with nothing left to
     // suggest - so dropping it silenced the receipt for those imports too.
-    onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+    onComplete(importedLineIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
-  // Build preview section for import side from original shots (no mode modifications).
-  // Both import and target sections display their original geometry so the user can
+  // Build preview line for import side from original shots (no mode modifications).
+  // Both import and target lines display their original geometry so the user can
   // visually compare the overlap regardless of the selected overlap mode.
-  const importPreviewSection = useMemo<DmpSection | null>(() => {
+  const importPreviewLine = useMemo<DmpSection | null>(() => {
     if (!currentSuggestion) return null;
-    const section = dmpFile.sections[currentSuggestion.importSectionIndex];
-    if (!section) return null;
-    if (!editState) return section;
+    const line = dmpFile.lines[currentSuggestion.importLineIndex];
+    if (!line) return null;
+    if (!editState) return line;
 
     return {
-      ...editableShotsToDmpSection(section, editState.shots),
+      ...editableShotsToDmpSection(line, editState.shots),
       name: editState.name,
       direction: editState.direction,
     };
-  }, [currentSuggestion, dmpFile.sections, editState]);
+  }, [currentSuggestion, dmpFile.lines, editState]);
 
-  // Build merge preview config for SectionPreview (existing target)
+  // Build merge preview config for LinePreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
     if (!currentSuggestion || currentSuggestion.targetType !== 'existing') return null;
-    if (currentSuggestion.existingSectionId == null) return null;
+    if (currentSuggestion.existingLineId == null) return null;
 
     const currentProject = useProjectStore.getState().project;
     if (!currentProject) return null;
 
-    const targetSection = currentProject.sections.find(
-      (s) => s.id === currentSuggestion.existingSectionId
+    const targetLine = currentProject.lines.find(
+      (s) => s.id === currentSuggestion.existingLineId
     );
-    if (!targetSection) return null;
+    if (!targetLine) return null;
 
     return {
-      targetSection,
+      targetLine,
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
     };
@@ -2510,38 +2510,38 @@ export default function DmpNewImportDialog({
     if (!currentSuggestion || currentSuggestion.targetType !== 'importing') return null;
     if (currentSuggestion.targetImportIndex == null) return null;
 
-    const targetSection = dmpFile.sections[currentSuggestion.targetImportIndex];
-    if (!targetSection) return null;
+    const targetLine = dmpFile.lines[currentSuggestion.targetImportIndex];
+    if (!targetLine) return null;
 
-    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % sectionPalette.length;
+    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % linePalette.length;
 
     return {
-      targetDmpSection: targetSection,
-      targetColor: sectionPalette[targetColorIdx] ?? '#95a5a6',
+      targetDmpSection: targetLine,
+      targetColor: linePalette[targetColorIdx] ?? '#95a5a6',
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
     };
-  }, [currentSuggestion, selectedMergePair, dmpFile.sections, sectionPalette]);
+  }, [currentSuggestion, selectedMergePair, dmpFile.lines, linePalette]);
 
-  // Merge target-side + import-side context for SectionPreview.
-  // Import-side context is relative to the import section's station 0 and needs the same
-  // merge offset that SectionPreview applies to align the import section with the target.
-  const mergedContextSections = useMemo((): ContextSectionGeometry[] | null => {
-    const parts: ContextSectionGeometry[] = [];
+  // Merge target-side + import-side context for LinePreview.
+  // Import-side context is relative to the import line's station 0 and needs the same
+  // merge offset that LinePreview applies to align the import line with the target.
+  const mergedContextLines = useMemo((): ContextLineGeometry[] | null => {
+    const parts: ContextLineGeometry[] = [];
     if (segmentContext?.targetSide) parts.push(...segmentContext.targetSide);
     if (segmentContext?.importSide && segmentContext.importSide.length > 0) {
       const activePreview = mergePreviewConfig ?? dmpMergePreviewConfig;
       let dx = 0;
       let dy = 0;
-      if (activePreview && importPreviewSection) {
-        // Compute the same importOffset that SectionPreview uses internally
+      if (activePreview && importPreviewLine) {
+        // Compute the same importOffset that LinePreview uses internally
         const importStations = computeStationsFromDmpShots(
-          importPreviewSection.shots.filter((s) => s.shot_type === 'Standard')
+          importPreviewLine.shots.filter((s) => s.shot_type === 'Standard')
         );
         let targetStations: Array<{ x: number; y: number }> = [];
         if (mergePreviewConfig) {
           targetStations = computeStationsFromShots(
-            mergePreviewConfig.targetSection.shots
+            mergePreviewConfig.targetLine.shots
           );
         } else if (dmpMergePreviewConfig) {
           targetStations = computeStationsFromDmpShots(
@@ -2564,31 +2564,31 @@ export default function DmpNewImportDialog({
       })));
     }
     return parts.length > 0 ? parts : null;
-  }, [segmentContext, mergePreviewConfig, dmpMergePreviewConfig, importPreviewSection]);
+  }, [segmentContext, mergePreviewConfig, dmpMergePreviewConfig, importPreviewLine]);
 
-  // Import color for the current section (from editState, which tracks user changes)
+  // Import color for the current line (from editState, which tracks user changes)
   const importColor = useMemo(() => {
     if (editState?.color) return editState.color;
-    const sectionIdx = currentSuggestion?.importSectionIndex ?? -1;
-    const pos = selectedIndices.indexOf(sectionIdx);
-    return sectionPalette[(pos >= 0 ? pos : 0) % sectionPalette.length] ?? '#4ecdc4';
-  }, [editState?.color, currentSuggestion?.importSectionIndex, selectedIndices, sectionPalette]);
+    const lineIdx = currentSuggestion?.importLineIndex ?? -1;
+    const pos = selectedIndices.indexOf(lineIdx);
+    return linePalette[(pos >= 0 ? pos : 0) % linePalette.length] ?? '#4ecdc4';
+  }, [editState?.color, currentSuggestion?.importLineIndex, selectedIndices, linePalette]);
 
-  // Target section name for display
-  const targetSectionName = useMemo(() => {
+  // Target line name for display
+  const targetLineName = useMemo(() => {
     if (!currentSuggestion) return '';
-    return currentSuggestion.existingSectionName;
+    return currentSuggestion.existingLineName;
   }, [currentSuggestion]);
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
   /**
-   * Refuse while ANY section that will be sent holds a half-filled row.
+   * Refuse while ANY line that will be sent holds a half-filled row.
    *
-   * Every selected section's edits are serialized, not just the one on screen,
-   * so a gate on the active section alone let a cleared cell in section B walk
-   * past it (switching the active section asks nothing) and die at Rust's
-   * deserializer with an error that named nothing. The section is named here for
+   * Every selected line's edits are serialized, not just the one on screen,
+   * so a gate on the active line alone let a cleared cell in line B walk
+   * past it (switching the active line asks nothing) and die at Rust's
+   * deserializer with an error that named nothing. The line is named here for
    * the same reason.
    *
    * Read FRESH from the refs: the wizard's actions suppress exhaustive-deps, so
@@ -2597,11 +2597,11 @@ export default function DmpNewImportDialog({
    * zero.
    */
   const refuseIncompleteShots = useCallback(() => {
-    const live = new Map(sectionEditsRef.current);
-    // The active section's newest rows reach `sectionEditsRef` an effect later.
-    const active = editStateForSectionRef.current;
+    const live = new Map(lineEditsRef.current);
+    // The active line's newest rows reach `lineEditsRef` an effect later.
+    const active = editStateForLineRef.current;
     if (active != null && editStateRef.current) live.set(active, editStateRef.current);
-    const blocking = findIncompleteSections(selectedIndices, live)[0];
+    const blocking = findIncompleteLines(selectedIndices, live)[0];
     if (!blocking) return false;
     useUIStore.getState().showToast(
       t('dmpWizard.toasts.sectionIncomplete', { name: blocking.name, count: blocking.count }),
@@ -2618,9 +2618,9 @@ export default function DmpNewImportDialog({
     suggestionActionInFlightRef.current = true;
     try {
       debugLog(
-        `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
-        `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingSectionId}`,
-        `"${currentSuggestion.existingSectionName}"`,
+        `[handleConfirm] import=${currentSuggestion.importLineIndex} "${currentSuggestion.importLineName}"`,
+        `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingLineId}`,
+        `"${currentSuggestion.existingLineName}"`,
         `type=${currentSuggestion.targetType}`,
         `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
         `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
@@ -2630,13 +2630,13 @@ export default function DmpNewImportDialog({
       // Read fresh edit state from the ref (synchronously up-to-date) instead of
       // the editState React state which may be one render behind when the user
       // confirms quickly after a suggestion change.
-      const importIdx = currentSuggestion.importSectionIndex;
-      const freshEditState = sectionEditsRef.current.get(importIdx);
+      const importIdx = currentSuggestion.importLineIndex;
+      const freshEditState = lineEditsRef.current.get(importIdx);
       if (!freshEditState) return; // shouldn't happen - init-effect always populates
 
       // Save raw user edits unchanged - NO overlap treatment here.
       // applyAllOverlapTreatments will handle all overlap mutation before batch import.
-      sectionEditsRef.current.set(importIdx, freshEditState);
+      lineEditsRef.current.set(importIdx, freshEditState);
 
       // Record confirmed overlap info so applyAllOverlapTreatments knows the merge station
       const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
@@ -2647,7 +2647,7 @@ export default function DmpNewImportDialog({
         direction: currentSuggestion.direction,
         existingStationIndex: currentSuggestion.existingStationIndex,
         targetType: currentSuggestion.targetType,
-        existingSectionId: currentSuggestion.existingSectionId ?? null,
+        existingLineId: currentSuggestion.existingLineId ?? null,
         targetImportIndex: currentSuggestion.targetImportIndex ?? null,
         mergeImportStation,
       });
@@ -2656,10 +2656,10 @@ export default function DmpNewImportDialog({
       const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
 
       const newConn: VirtualConnection = {
-        importSectionIndex: currentSuggestion.importSectionIndex,
+        importLineIndex: currentSuggestion.importLineIndex,
         importStationIndex: mergeImportStation,
         targetType: currentSuggestion.targetType,
-        ...(currentSuggestion.existingSectionId != null && { existingSectionId: currentSuggestion.existingSectionId }),
+        ...(currentSuggestion.existingLineId != null && { existingLineId: currentSuggestion.existingLineId }),
         ...(currentSuggestion.targetType === 'existing' && { existingStationIndex: mergeExistingStation }),
         ...(currentSuggestion.targetImportIndex != null && { targetImportIndex: currentSuggestion.targetImportIndex }),
         ...(currentSuggestion.targetType === 'importing' && { targetImportStationIndex: mergeExistingStation }),
@@ -2669,9 +2669,9 @@ export default function DmpNewImportDialog({
       // Update ref eagerly
       connectionsRef.current = [...connectionsRef.current, newConn];
 
-      // Check if all sections are now connected or skipped
-      const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      // Check if all lines are now connected or skipped
+      const newConnected = new Set(connectionsRef.current.map((c) => c.importLineIndex));
+      const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
       const remaining = selectedIndices.filter(
         (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !skippedIndicesRef.current.has(idx)
       );
@@ -2684,7 +2684,7 @@ export default function DmpNewImportDialog({
 
       // Pick next from pool
       if (!(await pickFromPool())) {
-        // Pool exhausted - check for unreachable sections
+        // Pool exhausted - check for unreachable lines
         transitionToPlacingOrManual();
         return;
       }
@@ -2703,7 +2703,7 @@ export default function DmpNewImportDialog({
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
     try {
-      const skippedIdx = currentSuggestion.importSectionIndex;
+      const skippedIdx = currentSuggestion.importLineIndex;
       const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
       const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
 
@@ -2725,8 +2725,8 @@ export default function DmpNewImportDialog({
       newSkipped.add(skippedIdx);
       skippedIndicesRef.current = newSkipped;
 
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+      const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
+      const newConnected = new Set(connectionsRef.current.map((c) => c.importLineIndex));
       const remaining = selectedIndices.filter(
         (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !newSkipped.has(idx)
       );
@@ -2748,7 +2748,7 @@ export default function DmpNewImportDialog({
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 
   // Alternative click handler
-  const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
+  const handleAlternativeClick = useCallback((alt: CrossLineSuggestion) => {
     setSelectedMergeOffset(computeDefaultMergeOffset(alt));
     setCurrentSuggestion(alt);
     setAlternatives((prev) => {
@@ -2790,98 +2790,98 @@ export default function DmpNewImportDialog({
     [setDmpImportWizardPhase]
   );
 
-  // Project sections and merges for "From Existing" dropdown + preview
-  const projectSections = useProjectStore((s) => s.project?.sections ?? []);
+  // Project lines and merges for "From Existing" dropdown + preview
+  const projectLines = useProjectStore((s) => s.project?.lines ?? []);
   const projectMerges = useProjectStore((s) => s.project?.station_merges ?? []);
 
-  // Get target section stations for "From Existing" mode
-  const fromExistingTargetSection = useMemo(() => {
-    if (fromExistingSectionId == null) return null;
-    return projectSections.find(s => s.id === fromExistingSectionId) ?? null;
-  }, [fromExistingSectionId, projectSections]);
+  // Get target line stations for "From Existing" mode
+  const fromExistingTargetLine = useMemo(() => {
+    if (fromExistingLineId == null) return null;
+    return projectLines.find(s => s.id === fromExistingLineId) ?? null;
+  }, [fromExistingLineId, projectLines]);
 
   const fromExistingStationCount = useMemo(() => {
-    if (!fromExistingTargetSection) return 0;
-    return fromExistingTargetSection.shots.length + 1;
-  }, [fromExistingTargetSection]);
+    if (!fromExistingTargetLine) return 0;
+    return fromExistingTargetLine.shots.length + 1;
+  }, [fromExistingTargetLine]);
 
   // Compute segment preview for manual_placing.
-  // Uses effective (post-treatment) sections so the preview reflects deleted
+  // Uses effective (post-treatment) lines so the preview reflects deleted
   // shots and interpolated values - matching what will be imported.
-  const segmentPreviewSections = useMemo(() => {
+  const segmentPreviewLines = useMemo(() => {
     if (!currentSegment) return null;
 
     // Build effective DmpSections with edits applied
-    const effectiveSections = dmpFile.sections.map((sec, idx) =>
-      buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
+    const effectiveLines = dmpFile.lines.map((sec, idx) =>
+      buildEffectiveDmpSection(sec, lineEditsRef.current.get(idx)),
     );
     // Adjust connection station indices to match post-deletion geometry
-    const effectiveConns = adjustConnectionsForEdits(connections, sectionEditsRef.current);
-    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveSections);
+    const effectiveConns = adjustConnectionsForEdits(connections, lineEditsRef.current);
+    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveLines);
 
     return layout.map((entry) => {
-      const section = effectiveSections[entry.sectionIndex];
-      if (!section) return null;
-      const edits = sectionEditsRef.current.get(entry.sectionIndex);
-      const selectedPos = selectedIndices.indexOf(entry.sectionIndex);
-      const sectionColor = (edits?.color || null) ?? sectionPalette[(selectedPos >= 0 ? selectedPos : entry.sectionIndex) % sectionPalette.length] ?? '#95a5a6';
+      const line = effectiveLines[entry.lineIndex];
+      if (!line) return null;
+      const edits = lineEditsRef.current.get(entry.lineIndex);
+      const selectedPos = selectedIndices.indexOf(entry.lineIndex);
+      const lineColor = (edits?.color || null) ?? linePalette[(selectedPos >= 0 ? selectedPos : entry.lineIndex) % linePalette.length] ?? '#95a5a6';
       return {
-        section,
-        color: sectionColor,
-        sectionIndex: entry.sectionIndex,
+        line,
+        color: lineColor,
+        lineIndex: entry.lineIndex,
         offsetX: entry.offsetX,
         offsetY: entry.offsetY,
       };
     }).filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [currentSegment, connections, dmpFile.sections, sectionPalette]);
+  }, [currentSegment, connections, dmpFile.lines, linePalette]);
 
-  // Compute target segment context for "From Existing" preview (shows the target section's
+  // Compute target segment context for "From Existing" preview (shows the target line's
   // connected segment as dimmed lines behind the import segment preview)
-  const fromExistingContextSections = useMemo((): ContextSectionGeometry[] | null => {
-    if (segmentPlacementMode !== 'fromExisting' || fromExistingSectionId == null) return null;
-    if (!segmentAnchor || !segmentPreviewSections || segmentPreviewSections.length === 0) return null;
+  const fromExistingContextLines = useMemo((): ContextLineGeometry[] | null => {
+    if (segmentPlacementMode !== 'fromExisting' || fromExistingLineId == null) return null;
+    if (!segmentAnchor || !segmentPreviewLines || segmentPreviewLines.length === 0) return null;
 
     // Build adjacency from project station_merges
     const mergeAdj = new Map<number, Array<{ neighborId: number; thisIdx: number; neighborIdx: number }>>();
     for (const m of projectMerges) {
       const a = m.station_a;
       const b = m.station_b;
-      if (!mergeAdj.has(a.section_id)) mergeAdj.set(a.section_id, []);
-      if (!mergeAdj.has(b.section_id)) mergeAdj.set(b.section_id, []);
-      mergeAdj.get(a.section_id)!.push({ neighborId: b.section_id, thisIdx: a.station_index, neighborIdx: b.station_index });
-      mergeAdj.get(b.section_id)!.push({ neighborId: a.section_id, thisIdx: b.station_index, neighborIdx: a.station_index });
+      if (!mergeAdj.has(a.line_id)) mergeAdj.set(a.line_id, []);
+      if (!mergeAdj.has(b.line_id)) mergeAdj.set(b.line_id, []);
+      mergeAdj.get(a.line_id)!.push({ neighborId: b.line_id, thisIdx: a.station_index, neighborIdx: b.station_index });
+      mergeAdj.get(b.line_id)!.push({ neighborId: a.line_id, thisIdx: b.station_index, neighborIdx: a.station_index });
     }
 
-    // BFS from target section through merges to discover connected segment
+    // BFS from target line through merges to discover connected segment
     const visited = new Set<number>();
-    const queue: Array<{ sectionId: number; offsetX: number; offsetY: number }> = [];
-    visited.add(fromExistingSectionId);
-    queue.push({ sectionId: fromExistingSectionId, offsetX: 0, offsetY: 0 });
+    const queue: Array<{ lineId: number; offsetX: number; offsetY: number }> = [];
+    visited.add(fromExistingLineId);
+    queue.push({ lineId: fromExistingLineId, offsetX: 0, offsetY: 0 });
 
-    const entries: Array<{ sectionId: number; stations: Array<{ x: number; y: number }>; offsetX: number; offsetY: number }> = [];
+    const entries: Array<{ lineId: number; stations: Array<{ x: number; y: number }>; offsetX: number; offsetY: number }> = [];
 
     while (queue.length > 0) {
-      const { sectionId, offsetX, offsetY } = queue.shift()!;
-      const section = projectSections.find((s) => s.id === sectionId);
-      if (!section) continue;
+      const { lineId, offsetX, offsetY } = queue.shift()!;
+      const line = projectLines.find((s) => s.id === lineId);
+      if (!line) continue;
 
-      const stnPositions = computeStationsFromShots(section.shots);
-      entries.push({ sectionId, stations: stnPositions, offsetX, offsetY });
+      const stnPositions = computeStationsFromShots(line.shots);
+      entries.push({ lineId, stations: stnPositions, offsetX, offsetY });
 
-      for (const edge of mergeAdj.get(sectionId) ?? []) {
+      for (const edge of mergeAdj.get(lineId) ?? []) {
         if (visited.has(edge.neighborId)) continue;
         visited.add(edge.neighborId);
 
-        const neighborSection = projectSections.find((s) => s.id === edge.neighborId);
-        if (!neighborSection) continue;
+        const neighborLine = projectLines.find((s) => s.id === edge.neighborId);
+        if (!neighborLine) continue;
 
-        const neighborStns = computeStationsFromShots(neighborSection.shots);
+        const neighborStns = computeStationsFromShots(neighborLine.shots);
         const thisPos = stnPositions[edge.thisIdx];
         const neighborPos = neighborStns[edge.neighborIdx];
         if (!thisPos || !neighborPos) continue;
 
         queue.push({
-          sectionId: edge.neighborId,
+          lineId: edge.neighborId,
           offsetX: offsetX + thisPos.x - neighborPos.x,
           offsetY: offsetY + thisPos.y - neighborPos.y,
         });
@@ -2889,25 +2889,25 @@ export default function DmpNewImportDialog({
     }
 
     // Align target segment to import segment: target station → import anchor station
-    const targetEntry = entries.find((e) => e.sectionId === fromExistingSectionId);
+    const targetEntry = entries.find((e) => e.lineId === fromExistingLineId);
     if (!targetEntry) return null;
     const targetStn = targetEntry.stations[fromExistingStationIdx];
     if (!targetStn) return null;
 
-    const anchorEntry = segmentPreviewSections.find((e) => e.sectionIndex === segmentAnchor.sectionIndex);
+    const anchorEntry = segmentPreviewLines.find((e) => e.lineIndex === segmentAnchor.lineIndex);
     if (!anchorEntry) return null;
     const anchorStns = computeStationsFromDmpShots(
-      anchorEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+      anchorEntry.line.shots.filter((s) => s.shot_type === 'Standard'),
     );
-    // `anchorStns` comes from the effective (emitted) section - so must the index.
+    // `anchorStns` comes from the effective (emitted) line - so must the index.
     const anchorStn = anchorStns[emittedAnchorStation(segmentAnchor)];
     if (!anchorStn) return null;
 
     const gx = (anchorEntry.offsetX + anchorStn.x) - (targetEntry.offsetX + targetStn.x);
     const gy = (anchorEntry.offsetY + anchorStn.y) - (targetEntry.offsetY + targetStn.y);
 
-    // Build ContextSectionGeometry for each section in the target segment
-    const result: ContextSectionGeometry[] = [];
+    // Build ContextLineGeometry for each line in the target segment
+    const result: ContextLineGeometry[] = [];
     for (const entry of entries) {
       const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
       for (let i = 0; i < entry.stations.length - 1; i++) {
@@ -2920,16 +2920,16 @@ export default function DmpNewImportDialog({
       }
       if (shots.length > 0) {
         result.push({
-          color: entry.sectionId === fromExistingSectionId ? '#95a5a6' : '#6b7280',
+          color: entry.lineId === fromExistingLineId ? '#95a5a6' : '#6b7280',
           shots,
         });
       }
     }
 
     return result.length > 0 ? result : null;
-  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, segmentAnchor, segmentPreviewSections, emittedAnchorStation]);
+  }, [segmentPlacementMode, fromExistingLineId, fromExistingStationIdx, projectLines, projectMerges, segmentAnchor, segmentPreviewLines, emittedAnchorStation]);
 
-  // Current segment's skipped suggestion (if any section in the segment had one)
+  // Current segment's skipped suggestion (if any line in the segment had one)
   const segmentSkippedSuggestion = useMemo(() => {
     if (!currentSegment) return null;
     for (const idx of currentSegment) {
@@ -2950,14 +2950,14 @@ export default function DmpNewImportDialog({
       }
       // Initialize anchor for next segment
       const firstSegment = next[0]!;
-      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
+      commitSegmentAnchor({ lineIndex: chooseSegmentAnchorLine(firstSegment), stationIndex: 0 });
       const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-      setFromExistingSectionId(null);
+      setFromExistingLineId(null);
       setFromExistingStationIdx(0);
       return next;
     });
-  }, [chooseSegmentAnchorSection, commitSegmentAnchor]);
+  }, [chooseSegmentAnchorLine, commitSegmentAnchor]);
 
   // Place segment handler
   const handleSegmentPlace = useCallback(() => {
@@ -2969,13 +2969,13 @@ export default function DmpNewImportDialog({
     if (segmentPlacementMode === 'suggestion' && segmentSkippedSuggestion) {
       // Use the skipped suggestion as a from_existing connection
       const suggestion = segmentSkippedSuggestion.suggestion;
-      if (suggestion.targetType === 'existing' && suggestion.existingSectionId != null) {
+      if (suggestion.targetType === 'existing' && suggestion.existingLineId != null) {
         // Add as a virtual connection instead
         const newConn: VirtualConnection = {
-          importSectionIndex: suggestion.importSectionIndex,
+          importLineIndex: suggestion.importLineIndex,
           importStationIndex: segmentSkippedSuggestion.mergeImportStation,
           targetType: 'existing',
-          existingSectionId: suggestion.existingSectionId,
+          existingLineId: suggestion.existingLineId,
           existingStationIndex: segmentSkippedSuggestion.mergeExistingStation,
         };
         setConnections((prev) => [...prev, newConn]);
@@ -2984,7 +2984,7 @@ export default function DmpNewImportDialog({
         return;
       } else if (suggestion.targetType === 'importing' && suggestion.targetImportIndex != null) {
         const newConn: VirtualConnection = {
-          importSectionIndex: suggestion.importSectionIndex,
+          importLineIndex: suggestion.importLineIndex,
           importStationIndex: segmentSkippedSuggestion.mergeImportStation,
           targetType: 'importing',
           targetImportIndex: suggestion.targetImportIndex,
@@ -2997,12 +2997,12 @@ export default function DmpNewImportDialog({
       }
       return;
     } else if (segmentPlacementMode === 'fromExisting') {
-      if (fromExistingSectionId == null) return;
+      if (fromExistingLineId == null) return;
       placement = {
         type: 'from_existing',
         import_station: anchorStation,
         existing_station: {
-          section_id: fromExistingSectionId,
+          line_id: fromExistingLineId,
           station_index: fromExistingStationIdx,
         },
       };
@@ -3021,13 +3021,13 @@ export default function DmpNewImportDialog({
     }
 
     const dp: DirectPlacement = {
-      anchorSectionIndex: segmentAnchor.sectionIndex,
+      anchorLineIndex: segmentAnchor.lineIndex,
       anchorStationIndex: anchorStation,
       placement,
     };
     directPlacementsRef.current = [...directPlacementsRef.current, dp];
     advanceSegmentQueue();
-  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue, emittedAnchorStation, refuseIncompleteShots]);
+  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingLineId, fromExistingStationIdx, advanceSegmentQueue, emittedAnchorStation, refuseIncompleteShots]);
 
   // Skip segment handler - appends to end of queue
   const handleSegmentSkip = useCallback(() => {
@@ -3045,74 +3045,74 @@ export default function DmpNewImportDialog({
       const next = [...rest, first!];
       // Initialize anchor for next segment
       const nextSeg = next[0]!;
-      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(nextSeg), stationIndex: 0 });
+      commitSegmentAnchor({ lineIndex: chooseSegmentAnchorLine(nextSeg), stationIndex: 0 });
       const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
-      setFromExistingSectionId(null);
+      setFromExistingLineId(null);
       setFromExistingStationIdx(0);
       return next;
     });
-  }, [currentSegment, chooseSegmentAnchorSection, commitSegmentAnchor]);
+  }, [currentSegment, chooseSegmentAnchorLine, commitSegmentAnchor]);
 
   // Station click handler for segment preview. The index arrives in the
   // preview's own (emitted) numbering - see the note on the two spaces.
-  const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
-    const idx = sectionIndex ?? (currentSegment && currentSegment.length > 0 ? currentSegment[0]! : null);
+  const handleSegmentStationClick = useCallback((stationIndex: number, lineIndex?: number) => {
+    const idx = lineIndex ?? (currentSegment && currentSegment.length > 0 ? currentSegment[0]! : null);
     if (idx == null) return;
-    commitSegmentAnchor({ sectionIndex: idx, stationIndex: visibleAnchorStation(idx, stationIndex) });
+    commitSegmentAnchor({ lineIndex: idx, stationIndex: visibleAnchorStation(idx, stationIndex) });
   }, [currentSegment, commitSegmentAnchor, visibleAnchorStation]);
 
   const buildSegmentPlacementPayload = useCallback(
-    (segment: number[], anchor: { sectionIndex: number; stationIndex: number }) => {
-      const anchorDmpSection = dmpFile.sections[anchor.sectionIndex];
+    (segment: number[], anchor: { lineIndex: number; stationIndex: number }) => {
+      const anchorDmpSection = dmpFile.lines[anchor.lineIndex];
       if (!anchorDmpSection) {
         return null;
       }
 
-      const edits = sectionEditsRef.current.get(anchor.sectionIndex);
+      const edits = lineEditsRef.current.get(anchor.lineIndex);
       const shots: ShotData[] = edits
         ? edits.shots.filter(isEmittedShot).map(editableShotToShotData)
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
       const emittedStationIndex = emittedAnchorStation(anchor);
 
-      const sectionData = buildPlacementSectionData({
+      const lineData = buildPlacementLineData({
         dmpSection: anchorDmpSection,
         edits,
         defaultDate: selectionConfig.defaultDate,
-        palette: sectionPalette,
-        paletteIndex: selectedIndices.indexOf(anchor.sectionIndex),
+        palette: linePalette,
+        paletteIndex: selectedIndices.indexOf(anchor.lineIndex),
         shots,
       });
 
-      // Build additional sections for segment shadow using effective (post-treatment)
-      // sections so the overlay reflects deleted shots and interpolated values.
-      const effectiveSections = dmpFile.sections.map((sec, idx) =>
-        buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
+      // Build additional lines for segment shadow using effective (post-treatment)
+      // lines so the overlay reflects deleted shots and interpolated values.
+      const effectiveLines = dmpFile.lines.map((sec, idx) =>
+        buildEffectiveDmpSection(sec, lineEditsRef.current.get(idx)),
       );
-      const effectiveConns = adjustConnectionsForEdits(connectionsRef.current, sectionEditsRef.current);
-      const layout = computeSegmentLayout(segment, effectiveConns, effectiveSections);
+      const effectiveConns = adjustConnectionsForEdits(connectionsRef.current, lineEditsRef.current);
+      const layout = computeSegmentLayout(segment, effectiveConns, effectiveLines);
       // Offsets from computeSegmentLayout are relative to station 0 of the root
-      // section (segmentIndices[0]). Re-base them relative to the anchor section's
+      // line (segmentIndices[0]). Re-base them relative to the anchor line's
       // station 0 so PlacementOverlay positions them correctly.
-      const anchorLayoutEntry = layout.find((entry) => entry.sectionIndex === anchor.sectionIndex);
+      const anchorLayoutEntry = layout.find((entry) => entry.lineIndex === anchor.lineIndex);
       const anchorLayoutOffsetX = anchorLayoutEntry?.offsetX ?? 0;
       const anchorLayoutOffsetY = anchorLayoutEntry?.offsetY ?? 0;
-      const additionalSections = layout
-        .filter((entry) => entry.sectionIndex !== anchor.sectionIndex)
+      const additionalLines = layout
+        .filter((entry) => entry.lineIndex !== anchor.lineIndex)
         .map((entry) => {
-          const sec = effectiveSections[entry.sectionIndex];
+          const sec = effectiveLines[entry.lineIndex];
           if (!sec) return null;
-          const secEdits = sectionEditsRef.current.get(entry.sectionIndex);
-          const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
+          const secEdits = lineEditsRef.current.get(entry.lineIndex);
+          const secSelectedPos = selectedIndices.indexOf(entry.lineIndex);
           const secColor =
             (secEdits?.color || null) ??
-            sectionPalette[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % sectionPalette.length] ??
+            linePalette[(secSelectedPos >= 0 ? secSelectedPos : entry.lineIndex) % linePalette.length] ??
             '#95a5a6';
           const secShots = secEdits
             ? secEdits.shots.filter(isEmittedShot).map(editableShotToShotData)
             : convertToEditableShots(sec.shots).map(editableShotToShotData);
           return {
-            sectionData: {
+            lineData: {
               name: secEdits?.name ?? sec.name,
               surveyor: null,
               date: null,
@@ -3128,30 +3128,30 @@ export default function DmpNewImportDialog({
         })
         .filter((value): value is NonNullable<typeof value> => value !== null);
 
-      return { sectionData, additionalSections, emittedStationIndex };
+      return { lineData, additionalLines, emittedStationIndex };
     },
-    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectedIndices, sectionPalette],
+    [dmpFile.lines, emittedAnchorStation, selectionConfig.defaultDate, selectedIndices, linePalette],
   );
 
   const importPlacedSegmentNow = useCallback(
     async (segmentIndices: number[], directPlacements: DirectPlacement[]) => {
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
+      const zeroDatumIdx = zeroDatumConfig?.lineIndex ?? null;
+      const { configs, emittedDmpIndices, emptyLines } = buildBatchImport(
         connectionsRef.current,
         zeroDatumIdx,
         dmpFile,
         selectionConfig,
-        sectionEditsRef.current,
+        lineEditsRef.current,
         fullPoolRef.current,
         directPlacements,
         earlyImportedRef.current,
         undefined,
         resolvedTheme,
       );
-      reportEmptySections(emptySections);
+      reportEmptyLines(emptyLines);
 
       const pendingSet = new Set(segmentIndices);
-      const segmentConfigs: BackendImportSectionConfig[] = [];
+      const segmentConfigs: BackendImportLineConfig[] = [];
       const segmentDmpIndices: number[] = [];
       // Map original config position -> new position in segmentConfigs
       const posRemap = new Map<number, number>();
@@ -3159,7 +3159,7 @@ export default function DmpNewImportDialog({
         const dmpIdx = emittedDmpIndices[i];
         if (dmpIdx != null && pendingSet.has(dmpIdx)) {
           posRemap.set(i, segmentConfigs.length);
-          segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
+          segmentConfigs.push({ ...configs[i]!, line_index: segmentConfigs.length });
           segmentDmpIndices.push(dmpIdx);
         }
       }
@@ -3169,13 +3169,13 @@ export default function DmpNewImportDialog({
           const placement = cfg.placement as {
             type: 'from_importing';
             import_station: number;
-            target_section_index: number;
+            target_line_index: number;
             target_station_index: number;
           };
-          const oldTarget = placement.target_section_index;
+          const oldTarget = placement.target_line_index;
           const newTarget = posRemap.get(oldTarget);
           if (newTarget != null) {
-            placement.target_section_index = newTarget;
+            placement.target_line_index = newTarget;
             continue;
           }
           const targetDmpIdx = emittedDmpIndices[oldTarget];
@@ -3187,7 +3187,7 @@ export default function DmpNewImportDialog({
               type: 'from_existing',
               import_station: placement.import_station,
               existing_station: {
-                section_id: existingTargetId,
+                line_id: existingTargetId,
                 station_index: placement.target_station_index,
               },
             };
@@ -3203,26 +3203,26 @@ export default function DmpNewImportDialog({
       }
 
       const pendingSetForUpdates = new Set(segmentDmpIndices);
-      const segmentExistingShotUpdates = backendExistingShotUpdatesForSections(
+      const segmentExistingShotUpdates = backendExistingShotUpdatesForLines(
         existingShotUpdatesRef.current,
         pendingSetForUpdates,
       );
-      const result = await invokeIpc<CommandResult>('import_sections', {
-        sections: segmentConfigs,
+      const result = await invokeIpc<CommandResult>('import_lines', {
+        lines: segmentConfigs,
         fileHash: selectionConfig.fileHash ?? null,
-        sectionHashes: selectionConfig.sectionHashes ?? null,
+        lineHashes: selectionConfig.lineHashes ?? null,
         existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
         virtualShotMode: 'AllReferences',
         ...dmpProvenance,
-      }, { purpose: 'import placed segment sections' });
+      }, { purpose: 'import placed segment lines' });
 
       if (!result.success) {
         setError(result.error ?? 'Segment import failed');
         return false;
       }
 
-      if (result.section_ids.length > 0) {
-        importedSectionIdsRef.current.push(...result.section_ids);
+      if (result.line_ids.length > 0) {
+        importedLineIdsRef.current.push(...result.line_ids);
       }
       // Banked BEFORE the refresh below deliberately: if that throws, the catch
       // in the placement callback reopens with the same queue and the retry
@@ -3234,19 +3234,19 @@ export default function DmpNewImportDialog({
       markSuccessfulDmpImportDirty();
 
       for (let i = 0; i < segmentDmpIndices.length; i++) {
-        const sectionId = result.section_ids[i];
-        if (sectionId != null) {
-          earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
+        const lineId = result.line_ids[i];
+        if (lineId != null) {
+          earlyImportedRef.current.set(segmentDmpIndices[i]!, lineId);
         }
       }
-      existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+      existingShotUpdatesRef.current = removeExistingShotUpdatesForLines(
         existingShotUpdatesRef.current,
         pendingSetForUpdates,
       );
 
       return true;
     },
-    [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
+    [dmpFile, refreshProjectState, reportEmptyLines, selectionConfig, zeroDatumConfig?.lineIndex, resolvedTheme],
   );
 
   /**
@@ -3255,7 +3255,7 @@ export default function DmpNewImportDialog({
    * Carries NO payload guard, deliberately (#476). `refuseIncompleteShots`
    * exists to protect an IPC payload, and this hands off nothing: the payload
    * leaves later, from `importPlacedSegmentNow`, once the user has dropped the
-   * section. Gating the handoff on the completeness of the WHOLE selection is
+   * line. Gating the handoff on the completeness of the WHOLE selection is
    * what turned one zero-length row in the file into a dead end - the auto-start
    * effect below runs this while the dialog is hidden, so a refusal here was
    * invisible AND unrecoverable. The guard stays where a payload is actually at
@@ -3279,7 +3279,7 @@ export default function DmpNewImportDialog({
 
     const buildSavedState = (
       queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
+      anchor: { lineIndex: number; stationIndex: number },
       directPlacements: DirectPlacement[],
     ): SavedManualPlacingState => ({
       connections: [...connectionsRef.current],
@@ -3289,7 +3289,7 @@ export default function DmpNewImportDialog({
       directPlacements,
       skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
-      sectionEdits: Array.from(sectionEditsRef.current.entries()),
+      lineEdits: Array.from(lineEditsRef.current.entries()),
       confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
       existingShotUpdates: [...existingShotUpdatesRef.current],
       earlyImported: Array.from(earlyImportedRef.current.entries()),
@@ -3299,15 +3299,15 @@ export default function DmpNewImportDialog({
       // this builder runs inside the placement callback, after it.
       importedReceipts: [...importedReceiptsRef.current],
       // Same liveness requirement, same call: that import also banks the
-      // section ids the reopened instance must complete with.
-      importedSectionIds: [...importedSectionIdsRef.current],
+      // line ids the reopened instance must complete with.
+      importedLineIds: [...importedLineIdsRef.current],
       // Which project they mean. Ids alone are ambiguous across a switch.
       projectKey: importProjectKeyRef.current,
     });
 
     const openPlacementDialog = (
       queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
+      anchor: { lineIndex: number; stationIndex: number },
       directPlacements: DirectPlacement[],
     ) => {
       setSource('dialog');
@@ -3320,7 +3320,7 @@ export default function DmpNewImportDialog({
 
     const startSegmentPlacement = (
       queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
+      anchor: { lineIndex: number; stationIndex: number },
       directPlacements: DirectPlacement[],
     ) => {
       const segment = queue[0];
@@ -3336,7 +3336,7 @@ export default function DmpNewImportDialog({
       }
 
       startPlacementMode(
-        payload.sectionData,
+        payload.lineData,
         payload.emittedStationIndex,
         (result: PlacementResult) => {
           const handlePlacementComplete = async () => {
@@ -3358,7 +3358,7 @@ export default function DmpNewImportDialog({
                 };
 
             const dp: DirectPlacement = {
-              anchorSectionIndex: anchor.sectionIndex,
+              anchorLineIndex: anchor.lineIndex,
               anchorStationIndex: alignStation,
               placement,
             };
@@ -3384,7 +3384,7 @@ export default function DmpNewImportDialog({
 
             if (nextQueue.length > 0) {
               const nextAnchor = {
-                sectionIndex: chooseSegmentAnchorSection(nextQueue[0]!),
+                lineIndex: chooseSegmentAnchorLine(nextQueue[0]!),
                 stationIndex: 0,
               };
               startSegmentPlacement(nextQueue, nextAnchor, nextDirectPlacements);
@@ -3399,7 +3399,7 @@ export default function DmpNewImportDialog({
         () => {
           openPlacementDialog(queue, anchor, directPlacements);
         },
-        payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
+        payload.additionalLines.length > 0 ? payload.additionalLines : undefined,
       );
 
       showToast(
@@ -3423,7 +3423,7 @@ export default function DmpNewImportDialog({
     selectionConfig,
     zeroDatumConfig,
     importPlacedSegmentNow,
-    chooseSegmentAnchorSection,
+    chooseSegmentAnchorLine,
     startPlacementMode,
     closeDialog,
     openDialog,
@@ -3433,7 +3433,7 @@ export default function DmpNewImportDialog({
   /**
    * "Place on Map", clicked by the user. This is where the payload guard
    * belongs: the click is a deliberate step toward an import, the dialog is
-   * VISIBLE, and the refusal toast names a section the user can then go and fix
+   * VISIBLE, and the refusal toast names a line the user can then go and fix
    * (#476 moved it off the auto-start path, where none of that was true).
    */
   const handlePlaceOnMapClick = useCallback(() => {
@@ -3504,13 +3504,13 @@ export default function DmpNewImportDialog({
   // This wizard imports EAGERLY - the zero-datum anchor lands in the project on
   // mount, and each reachable segment as it is placed, because the map has to
   // render what it is placing. So by the time either exit is reached the project
-  // may already hold sections the user never agreed to keep, and neither exit
+  // may already hold lines the user never agreed to keep, and neither exit
   // used to say so: the gate asked only about `connections` (client-side records
   // that have imported nothing), so cancelling right after the zero-datum import
-  // closed silently and left the section behind (#394 F2).
+  // closed silently and left the line behind (#394 F2).
   //
   // Both exits therefore offer to WITHDRAW what was imported, and the withdrawal
-  // is one batched `delete_section` - one undo entry for one user action, not N.
+  // is one batched `delete_line` - one undo entry for one user action, not N.
 
   /** A withdrawal already running. A REF, not just the state mirror below: two
    *  clicks in the same tick both read the pre-`setState` value, and the second
@@ -3524,23 +3524,23 @@ export default function DmpNewImportDialog({
    *  close over. */
   const withdrawalNeedsSaveRef = useRef(false);
 
-  /** Remove every section this wizard run imported, as ONE undoable step, and
+  /** Remove every line this wizard run imported, as ONE undoable step, and
    *  leave the result on disk.
    *  Returns false (leaving the accumulators untouched) if it refused, the
    *  backend did, or the follow-up save did, so the caller can keep the wizard
    *  open on a visible error instead of closing over a project it failed to
    *  clean up. */
-  const withdrawImportedSections = useCallback(async (): Promise<boolean> => {
+  const withdrawImportedLines = useCallback(async (): Promise<boolean> => {
     if (withdrawInFlightRef.current) return false;
     // DEDUPLICATED: this accumulator is seeded from the saved state AND appended
     // to by live imports, so one id can appear twice across the map-placement
     // handoff. `execute_batch` is all-or-nothing and the second delete of an id
     // fails with "not found", which rolls the WHOLE batch back - the withdrawal
     // would remove nothing at all and report an error for it.
-    const sectionIds = [...new Set(importedSectionIdsRef.current)];
-    if (sectionIds.length === 0 && !withdrawalNeedsSaveRef.current) return true;
-    // Section ids are small per-project integers, so a withdrawal aimed at a
-    // project that is no longer open would delete same-numbered sections in
+    const lineIds = [...new Set(importedLineIdsRef.current)];
+    if (lineIds.length === 0 && !withdrawalNeedsSaveRef.current) return true;
+    // Line ids are small per-project integers, so a withdrawal aimed at a
+    // project that is no longer open would delete same-numbered lines in
     // whatever replaced it - and every id would RESOLVE, so nothing downstream
     // fails safe. Nothing clears `dialogData` on a project switch
     // (`resetToolTransientsForProjectSwitch` leaves the dialog slot alone), so
@@ -3554,32 +3554,32 @@ export default function DmpNewImportDialog({
     setWithdrawInFlight(true);
     setIsImporting(true);
     try {
-      if (sectionIds.length > 0) {
+      if (lineIds.length > 0) {
         const fileHashes = selectionConfig.fileHash ? [selectionConfig.fileHash] : [];
-        const sectionHashes = selectionConfig.sectionHashes ?? [];
+        const lineHashes = selectionConfig.lineHashes ?? [];
         const result = await executeBatch([
-          ...sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
+          ...lineIds.map((lineId) => ({ type: 'delete_line', line_id: lineId }) as const),
           // In the SAME batch, and that is the point of batching it: deleting a
-          // section does not touch the import-dedup hashes `import_sections`
+          // line does not touch the import-dedup hashes `import_lines`
           // recorded (they are project-level bookkeeping, not references), so
           // without this the project still claims this file was imported while
-          // none of it remains - and `DmpSelectionDialog` DESELECTS every section
+          // none of it remains - and `DmpSelectionDialog` DESELECTS every line
           // it believes is a duplicate, so the obvious retry silently offers
-          // nothing to import. One batch, so one undo restores the sections and
+          // nothing to import. One batch, so one undo restores the lines and
           // their tracking together.
           //
-          // Only the hashes THIS run sent to `import_sections`: `sectionHashes`
-          // holds the selected sections alone (duplicates were auto-deselected
+          // Only the hashes THIS run sent to `import_lines`: `lineHashes`
+          // holds the selected lines alone (duplicates were auto-deselected
           // before the wizard opened), so an earlier session's tracking is out of
           // reach. The file hash is coarser - one per file - so a file imported
           // in an earlier session too loses its file-level duplicate flag. That
           // is the intended direction: after a withdrawal the user may well want
-          // to re-import it, and the per-section flags still stand.
-          ...(fileHashes.length > 0 || sectionHashes.length > 0
+          // to re-import it, and the per-line flags still stand.
+          ...(fileHashes.length > 0 || lineHashes.length > 0
             ? [{
                 type: 'untrack_import',
                 file_hashes: fileHashes,
-                section_hashes: sectionHashes,
+                line_hashes: lineHashes,
               } as const]
             : []),
         ]);
@@ -3589,24 +3589,24 @@ export default function DmpNewImportDialog({
         }
 
         // DIFFED, not cleared: an import that resolved while the batch was in
-        // flight has pushed an id the batch never named, and that section is
+        // flight has pushed an id the batch never named, and that line is
         // still in the project. Wiping the list would drop it from tracking
         // while it survives on disk - the very shape F2 exists to prevent. (The
         // handlers refuse to start a withdrawal mid-import, so this is the
         // second line of defence, not the first.)
-        const removed = new Set(sectionIds);
-        importedSectionIdsRef.current = importedSectionIdsRef.current.filter((id) => !removed.has(id));
+        const removed = new Set(lineIds);
+        importedLineIdsRef.current = importedLineIdsRef.current.filter((id) => !removed.has(id));
         for (const dmpIndex of [...earlyImportedRef.current.keys()]) {
-          const sectionId = earlyImportedRef.current.get(dmpIndex);
-          if (sectionId != null && removed.has(sectionId)) earlyImportedRef.current.delete(dmpIndex);
+          const lineId = earlyImportedRef.current.get(dmpIndex);
+          if (lineId != null && removed.has(lineId)) earlyImportedRef.current.delete(dmpIndex);
         }
-        // Receipts are per-`import_sections` CALL and carry no section id, so
+        // Receipts are per-`import_lines` CALL and carry no line id, so
         // they cannot be diffed - only safe to drop once nothing survives.
-        if (importedSectionIdsRef.current.length === 0) importedReceiptsRef.current = [];
+        if (importedLineIdsRef.current.length === 0) importedReceiptsRef.current = [];
 
         // #394 F14. The eager anchor import already RESOLVED this project's
         // deferred first save (`finalize_deferred_import`), so the file on disk
-        // still holds the sections just withdrawn. It has to be written through.
+        // still holds the lines just withdrawn. It has to be written through.
         //
         // Gated as `saveAfterImport` gates its own save, for its reason:
         // importing INTO AN EXISTING project the user may have unrelated pending
@@ -3617,7 +3617,7 @@ export default function DmpNewImportDialog({
       }
 
       // The save is NOT best-effort: closing here is what makes the removal
-      // final from the user's side, and a `.stalx` still holding the sections
+      // final from the user's side, and a `.stalx` still holding the lines
       // they chose to remove is the exact F2 shape one layer out. So a failed
       // write keeps the wizard open with the reason on screen, and
       // `withdrawalNeedsSaveRef` makes the next Remove click retry the SAVE -
@@ -3640,9 +3640,9 @@ export default function DmpNewImportDialog({
       setWithdrawInFlight(false);
       setIsImporting(false);
     }
-  }, [executeBatch, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
+  }, [executeBatch, selectionConfig.fileHash, selectionConfig.lineHashes, t]);
 
-  /** How many sections the pending confirmation is talking about. Snapshotted
+  /** How many lines the pending confirmation is talking about. Snapshotted
    *  into state when the confirmation opens: the live count lives in a ref, and
    *  a ref does not re-render the copy that quotes it. */
   const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
@@ -3650,7 +3650,7 @@ export default function DmpNewImportDialog({
   /**
    * Neither exit may be OPENED while an import is in flight.
    *
-   * An import banks its section ids only when it resolves, so a withdrawal
+   * An import banks its line ids only when it resolves, so a withdrawal
    * decided now would snapshot a list that is about to grow, and the late
    * arrival would survive in the project with nothing tracking it - the exact
    * shape F2 exists to prevent. The footer buttons are disabled for the same
@@ -3661,7 +3661,7 @@ export default function DmpNewImportDialog({
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
-    const importedCount = importedSectionIdsRef.current.length;
+    const importedCount = importedLineIdsRef.current.length;
     if (connections.length > 0 || importedCount > 0) {
       setPendingWithdrawCount(importedCount);
       setShowCancelConfirm(true);
@@ -3672,14 +3672,14 @@ export default function DmpNewImportDialog({
 
   /** Close the wizard, first removing what it imported. */
   const handleCancelWithRemoval = useCallback(async () => {
-    if (!(await withdrawImportedSections())) return;
+    if (!(await withdrawImportedLines())) return;
     setShowCancelConfirm(false);
     onCancel();
-  }, [withdrawImportedSections, onCancel]);
+  }, [withdrawImportedLines, onCancel]);
 
   const handleBack = useCallback(() => {
     if (isImporting) return;
-    const importedCount = importedSectionIdsRef.current.length;
+    const importedCount = importedLineIdsRef.current.length;
     if (connections.length > 0 || importedCount > 0) {
       setPendingWithdrawCount(importedCount);
       setShowBackConfirm(true);
@@ -3690,9 +3690,9 @@ export default function DmpNewImportDialog({
 
   /**
    * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
-   * config, or the section selection), and the forward pass re-imports from
+   * config, or the line selection), and the forward pass re-imports from
    * scratch - the anchor on mount, then the whole suggest/early-import pipeline.
-   * So Back has to withdraw first, or the second pass duplicates every section
+   * So Back has to withdraw first, or the second pass duplicates every line
    * the first one created (#394 F1). Carrying "already imported, don't redo it"
    * across instead cannot work: the mount effect that imports the anchor is the
    * same one that fires `suggest_all_import_placements`, so suppressing it
@@ -3701,10 +3701,10 @@ export default function DmpNewImportDialog({
    * exactly what the user pressed Back to change.
    */
   const handleBackWithRemoval = useCallback(async () => {
-    if (!(await withdrawImportedSections())) return;
+    if (!(await withdrawImportedLines())) return;
     setShowBackConfirm(false);
     onBack();
-  }, [withdrawImportedSections, onBack]);
+  }, [withdrawImportedLines, onBack]);
 
   // Confidence helpers
   const confidenceColors: Record<string, string> = {
@@ -3716,11 +3716,11 @@ export default function DmpNewImportDialog({
   const directionLabel = (direction: string) =>
     direction === 'forward' ? '\u2192' : '\u2190';
 
-  // Progress - during manual_placing, compute from queue (which has ALL unplaced sections).
-  // Otherwise, count connected sections + zero datum.
-  const sectionsInQueue = useMemo(() => segmentQueue.flat().length, [segmentQueue]);
+  // Progress - during manual_placing, compute from queue (which has ALL unplaced lines).
+  // Otherwise, count connected lines + zero datum.
+  const linesInQueue = useMemo(() => segmentQueue.flat().length, [segmentQueue]);
   const placedCount = phase === 'manual_placing' || phase === 'placing' || phase === 'done'
-    ? totalSelected - sectionsInQueue
+    ? totalSelected - linesInQueue
     : connectedIndices.size + (zeroDatumConfig ? 1 : 0);
   const skippedCount = skippedIndices.size;
 
@@ -3733,21 +3733,21 @@ export default function DmpNewImportDialog({
   // Target type label for import-to-import connections
   const isImportTarget = currentSuggestion?.targetType === 'importing';
 
-  // Section names in current segment (for display)
-  const segmentSectionNames = useMemo(() => {
+  // Line names in current segment (for display)
+  const segmentLineNames = useMemo(() => {
     if (!currentSegment) return [];
-    return currentSegment.map(idx => dmpFile.sections[idx]?.name ?? `Section ${idx}`);
-  }, [currentSegment, dmpFile.sections]);
+    return currentSegment.map(idx => dmpFile.lines[idx]?.name ?? `Line ${idx}`);
+  }, [currentSegment, dmpFile.lines]);
 
   // Whether current placement mode is valid for submission
   const isSegmentPlacementValid = useMemo(() => {
     if (!segmentAnchor) return false;
     if (segmentPlacementMode === 'suggestion') return segmentSkippedSuggestion != null;
-    if (segmentPlacementMode === 'fromExisting') return fromExistingSectionId != null;
+    if (segmentPlacementMode === 'fromExisting') return fromExistingLineId != null;
     if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
     if (segmentPlacementMode === 'discard') return true;
     return false;
-  }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
+  }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingLineId]);
 
   return (
     <DialogWrapper
@@ -3798,15 +3798,15 @@ export default function DmpNewImportDialog({
               onWidthChange={setMapPanelWidth}
               bodyRef={suggestionBodyRef} panelRef={suggestionPreviewRef} height={bandHeight}
             >
-              <SectionPreview
-                section={importPreviewSection}
+              <LinePreview
+                line={importPreviewLine}
                 color={importColor}
                 size={suggestionPreviewSize.width}
                 height={suggestionPreviewSize.height}
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
-                contextSections={mergedContextSections}
+                contextLines={mergedContextLines}
               />
             </WizardMapPanel>
 
@@ -3826,14 +3826,14 @@ export default function DmpNewImportDialog({
                 {/* Connection description */}
                 <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
                   <div className="text-sm">
-                    <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
+                    <span className="font-medium">&ldquo;{currentSuggestion!.importLineName}&rdquo;</span>
                     {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
                   </div>
                   <div className="text-text-secondary text-sm my-1">
                     {t('dialogs.dmpNewImport.connectsTo')}
                   </div>
                   <div className="text-sm">
-                    <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
+                    <span className="font-medium">&ldquo;{targetLineName}&rdquo;</span>
                     {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
                     {isImportTarget && (
                       <span className="ml-1 text-xs text-text-secondary">(importing)</span>
@@ -3863,7 +3863,7 @@ export default function DmpNewImportDialog({
                       onChange={(v) => setSelectedMergeOffset(Number(v))}
                       options={mergeOptions.map((opt) => ({
                         value: String(opt.offset),
-                        label: `stn ${opt.importStation} → ${targetSectionName} stn ${opt.existingStation}`,
+                        label: `stn ${opt.importStation} → ${targetLineName} stn ${opt.existingStation}`,
                       }))}
                       size="sm"
                       data-testid="merge-station-select"
@@ -3872,7 +3872,7 @@ export default function DmpNewImportDialog({
                     <span className="text-xs text-text-secondary">
                       stn {selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
                       {' → '}
-                      {targetSectionName} stn{' '}
+                      {targetLineName} stn{' '}
                       {selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex}
                     </span>
                   )}
@@ -3935,7 +3935,7 @@ export default function DmpNewImportDialog({
                     <div className="mt-2 space-y-1" data-testid="alternatives-list">
                       {alternatives.map((alt, idx) => (
                         <button
-                          key={`${alt.importSectionIndex}-${alt.existingSectionId ?? alt.targetImportIndex}-${alt.existingStationIndex}-${alt.importStationIndex}-${alt.direction}`}
+                          key={`${alt.importLineIndex}-${alt.existingLineId ?? alt.targetImportIndex}-${alt.existingStationIndex}-${alt.importStationIndex}-${alt.direction}`}
                           type="button"
                           className={`w-full p-2 rounded border text-left text-xs flex items-center gap-2 hover:bg-accent-5 transition-colors ${confidenceColors[alt.confidence] ?? ''}`}
                           onClick={() => handleAlternativeClick(alt)}
@@ -3947,7 +3947,7 @@ export default function DmpNewImportDialog({
                           <span className="flex-1 truncate">
                             <span className="text-text-secondary">stn {alt.importStationIndex}</span>
                             <span className="text-text-secondary"> → </span>
-                            <span className="font-medium">{alt.existingSectionName}</span>
+                            <span className="font-medium">{alt.existingLineName}</span>
                             <span className="text-text-secondary"> stn {alt.existingStationIndex}</span>
                             {alt.targetType === 'importing' && (
                               <span className="text-text-secondary text-[10px] ml-0.5">(imp)</span>
@@ -3963,19 +3963,19 @@ export default function DmpNewImportDialog({
                 </div>
               )}
 
-              {/* Section Settings */}
-              {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
-                  Consumed as-is here; the reusable focus-mode section-edit surface
+              {/* Line Settings */}
+              {/* #61 embedding slot: line-name + LineMetadataForm + ShotTableEditor.
+                  Consumed as-is here; the reusable focus-mode line-edit surface
                   (fields-right / table-bottom) drops in here later. Do not refactor.
                   #567 item 2: wrapped in a collapsed-by-default disclosure so it
                   stops competing with the connection card/confidence badge above -
                   the wrapped content itself is unchanged. */}
               {editState && (
                 <div className="border-t border-border pt-3">
-                  {sectionPeopleProps && (
+                  {linePeopleProps && (
                     <SuggestionSectionSettings
                       editState={editState}
-                      people={sectionPeopleProps}
+                      people={linePeopleProps}
                       onMetadataChange={handleMetadataChange}
                     />
                   )}
@@ -4010,14 +4010,14 @@ export default function DmpNewImportDialog({
               onWidthChange={setMapPanelWidth}
               bodyRef={manualBodyRef} panelRef={manualPreviewRef} height={bandHeight}
             >
-              <SectionPreview
-                segmentSections={segmentPreviewSections}
-                contextSections={fromExistingContextSections}
+              <LinePreview
+                segmentLines={segmentPreviewLines}
+                contextLines={fromExistingContextLines}
                 size={manualPreviewSize.width}
                 height={manualPreviewSize.height}
                 onStationClick={handleSegmentStationClick}
                 selectedStationIndex={previewAnchor ? emittedAnchorStation(previewAnchor) : null}
-                selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
+                selectedLineIndex={previewAnchor?.lineIndex ?? null}
               />
             </WizardMapPanel>
 
@@ -4032,7 +4032,7 @@ export default function DmpNewImportDialog({
                   })}
                 </div>
                 <div className="text-xs text-text-secondary mt-0.5">
-                  {t('dialogs.dmpNewImport.manualPlacing.sections')}: {segmentSectionNames.join(', ')}
+                  {t('dialogs.dmpNewImport.manualPlacing.sections')}: {segmentLineNames.join(', ')}
                 </div>
               </div>
 
@@ -4044,24 +4044,24 @@ export default function DmpNewImportDialog({
                 currentSegment={currentSegment}
                 segmentAnchor={segmentAnchor}
                 onCommitSegmentAnchor={commitSegmentAnchor}
-                sectionEdits={sectionEditsRef.current}
-                dmpSections={dmpFile.sections}
-                onAnchorSectionHover={handleAnchorSectionHover}
+                lineEdits={lineEditsRef.current}
+                dmpSections={dmpFile.lines}
+                onAnchorLineHover={handleAnchorLineHover}
                 onAnchorStationHover={handleAnchorStationHover}
-                projectSections={projectSections}
-                fromExistingSectionId={fromExistingSectionId}
-                onFromExistingSectionChange={setFromExistingSectionId}
+                projectLines={projectLines}
+                fromExistingLineId={fromExistingLineId}
+                onFromExistingLineChange={setFromExistingLineId}
                 fromExistingStationIdx={fromExistingStationIdx}
                 onFromExistingStationChange={setFromExistingStationIdx}
                 fromExistingStationCount={fromExistingStationCount}
                 onPlaceOnMap={handlePlaceOnMapClick}
               />
 
-              {/* Section settings (same editing surface as section connection / zero datum flows) */}
-              {/* #61 embedding slot: section-edit surface goes here later. Do not refactor. */}
+              {/* Line settings (same editing surface as line connection / zero datum flows) */}
+              {/* #61 embedding slot: line-edit surface goes here later. Do not refactor. */}
               {editState && (
                 <>
-                  <div className="space-y-2" data-testid="wizard-manual-section-settings">
+                  <div className="space-y-2" data-testid="wizard-manual-line-settings">
                     <div className="border-t border-border" />
                     <div className="text-sm font-medium">
                       {t('dialogs.dmpNewImport.sectionSettings')}
@@ -4076,14 +4076,14 @@ export default function DmpNewImportDialog({
                         onChange={(e) => handleMetadataChange('name', e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded"
                         placeholder={t('sectionMetadata.placeholders.name')}
-                        data-testid="section-name-input"
+                        data-testid="line-name-input"
                       />
                     </div>
                   </div>
                   <div className="space-y-4" data-testid="wizard-manual-editable-rest">
-                    <SectionMetadataForm
+                    <LineMetadataForm
                       name={editState.name}
-                      people={sectionPeopleProps ?? listPeopleProps(resolveImportPeople(editState, selectionConfig), handlePeopleChange)}
+                      people={linePeopleProps ?? listPeopleProps(resolveImportPeople(editState, selectionConfig), handlePeopleChange)}
                       date={editState.date}
                       color={editState.color}
                       direction={editState.direction}
@@ -4255,7 +4255,7 @@ export default function DmpNewImportDialog({
 
       {/* Cancel confirmation. Three actions once anything has been imported -
           the exit is no longer just "close a dialog", it decides what happens to
-          sections that are already in the project. `confirm-cancel-button` keeps
+          lines that are already in the project. `confirm-cancel-button` keeps
           its id and its meaning (close, change nothing on disk); the removal is
           the new, additional action. */}
       <AlertDialog
@@ -4265,7 +4265,7 @@ export default function DmpNewImportDialog({
         // until it lands, including Escape and the backdrop. "Keep and close"
         // above all: it would close the wizard over a removal that still
         // completes, leaving the user looking at a project they chose to keep
-        // sections in while those sections disappear behind them.
+        // lines in while those lines disappear behind them.
         onClose={() => { if (!withdrawInFlight) setShowCancelConfirm(false); }}
         data-testid="cancel-confirm-dialog"
         actions={

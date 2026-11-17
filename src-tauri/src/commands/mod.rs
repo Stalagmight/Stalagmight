@@ -16,7 +16,7 @@ pub mod mnemo;
 pub mod project;
 pub mod raw_data;
 pub mod recovery;
-pub mod section;
+pub mod line;
 pub mod shot;
 pub mod speleodb;
 pub mod speleodb_cache;

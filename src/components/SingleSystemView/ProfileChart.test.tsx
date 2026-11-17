@@ -32,7 +32,7 @@ import type { GasReachField, RouteProfilePoint } from '../../types/ipc.generated
 
 const point = (over: Partial<RouteProfilePoint>): RouteProfilePoint => ({
   route_index: 0,
-  station_ref: { section_id: 1, station_index: 0 },
+  station_ref: { line_id: 1, station_index: 0 },
   distance_m: 0,
   depth_m: 0,
   gas_l: 0,
@@ -268,7 +268,7 @@ describe('ProfileChart (#299)', () => {
     // screen.
     seed(fakeField());
     render(<ProfileChart />);
-    const moved = { section_id: 9, station_index: 9 };
+    const moved = { line_id: 9, station_index: 9 };
     useGasPlanStore.setState({ endpoint: moved });
     fireEvent.click(screen.getByTestId('plan-profile-export-xml'));
     await waitFor(() => expect(vi.mocked(exportDiveProfile)).toHaveBeenCalled());

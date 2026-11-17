@@ -48,7 +48,7 @@ export function SpeleoRevisionHistory() {
   // does and refuses whenever this copy holds work the server has never seen. That
   // state is ordinary here - a push that failed, or a lock released without one,
   // leaves exactly it - so offering a button that can only be refused made the whole
-  // section a dead end: the raw "local edits that were never pushed" line for what
+  // line a dead end: the raw "local edits that were never pushed" line for what
   // the user asked to be a peek, with nothing said about how to get out of it.
   // Named up front instead, with the way through (see the hint below).
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);

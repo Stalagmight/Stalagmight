@@ -49,10 +49,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({ t: (k: string) => k }),
 }));
 
-// SectionPreview draws on a MapLibre canvas, which jsdom cannot run. The pick
+// LinePreview draws on a MapLibre canvas, which jsdom cannot run. The pick
 // it feeds is exercised through the dropdown instead.
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 
 // The shot table reads validation settings and decimal precision off the store.
 vi.mock('../../../store/projectStore', () => ({
@@ -112,19 +112,19 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 // Date picker and colour swatches are irrelevant here and pull in more DOM.
-vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
-  SectionMetadataForm: () => null,
+vi.mock('../../common/LineMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/LineMetadataForm')>()),
+  LineMetadataForm: () => null,
 }));
 
 import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
-import { buildZeroDatumSectionConfig } from '../../../utils/importSectionConfig';
+import { buildZeroDatumLineConfig } from '../../../utils/importLineConfig';
 import type {
   DmpFile,
   DmpSection,
   DmpShot,
   ImportPlacement,
-  ImportSectionConfig,
+  ImportLineConfig,
 } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 
@@ -155,7 +155,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -163,7 +163,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: SHOT_COUNT }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -180,7 +180,7 @@ function renderDialog() {
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={vi.fn()}
@@ -236,14 +236,14 @@ function insertBeforeRow(visibleIndex: number) {
 }
 
 /** Confirm the dialog and return the config the backend would receive. */
-function confirmedConfig(): ImportSectionConfig {
+function confirmedConfig(): ImportLineConfig {
   fireEvent.change(screen.getByTestId('zero-datum-gps-input'), {
     target: { value: '20.2, -87.4' },
   });
   fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
 
   expect(onConfirm).toHaveBeenCalledTimes(1);
-  return buildZeroDatumSectionConfig(onConfirm.mock.calls[0]![0]);
+  return buildZeroDatumLineConfig(onConfirm.mock.calls[0]![0]);
 }
 
 /** The `station_index` the backend would receive. */
@@ -293,7 +293,7 @@ describe('ZeroDatumConfigDialog station pick', () => {
    * An INSERTED row is blank, and a blank row is dropped from the payload, so it
    * renumbers nothing yet - the pick must not move. This used to assert a shift
    * of +1, from when every non-deleted row counted; keeping that would have put
-   * the picker one ahead of the section actually sent and anchored the datum to
+   * the picker one ahead of the line actually sent and anchored the datum to
    * the wrong station.
    */
   it('leaves the pick alone when a BLANK shot is inserted before it', () => {
@@ -361,7 +361,7 @@ describe('ZeroDatumConfigDialog station pick', () => {
     // A shot is added by typing into the trailing blank row, which is the
     // convention across the app's grids - there is no Add button any more.
     appendShot();
-    // Appending extends the section; the old last station keeps its number and
+    // Appending extends the line; the old last station keeps its number and
     // the new far end is one beyond it.
     expect(confirmedStationIndex()).toBe(SHOT_COUNT);
   });
@@ -386,7 +386,7 @@ describe('ZeroDatumConfigDialog station pick', () => {
     expect(shots[1]?.length).toBe(42);
   });
 
-  it('follows the pick down as the section is emptied out from under it', () => {
+  it('follows the pick down as the line is emptied out from under it', () => {
     renderDialog();
     pickStation(PICK);
     // Delete the five shots the pick sits beyond, one at a time - the visible
@@ -493,7 +493,7 @@ describe('ZeroDatumConfigDialog station pick across blank transitions', () => {
  *
  * Applying the whole run's delta instead subtracted more stations than preceded
  * the pick - deleting stations 2..7 with 5 picked gave 5 - 6, clamped to 0, so
- * the GPS anchor jumped to the head of the section.
+ * the GPS anchor jumped to the head of the line.
  */
 describe('ZeroDatumConfigDialog pick inside a deleted run', () => {
   beforeAll(() => {
@@ -566,9 +566,9 @@ describe('ZeroDatumConfigDialog dirty guard', () => {
     expect(lastIsDirty()).toBe(false);
   });
 
-  it('goes dirty when the section is renamed', () => {
+  it('goes dirty when the line is renamed', () => {
     renderDialog();
-    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'New Name' } });
+    fireEvent.change(screen.getByTestId('line-name-input'), { target: { value: 'New Name' } });
     expect(lastIsDirty()).toBe(true);
   });
 
@@ -623,7 +623,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={onCancel}
         onBack={vi.fn()}
@@ -640,7 +640,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={onCancel}
         onBack={vi.fn()}
@@ -661,7 +661,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={onCancel}
         onBack={vi.fn()}
@@ -680,7 +680,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={vi.fn()}
         onBack={onBack}
@@ -700,7 +700,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={vi.fn()}
         onBack={onBack}
@@ -721,7 +721,7 @@ describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
       <ZeroDatumConfigDialog
         dmpFile={dmpFile()}
         selectionConfig={selectionConfig}
-        sectionIndex={0}
+        lineIndex={0}
         filePath="/tmp/anchor.dmp"
         onCancel={vi.fn()}
         onBack={onBack}

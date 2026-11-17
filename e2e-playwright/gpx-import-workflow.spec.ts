@@ -59,19 +59,19 @@ test.describe('GPX Import Workflow', () => {
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              project: { sections: unknown[]; zero_datums: unknown[] } | null;
+              project: { lines: unknown[]; zero_datums: unknown[] } | null;
             };
           };
         };
       }).__E2E_TEST__?.projectStore.getState();
 
       return {
-        sectionCount: state?.project?.sections.length ?? 0,
+        lineCount: state?.project?.lines.length ?? 0,
         datumCount: state?.project?.zero_datums.length ?? 0,
       };
     });
 
-    expect(projectSummary.sectionCount).toBeGreaterThan(0);
+    expect(projectSummary.lineCount).toBeGreaterThan(0);
     expect(projectSummary.datumCount).toBeGreaterThan(0);
   });
 
@@ -95,14 +95,14 @@ test.describe('GPX Import Workflow', () => {
 
     // The current project is unchanged (nothing was imported into it, and the
     // project was not closed).
-    const sectionCount = await page.evaluate(() => {
+    const lineCount = await page.evaluate(() => {
       const state = (window as unknown as {
         __E2E_TEST__?: {
-          projectStore: { getState: () => { project: { sections: unknown[] } | null } };
+          projectStore: { getState: () => { project: { lines: unknown[] } | null } };
         };
       }).__E2E_TEST__?.projectStore.getState();
-      return state?.project?.sections.length ?? 0;
+      return state?.project?.lines.length ?? 0;
     });
-    expect(sectionCount).toBe(0);
+    expect(lineCount).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 use crate::config::ValidationConfig;
 use crate::models::shot::implied_pitch_deg;
 use crate::models::warning::severity_for_code;
-use crate::models::{SectionId, ShotData};
+use crate::models::{LineId, ShotData};
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -27,7 +27,7 @@ impl Validator {
     pub fn validate_shot(
         shot: &ShotData,
         config: &ValidationConfig,
-        section_id: SectionId,
+        line_id: LineId,
         shot_index: usize,
     ) -> Vec<ValidationWarning> {
         let mut warnings = Vec::new();
@@ -68,7 +68,7 @@ impl Validator {
                 "NON_FINITE_VALUE",
                 format!(
                     "Shot {}:{} has non-finite value(s) in: {}",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     non_finite.join(", ")
                 ),
@@ -79,7 +79,7 @@ impl Validator {
         if shot.length == 0.0 {
             warnings.push(warn(
                 "ZERO_LENGTH",
-                format!("Shot {}:{} has zero length", section_id, shot_index + 1),
+                format!("Shot {}:{} has zero length", line_id, shot_index + 1),
             ));
         }
 
@@ -89,7 +89,7 @@ impl Validator {
                 "NEGATIVE_LENGTH",
                 format!(
                     "Shot {}:{} has negative length: {:.1}m",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     shot.length
                 ),
@@ -102,7 +102,7 @@ impl Validator {
                 "SHORT_SHOT",
                 format!(
                     "Shot {}:{} length {:.1}m below minimum threshold {:.1}m",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_min
@@ -115,7 +115,7 @@ impl Validator {
                 "LONG_SHOT",
                 format!(
                     "Shot {}:{} length {:.1}m above maximum threshold {:.1}m",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_max
@@ -130,7 +130,7 @@ impl Validator {
                 "LARGE_DEPTH_CHANGE",
                 format!(
                     "Shot {}:{} depth change {:.1}m exceeds threshold {:.1}m",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     depth_change,
                     config.warn_depth_change_per_shot_max
@@ -144,7 +144,7 @@ impl Validator {
                 "INVALID_AZIMUTH",
                 format!(
                     "Shot {}:{} has invalid azimuth_in: {:.1}° (must be 0-360)",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     shot.azimuth_in
                 ),
@@ -156,7 +156,7 @@ impl Validator {
                 "INVALID_AZIMUTH",
                 format!(
                     "Shot {}:{} has invalid azimuth_out: {:.1}° (must be 0-360)",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     shot.azimuth_out
                 ),
@@ -171,7 +171,7 @@ impl Validator {
                 "AZIMUTH_DEVIATION",
                 format!(
                     "Shot {}:{} azimuth in/out difference {:.1}° exceeds threshold {:.1}°",
-                    section_id,
+                    line_id,
                     shot_index + 1,
                     angular_diff,
                     config.azimuth_diff_threshold
@@ -186,7 +186,7 @@ impl Validator {
                     "NEGATIVE_LRUD",
                     format!(
                         "Shot {}:{} has negative left distance: {:.1}m",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         left
                     ),
@@ -200,7 +200,7 @@ impl Validator {
                     "NEGATIVE_LRUD",
                     format!(
                         "Shot {}:{} has negative right distance: {:.1}m",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         right
                     ),
@@ -214,7 +214,7 @@ impl Validator {
                     "NEGATIVE_LRUD",
                     format!(
                         "Shot {}:{} has negative up distance: {:.1}m",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         up
                     ),
@@ -228,7 +228,7 @@ impl Validator {
                     "NEGATIVE_LRUD",
                     format!(
                         "Shot {}:{} has negative down distance: {:.1}m",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         down
                     ),
@@ -251,7 +251,7 @@ impl Validator {
                         "INVALID_PITCH",
                         format!(
                             "Shot {}:{} has an out-of-range pitch_{leg}: {:.1}° (must be between -90° and 90°)",
-                            section_id,
+                            line_id,
                             shot_index + 1,
                             p
                         ),
@@ -274,7 +274,7 @@ impl Validator {
                     "PITCH_DEVIATION",
                     format!(
                         "Shot {}:{} inclination in/out difference {:.1}° exceeds threshold {:.1}°",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         pitch_diff,
                         config.pitch_diff_threshold
@@ -295,7 +295,7 @@ impl Validator {
                     "LENGTH_BELOW_DEPTH_CHANGE",
                     format!(
                         "Shot {}:{} length {:.2}m is shorter than its depth change {:.2}m (impossible: slope length must be at least the vertical change)",
-                        section_id,
+                        line_id,
                         shot_index + 1,
                         shot.length,
                         dz.abs()
@@ -324,7 +324,7 @@ impl Validator {
                                 "INCLINATION_DEPTH_MISMATCH",
                                 format!(
                                     "Shot {}:{} recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
-                                    section_id,
+                                    line_id,
                                     shot_index + 1,
                                     recorded,
                                     implied,
@@ -466,12 +466,12 @@ mod tests {
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
     }
 
-    /// Verify warning messages use "Shot {section_id}:{position}" format
+    /// Verify warning messages use "Shot {line_id}:{position}" format
     #[test]
     fn test_warning_message_format() {
         let config = default_config();
 
-        // ZERO_LENGTH with section_id=4, shot_index=2 → "Shot 4:3 has zero length"
+        // ZERO_LENGTH with line_id=4, shot_index=2 → "Shot 4:3 has zero length"
         let zero_shot = ShotData {
             azimuth_in: 45.0,
             azimuth_out: 50.0,
@@ -486,7 +486,7 @@ mod tests {
             w.message
         );
 
-        // SHORT_SHOT with section_id=7, shot_index=0 → "Shot 7:1 length ..."
+        // SHORT_SHOT with line_id=7, shot_index=0 → "Shot 7:1 length ..."
         let short_shot = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 95.0,
@@ -501,7 +501,7 @@ mod tests {
             w.message
         );
 
-        // INVALID_AZIMUTH with section_id=2, shot_index=5 → "Shot 2:6 has invalid azimuth_in..."
+        // INVALID_AZIMUTH with line_id=2, shot_index=5 → "Shot 2:6 has invalid azimuth_in..."
         let bad_azimuth = ShotData {
             azimuth_in: 400.0,
             azimuth_out: 180.0,
@@ -519,7 +519,7 @@ mod tests {
             w.message
         );
 
-        // NEGATIVE_LRUD with section_id=10, shot_index=3 → "Shot 10:4 has negative left..."
+        // NEGATIVE_LRUD with line_id=10, shot_index=3 → "Shot 10:4 has negative left..."
         let neg_lrud = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 270.0,
@@ -1010,7 +1010,7 @@ mod tests {
         ];
 
         for (length, depth_in, depth_out, device_pitch) in device_shots {
-            // `parse_section` normalises the device's +up reading into the
+            // `parse_line` normalises the device's +up reading into the
             // model's +down frame, so this is the pitch a `DmpShot` carries by
             // the time anything downstream sees it.
             let pitch = -device_pitch;

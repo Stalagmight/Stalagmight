@@ -161,7 +161,7 @@ impl Database {
             .conn
             .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
         // Default cache_size is 2 000 pages (~2 MB). Large projects
-        // benefit from holding more pages resident so the per-section
+        // benefit from holding more pages resident so the per-line
         // shot SELECT and the integrity check don't re-fault from
         // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
         // the indexes; SQLite caps this against its own limits.

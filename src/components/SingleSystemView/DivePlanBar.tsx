@@ -204,7 +204,7 @@ export function DivePlanBar() {
   const canDelete = loadedPlanId !== null && !busy;
 
   return (
-    <section className="space-y-1" data-testid="dive-plan-bar">
+    <line className="space-y-1" data-testid="dive-plan-bar">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium opacity-80" id="dive-plan-select-label">
           {t('divePlanBar.label')}
@@ -392,6 +392,6 @@ export function DivePlanBar() {
           {error}
         </p>
       )}
-    </section>
+    </line>
   );
 }

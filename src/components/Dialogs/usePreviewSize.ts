@@ -8,9 +8,9 @@
  * centred square - on a 1024x640 window nothing past ~500px bought any map, yet
  * the divider still dragged to 900 (#567 item 1).
  *
- * The square was never a renderer requirement. `SectionPreview` is a MapLibre
+ * The square was never a renderer requirement. `LinePreview` is a MapLibre
  * viewport that fits its bounds with padding taken from its container's own
- * clientWidth and clientHeight independently (SectionPreview.tsx), so a
+ * clientWidth and clientHeight independently (LinePreview.tsx), so a
  * non-square viewport is drawn correctly - it just shows more cave. The only
  * square assumption was the single `size` prop, which now takes an optional
  * `height` beside it.

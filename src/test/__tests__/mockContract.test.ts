@@ -280,15 +280,15 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   fetch_tile: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
   get_tile_fetch_stats: 'no e2e spec drives a real tile fetch (map tiles are mocked at the layer level)',
 
-  // Section-graph / relationship queries and warning-resolution: no
+  // Line-graph / relationship queries and warning-resolution: no
   // frontend caller reaches these from any mocked e2e flow today.
-  get_rigid_connected_section_ids:
-    'SectionAdjustDialog calls it (section-adjust-dialog.spec.ts) but no spec asserts on the derived connected count; a null response is swallowed by the dialog\'s own .catch()',
+  get_rigid_connected_line_ids:
+    'LineAdjustDialog calls it (line-adjust-dialog.spec.ts) but no spec asserts on the derived connected count; a null response is swallowed by the dialog\'s own .catch()',
   export_tml:
     'export-dialog.spec.ts drives the TML export flow, but only asserts the dialog closes afterward, which happens regardless of the (missing) mock response',
-  get_section_relationships:
-    'ConfirmDialog calls it when deleting a section, but no seeded e2e project has merges/closures/offsets on the deleted section, so a null fallback renders identically to a real empty response',
-  create_section_and_merge: 'no mocked spec drives the drag-to-merge-during-import flow',
+  get_line_relationships:
+    'ConfirmDialog calls it when deleting a line, but no seeded e2e project has merges/closures/offsets on the deleted line, so a null fallback renders identically to a real empty response',
+  create_line_and_merge: 'no mocked spec drives the drag-to-merge-during-import flow',
   resolve_warning: 'no mocked spec drives the warning-resolution flow',
   unresolve_warning: 'no mocked spec drives the warning-resolution flow',
   get_recent_logs_since: 'no frontend caller (only get_recent_logs, the unbounded variant, is used)',

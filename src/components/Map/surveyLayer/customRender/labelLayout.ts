@@ -59,14 +59,14 @@ export interface KindLayout {
  * (see the parity inventory):
  *   - shot label:     anchor 'top',         offset [0, 0.5]
  *   - station label:  anchor 'bottom-left',  offset [0.8, -0.8]
- *   - section name:   anchor 'bottom',       offset [0, -1.2]
+ *   - line name:   anchor 'bottom',       offset [0, -1.2]
  *   - comments:       anchor 'top',          offset [0, 1.5], max-width 12
  *   - errors:         anchor 'bottom',       offset [0, -0.4]
  */
 export const LABEL_KIND_LAYOUT: Record<LabelKind, KindLayout> = {
   [LABEL_KIND.SHOT_LABEL]: { h: 'center', v: 'top', offsetEm: [0, 0.5], maxWidthEm: Infinity },
   [LABEL_KIND.STATION_LABEL]: { h: 'left', v: 'bottom', offsetEm: [0.8, -0.8], maxWidthEm: Infinity },
-  [LABEL_KIND.SECTION_NAME]: { h: 'center', v: 'bottom', offsetEm: [0, -1.2], maxWidthEm: Infinity },
+  [LABEL_KIND.LINE_NAME]: { h: 'center', v: 'bottom', offsetEm: [0, -1.2], maxWidthEm: Infinity },
   [LABEL_KIND.STATION_COMMENT]: { h: 'center', v: 'top', offsetEm: [0, 1.5], maxWidthEm: COMMENT_MAX_WIDTH_EM },
   [LABEL_KIND.SHOT_COMMENT]: { h: 'center', v: 'top', offsetEm: [0, 1.5], maxWidthEm: COMMENT_MAX_WIDTH_EM },
   // Errors labels sit ABOVE their point, so a shot's Errors label and its

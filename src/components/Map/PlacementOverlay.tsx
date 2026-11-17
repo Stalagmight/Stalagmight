@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
-import type { SectionData, Coordinates, ShotData } from '../../types/project';
+import type { LineData, Coordinates, ShotData } from '../../types/project';
 import { getThemeColor } from '../../utils/themeColors';
-import { useUIStore, type AdditionalPlacementSection } from '../../store/uiStore';
+import { useUIStore, type AdditionalPlacementLine } from '../../store/uiStore';
 
 interface PlacementOverlayProps {
-  /** Section data to preview */
-  sectionData: SectionData;
+  /** Line data to preview */
+  lineData: LineData;
   /** Which station index aligns to cursor (0 = first, N = last) */
   alignStationIndex: number;
   /** Current cursor position in screen pixels */
@@ -14,8 +14,8 @@ interface PlacementOverlayProps {
   isSnapped: boolean;
   /** Pixels per meter at current map zoom (for to-scale rendering) */
   pixelsPerMeter: number;
-  /** Additional sections to render alongside primary (for segment placement) */
-  additionalSections?: AdditionalPlacementSection[] | undefined;
+  /** Additional lines to render alongside primary (for segment placement) */
+  additionalLines?: AdditionalPlacementLine[] | undefined;
   /** Callback to cancel placement (shown as button on touch devices) */
   onCancel?: () => void;
 }
@@ -49,22 +49,22 @@ function calculateStationPositions(shots: ShotData[]): Coordinates[] {
 }
 
 /**
- * Overlay component that renders a section preview following the cursor
+ * Overlay component that renders a line preview following the cursor
  * during manual placement mode. The preview is rendered to-scale with the map.
  */
 export default function PlacementOverlay({
-  sectionData,
+  lineData,
   alignStationIndex,
   cursorPosition,
   isSnapped,
   pixelsPerMeter,
-  additionalSections,
+  additionalLines,
   onCancel,
 }: PlacementOverlayProps) {
   // Calculate station positions relative to first station
   const stationPositions = useMemo(
-    () => calculateStationPositions(sectionData.shots),
-    [sectionData.shots]
+    () => calculateStationPositions(lineData.shots),
+    [lineData.shots]
   );
 
   // Clamp align station index to valid range
@@ -102,9 +102,9 @@ export default function PlacementOverlay({
   const crosshairColor = getThemeColor('--cc-compass-color');
   const stationStrokeColor = getThemeColor('--cc-stroke-color');
 
-  // Color for preview (use section color with transparency)
-  const strokeColor = sectionData.color;
-  const fillColor = isSnapped ? snapColor : sectionData.color;
+  // Color for preview (use line color with transparency)
+  const strokeColor = lineData.color;
+  const fillColor = isSnapped ? snapColor : lineData.color;
 
   return (
     <>
@@ -141,13 +141,13 @@ export default function PlacementOverlay({
         );
       })}
 
-      {/* Additional sections (segment context) */}
-      {additionalSections?.map((addSection, secIdx) => {
-        const addPositions = calculateStationPositions(addSection.sectionData.shots);
-        // Transform with offset relative to primary section's anchor station
+      {/* Additional lines (segment context) */}
+      {additionalLines?.map((addLine, secIdx) => {
+        const addPositions = calculateStationPositions(addLine.lineData.shots);
+        // Transform with offset relative to primary line's anchor station
         const toScreenAdd = (station: Coordinates): { x: number; y: number } => {
-          const relX = (station.x + addSection.offsetX - anchorStation.x) * scale;
-          const relY = -(station.y + addSection.offsetY - anchorStation.y) * scale;
+          const relX = (station.x + addLine.offsetX - anchorStation.x) * scale;
+          const relY = -(station.y + addLine.offsetY - anchorStation.y) * scale;
           return {
             x: cursorPosition.x + relX,
             y: cursorPosition.y + relY,
@@ -166,7 +166,7 @@ export default function PlacementOverlay({
             <path
               d={addPathData}
               fill="none"
-              stroke={addSection.color}
+              stroke={addLine.color}
               strokeWidth={1.5}
               strokeOpacity={0.6}
               strokeDasharray="4 2"
@@ -179,7 +179,7 @@ export default function PlacementOverlay({
                   cx={screen.x}
                   cy={screen.y}
                   r={3}
-                  fill={addSection.color}
+                  fill={addLine.color}
                   fillOpacity={0.6}
                   stroke={stationStrokeColor}
                   strokeWidth={0.5}

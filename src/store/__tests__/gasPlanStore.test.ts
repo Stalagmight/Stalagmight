@@ -62,8 +62,8 @@ describe('gasPlanStore', () => {
   });
 
   it.each([
-    ['setOrigin', () => useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 })],
-    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 })],
+    ['setOrigin', () => useGasPlanStore.getState().setOrigin({ line_id: 1, station_index: 0 })],
+    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ line_id: 1, station_index: 2 })],
     ['setDiver', () => useGasPlanStore.getState().setDiver({ rmv_l_per_min: 18, label: null })],
     ['setCylinders', () => useGasPlanStore.getState().setCylinders([])],
     ['setGasConfig', () => useGasPlanStore.getState().setGasConfig({ ...defaultConfig.gas })],
@@ -75,7 +75,7 @@ describe('gasPlanStore', () => {
   });
 
   it('setReachField stores the field; reset clears it and restores defaults', () => {
-    useGasPlanStore.getState().setOrigin({ section_id: 3, station_index: 2 });
+    useGasPlanStore.getState().setOrigin({ line_id: 3, station_index: 2 });
     useGasPlanStore.getState().setReachField(fakeField());
     expect(useGasPlanStore.getState().reachField).not.toBeNull();
     useGasPlanStore.getState().reset();
@@ -87,8 +87,8 @@ describe('gasPlanStore', () => {
 
   it('endpoint defaults null and is cleared by reset (no leak across plan sessions)', () => {
     expect(useGasPlanStore.getState().endpoint).toBeNull();
-    useGasPlanStore.getState().setEndpoint({ section_id: 2, station_index: 4 });
-    expect(useGasPlanStore.getState().endpoint).toEqual({ section_id: 2, station_index: 4 });
+    useGasPlanStore.getState().setEndpoint({ line_id: 2, station_index: 4 });
+    expect(useGasPlanStore.getState().endpoint).toEqual({ line_id: 2, station_index: 4 });
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().endpoint).toBeNull();
   });
@@ -102,7 +102,7 @@ describe('gasPlanStore', () => {
   });
 
   it('setStageDropOverride pins a drop by index and pads sparse slots with null (#246)', () => {
-    const ref = { section_id: 1, station_index: 3 };
+    const ref = { line_id: 1, station_index: 3 };
     useGasPlanStore.getState().setStageDropOverride(1, ref);
     // Index 0 was never set, so it pads with null; index 1 holds the pinned station.
     expect(useGasPlanStore.getState().stageDropOverrides).toEqual([null, ref]);
@@ -116,25 +116,25 @@ describe('gasPlanStore', () => {
 
   it('setStageDropOverride does NOT null reachField (markers stay put during refetch) (#246)', () => {
     useGasPlanStore.getState().setReachField(fakeField());
-    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
     expect(useGasPlanStore.getState().reachField).not.toBeNull();
   });
 
   it.each([
-    ['setOrigin', () => useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 })],
-    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 5 })],
+    ['setOrigin', () => useGasPlanStore.getState().setOrigin({ line_id: 1, station_index: 0 })],
+    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ line_id: 1, station_index: 5 })],
     ['setDiver', () => useGasPlanStore.getState().setDiver({ rmv_l_per_min: 18, label: null })],
     ['setCylinders', () => useGasPlanStore.getState().setCylinders([])],
     ['setGasConfig', () => useGasPlanStore.getState().setGasConfig({ ...defaultConfig.gas })],
   ])('%s clears stageDropOverrides (a reshuffled rig invalidates pinned drops) (#246)', (_n, mutate) => {
-    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
     expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
     mutate();
     expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
   });
 
   it('reset clears stageDropOverrides (no leak across plan sessions) (#246)', () => {
-    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
     expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
@@ -142,8 +142,8 @@ describe('gasPlanStore', () => {
 });
 
 describe('gasPlanStore way points (#298)', () => {
-  const a = { section_id: 1, station_index: 1 };
-  const b = { section_id: 1, station_index: 5 };
+  const a = { line_id: 1, station_index: 1 };
+  const b = { line_id: 1, station_index: 5 };
 
   beforeEach(() => {
     useGasPlanStore.getState().reset();
@@ -172,12 +172,12 @@ describe('gasPlanStore way points (#298)', () => {
     // per way point on every keystroke and only meets the wall at save time, on a message naming
     // neither the limit nor which entry to drop. Same reasoning as the label's maxLength.
     for (let i = 0; i < 70; i++) {
-      useGasPlanStore.getState().addWaypoint({ section_id: 9, station_index: i });
+      useGasPlanStore.getState().addWaypoint({ line_id: 9, station_index: i });
     }
     expect(useGasPlanStore.getState().waypoints).toHaveLength(64);
     // Non-vacuous: the cap is what stopped it, not the duplicate guard - every ref here is distinct.
     const kept = useGasPlanStore.getState().waypoints;
-    expect(kept[kept.length - 1]).toEqual({ section_id: 9, station_index: 63 });
+    expect(kept[kept.length - 1]).toEqual({ line_id: 9, station_index: 63 });
   });
 
   it('moveWaypoint swaps with the neighbour and clamps at both ends', () => {
@@ -202,7 +202,7 @@ describe('gasPlanStore way points (#298)', () => {
   it.each([
     // A ref not already on the list - re-adding an existing one is deliberately a no-op, which
     // would make this case pass for the wrong reason (nothing changed, so nothing was invalidated).
-    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint({ section_id: 2, station_index: 3 })],
+    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint({ line_id: 2, station_index: 3 })],
     ['removeWaypoint', () => useGasPlanStore.getState().removeWaypoint(0)],
     ['moveWaypoint', () => useGasPlanStore.getState().moveWaypoint(0, 1)],
   ])(
@@ -211,7 +211,7 @@ describe('gasPlanStore way points (#298)', () => {
       // Two way points so `moveWaypoint(0, 1)` is a real move rather than an out-of-range no-op.
       useGasPlanStore.getState().addWaypoint(a);
       useGasPlanStore.getState().addWaypoint(b);
-      useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+      useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
       useGasPlanStore.setState({ reachField: fakeField() });
       mutate();
       expect(useGasPlanStore.getState().reachField).toBeNull();
@@ -227,9 +227,9 @@ describe('gasPlanStore way points (#298)', () => {
 });
 
 describe('gasPlanStore segments (#317)', () => {
-  const a = { section_id: 1, station_index: 1 };
-  const b = { section_id: 1, station_index: 5 };
-  const c = { section_id: 1, station_index: 9 };
+  const a = { line_id: 1, station_index: 1 };
+  const b = { line_id: 1, station_index: 5 };
+  const c = { line_id: 1, station_index: 9 };
 
   beforeEach(() => {
     useGasPlanStore.getState().reset();
@@ -269,7 +269,7 @@ describe('gasPlanStore segments (#317)', () => {
 
   it('stays synced at the way-point cap too (64 way points -> 65 spans)', () => {
     for (let i = 0; i < 70; i++) {
-      useGasPlanStore.getState().addWaypoint({ section_id: 9, station_index: i });
+      useGasPlanStore.getState().addWaypoint({ line_id: 9, station_index: i });
     }
     expect(useGasPlanStore.getState().waypoints).toHaveLength(64);
     expect(useGasPlanStore.getState().segments).toHaveLength(65);
@@ -388,7 +388,7 @@ describe('gasPlanStore segments (#317)', () => {
   });
 
   it('setSegments nulls reachField and clears stageDropOverrides (a gas input, like setCylinders)', () => {
-    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
     useGasPlanStore.setState({ reachField: fakeField() });
     useGasPlanStore.getState().setSegments([{ speed_m_per_min: 15, on_scooter: false }]);
     expect(useGasPlanStore.getState().reachField).toBeNull();
@@ -489,7 +489,7 @@ describe('gasPlanStore segments (#317)', () => {
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(9, {
       ...snapshot,
-      waypoints: [{ section_id: 1, station_index: 1 }],
+      waypoints: [{ line_id: 1, station_index: 1 }],
       segments: [
         { speed_m_per_min: 45, on_scooter: true },
         { speed_m_per_min: 12, on_scooter: false },
@@ -655,7 +655,7 @@ describe('gasPlanStore setDpvRig (#317)', () => {
 });
 
 describe('gasPlanStore marked points (#298)', () => {
-  const at = { section_id: 2, station_index: 3 };
+  const at = { line_id: 2, station_index: 3 };
 
   beforeEach(() => {
     useGasPlanStore.getState().reset();
@@ -737,7 +737,7 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
   });
 
   it('is not dirty when no plan is loaded (a never-saved exploration is unguarded)', () => {
-    useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 });
+    useGasPlanStore.getState().setOrigin({ line_id: 1, station_index: 0 });
     expect(useGasPlanStore.getState().loadedPlanId).toBeNull();
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
   });
@@ -745,11 +745,11 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
   it('applyLoadedPlan sets inputs + baseline, nulls reachField, and reads clean', () => {
     useGasPlanStore.getState().setReachField(fakeField());
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
-    snapshot.origin = { section_id: 4, station_index: 1 };
+    snapshot.origin = { line_id: 4, station_index: 1 };
     useGasPlanStore.getState().applyLoadedPlan(7, snapshot);
     const s = useGasPlanStore.getState();
     expect(s.loadedPlanId).toBe(7);
-    expect(s.origin).toEqual({ section_id: 4, station_index: 1 });
+    expect(s.origin).toEqual({ line_id: 4, station_index: 1 });
     expect(s.reachField).toBeNull(); // stale overlay dropped
     expect(selectIsPlanDirty(s)).toBe(false);
   });
@@ -770,7 +770,7 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(3, {
       ...snapshot,
-      endpoint: { section_id: 1, station_index: 4 },
+      endpoint: { line_id: 1, station_index: 4 },
     });
     useGasPlanStore.getState().setEndpoint(null);
     expect(selectHasPins(useGasPlanStore.getState())).toBe(true);
@@ -783,7 +783,7 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
-    useGasPlanStore.getState().setOrigin({ section_id: 9, station_index: 9 });
+    useGasPlanStore.getState().setOrigin({ line_id: 9, station_index: 9 });
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
   });
 
@@ -801,11 +801,11 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
   it('clearLoadedPlan forgets the plan without touching inputs (and reads clean)', () => {
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
-    useGasPlanStore.getState().setOrigin({ section_id: 2, station_index: 2 });
+    useGasPlanStore.getState().setOrigin({ line_id: 2, station_index: 2 });
     useGasPlanStore.getState().clearLoadedPlan();
     const s = useGasPlanStore.getState();
     expect(s.loadedPlanId).toBeNull();
-    expect(s.origin).toEqual({ section_id: 2, station_index: 2 }); // inputs untouched
+    expect(s.origin).toEqual({ line_id: 2, station_index: 2 }); // inputs untouched
     expect(selectIsPlanDirty(s)).toBe(false);
   });
 
@@ -980,7 +980,7 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
     // move the route and its drop positions, so a ▼ dragged on the old route must not be sent
     // into the recompute against the new one.
     useGasPlanStore.getState().markHydrated(gas({ jump_rmv_multiplier: 1.5 }));
-    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setStageDropOverride(0, { line_id: 1, station_index: 2 });
     expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
     useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 2.5 }));
     expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);

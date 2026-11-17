@@ -2,11 +2,11 @@ import type { TFunction } from 'i18next';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 
 /**
- * Combine the receipts from several `import_sections` calls made during one
+ * Combine the receipts from several `import_lines` calls made during one
  * logical import (the MNemo DMP wizard batches early/segment/late/pending
  * imports, each a separate backend call) into a single summary. Counts are
  * summed, warnings are concatenated in call order, and the file-level fields
- * (`source_format`, `file_name`, `sections_found`, the first non-null
+ * (`source_format`, `file_name`, `lines_found`, the first non-null
  * `unit_conversion`) are taken from whichever receipt set them first - they
  * describe the whole file, not a single batch, so summing would be wrong.
  *
@@ -21,8 +21,8 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
     (acc, r) => ({
       source_format: acc.source_format,
       file_name: acc.file_name,
-      sections_found: acc.sections_found,
-      sections_imported: acc.sections_imported + r.sections_imported,
+      lines_found: acc.lines_found,
+      lines_imported: acc.lines_imported + r.lines_imported,
       shot_count: acc.shot_count + r.shot_count,
       closures_requested: acc.closures_requested + r.closures_requested,
       closures_created: acc.closures_created + r.closures_created,
@@ -41,9 +41,9 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
 
 /**
  * The three "what landed" facts shared by the receipt dialog and the receipt
- * toast (docs/notifications.md): sections imported, shots imported, and loops
+ * toast (docs/notifications.md): lines imported, shots imported, and loops
  * reconstructed (only when the receipt actually requested a closure), plus
- * any `info` notice lines (#446 - e.g. "N sections are not connected to a
+ * any `info` notice lines (#446 - e.g. "N lines are not connected to a
  * zero datum") when `includeInfo` is true. `info` rides the same summary as
  * these facts rather than a `warnings`-style tier, so it never promotes a
  * warning-free receipt from toast to dialog (`presentImportReceipt`).
@@ -65,7 +65,7 @@ export function importReceiptSummaryParts(
   includeInfo = true,
 ): string[] {
   return [
-    t('dialogs.importReceipt.sections', { count: receipt.sections_imported }),
+    t('dialogs.importReceipt.sections', { count: receipt.lines_imported }),
     t('dialogs.importReceipt.shots', { count: receipt.shot_count }),
     ...(receipt.closures_requested > 0
       ? [t('dialogs.importReceipt.loops', { count: receipt.closures_created })]
@@ -79,15 +79,15 @@ export function importReceiptSummaryParts(
  * never be demoted to a toast, even if it happens to carry no `warnings` of
  * its own (the absence of any data IS the thing the user needs to see).
  *
- * Gated on `sections_imported` alone, NOT `shot_count`: `shot_count` is
- * summed from the sections the import *attempted* (`command_import.rs`,
- * computed before the per-section outcome is known), while
- * `sections_imported` counts what actually landed. They only agree today
+ * Gated on `lines_imported` alone, NOT `shot_count`: `shot_count` is
+ * summed from the lines the import *attempted* (`command_import.rs`,
+ * computed before the per-line outcome is known), while
+ * `lines_imported` counts what actually landed. They only agree today
  * because the import loop is all-or-nothing - the day a partial-drop path
- * exists, a zero-sections receipt could carry a nonzero `shot_count`, and a
+ * exists, a zero-lines receipt could carry a nonzero `shot_count`, and a
  * `shot_count`-inclusive check would wrongly let that case through as a
  * toast.
  */
 export function isEmptyImportReceipt(receipt: ImportReceipt): boolean {
-  return receipt.sections_imported === 0;
+  return receipt.lines_imported === 0;
 }

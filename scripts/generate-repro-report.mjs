@@ -225,7 +225,7 @@ function describeAction(a) {
         p.featureType === 'station'
           ? `station index=${p.stationIndex}`
           : `shot id=${p.shotId}`;
-      return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
+      return `${which} in line ${p.lineId}${p.button === 'right' ? ' (right)' : ''}`;
     }
     case 'type_text':
       return `"${mdInline(p.text ?? '', 40)}"${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;

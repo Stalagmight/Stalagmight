@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
     gps_to_local, local_to_gps, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
-    LoopClosure, Project, SectionData, SectionId, ShotData, StationRef, ZeroDatum,
+    LoopClosure, Project, LineData, LineId, ShotData, StationRef, ZeroDatum,
 };
 
 const SHOTS_PER_LEG: usize = 25;
@@ -47,9 +47,9 @@ fn leg(azimuth: f64) -> Vec<ShotData> {
         .collect()
 }
 
-fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -121,7 +121,7 @@ fn traverse(accuracy_m: Option<f64>) -> Traverse {
 /// Solve `project`'s component around `anchor` with `closures`, as the
 /// Computed View does on its clone.
 fn solve(project: &mut Project, anchor: StationRef, closures: &[LoopClosure]) {
-    let component = project.get_connected_section_ids(anchor.section_id);
+    let component = project.get_connected_line_ids(anchor.line_id);
     project
         .adjust_least_squares(
             &component,
@@ -166,8 +166,8 @@ fn chain_variance(project: &Project) -> (f64, f64) {
     let sigma_len = config.base_sigma_length_m;
     let sigma_az = config.base_sigma_azimuth_deg.to_radians();
     let mut v = (0.0, 0.0);
-    for section in &project.sections {
-        for s in &section.shots {
+    for line in &project.lines {
+        for s in &line.shots {
             let az = s.azimuth_in.to_radians();
             v.0 += (az.sin() * sigma_len).powi(2) + (s.length * az.cos() * sigma_az).powi(2);
             v.1 += (az.cos() * sigma_len).powi(2) + (s.length * az.sin() * sigma_az).powi(2);
@@ -248,7 +248,7 @@ fn a_fix_and_a_closure_are_solved_together() {
         entrance_2,
         gps,
     } = traverse(None);
-    let a = entrance_1.section_id;
+    let a = entrance_1.line_id;
     // A side loop off station 10 (100, 0) that comes back near station 12
     // (120, 0), 0.3 m short.
     let c = add(
@@ -350,7 +350,7 @@ fn two_placement_datums_in_one_group_are_refused_not_a_panic() {
         strategy: ClosureStrategy::LeastSquaresWeighted,
         is_aligned: false,
     };
-    let component: HashSet<SectionId> = [a, e].into_iter().collect();
+    let component: HashSet<LineId> = [a, e].into_iter().collect();
     let result = project.adjust_least_squares(
         &component,
         &[closure],

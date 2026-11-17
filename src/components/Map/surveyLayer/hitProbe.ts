@@ -1,5 +1,5 @@
 /**
- * Pure hit-probe geometry for the survey layer's candidate-section gate (#mem).
+ * Pure hit-probe geometry for the survey layer's candidate-line gate (#mem).
  *
  * The dedicated `survey-shots-hitbox` / `survey-stations-hitbox` layers were
  * removed to reclaim two full duplicate vertex buckets. Hit-testing now queries
@@ -7,7 +7,7 @@
  * old hitboxes, with a padded probe box that restores the exact old tolerance.
  *
  * This module isolates the tolerance-preservation arithmetic so it can be unit
- * tested without a live MapLibre map. See `SurveyLayer.hitCandidateSections`.
+ * tested without a live MapLibre map. See `SurveyLayer.hitCandidateLines`.
  *
  * Reach model (matches MapLibre's point-in-feature test):
  *   - a point hits a LINE within `line-width / 2` of its centerline,

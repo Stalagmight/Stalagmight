@@ -1,4 +1,4 @@
-//! Combine Sections making two loop closures identical (#749): which one
+//! Combine Lines making two loop closures identical (#749): which one
 //! `dedupe_closures_in` keeps, case by case, and the surveys that reach it
 //! through a combine, checked against the plan the station menu offered and
 //! the closure-adjusted view (`combine_closure_tests::check_combined`).
@@ -10,7 +10,7 @@ use super::combine_closure_tests::{
 use crate::{
     ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan,
     CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind, KeptMovesReason, LoopClosure,
-    Project, SectionEnd, SectionId, StationRef, TornTieKind, TornTieReason,
+    Project, LineEnd, LineId, StationRef, TornTieKind, TornTieReason,
 };
 
 /// Plant a loop closure between `a` and `b` as a file can carry it: any
@@ -41,8 +41,8 @@ fn plant(
 }
 
 /// The plan `candidate` offers for keeping `kept`.
-fn plan_keeping(candidate: &CombineCandidate, kept: SectionId) -> &CombinePlan {
-    if candidate.section_a == kept {
+fn plan_keeping(candidate: &CombineCandidate, kept: LineId) -> &CombinePlan {
+    if candidate.line_a == kept {
         &candidate.plan_keeping_a
     } else {
         &candidate.plan_keeping_b
@@ -97,7 +97,7 @@ fn dedupe(pair: &[(ClosureStrategy, bool)]) -> Vec<u64> {
         ],
     );
     let t = add(&mut project, "T", vec![shot(0.0, 3.0)]);
-    let at = |id: SectionId, index: u32| StationRef::new(id, index);
+    let at = |id: LineId, index: u32| StationRef::new(id, index);
     for (n, (strategy, aligned)) in pair.iter().enumerate() {
         let ends = if n == 0 {
             (at(s, 2), at(s, 0))
@@ -118,7 +118,7 @@ fn dedupe(pair: &[(ClosureStrategy, bool)]) -> Vec<u64> {
 /// `dedupe_closures_in` keeps, of closures the combine made identical, the
 /// first one the solve takes (`Batch`, `LeastSquaresWeighted`), else the
 /// first one; each kept closure keeps its place, and closures that do not
-/// touch the combined section are left alone.
+/// touch the combined line are left alone.
 ///
 /// Before #749 it kept the first one whatever it was: the rows marked
 /// "#749" kept the closure the solve ignores and dropped the one it takes.
@@ -266,7 +266,7 @@ fn the_load_gives_a_repeated_closure_id_a_fresh_one() {
 /// station 2, 0.4 m east of its start, back to its start. A runs one shot,
 /// 4 m south, and its end is merged to B:2 (the middle of B). The station
 /// menu on A's end offers A with B across that closure.
-fn legacy_loop(strategy: ClosureStrategy) -> (Project, SectionId, SectionId) {
+fn legacy_loop(strategy: ClosureStrategy) -> (Project, LineId, LineId) {
     let mut project = Project::new("Legacy loop".to_string(), None);
     let b = add(
         &mut project,
@@ -298,7 +298,7 @@ fn legacy_loop(strategy: ClosureStrategy) -> (Project, SectionId, SectionId) {
 /// #749. In [`legacy_loop`], combining A's end with B's start keeps A and
 /// tears the merge A:1-B:2: as a `Batch` closure it closes B's loop, so the
 /// Closures Computed View will solve the joined survey, and B holds the
-/// station that view is held at, so A (the kept section) is the side that
+/// station that view is held at, so A (the kept line) is the side that
 /// moves, 0.4 m onto B's start (`KeptMovesReason::AdjustmentAnchor`). The
 /// torn merge's closure lands on the same two stations as the closure
 /// already there (B:2 to B:0, now A:3 to A:1).
@@ -326,11 +326,11 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
         let candidate = project
             .combine_candidates_at_point(StationRef::new(a, 1))
             .into_iter()
-            .find(|c| [c.section_a, c.section_b] == [b, a])
+            .find(|c| [c.line_a, c.line_b] == [b, a])
             .unwrap_or_else(|| panic!("{what}: the menu on A's end offers A with B"));
         assert_eq!(candidate.join_kind, CombineJoinKind::Closure, "{what}");
         let plan = plan_keeping(&candidate, a);
-        assert_eq!(plan.moving_section, Some(a), "{what}");
+        assert_eq!(plan.moving_line, Some(a), "{what}");
         assert_eq!(
             plan.kept_moves_because,
             Some(KeptMovesReason::AdjustmentAnchor),
@@ -381,12 +381,12 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
 
         let mut combined = project.clone();
         let outcome = combined
-            .combine_sections_reporting(
+            .combine_lines_reporting(
                 a,
                 b,
                 &options(Some(CombineJoinEnds {
-                    kept: SectionEnd::End,
-                    other: SectionEnd::Start,
+                    kept: LineEnd::End,
+                    other: LineEnd::Start,
                 })),
             )
             .unwrap();
@@ -442,13 +442,13 @@ fn a_merge_torn_onto_a_legacy_closure_leaves_the_closure_the_solve_takes() {
     }
 }
 
-/// The two-section loop with a passage beside it. K runs 10 m east; O runs
+/// The two-line loop with a passage beside it. K runs 10 m east; O runs
 /// 9.6 m west from 0.4 m short of K's end and is merged onto K's start; a
 /// `Batch` closure ties K's end to O's start (the join). X runs 10 m west
 /// from K's end, merged onto K's start too, so its start sits on K's end:
 /// a snapped (`Move`) closure ties the two, and an ordinary `Batch` one ties
 /// X's start to O's start, in the order `snap_first` says.
-fn snapped_beside_the_join(snap_first: bool) -> (Project, [SectionId; 3]) {
+fn snapped_beside_the_join(snap_first: bool) -> (Project, [LineId; 3]) {
     let mut project = Project::new("Snapped".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(270.0, 9.6)]);
@@ -481,7 +481,7 @@ fn snapped_beside_the_join(snap_first: bool) -> (Project, [SectionId; 3]) {
 /// [`snapped_beside_the_join`], combining K's end with O's start makes X's
 /// two closures (to K's end, snapped; to O's start, ordinary) two closures
 /// between X's start and the joined station. The ordinary one stays, in
-/// either order and whichever section is kept: it is the one the solve
+/// either order and whichever line is kept: it is the one the solve
 /// takes, and the plan's model of the joined survey counted it. The snap
 /// goes with its rigidity and depth co-location, which nothing in the plan
 /// models after the join; before #749 the first of the two stayed, so with
@@ -497,19 +497,19 @@ fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
             let ordinary = project
                 .loop_closures
                 .iter()
-                .find(|c| c.strategy == BATCH && c.station_a.section_id == x)
+                .find(|c| c.strategy == BATCH && c.station_a.line_id == x)
                 .unwrap()
                 .id;
             let join = CombineJoinEnds {
                 kept: if keep_o {
-                    SectionEnd::Start
+                    LineEnd::Start
                 } else {
-                    SectionEnd::End
+                    LineEnd::End
                 },
                 other: if keep_o {
-                    SectionEnd::End
+                    LineEnd::End
                 } else {
-                    SectionEnd::Start
+                    LineEnd::Start
                 },
             };
             let (kept, other) = if keep_o { (o, k) } else { (k, o) };
@@ -536,7 +536,7 @@ fn a_snapped_and_an_ordinary_closure_made_identical_keep_the_ordinary_one() {
             assert_eq!(plan.closures_replaced, Some(listed.clone()), "{what}");
             let mut combined = project.clone();
             let outcome = combined
-                .combine_sections_reporting(kept, other, &options(Some(join)))
+                .combine_lines_reporting(kept, other, &options(Some(join)))
                 .unwrap();
             assert_eq!(outcome.replaced, listed, "{what}");
 
@@ -595,13 +595,13 @@ fn a_snap_the_combine_tears_replaces_a_legacy_closure_on_its_stations() {
     plant(&mut project, (at(x, 0), at(k, 1)), LEGACY, false, legacy);
 
     let join = CombineJoinEnds {
-        kept: SectionEnd::End,
-        other: SectionEnd::Start,
+        kept: LineEnd::End,
+        other: LineEnd::Start,
     };
     let candidate = project.combine_candidate_joining(k, o, Some(join)).unwrap();
     assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
     let plan = plan_keeping(&candidate, k);
-    assert_eq!(plan.moving_section, Some(o));
+    assert_eq!(plan.moving_line, Some(o));
     assert!(
         plan.torn_ties
             .iter()
@@ -621,7 +621,7 @@ fn a_snap_the_combine_tears_replaces_a_legacy_closure_on_its_stations() {
 
     let mut combined = project.clone();
     let outcome = combined
-        .combine_sections_reporting(k, o, &options(Some(join)))
+        .combine_lines_reporting(k, o, &options(Some(join)))
         .unwrap();
     assert_eq!(outcome.replaced, listed);
     assert_eq!(

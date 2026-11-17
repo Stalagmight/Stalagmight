@@ -6,7 +6,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createSelectHandler, parseIntRadix10 } from './types';
-import { getThemedDisplayDefaults, getThemedSectionColorDefaults } from '../../../types/config';
+import { getThemedDisplayDefaults, getThemedLineColorDefaults } from '../../../types/config';
 import { useUIStore } from '../../../store/uiStore';
 import {
   getUiScale,
@@ -21,7 +21,7 @@ import {
 
 /**
  * Display settings category content.
- * Maps to config.display + config.section_colors: grid settings, font
+ * Maps to config.display + config.line_colors: grid settings, font
  * settings, measure-path colour, palette. The depth / distance colour palette
  * is not here: it lives on the map legend's cog (`[map_palette]`).
  */
@@ -35,7 +35,7 @@ export function DisplaySettings({
   const { t } = useTranslation();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const displayDefaults = getThemedDisplayDefaults(resolvedTheme);
-  const sectionColorDefaults = getThemedSectionColorDefaults(resolvedTheme);
+  const lineColorDefaults = getThemedLineColorDefaults(resolvedTheme);
 
   // UI scale (whole-interface zoom). Lives in localStorage / webview zoom rather
   // than config; applies immediately like the Ctrl+= shortcut. Sync to external
@@ -110,7 +110,7 @@ export function DisplaySettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.display.title')}</h2>
 
-      <SettingsSection title={t('settings.display.sections.interface')} data-testid="section-interface">
+      <SettingsSection title={t('settings.display.sections.interface')} data-testid="line-interface">
         <SettingRow
           label={t('settings.display.uiScale.label')}
           helpText={t('settings.display.uiScale.help')}
@@ -141,7 +141,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.grid')} data-testid="section-grid">
+      <SettingsSection title={t('settings.display.sections.grid')} data-testid="line-grid">
         <SettingRow
           label={t('settings.display.grid.color.label')}
           helpText={t('settings.display.grid.color.help')}
@@ -179,7 +179,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.font')} data-testid="section-font">
+      <SettingsSection title={t('settings.display.sections.font')} data-testid="line-font">
         <SettingRow
           label={t('settings.display.font.size.label')}
           helpText={t('settings.display.font.size.help')}
@@ -219,7 +219,7 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.measure')} data-testid="section-measure">
+      <SettingsSection title={t('settings.display.sections.measure')} data-testid="line-measure">
         <SettingRow
           label={t('settings.display.measurePathColor.label')}
           helpText={t('settings.display.measurePathColor.help')}
@@ -239,26 +239,26 @@ export function DisplaySettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.display.sections.sectionColors')} data-testid="section-colors-palette">
+      <SettingsSection title={t('settings.display.sections.sectionColors')} data-testid="line-colors-palette">
         <SettingRow
           label={t('settings.display.sectionColors.label')}
           helpText={t('settings.display.sectionColors.help')}
           isChanged={isFieldChanged(changedFields, 'section_colors.palette')}
           data-testid="setting-color-palette"
-          onReset={() => onChange({ section_colors: { palette: [...sectionColorDefaults.palette] } })}
-          isDefault={JSON.stringify(config.section_colors.palette) === JSON.stringify(sectionColorDefaults.palette)}
+          onReset={() => onChange({ line_colors: { palette: [...lineColorDefaults.palette] } })}
+          isDefault={JSON.stringify(config.line_colors.palette) === JSON.stringify(lineColorDefaults.palette)}
         >
           <div className="flex gap-1">
-            {config.section_colors.palette.map((color, index) => (
+            {config.line_colors.palette.map((color, index) => (
               <input
                 key={index}
                 type="color"
                 value={color}
                 onChange={(e) => {
-                  const newPalette = [...config.section_colors.palette];
+                  const newPalette = [...config.line_colors.palette];
                   newPalette[index] = e.target.value;
                   onChange({
-                    section_colors: {
+                    line_colors: {
                       palette: newPalette,
                     },
                   });

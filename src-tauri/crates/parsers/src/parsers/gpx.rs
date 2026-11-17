@@ -1,7 +1,7 @@
 //! GPX (GPS Exchange Format) file parser.
 //!
 //! Parses GPX 1.0 and 1.1 files containing waypoints, tracks, and routes.
-//! Converts GPS data into import-ready section configurations.
+//! Converts GPS data into import-ready line configurations.
 
 use std::path::Path;
 
@@ -13,7 +13,7 @@ use ts_rs::TS;
 
 use crate::models::geo::{haversine_distance, initial_bearing};
 use crate::models::{
-    AzimuthReference, CorrectionSource, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    AzimuthReference, CorrectionSource, GpsCoordinates, ImportPlacement, ImportLineConfig,
     ShotData, ShotKind,
 };
 
@@ -100,11 +100,11 @@ pub struct GpxRoutePoint {
     pub time: Option<String>,
 }
 
-/// Per-section placement for GPX import (tracks/routes from Step 2).
+/// Per-line placement for GPX import (tracks/routes from Step 2).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
-pub struct GpxSectionPlacement {
-    pub section_index: u32,
+pub struct GpxLinePlacement {
+    pub line_index: u32,
     pub placement: ImportPlacement,
     pub name: Option<String>,
     pub color: String,
@@ -731,7 +731,7 @@ fn parse_route_point_children(
 // Conversion to import configs
 // ============================================================================
 
-/// Section color palette for imported GPX sections.
+/// Line color palette for imported GPX lines.
 const GPX_COLORS: &[&str] = &[
     "#2ecc71", "#3498db", "#9b59b6", "#e67e22", "#1abc9c", "#e74c3c", "#f39c12", "#2980b9",
     "#8e44ad", "#27ae60",
@@ -794,11 +794,11 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
 
 /// Convert waypoints into zero-datum import configs.
 ///
-/// Each waypoint becomes a single-station section (0 shots) placed at its GPS coordinates.
+/// Each waypoint becomes a single-station line (0 shots) placed at its GPS coordinates.
 pub fn waypoints_to_import_configs(
     waypoints: &[GpxWaypoint],
     start_index: u32,
-) -> Result<Vec<ImportSectionConfig>> {
+) -> Result<Vec<ImportLineConfig>> {
     let mut configs = Vec::new();
 
     for (i, wpt) in waypoints.iter().enumerate() {
@@ -821,9 +821,9 @@ pub fn waypoints_to_import_configs(
             }
         }
 
-        configs.push(ImportSectionConfig {
+        configs.push(ImportLineConfig {
             reverse: false,
-            section_index: idx,
+            line_index: idx,
             name: wpt.name.clone(),
             surveyor: None,
             date: None,
@@ -850,21 +850,21 @@ pub fn waypoints_to_import_configs(
 /// Convert a track segment into an import config.
 fn track_segment_to_config(
     seg: &GpxTrackSegment,
-    section_index: u32,
+    line_index: u32,
     name: Option<String>,
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> ImportSectionConfig {
+) -> ImportLineConfig {
     let points: Vec<(f64, f64, Option<f64>)> = seg
         .points
         .iter()
         .map(|p| (p.latitude, p.longitude, p.elevation))
         .collect();
 
-    ImportSectionConfig {
+    ImportLineConfig {
         reverse: false,
-        section_index,
+        line_index,
         name,
         surveyor: None,
         date: None,
@@ -885,20 +885,20 @@ fn track_segment_to_config(
 /// Convert a route into an import config.
 fn route_to_config(
     rte: &GpxRoute,
-    section_index: u32,
+    line_index: u32,
     color: &str,
     placement: ImportPlacement,
     depth_inverted: bool,
-) -> ImportSectionConfig {
+) -> ImportLineConfig {
     let points: Vec<(f64, f64, Option<f64>)> = rte
         .points
         .iter()
         .map(|p| (p.latitude, p.longitude, p.elevation))
         .collect();
 
-    ImportSectionConfig {
+    ImportLineConfig {
         reverse: false,
-        section_index,
+        line_index,
         name: rte.name.clone(),
         surveyor: None,
         date: None,
@@ -918,41 +918,41 @@ fn route_to_config(
 
 /// Convert a GPX file into import configs.
 ///
-/// Waypoints are always placed as zero-datum sections. Track/route sections
+/// Waypoints are always placed as zero-datum lines. Track/route lines
 /// use the provided placements (from Step 2 of the import dialog).
 ///
-/// If `placements` is empty, track/route sections default to zero-datum
+/// If `placements` is empty, track/route lines default to zero-datum
 /// placement at their first station.
 pub fn convert_gpx_to_import_configs(
     gpx: &GpxFile,
     import_waypoints: bool,
     import_tracks: bool,
     import_routes: bool,
-    placements: &[GpxSectionPlacement],
+    placements: &[GpxLinePlacement],
     depth_inverted: bool,
-) -> Result<Vec<ImportSectionConfig>> {
+) -> Result<Vec<ImportLineConfig>> {
     let mut configs = Vec::new();
-    let mut section_index = 0u32;
+    let mut line_index = 0u32;
 
-    // Waypoints → zero-datum sections
+    // Waypoints → zero-datum lines
     if import_waypoints {
-        let wpt_configs = waypoints_to_import_configs(&gpx.waypoints, section_index)?;
-        section_index += wpt_configs.len() as u32;
+        let wpt_configs = waypoints_to_import_configs(&gpx.waypoints, line_index)?;
+        line_index += wpt_configs.len() as u32;
         configs.extend(wpt_configs);
     }
 
-    // Tracks → sections
+    // Tracks → lines
     if import_tracks {
         for trk in &gpx.tracks {
             for (seg_i, seg) in trk.segments.iter().enumerate() {
                 if seg.points.len() < 2 {
-                    section_index += 1;
+                    line_index += 1;
                     continue;
                 }
 
                 let first_pt = seg.points.first();
                 let (placement, sec_name, color) =
-                    resolve_placement(section_index, placements, first_pt, || {
+                    resolve_placement(line_index, placements, first_pt, || {
                         if trk.segments.len() == 1 {
                             trk.name.clone()
                         } else {
@@ -966,22 +966,22 @@ pub fn convert_gpx_to_import_configs(
 
                 configs.push(track_segment_to_config(
                     seg,
-                    section_index,
+                    line_index,
                     sec_name,
                     &color,
                     placement,
                     depth_inverted,
                 ));
-                section_index += 1;
+                line_index += 1;
             }
         }
     }
 
-    // Routes → sections
+    // Routes → lines
     if import_routes {
         for rte in &gpx.routes {
             if rte.points.len() < 2 {
-                section_index += 1;
+                line_index += 1;
                 continue;
             }
 
@@ -994,40 +994,40 @@ pub fn convert_gpx_to_import_configs(
             });
 
             let (placement, _sec_name, color) =
-                resolve_placement(section_index, placements, first_as_trkpt.as_ref(), || {
+                resolve_placement(line_index, placements, first_as_trkpt.as_ref(), || {
                     rte.name.clone()
                 })?;
 
             configs.push(route_to_config(
                 rte,
-                section_index,
+                line_index,
                 &color,
                 placement,
                 depth_inverted,
             ));
-            section_index += 1;
+            line_index += 1;
         }
     }
 
     Ok(configs)
 }
 
-/// Resolve placement for a track/route section.
+/// Resolve placement for a track/route line.
 ///
 /// Uses user-provided placement from Step 2 if available, otherwise falls back
 /// to zero-datum at the first point.
 fn resolve_placement(
-    section_index: u32,
-    placements: &[GpxSectionPlacement],
+    line_index: u32,
+    placements: &[GpxLinePlacement],
     first_point: Option<&GpxTrackPoint>,
     default_name: impl FnOnce() -> Option<String>,
 ) -> Result<(ImportPlacement, Option<String>, String)> {
-    if let Some(p) = placements.iter().find(|p| p.section_index == section_index) {
+    if let Some(p) = placements.iter().find(|p| p.line_index == line_index) {
         return Ok((p.placement.clone(), p.name.clone(), p.color.clone()));
     }
 
     // Default: zero datum at first point
-    let color_idx = section_index as usize % GPX_COLORS.len();
+    let color_idx = line_index as usize % GPX_COLORS.len();
     let color = GPX_COLORS[color_idx].to_string();
     let name = default_name();
 
@@ -1197,7 +1197,7 @@ mod tests {
         assert_eq!(configs.len(), 2);
 
         let c0 = &configs[0];
-        assert_eq!(c0.section_index, 0);
+        assert_eq!(c0.line_index, 0);
         assert_eq!(c0.name.as_deref(), Some("Cave Entrance"));
         assert!(c0.shots.is_empty());
         assert!(matches!(&c0.placement, ImportPlacement::ZeroDatum { .. }));
@@ -1237,11 +1237,11 @@ mod tests {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
         let configs = convert_gpx_to_import_configs(&gpx, true, true, true, &[], false).unwrap();
 
-        // 2 waypoints + 1 track segment + 1 route = 4 sections
+        // 2 waypoints + 1 track segment + 1 route = 4 lines
         assert_eq!(configs.len(), 4);
 
         for (i, c) in configs.iter().enumerate() {
-            assert_eq!(c.section_index, i as u32);
+            assert_eq!(c.line_index, i as u32);
         }
     }
 
@@ -1462,8 +1462,8 @@ mod tests {
     #[test]
     fn custom_placement_override() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
-        let placements = vec![GpxSectionPlacement {
-            section_index: 0,
+        let placements = vec![GpxLinePlacement {
+            line_index: 0,
             placement: ImportPlacement::Origin,
             name: Some("Custom Name".to_string()),
             color: "#ff0000".to_string(),

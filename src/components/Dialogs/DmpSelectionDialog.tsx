@@ -13,7 +13,7 @@ import type { DmpFile } from '../../types/commands';
 import type { Person } from '../../types/ipc.generated';
 import { CreditPeopleFields } from '../common/CreditFields';
 import { OptionalDateInput } from '../common/OptionalDateInput';
-import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
+import { listPeopleProps, type CreditLists } from '../common/LineMetadataForm';
 import { personKey } from '../../utils/people';
 
 /**
@@ -21,18 +21,18 @@ import { personKey } from '../../utils/people';
  * and passed to the DMP import wizard.
  */
 export interface DmpSelectionConfig {
-  /** Indices of selected sections from the DMP file */
+  /** Indices of selected lines from the DMP file */
   selectedIndices: Set<number>;
-  /** Default surveyors for every section (a section may change its own) */
+  /** Default surveyors for every line (a line may change its own) */
   defaultSurveyors: Person[];
-  /** Default explorers for every section */
+  /** Default explorers for every line */
   defaultExplorers: Person[];
-  /** Optional date override to apply to all sections */
+  /** Optional date override to apply to all lines */
   defaultDate: string | null;
   /** SHA256 hash of the source DMP file, null if computation failed */
   fileHash: string | null;
-  /** Content hashes of selected sections (for section-level duplicate detection) */
-  sectionHashes: string[];
+  /** Content hashes of selected lines (for line-level duplicate detection) */
+  lineHashes: string[];
 }
 
 interface DmpSelectionDialogProps {
@@ -47,25 +47,25 @@ interface DmpSelectionDialogProps {
 }
 
 /**
- * Calculate DMP file metadata for header display based on selected sections.
+ * Calculate DMP file metadata for header display based on selected lines.
  */
 function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
-  const sections = dmpFile.sections;
-  const sectionCount = sections.length;
+  const lines = dmpFile.lines;
+  const lineCount = lines.length;
 
-  // Count only importable shots from selected sections
+  // Count only importable shots from selected lines
   let totalShots = 0;
   let totalLength = 0;
   let minDepth: number | null = null;
   let maxDepth: number | null = null;
 
-  for (let i = 0; i < sections.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
     if (!selectedIndices.has(i)) continue;
 
-    const section = sections[i];
-    if (!section) continue;
+    const line = lines[i];
+    if (!line) continue;
 
-    const standardShots = section.shots.filter(isImportableDmpShot);
+    const standardShots = line.shots.filter(isImportableDmpShot);
     totalShots += standardShots.length;
 
     for (const shot of standardShots) {
@@ -85,7 +85,7 @@ function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
   }
 
   return {
-    sectionCount,
+    lineCount,
     totalShots,
     totalLength,
     minDepth,
@@ -101,15 +101,15 @@ function samePeopleLists(a: CreditLists, b: CreditLists): boolean {
 }
 
 /**
- * Step 1 of DMP Import: Select sections and set default values.
+ * Step 1 of DMP Import: Select lines and set default values.
  *
  * This dialog displays:
- * - DMP file metadata header (version, sections, shots, length, date range)
- * - Default values section (surveyors, explorers, date override)
+ * - DMP file metadata header (version, lines, shots, length, date range)
+ * - Default values line (surveyors, explorers, date override)
  * - Bulk selection controls (All, None, Invert)
- * - Section table with checkboxes
+ * - Line table with checkboxes
  *
- * Empty sections (0 importable shots) are displayed but grayed out and disabled.
+ * Empty lines (0 importable shots) are displayed but grayed out and disabled.
  */
 export default function DmpSelectionDialog({
   dmpFile,
@@ -133,7 +133,7 @@ export default function DmpSelectionDialog({
   // Get hash functions from project store
   const calculateFileHash = useProjectStore((state) => state.calculateFileHash);
   const checkDuplicateImport = useProjectStore((state) => state.checkDuplicateImport);
-  const checkSectionHashes = useProjectStore((state) => state.checkSectionHashes);
+  const checkLineHashes = useProjectStore((state) => state.checkLineHashes);
 
   // File hash and duplicate detection state
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -142,26 +142,26 @@ export default function DmpSelectionDialog({
   // Track whether hash computation has settled (resolved or failed)
   const [hashSettled, setHashSettled] = useState(false);
 
-  // Section-level duplicate detection state
-  const [duplicateSectionIndices, setDuplicateSectionIndices] = useState<Set<number>>(new Set());
-  const [sectionHashesSettled, setSectionHashesSettled] = useState(false);
+  // Line-level duplicate detection state
+  const [duplicateLineIndices, setDuplicateLineIndices] = useState<Set<number>>(new Set());
+  const [lineHashesSettled, setLineHashesSettled] = useState(false);
 
-  // Check section content hashes for duplicates on mount
+  // Check line content hashes for duplicates on mount
   useEffect(() => {
     let cancelled = false;
-    setSectionHashesSettled(false);
-    setDuplicateSectionIndices(new Set());
+    setLineHashesSettled(false);
+    setDuplicateLineIndices(new Set());
     (async () => {
       try {
-        const hashes = dmpFile.sections.map(s => s.content_hash);
-        const results = await checkSectionHashes(hashes);
+        const hashes = dmpFile.lines.map(s => s.content_hash);
+        const results = await checkLineHashes(hashes);
         if (cancelled) return;
         const dupes = new Set<number>();
         results.forEach((isDup, idx) => {
           if (isDup) dupes.add(idx);
         });
-        setDuplicateSectionIndices(dupes);
-        // Auto-deselect duplicate sections
+        setDuplicateLineIndices(dupes);
+        // Auto-deselect duplicate lines
         if (dupes.size > 0) {
           setSelectedIndices(prev => {
             const next = new Set(prev);
@@ -175,12 +175,12 @@ export default function DmpSelectionDialog({
         // Graceful degradation
       } finally {
         if (!cancelled) {
-          setSectionHashesSettled(true);
+          setLineHashesSettled(true);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [dmpFile.sections, checkSectionHashes]);
+  }, [dmpFile.lines, checkLineHashes]);
 
   // Compute file hash and check for duplicates on mount / filePath change
   useEffect(() => {
@@ -209,7 +209,7 @@ export default function DmpSelectionDialog({
     return () => { cancelled = true; };
   }, [filePath, calculateFileHash, checkDuplicateImport]);
 
-  // The people the last section was created or imported with this session
+  // The people the last line was created or imported with this session
   const setLastUsedCredit = useUIStore((state) => state.setLastUsedCredit);
 
   // Default values state - the people start as the last used ones
@@ -231,11 +231,11 @@ export default function DmpSelectionDialog({
     setPeopleTextPending,
   );
 
-  // Section selection state - default to sections with at least 2 importable shots
+  // Line selection state - default to lines with at least 2 importable shots
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() => {
     const indices = new Set<number>();
-    dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(isImportableDmpShot);
+    dmpFile.lines.forEach((line, index) => {
+      const standardShots = line.shots.filter(isImportableDmpShot);
       if (standardShots.length > 1) {
         indices.add(index);
       }
@@ -246,8 +246,8 @@ export default function DmpSelectionDialog({
   // Track initial selection for isDirty calculation
   const [initialSelection] = useState(() => {
     const indices = new Set<number>();
-    dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(isImportableDmpShot);
+    dmpFile.lines.forEach((line, index) => {
+      const standardShots = line.shots.filter(isImportableDmpShot);
       if (standardShots.length > 1) {
         indices.add(index);
       }
@@ -271,7 +271,7 @@ export default function DmpSelectionDialog({
     return false;
   }, [peopleTextPending, defaultPeople, initialPeople, defaultDate, initialDate, selectedIndices, initialSelection]);
 
-  // Calculate metadata for header based on selected sections (updates in real-time)
+  // Calculate metadata for header based on selected lines (updates in real-time)
   const metadata = useMemo(
     () => calculateMetadata(dmpFile, selectedIndices),
     [dmpFile, selectedIndices]
@@ -280,14 +280,14 @@ export default function DmpSelectionDialog({
   // Bulk selection handlers
   const handleSelectAll = useCallback(() => {
     const indices = new Set<number>();
-    dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(isImportableDmpShot);
+    dmpFile.lines.forEach((line, index) => {
+      const standardShots = line.shots.filter(isImportableDmpShot);
       if (standardShots.length > 0) {
         indices.add(index);
       }
     });
     setSelectedIndices(indices);
-  }, [dmpFile.sections]);
+  }, [dmpFile.lines]);
 
   const handleSelectNone = useCallback(() => {
     setSelectedIndices(new Set());
@@ -295,17 +295,17 @@ export default function DmpSelectionDialog({
 
   const handleInvertSelection = useCallback(() => {
     const inverted = new Set<number>();
-    dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(isImportableDmpShot);
+    dmpFile.lines.forEach((line, index) => {
+      const standardShots = line.shots.filter(isImportableDmpShot);
       if (standardShots.length > 0 && !selectedIndices.has(index)) {
         inverted.add(index);
       }
     });
     setSelectedIndices(inverted);
-  }, [dmpFile.sections, selectedIndices]);
+  }, [dmpFile.lines, selectedIndices]);
 
-  // Toggle individual section
-  const handleToggleSection = useCallback((index: number) => {
+  // Toggle individual line
+  const handleToggleLine = useCallback((index: number) => {
     setSelectedIndices(prev => {
       const next = new Set(prev);
       if (next.has(index)) {
@@ -319,14 +319,14 @@ export default function DmpSelectionDialog({
 
   // Handle Continue button click
   const handleContinue = useCallback(() => {
-    // Remember the people for the next import (and New Section) this session.
+    // Remember the people for the next import (and New Line) this session.
     setLastUsedCredit({ surveyors: defaultPeople.surveyors, explorers: defaultPeople.explorers });
 
-    const sectionHashes: string[] = [];
+    const lineHashes: string[] = [];
     for (const idx of selectedIndices) {
-      const section = dmpFile.sections[idx];
-      if (section) {
-        sectionHashes.push(section.content_hash);
+      const line = dmpFile.lines[idx];
+      if (line) {
+        lineHashes.push(line.content_hash);
       }
     }
 
@@ -336,17 +336,17 @@ export default function DmpSelectionDialog({
       defaultExplorers: defaultPeople.explorers,
       defaultDate: defaultDate.trim() || null,
       fileHash,
-      sectionHashes,
+      lineHashes,
     };
     onContinue(config);
-  }, [selectedIndices, defaultPeople, defaultDate, fileHash, dmpFile.sections, onContinue, setLastUsedCredit]);
+  }, [selectedIndices, defaultPeople, defaultDate, fileHash, dmpFile.lines, onContinue, setLastUsedCredit]);
 
-  // Calculate section counts for display
-  const nonEmptySectionCount = useMemo(() => {
-    return dmpFile.sections.filter(
-      section => section.shots.filter(isImportableDmpShot).length > 0
+  // Calculate line counts for display
+  const nonEmptyLineCount = useMemo(() => {
+    return dmpFile.lines.filter(
+      line => line.shots.filter(isImportableDmpShot).length > 0
     ).length;
-  }, [dmpFile.sections]);
+  }, [dmpFile.lines]);
 
   return (
     <DialogWrapper
@@ -389,20 +389,20 @@ export default function DmpSelectionDialog({
           </div>
         )}
 
-        {/* Section-level duplicate banner */}
-        {sectionHashesSettled && duplicateSectionIndices.size > 0 && (
+        {/* Line-level duplicate banner */}
+        {lineHashesSettled && duplicateLineIndices.size > 0 && (
           <div
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
-            data-testid="duplicate-sections-warning"
+            data-testid="duplicate-lines-warning"
           >
             {'\u26A0'} {t('dialogs.dmpSelection.duplicateSectionsWarning', {
-              duplicates: duplicateSectionIndices.size,
-              total: dmpFile.sections.length,
+              duplicates: duplicateLineIndices.size,
+              total: dmpFile.lines.length,
             })}
           </div>
         )}
 
-        {/* Default values section */}
+        {/* Default values line */}
         <Panel title={t('dialogs.dmpSelection.defaultValues')}>
           <div className="space-y-3" data-testid="dmp-default-values">
             <CreditPeopleFields {...peopleProps} layout="columns" testIdPrefix="default" />
@@ -451,12 +451,12 @@ export default function DmpSelectionDialog({
           <span className="ml-auto text-sm text-text-secondary self-center">
             {t('dialogs.dmpSelection.selectedCount', {
               selected: selectedIndices.size,
-              total: nonEmptySectionCount,
+              total: nonEmptyLineCount,
             })}
           </span>
         </div>
 
-        {/* Section table */}
+        {/* Line table */}
         <div className="border border-border rounded overflow-hidden" data-testid="dmp-section-table">
           <div className="max-h-64 overflow-auto">
             <table className="w-full text-sm">
@@ -470,13 +470,13 @@ export default function DmpSelectionDialog({
                 </tr>
               </thead>
               <tbody>
-                {dmpFile.sections.map((section, index) => {
-                  const standardShots = section.shots.filter(isImportableDmpShot);
+                {dmpFile.lines.map((line, index) => {
+                  const standardShots = line.shots.filter(isImportableDmpShot);
                   const shotCount = standardShots.length;
                   const isEmpty = shotCount === 0;
                   const isSelected = selectedIndices.has(index);
-                  const isDupeSection = duplicateSectionIndices.has(index);
-                  const dateStr = section.date?.split(/[T ]/)[0] ?? '-';
+                  const isDupeLine = duplicateLineIndices.has(index);
+                  const dateStr = line.date?.split(/[T ]/)[0] ?? '-';
 
                   return (
                     <tr
@@ -486,28 +486,28 @@ export default function DmpSelectionDialog({
                         ${isEmpty ? 'opacity-50 bg-background-30' : ''}
                         ${isSelected && !isEmpty ? 'bg-accent-10' : ''}
                       `}
-                      data-testid={`section-row-${index}`}
+                      data-testid={`line-row-${index}`}
                     >
                       <td className="px-3 py-2">
                         <input
                           type="checkbox"
                           checked={isSelected}
                           disabled={isEmpty}
-                          onChange={() => handleToggleSection(index)}
-                          data-testid={`section-checkbox-${index}`}
-                          aria-label={t('dialogs.dmpSelection.selectSectionLabel', { name: section.name })}
+                          onChange={() => handleToggleLine(index)}
+                          data-testid={`line-checkbox-${index}`}
+                          aria-label={t('dialogs.dmpSelection.selectSectionLabel', { name: line.name })}
                         />
                       </td>
                       <td className="px-3 py-2">
-                        {section.name}
-                        {isDupeSection && (
-                          <span className="ml-2 text-xs text-warning" data-testid={`section-duplicate-${index}`}>
+                        {line.name}
+                        {isDupeLine && (
+                          <span className="ml-2 text-xs text-warning" data-testid={`line-duplicate-${index}`}>
                             {t('dialogs.dmpSelection.alreadyImported')}
                           </span>
                         )}
                       </td>
                       <td className="px-3 py-2">{dateStr}</td>
-                      <td className="px-3 py-2 capitalize">{section.direction}</td>
+                      <td className="px-3 py-2 capitalize">{line.direction}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
                         {isEmpty ? (
                           <span className="text-text-secondary">{t('dialogs.dmpSelection.empty')}</span>
@@ -531,10 +531,10 @@ export default function DmpSelectionDialog({
           <Button
             variant="primary"
             onClick={handleContinue}
-            disabled={selectedIndices.size === 0 || !hashSettled || !sectionHashesSettled}
+            disabled={selectedIndices.size === 0 || !hashSettled || !lineHashesSettled}
             data-testid="continue-button"
           >
-            {!hashSettled || !sectionHashesSettled
+            {!hashSettled || !lineHashesSettled
               ? t('dialogs.dmpSelection.checkingDuplicates')
               : t('dialogs.dmpSelection.continue')}
           </Button>

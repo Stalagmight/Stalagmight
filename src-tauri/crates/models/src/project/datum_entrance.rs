@@ -12,7 +12,7 @@
 //!   to the surface, and a piece with no entrance could not be planned from;
 //! - a GPS fix follows the user's override (`ZeroDatum::entrance`) when there
 //!   is one, and otherwise is an entrance when its station is the first or the
-//!   last station of its section ([`Project::is_section_end`]): surveys start
+//!   last station of its line ([`Project::is_line_end`]): surveys start
 //!   at an entrance and tie a second entrance in at the end of a line, while a
 //!   fix in the middle of a line is a point inside the cave.
 
@@ -20,15 +20,15 @@ use super::{Project, StationRef};
 use crate::station::DatumRole;
 
 impl Project {
-    /// Whether `station_ref` is the first or the last station of its section:
+    /// Whether `station_ref` is the first or the last station of its line:
     /// the default rule for a GPS fix. `false` for a station that does not
     /// exist.
-    pub fn is_section_end(&self, station_ref: StationRef) -> bool {
-        let Some(section) = self.get_section(station_ref.section_id) else {
+    pub fn is_line_end(&self, station_ref: StationRef) -> bool {
+        let Some(line) = self.get_line(station_ref.line_id) else {
             return false;
         };
         let index = station_ref.station_index as usize;
-        index == 0 || index == section.shots.len()
+        index == 0 || index == line.shots.len()
     }
 
     /// Whether a datum with `role` and `override_entrance` on `station_ref` is
@@ -42,7 +42,7 @@ impl Project {
         match role {
             DatumRole::Placement => true,
             DatumRole::GpsFix => {
-                override_entrance.unwrap_or_else(|| self.is_section_end(station_ref))
+                override_entrance.unwrap_or_else(|| self.is_line_end(station_ref))
             }
         }
     }

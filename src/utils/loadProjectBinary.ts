@@ -19,11 +19,11 @@ import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
-import type { Section } from '../types/ipc/Section';
+import type { Line } from '../types/ipc/Line';
 import type { Shot } from '../types/ipc/Shot';
 import type { Person } from '../types/ipc/Person';
 import type { SurveyCredit } from '../types/ipc/SurveyCredit';
-import { noteLazySectionCredits } from './projectPeople';
+import { noteLazyLineCredits } from './projectPeople';
 import type { StationRef } from '../types/ipc/StationRef';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
@@ -37,7 +37,7 @@ import type { DisplaySettings } from '../types/ipc/DisplaySettings';
 import type { SurveyDirection } from '../types/ipc/SurveyDirection';
 import {
   type SurveyData,
-  type SectionMetadata,
+  type LineMetadata,
   lazyStationArray,
   noteShotMaterialization,
   SHOT_FLAG_KIND_MASK,
@@ -106,7 +106,7 @@ export interface BinaryEnvelope {
   shots_uints: Uint8Array;
   shots_flags: Uint8Array;
   shot_comments: Array<[number, string]>;
-  /** Per-shot u32: index into the shot's SECTION `credits`, 0xFFFFFFFF for none.
+  /** Per-shot u32: index into the shot's LINE `credits`, 0xFFFFFFFF for none.
    *  Empty (zero bytes) when no shot of the project carries a credit (v7). */
   shots_credit: Uint8Array;
   station_count: number;
@@ -130,21 +130,21 @@ interface ProjectHeaderBinary {
   created_at: string;
   modified_at: string;
   file_path: string | null;
-  next_section_id: number;
+  next_line_id: number;
   next_closure_id: bigint | number;
-  sections: SectionHeaderBinary[];
+  lines: LineHeaderBinary[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
   loop_closures: LoopClosure[];
-  section_offsets: Array<[number, [number, number]]>;
+  line_offsets: Array<[number, [number, number]]>;
   station_offsets: Array<[StationRef, [number, number, number]]>;
   station_comments_map: Array<[StationRef, string]>;
   imported_file_hashes: string[];
-  imported_section_hashes: string[];
+  imported_line_hashes: string[];
   validation: ValidationConfig;
   surface_elevation: number | null;
   /**
-   * The project-level north reference a section inherits when it declares none
+   * The project-level north reference a line inherits when it declares none
    * (#438). Absent on an envelope from a backend that predates it; the decoder
    * folds that onto `null`, which is the same "nothing recorded" the JSON path
    * means.
@@ -155,14 +155,14 @@ interface ProjectHeaderBinary {
   credit_people: Person[];
 }
 
-/** One distinct survey credit of a section, people as `credit_people` indices. */
+/** One distinct survey credit of a line, people as `credit_people` indices. */
 interface CreditBinary {
   surveyors: number[];
   explorers: number[];
   date: string | null;
 }
 
-interface SectionHeaderBinary {
+interface LineHeaderBinary {
   id: number;
   name: string | null;
   color: string;
@@ -171,9 +171,9 @@ interface SectionHeaderBinary {
   shot_offset: number;
   shot_count: number;
   next_shot_id: number;
-  /** This section's own north reference (#438); absent/null inherits. */
+  /** This line's own north reference (#438); absent/null inherits. */
   azimuth_reference?: AzimuthReference | null;
-  /** The section's distinct shot credits, indexed by `shots_credit` (v7). */
+  /** The line's distinct shot credits, indexed by `shots_credit` (v7). */
   credits: CreditBinary[];
 }
 
@@ -286,25 +286,25 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   }
   const people = env.project_header.credit_people;
 
-  // Build Section[] with a *lazy* `shots` getter backed by the typed
+  // Build Line[] with a *lazy* `shots` getter backed by the typed
   // arrays we already have. Materializing all 75k Shot objects up
   // front committed bmalloc slabs for the Shot class that never
   // decommitted (the residue we measured at ~2 GB after close).
   // Lazy materialization means the slab only commits if a consumer
-  // actually iterates `section.shots`; sections nobody touches stay
+  // actually iterates `line.shots`; lines nobody touches stay
   // typed-array-only.
   //
-  // Each Section's shots getter caches the materialized array after
+  // Each Line's shots getter caches the materialized array after
   // first access (consumer code expects identity stability - repeat
-  // calls return the same array). The cache is per-section, so the
-  // memory cost is bounded by which sections are accessed × shots in
-  // those sections. For typical UI use (one section at a time in
+  // calls return the same array). The cache is per-line, so the
+  // memory cost is bounded by which lines are accessed × shots in
+  // those lines. For typical UI use (one line at a time in
   // DataTable, single shots in DetailPanel) this is ~100s of shots
   // materialized vs the legacy 75 000.
-  const sections: Section[] = env.project_header.sections.map((sh) => {
+  const lines: Line[] = env.project_header.lines.map((sh) => {
     const materializeShots = (): Shot[] => {
       const shots: Shot[] = new Array(sh.shot_count);
-      // The section's distinct credits, resolved once and SHARED by every shot
+      // The line's distinct credits, resolved once and SHARED by every shot
       // that carries them - treat a shot's `credit` as immutable.
       const credits: SurveyCredit[] = sh.credits.map((c) => decodeCredit(c, people));
       for (let j = 0; j < sh.shot_count; j++) {
@@ -338,10 +338,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       return shots;
     };
     // `Object.defineProperty` for `shots` so we can install a getter
-    // without breaking the `Section` interface (which declares it as
-    // a plain `Shot[]`). Consumers read `section.shots` exactly as
+    // without breaking the `Line` interface (which declares it as
+    // a plain `Shot[]`). Consumers read `line.shots` exactly as
     // before; the materialization happens transparently on first read.
-    const section = {
+    const line = {
       id: sh.id,
       name: sh.name,
       color: sh.color,
@@ -349,20 +349,20 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       quality: sh.quality,
       next_shot_id: sh.next_shot_id,
       azimuth_reference: sh.azimuth_reference ?? null,
-    } as Section;
+    } as Line;
     // Define-once lazy getter: on first read it materializes the Shot[] and
     // *replaces itself* with a plain data property holding that array. This
     // (a) keeps identity stable (later reads return the same array),
     // (b) drops the getter/closure overhead after materialization, and
     // (c) makes the state externally observable for the load-path lazy guard:
-    //     an untouched section's descriptor is an accessor (`get` defined),
+    //     an untouched line's descriptor is an accessor (`get` defined),
     //     a materialized one is a data property (`value` defined). The
-    //     regression test and the E2E harness classify sections that way.
-    Object.defineProperty(section, 'shots', {
+    //     regression test and the E2E harness classify lines that way.
+    Object.defineProperty(line, 'shots', {
       get() {
         const shots = materializeShots();
         noteShotMaterialization();
-        Object.defineProperty(section, 'shots', {
+        Object.defineProperty(line, 'shots', {
           value: shots,
           writable: true,
           enumerable: true,
@@ -373,16 +373,16 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       enumerable: true,
       configurable: true,
     });
-    // The people autocomplete reads a section's distinct credits without
+    // The people autocomplete reads a line's distinct credits without
     // materializing its shots (utils/projectPeople).
-    noteLazySectionCredits(section, () => sh.credits.map((c) => decodeCredit(c, people)));
-    return section;
+    noteLazyLineCredits(line, () => sh.credits.map((c) => decodeCredit(c, people)));
+    return line;
   });
 
-  // Reconstruct the section_offsets record: Vec<(SectionId, (f64,f64))> -> Record<number, [number, number]>
-  const section_offsets: Record<number, [number, number]> = {};
-  for (const [sid, [x, y]] of env.project_header.section_offsets) {
-    section_offsets[sid] = [x, y];
+  // Reconstruct the line_offsets record: Vec<(LineId, (f64,f64))> -> Record<number, [number, number]>
+  const line_offsets: Record<number, [number, number]> = {};
+  for (const [sid, [x, y]] of env.project_header.line_offsets) {
+    line_offsets[sid] = [x, y];
   }
 
   // Note: station_offsets and station_comments_map are on Project but TS
@@ -395,15 +395,15 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     location: env.project_header.location,
     created_at: env.project_header.created_at,
     modified_at: env.project_header.modified_at,
-    sections,
+    lines,
     station_merges: env.project_header.station_merges,
     zero_datums: env.project_header.zero_datums,
     loop_closures: env.project_header.loop_closures,
     file_path: env.project_header.file_path,
-    next_section_id: env.project_header.next_section_id,
-    section_offsets,
+    next_line_id: env.project_header.next_line_id,
+    line_offsets,
     imported_file_hashes: env.project_header.imported_file_hashes,
-    imported_section_hashes: env.project_header.imported_section_hashes,
+    imported_line_hashes: env.project_header.imported_line_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
     validation: env.project_header.validation,
     surface_elevation: env.project_header.surface_elevation,
@@ -447,8 +447,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // No additional allocations beyond:
   //   - 12 per-field Float32 views over the same `shots_floats` buffer
   //     (and similar for stations) - DataView-style, zero copy
-  //   - 1 Uint32Array `shotSectionIds` (4 bytes/shot, derived from the
-  //     section metadata + offsets - we have to materialize this because
+  //   - 1 Uint32Array `shotLineIds` (4 bytes/shot, derived from the
+  //     line metadata + offsets - we have to materialize this because
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
@@ -461,7 +461,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // ~89k-object array. The old eager loop (removed here) materialized one
   // `Station` (plus nested `station_ref` / `coordinates` objects) per
   // station and held them for the project's whole lifetime - a pure
-  // duplicate of `surveyData.stationCoords` / `stationSectionIds` /
+  // duplicate of `surveyData.stationCoords` / `stationLineIds` /
   // `stationIndices` / the sparse extras maps. `lazyStationArray`
   // reconstructs the exact same `Station` shape on index access via
   // `getStation`, so consumers that still take a `Station[]` are unchanged,
@@ -521,7 +521,7 @@ function buildSurveyData(
 ): SurveyData {
   const N = env.shot_count;
   const shotIds = new Uint32Array(N);
-  const shotSectionIds = new Uint32Array(N);
+  const shotLineIds = new Uint32Array(N);
   const shotAzimuthIn = new Float32Array(N);
   const shotAzimuthOut = new Float32Array(N);
   const shotLength = new Float32Array(N);
@@ -558,11 +558,11 @@ function buildSurveyData(
     const uBase = i * SHOT_UINT_FIELDS;
     // Both columns are u32 on the wire and u32 in the SoA, so copy them
     // verbatim. They used to be coerced with `| 0` into Int32Arrays, which
-    // wrapped every shot id past 2^31 (reachable from section 21_474 up, since
-    // Rust mints `section_id * 100_000 + sequence_order`) to a negative number
-    // while the lazy `section.shots` materializer below read the same slot
+    // wrapped every shot id past 2^31 (reachable from line 21_474 up, since
+    // Rust mints `line_id * 100_000 + sequence_order`) to a negative number
+    // while the lazy `line.shots` materializer below read the same slot
     // unsigned - the two views of one id stopped comparing equal (#555).
-    shotSectionIds[i] = shotsU32[uBase]!;           // section_id
+    shotLineIds[i] = shotsU32[uBase]!;           // line_id
     shotIds[i]        = shotsU32[uBase + 1]!;       // shot.id
     const markerRaw   = shotsU32[uBase + 2]!;
     shotMarkerIndex[i] = markerRaw === 0xFFFFFFFF ? SHOT_MARKER_NULL : (markerRaw | 0);
@@ -573,7 +573,7 @@ function buildSurveyData(
     shotFlags[i] = shotsFlags[i]! & SHOT_FLAG_KIND_MASK;
   }
 
-  const sections: SectionMetadata[] = env.project_header.sections.map((sh) => ({
+  const lines: LineMetadata[] = env.project_header.lines.map((sh) => ({
     id: sh.id,
     name: sh.name,
     color: sh.color,
@@ -587,7 +587,7 @@ function buildSurveyData(
 
   // ─── Stations ──────────────────────────────────────────────────
   const SN = env.station_count;
-  const stationSectionIds = new Uint32Array(SN);
+  const stationLineIds = new Uint32Array(SN);
   const stationIndices = new Uint32Array(SN);
   // Reuse the existing stationsF64 view directly - it's already
   // [x0,y0,z0,x1,y1,z1,…] which matches our stationCoords stride-3.
@@ -600,16 +600,16 @@ function buildSurveyData(
     const uBase = i * STATION_UINT_FIELDS;
     // u32 in, u32 out - see the shot columns above for why the old `| 0`
     // coercion was wrong (#555).
-    stationSectionIds[i] = stationsU32[uBase]!;
+    stationLineIds[i] = stationsU32[uBase]!;
     stationIndices[i] = stationsU32[uBase + 1]!;
     stationFlagsOut[i] = (stationsFlags[i]! & 1) !== 0 ? STATION_FLAG_IS_ZERO_DATUM : 0;
   }
 
   return {
-    sections,
+    lines,
     shotCount: N,
     shotIds,
-    shotSectionIds,
+    shotLineIds,
     shotAzimuthIn,
     shotAzimuthOut,
     shotLength,
@@ -626,7 +626,7 @@ function buildSurveyData(
     shotMarkerIndex,
     shotComments: shotCommentByIdx,
     stationCount: SN,
-    stationSectionIds,
+    stationLineIds,
     stationIndices,
     stationCoords,
     stationFlags: stationFlagsOut,
@@ -638,7 +638,7 @@ function buildSurveyData(
   };
 }
 
-/** A section credit with its people resolved; an index past the table is dropped. */
+/** A line credit with its people resolved; an index past the table is dropped. */
 function decodeCredit(credit: CreditBinary, people: readonly Person[]): SurveyCredit {
   const resolve = (ids: readonly number[]): Person[] =>
     ids.map((id) => people[id]).filter((p): p is Person => p !== undefined);

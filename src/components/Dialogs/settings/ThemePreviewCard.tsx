@@ -16,7 +16,7 @@ const COLOR_THEME_NAME_KEYS: Record<ColorTheme, string> = {
 };
 
 interface ThemePreviewCardProps {
-  /** Which mode section this card represents */
+  /** Which mode line this card represents */
   mode: 'day' | 'night';
   /** Which color theme is currently selected for this mode */
   colorTheme: ColorTheme;
@@ -27,7 +27,7 @@ interface ThemePreviewCardProps {
 }
 
 /**
- * Visual preview card for a mode section (day/night), showing a mini app
+ * Visual preview card for a mode line (day/night), showing a mini app
  * mockup using the selected color theme's actual colors from themeTokens.
  */
 export function ThemePreviewCard({

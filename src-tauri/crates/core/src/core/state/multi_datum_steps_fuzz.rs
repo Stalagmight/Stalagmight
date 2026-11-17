@@ -9,8 +9,8 @@ use std::fmt;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick, CombineSectionsOptions,
-    GpsCoordinates, Project, SectionEnd, SectionId, ShotData, SplitAt, SplitSectionOptions,
+    local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick, CombineLinesOptions,
+    GpsCoordinates, Project, LineEnd, LineId, ShotData, SplitAt, SplitLineOptions,
     SplitSide, StationRef,
 };
 
@@ -100,30 +100,30 @@ pub(super) enum Op {
         a: StationRef,
         b: StationRef,
     },
-    /// Split `section` at station `at`; a datum there goes to half B when
+    /// Split `line` at station `at`; a datum there goes to half B when
     /// `side_b`.
     Split {
-        section: SectionId,
+        line: LineId,
         at: u32,
         side_b: bool,
     },
     Combine {
-        kept: SectionId,
-        kept_end: SectionEnd,
-        other: SectionId,
-        other_end: SectionEnd,
+        kept: LineId,
+        kept_end: LineEnd,
+        other: LineId,
+        other_end: LineEnd,
     },
-    DeleteSection {
-        section: SectionId,
+    DeleteLine {
+        line: LineId,
     },
     DeleteShot {
-        section: SectionId,
+        line: LineId,
         index: usize,
     },
     /// Add a shot: `pos` -1 before the first shot, `k` after shot `k`, or
     /// `None` at the end.
     AddShot {
-        section: SectionId,
+        line: LineId,
         pos: Option<i64>,
         azimuth: f64,
         length: f64,
@@ -136,17 +136,17 @@ pub(super) enum Op {
 }
 
 fn st(s: StationRef) -> String {
-    format!("{}:{}", s.section_id, s.station_index)
+    format!("{}:{}", s.line_id, s.station_index)
 }
 
 fn acc_text(a: Option<f64>) -> String {
     a.map_or_else(|| "-".to_string(), |v| format!("{v:?}"))
 }
 
-fn end_text(e: SectionEnd) -> &'static str {
+fn end_text(e: LineEnd) -> &'static str {
     match e {
-        SectionEnd::Start => "start",
-        SectionEnd::End => "end",
+        LineEnd::Start => "start",
+        LineEnd::End => "end",
     }
 }
 
@@ -163,12 +163,12 @@ impl fmt::Display for Op {
             Op::Unmerge { a, b } => write!(f, "unmerge({},{})", st(*a), st(*b)),
             Op::Closure { a, b } => write!(f, "closure({},{})", st(*a), st(*b)),
             Op::Split {
-                section,
+                line,
                 at,
                 side_b,
             } => write!(
                 f,
-                "split({section},{at},{})",
+                "split({line},{at},{})",
                 if *side_b { "b" } else { "a" }
             ),
             Op::Combine {
@@ -182,10 +182,10 @@ impl fmt::Display for Op {
                 end_text(*kept_end),
                 end_text(*other_end)
             ),
-            Op::DeleteSection { section } => write!(f, "delsec({section})"),
-            Op::DeleteShot { section, index } => write!(f, "delshot({section},{index})"),
+            Op::DeleteLine { line } => write!(f, "delsec({line})"),
+            Op::DeleteShot { line, index } => write!(f, "delshot({line},{index})"),
             Op::AddShot {
-                section,
+                line,
                 pos,
                 azimuth,
                 length,
@@ -193,7 +193,7 @@ impl fmt::Display for Op {
                 depth_out,
             } => write!(
                 f,
-                "addshot({section},{},{azimuth:?},{length:?},{depth_in:?},{depth_out:?})",
+                "addshot({line},{},{azimuth:?},{length:?},{depth_in:?},{depth_out:?})",
                 pos.map_or_else(|| "end".to_string(), |p| p.to_string())
             ),
             Op::Undo => write!(f, "undo"),
@@ -212,12 +212,12 @@ fn parse_acc(text: &str) -> Option<f64> {
     (text != "-").then(|| text.parse().unwrap())
 }
 
-fn parse_end(text: &str) -> (SectionId, SectionEnd) {
+fn parse_end(text: &str) -> (LineId, LineEnd) {
     let (s, e) = text.split_once(':').unwrap();
     let end = if e == "start" {
-        SectionEnd::Start
+        LineEnd::Start
     } else {
-        SectionEnd::End
+        LineEnd::End
     };
     (s.parse().unwrap(), end)
 }
@@ -261,7 +261,7 @@ pub(super) fn parse_op(text: &str) -> Op {
             b: parse_station(a[1]),
         },
         "split" => Op::Split {
-            section: a[0].parse().unwrap(),
+            line: a[0].parse().unwrap(),
             at: a[1].parse().unwrap(),
             side_b: a[2] == "b",
         },
@@ -274,15 +274,15 @@ pub(super) fn parse_op(text: &str) -> Op {
                 other_end,
             }
         }
-        "delsec" => Op::DeleteSection {
-            section: a[0].parse().unwrap(),
+        "delsec" => Op::DeleteLine {
+            line: a[0].parse().unwrap(),
         },
         "delshot" => Op::DeleteShot {
-            section: a[0].parse().unwrap(),
+            line: a[0].parse().unwrap(),
             index: int(1),
         },
         "addshot" => Op::AddShot {
-            section: a[0].parse().unwrap(),
+            line: a[0].parse().unwrap(),
             pos: (a[1] != "end").then(|| a[1].parse().unwrap()),
             azimuth: num(2),
             length: num(3),
@@ -296,9 +296,9 @@ pub(super) fn parse_op(text: &str) -> Op {
     }
 }
 
-/// Every station of `p`, section by section.
+/// Every station of `p`, line by line.
 pub(super) fn every_station(p: &Project) -> Vec<StationRef> {
-    p.sections
+    p.lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .collect()
@@ -346,7 +346,7 @@ pub(super) fn datum_op(rng: &mut Rng, at: StationRef) -> Op {
     }
 }
 
-/// The station a datum step lands on: station 0, a section that already
+/// The station a datum step lands on: station 0, a line that already
 /// holds a datum, the frame's merge component, or anywhere.
 fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
     let all = every_station(p);
@@ -360,11 +360,11 @@ fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
         );
     }
     if roll < 40 {
-        let held: HashSet<SectionId> = p.all_datum_refs().iter().map(|s| s.section_id).collect();
+        let held: HashSet<LineId> = p.all_datum_refs().iter().map(|s| s.line_id).collect();
         let on: Vec<_> = all
             .iter()
             .copied()
-            .filter(|s| held.contains(&s.section_id))
+            .filter(|s| held.contains(&s.line_id))
             .collect();
         if !on.is_empty() {
             return rng.pick(&on);
@@ -375,11 +375,11 @@ fn datum_station(rng: &mut Rng, p: &Project) -> Option<StationRef> {
             .frame_datum()
             .and_then(|zd| p.resolve_key(&zd.station_ref))
         {
-            let group = p.get_merged_section_ids(frame.section_id);
+            let group = p.get_merged_line_ids(frame.line_id);
             let near: Vec<_> = all
                 .iter()
                 .copied()
-                .filter(|s| group.contains(&s.section_id))
+                .filter(|s| group.contains(&s.line_id))
                 .collect();
             return rng.pick(&near);
         }
@@ -449,17 +449,17 @@ pub(super) fn next_op(
             let placed = p.placement_datum_refs();
             let (a, b) = if placed.len() >= 2 && rng.chance(40) {
                 let (x, y) = (rng.pick(&placed)?, rng.pick(&placed)?);
-                let ga = p.get_merged_section_ids(x.section_id);
-                let gb = p.get_merged_section_ids(y.section_id);
+                let ga = p.get_merged_line_ids(x.line_id);
+                let gb = p.get_merged_line_ids(y.line_id);
                 let in_a: Vec<_> = all
                     .iter()
                     .copied()
-                    .filter(|s| ga.contains(&s.section_id))
+                    .filter(|s| ga.contains(&s.line_id))
                     .collect();
                 let in_b: Vec<_> = all
                     .iter()
                     .copied()
-                    .filter(|s| gb.contains(&s.section_id))
+                    .filter(|s| gb.contains(&s.line_id))
                     .collect();
                 (rng.pick(&in_a)?, rng.pick(&in_b)?)
             } else {
@@ -479,17 +479,17 @@ pub(super) fn next_op(
             b: rng.pick(&all)?,
         },
         58..=62 => {
-            let long: Vec<_> = p.sections.iter().filter(|s| s.shots.len() >= 2).collect();
+            let long: Vec<_> = p.lines.iter().filter(|s| s.shots.len() >= 2).collect();
             let s = long.get(rng.below(long.len()))?;
             Op::Split {
-                section: s.id,
+                line: s.id,
                 at: 1 + rng.below(s.shots.len() - 1) as u32,
                 side_b: rng.chance(50),
             }
         }
         63..=67 => {
             let mut offered = Vec::new();
-            for s in &p.sections {
+            for s in &p.lines {
                 for end in [0, s.shots.len() as u32] {
                     let at = StationRef::new(s.id, end);
                     offered.extend(
@@ -511,33 +511,33 @@ pub(super) fn next_op(
             };
             if keep_a {
                 Op::Combine {
-                    kept: c.section_a,
+                    kept: c.line_a,
                     kept_end: c.end_a,
-                    other: c.section_b,
+                    other: c.line_b,
                     other_end: c.end_b,
                 }
             } else {
                 Op::Combine {
-                    kept: c.section_b,
+                    kept: c.line_b,
                     kept_end: c.end_b,
-                    other: c.section_a,
+                    other: c.line_a,
                     other_end: c.end_a,
                 }
             }
         }
-        68..=70 if p.sections.len() > 1 => Op::DeleteSection {
-            section: p.sections[rng.below(p.sections.len())].id,
+        68..=70 if p.lines.len() > 1 => Op::DeleteLine {
+            line: p.lines[rng.below(p.lines.len())].id,
         },
         71..=75 => {
-            let with: Vec<_> = p.sections.iter().filter(|s| !s.shots.is_empty()).collect();
+            let with: Vec<_> = p.lines.iter().filter(|s| !s.shots.is_empty()).collect();
             let s = with.get(rng.below(with.len()))?;
             Op::DeleteShot {
-                section: s.id,
+                line: s.id,
                 index: rng.below(s.shots.len()),
             }
         }
         76..=80 => {
-            let s = &p.sections[rng.below(p.sections.len())];
+            let s = &p.lines[rng.below(p.lines.len())];
             let pos = match rng.below(3) {
                 0 => None,
                 1 if !s.shots.is_empty() => Some(-1),
@@ -547,7 +547,7 @@ pub(super) fn next_op(
             let depth = rng.range(0.0, 30.0);
             let shot = random_shot(rng, depth);
             Op::AddShot {
-                section: s.id,
+                line: s.id,
                 pos,
                 azimuth: shot.azimuth_in,
                 length: shot.length,
@@ -635,17 +635,17 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             closure_strategy: ClosureStrategy::Batch,
         }),
         Op::Split {
-            section,
+            line,
             at,
             side_b,
         } => {
             let side = if *side_b { SplitSide::B } else { SplitSide::A };
-            state.execute_split_section(
-                *section,
+            state.execute_split_line(
+                *line,
                 SplitAt::Station { station_index: *at },
-                SplitSectionOptions {
-                    name_a: format!("S{section}a"),
-                    name_b: format!("S{section}b"),
+                SplitLineOptions {
+                    name_a: format!("S{line}a"),
+                    name_b: format!("S{line}b"),
                     color_a: "#123456".to_string(),
                     color_b: "#654321".to_string(),
                     comment_side: SplitSide::A,
@@ -658,10 +658,10 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             kept_end,
             other,
             other_end,
-        } => state.execute_combine_sections(
+        } => state.execute_combine_lines(
             *kept,
             *other,
-            CombineSectionsOptions {
+            CombineLinesOptions {
                 name: format!("C{kept}"),
                 color: "#abcdef".to_string(),
                 swap_lr: true,
@@ -673,20 +673,20 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
                 }),
             },
         ),
-        Op::DeleteSection { section } => state.execute(Command::DeleteSection {
-            section_id: *section,
+        Op::DeleteLine { line } => state.execute(Command::DeleteLine {
+            line_id: *line,
         }),
-        Op::DeleteShot { section, index } => {
-            match p.get_section(*section).and_then(|s| s.shots.get(*index)) {
+        Op::DeleteShot { line, index } => {
+            match p.get_line(*line).and_then(|s| s.shots.get(*index)) {
                 Some(shot) => state.execute(Command::DeleteShot {
-                    section_id: *section,
+                    line_id: *line,
                     shot_id: shot.id,
                 }),
                 None => return Applied::Refused("no shot".to_string()),
             }
         }
         Op::AddShot {
-            section,
+            line,
             pos,
             azimuth,
             length,
@@ -694,7 +694,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
             depth_out,
         } => {
             let ids: Vec<_> = p
-                .get_section(*section)
+                .get_line(*line)
                 .map(|s| s.shots.iter().map(|x| x.id).collect())
                 .unwrap_or_default();
             let (after, before) = match pos {
@@ -703,7 +703,7 @@ pub(super) fn apply(state: &AppState, origin: &GpsCoordinates, op: &Op, p: &Proj
                 None => (None, None),
             };
             state.execute(Command::CreateShot {
-                section_id: *section,
+                line_id: *line,
                 shot: ShotData {
                     azimuth_in: *azimuth,
                     azimuth_out: *azimuth,

@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{Project, SectionId, StationRef, ZeroDatum};
+use super::{Project, LineId, StationRef, ZeroDatum};
 use crate::station::DatumRole;
 use crate::{gps_to_local, GpsCoordinates};
 
@@ -102,7 +102,7 @@ impl Project {
         let existing = stored.and_then(|(_, role)| role);
         let override_entrance = stored.and_then(|(zd, _)| zd.entrance);
         let role = existing.unwrap_or_else(|| {
-            if self.component_datum_refs(station_ref.section_id).is_empty() {
+            if self.component_datum_refs(station_ref.line_id).is_empty() {
                 DatumRole::Placement
             } else {
                 DatumRole::GpsFix
@@ -123,15 +123,15 @@ impl Project {
     /// Every datum's role, parallel to `zero_datums`; `None` for a datum that
     /// does not resolve (a dangling datum anchors nothing).
     pub fn datum_roles(&self) -> Vec<Option<DatumRole>> {
-        let mut placed: HashSet<SectionId> = HashSet::new();
+        let mut placed: HashSet<LineId> = HashSet::new();
         self.zero_datums
             .iter()
             .map(|zd| {
                 let sr = self.resolve_key(&zd.station_ref)?;
-                if placed.contains(&sr.section_id) {
+                if placed.contains(&sr.line_id) {
                     Some(DatumRole::GpsFix)
                 } else {
-                    placed.extend(self.get_merged_section_ids(sr.section_id));
+                    placed.extend(self.get_merged_line_ids(sr.line_id));
                     Some(DatumRole::Placement)
                 }
             })
@@ -175,25 +175,25 @@ impl Project {
             .collect()
     }
 
-    /// Sections that hold a placement datum on one of their own stations: the
-    /// sections the raw-geometry solvers treat as fixed. A section holding only
+    /// Lines that hold a placement datum on one of their own stations: the
+    /// lines the raw-geometry solvers treat as fixed. A line holding only
     /// GPS fixes is NOT in it, because a fix never moves raw geometry.
-    pub(crate) fn placement_datum_sections(&self) -> HashSet<SectionId> {
+    pub(crate) fn placement_datum_lines(&self) -> HashSet<LineId> {
         self.placement_datum_refs()
             .into_iter()
-            .map(|sr| sr.section_id)
+            .map(|sr| sr.line_id)
             .collect()
     }
 
-    /// List index of the placement datum of `section_id`'s merge component (the
+    /// List index of the placement datum of `line_id`'s merge component (the
     /// first datum in list order that resolves into it), or `None` when the
     /// component holds no resolvable datum. Comparing two of these decides which
     /// of two placed groups keeps its placement when they are merged.
-    pub(crate) fn placement_datum_index(&self, section_id: SectionId) -> Option<usize> {
-        let merged = self.get_merged_section_ids(section_id);
+    pub(crate) fn placement_datum_index(&self, line_id: LineId) -> Option<usize> {
+        let merged = self.get_merged_line_ids(line_id);
         self.zero_datums.iter().position(|zd| {
             self.resolve_key(&zd.station_ref)
-                .is_some_and(|sr| merged.contains(&sr.section_id))
+                .is_some_and(|sr| merged.contains(&sr.line_id))
         })
     }
 
@@ -279,8 +279,8 @@ impl Project {
                 adj[j].push((i, w));
             }
         };
-        for section in &self.sections {
-            for (i, shot) in (0u32..).zip(&section.shots) {
+        for line in &self.lines {
+            for (i, shot) in (0u32..).zip(&line.shots) {
                 // A non-finite length is never crossed (`dijkstra`).
                 let w = if shot.length.is_finite() {
                     shot.length.max(0.0)
@@ -288,8 +288,8 @@ impl Project {
                     f64::INFINITY
                 };
                 link(
-                    StationRef::new(section.id, i),
-                    StationRef::new(section.id, i + 1),
+                    StationRef::new(line.id, i),
+                    StationRef::new(line.id, i + 1),
                     w,
                 );
             }

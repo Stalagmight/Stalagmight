@@ -36,8 +36,8 @@ async function createProject(page: Page, name: string): Promise<void> {
 }
 
 /**
- * Inject a section with a zero datum station into the project store.
- * Station 0 of this section will have is_zero_datum=true with GPS coordinates.
+ * Inject a line with a zero datum station into the project store.
+ * Station 0 of this line will have is_zero_datum=true with GPS coordinates.
  */
 async function injectZeroDatumFixture(
   page: Page,
@@ -61,7 +61,7 @@ async function injectZeroDatumFixture(
         projectStore: {
           getState: () => {
             project: Record<string, unknown> & {
-              sections: Array<Record<string, unknown>>;
+              lines: Array<Record<string, unknown>>;
               zero_datums: Array<Record<string, unknown>>;
             };
             stations: Array<Record<string, unknown>>;
@@ -80,10 +80,10 @@ async function injectZeroDatumFixture(
         throw new Error('Project is null');
       }
 
-      // Create a test section with one shot
-      const testSection = {
+      // Create a test line with one shot
+      const testLine = {
         id: 1,
-        name: 'Datum Section',
+        name: 'Datum Line',
         surveyor: 'Test Surveyor',
         date: '2026-01-28',
         color: '#4ecdc4',
@@ -110,32 +110,32 @@ async function injectZeroDatumFixture(
         ],
       };
 
-      const existingSections = existingProject.sections ?? [];
+      const existingLines = existingProject.lines ?? [];
 
-      // Update project with the datum section and zero datum entry
+      // Update project with the datum line and zero datum entry
       const project = {
         ...existingProject,
-        sections: [testSection, ...existingSections],
+        lines: [testLine, ...existingLines],
         zero_datums: [
           {
-            station_ref: { section_id: 1, station_index: 0 },
+            station_ref: { line_id: 1, station_index: 0 },
             gps: { latitude: lat, longitude: lon, depth_reference: 0 },
           },
         ],
       };
 
-      // Create mock stations for the new section
+      // Create mock stations for the new line
       const existingStations = state.stations ?? [];
       const newStations = [
         {
-          station_ref: { section_id: 1, station_index: 0 },
+          station_ref: { line_id: 1, station_index: 0 },
           coordinates: { x: 0, y: 0, z: 0 },
           is_zero_datum: true,
           gps_coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
           merged_with: [],
         },
         {
-          station_ref: { section_id: 1, station_index: 1 },
+          station_ref: { line_id: 1, station_index: 1 },
           coordinates: { x: 10, y: 0, z: -1 },
           is_zero_datum: false,
           gps_coordinates: null,
@@ -168,22 +168,22 @@ async function injectZeroDatumFixture(
         | {
             projectStore: {
               getState: () => {
-                project: { sections: Array<{ id: number; name: string }> } | null;
+                project: { lines: Array<{ id: number; name: string }> } | null;
               };
             };
           }
         | undefined;
       return e2e?.projectStore
         .getState()
-        .project?.sections?.some(
-          (s: { id: number; name: string }) => s.id === 1 && s.name === 'Datum Section'
+        .project?.lines?.some(
+          (s: { id: number; name: string }) => s.id === 1 && s.name === 'Datum Line'
         );
     },
     { timeout: 5000 }
   );
 
-  // Wait for the section name to be visible in the UI
-  await expect(page.locator('text=Datum Section')).toBeVisible({ timeout: 5000 });
+  // Wait for the line name to be visible in the UI
+  await expect(page.locator('text=Datum Line')).toBeVisible({ timeout: 5000 });
 }
 
 /**
@@ -330,11 +330,11 @@ async function getUndoStackLength(page: Page): Promise<number> {
  */
 async function openEditStationDialog(
   page: Page,
-  sectionId: number,
+  lineId: number,
   stationIndex: number
 ): Promise<void> {
   await page.evaluate(
-    ({ sectionId, stationIndex }) => {
+    ({ lineId, stationIndex }) => {
       const e2e = (window as unknown as Record<string, unknown>).__E2E_TEST__ as
         | {
             uiStore: {
@@ -350,10 +350,10 @@ async function openEditStationDialog(
       }
 
       e2e.uiStore.getState().openDialog('edit-station', {
-        stationRef: { section_id: sectionId, station_index: stationIndex },
+        stationRef: { line_id: lineId, station_index: stationIndex },
       });
     },
-    { sectionId, stationIndex }
+    { lineId, stationIndex }
   );
 
   // Wait for dialog to be visible
@@ -375,7 +375,7 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     // Record baseline undo stack length via IPC
     const baselineLength = await getUndoStackLength(page);
 
-    // Open EditStationDialog for station 0 of section 1 (the zero datum station)
+    // Open EditStationDialog for station 0 of line 1 (the zero datum station)
     await openEditStationDialog(page, 1, 0);
 
     const dialog = page.getByTestId('edit-station-dialog');
@@ -429,7 +429,7 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     // Record baseline undo stack length via IPC
     const baselineLength = await getUndoStackLength(page);
 
-    // Open EditStationDialog for station 0 of section 1
+    // Open EditStationDialog for station 0 of line 1
     await openEditStationDialog(page, 1, 0);
 
     const dialog = page.getByTestId('edit-station-dialog');

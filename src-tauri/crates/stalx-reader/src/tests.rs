@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use stalagmight_models::station::{GpsCoordinates, LoopClosure as ModelClosure, StationRef};
 use stalagmight_models::{
-    ClosureStrategy, Project, SectionData, ShotData, ShotKind as ModelShotKind, SurveyDirection,
+    ClosureStrategy, Project, LineData, ShotData, ShotKind as ModelShotKind, SurveyDirection,
 };
 use stalagmight_persistence::persistence::Database;
 use tempfile::TempDir;
@@ -38,8 +38,8 @@ fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
 }
 
 /// 30-degree descents (length 10, dz 5), pitch stored with `sign`.
-fn descending(name: &str, sign: f64, count: usize) -> SectionData {
-    SectionData {
+fn descending(name: &str, sign: f64, count: usize) -> LineData {
+    LineData {
         name: Some(name.to_string()),
         surveyor: Some("user1".to_string()),
         date: None,
@@ -80,15 +80,15 @@ fn set_user_version(path: &Path, version: i32) {
 /// Two sections, one merge, one datum, one closure, one comment, two names.
 fn full_project() -> Project {
     let mut project = Project::new("Synthetic".to_string(), Some("Nowhere".to_string()));
-    project.add_section(descending("Main", 1.0, 4));
+    project.add_line(descending("Main", 1.0, 4));
     let mut side = descending("Side", 1.0, 2);
     side.direction = Some(SurveyDirection::Out);
     side.shots[0].left = Some(1.5);
     side.shots[1].kind = ModelShotKind::Jump;
     side.shots[1].comment = Some("sump".to_string());
-    project.add_section(side);
+    project.add_line(side);
 
-    let (main, side) = (project.sections[0].id, project.sections[1].id);
+    let (main, side) = (project.lines[0].id, project.lines[1].id);
     project
         .merge_stations(StationRef::new(main, 2), StationRef::new(side, 0))
         .unwrap();
@@ -191,7 +191,7 @@ fn an_old_file_is_migrated_before_it_is_read() {
     // it. A raw read would return -30 here.
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(descending("OldConvention", -1.0, 4));
+    project.add_line(descending("OldConvention", -1.0, 4));
     let path = save(&dir, &project);
     set_user_version(&path, 11);
 
@@ -518,7 +518,7 @@ fn positions_report_their_datum_anchor_and_the_frame_datum() {
     // Main carries the datum at its start; Side is merged into Main, so it shares
     // the anchor; Loose is connected to nothing, so it floats.
     let mut project = full_project();
-    project.add_section(descending("Loose", 1.0, 2));
+    project.add_line(descending("Loose", 1.0, 2));
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &project);
 
@@ -550,8 +550,8 @@ fn every_list_is_sorted_and_reads_are_deterministic() {
     // Store merges and closures in the reverse of their sorted order, so only the
     // reader's own sort can put them right.
     let mut project = full_project();
-    project.add_section(descending("Third", 1.0, 3));
-    let (main, third) = (project.sections[0].id, project.sections[2].id);
+    project.add_line(descending("Third", 1.0, 3));
+    let (main, third) = (project.lines[0].id, project.lines[2].id);
     project
         .merge_stations(StationRef::new(main, 1), StationRef::new(third, 0))
         .unwrap();
@@ -644,7 +644,7 @@ fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
     // file can carry one. Put a datum on Side (merged into Main) FIRST, so it is
     // the frame datum although Main's datum has the lower station id.
     let mut project = full_project();
-    let side = project.sections[1].id;
+    let side = project.lines[1].id;
     let key = project.key_for_ref(StationRef::new(side, 1)).unwrap();
     let mut extra = project.zero_datums[0].clone();
     extra.station_ref = key;
@@ -671,7 +671,7 @@ fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
 /// LOWER station than its placement datum (#741).
 fn project_with_a_fix() -> (Project, u32) {
     let mut project = full_project();
-    let loose = project.add_section(descending("Loose", 1.0, 2)).id;
+    let loose = project.add_line(descending("Loose", 1.0, 2)).id;
     project.ensure_shot_uuids();
     let datum = |project: &Project, index, lat| stalagmight_models::ZeroDatum {
         station_ref: project.key_for_ref(StationRef::new(loose, index)).unwrap(),
@@ -844,7 +844,7 @@ fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
         "d1d1d1d1-0000-4000-8000-000000000001",
         "d1d1d1d1-0000-4000-8000-000000000002",
     ];
-    let copy = || SectionData {
+    let copy = || LineData {
         shots: IDS
             .iter()
             .map(|id| ShotData {
@@ -858,8 +858,8 @@ fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
         ..Default::default()
     };
     let mut project = Project::new("Copies".to_string(), None);
-    project.add_section(copy());
-    project.add_section(copy());
+    project.add_line(copy());
+    project.add_line(copy());
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &project);
 
@@ -892,10 +892,10 @@ fn an_id_two_sections_hold_is_derived_for_the_later_one_the_way_the_app_does() {
 fn anchored_positions_carry_lat_lon_and_datums_carry_their_residual() {
     let mut project = full_project();
     // Fore- and back-sight both 90: Main really runs due east.
-    for shot in &mut project.sections[0].shots {
+    for shot in &mut project.lines[0].shots {
         shot.azimuth_out = 90.0;
     }
-    project.add_section(descending("Loose", 1.0, 2));
+    project.add_line(descending("Loose", 1.0, 2));
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &project);
 
@@ -937,7 +937,7 @@ fn anchored_positions_carry_lat_lon_and_datums_carry_their_residual() {
 fn a_datum_the_stored_offsets_no_longer_honour_has_a_large_residual() {
     // A second datum whose GPS disagrees with where the survey puts its station.
     let mut project = full_project();
-    let side = project.sections[1].id;
+    let side = project.lines[1].id;
     let mut extra = project.zero_datums[0].clone();
     extra.station_ref = project.key_for_ref(StationRef::new(side, 2)).unwrap();
     extra.gps = GpsCoordinates::new(20.6, -87.4, 0.0).unwrap();
@@ -1070,10 +1070,10 @@ fn station_positions_are_bit_exact_with_the_apps_own_open() {
     let mut project = full_project();
     let template = project.station_merges.iter().next().cloned().unwrap();
     let hub = project
-        .key_for_ref(StationRef::new(project.sections[0].id, 1))
+        .key_for_ref(StationRef::new(project.lines[0].id, 1))
         .unwrap();
     for i in 0..50 {
-        let id = project.add_section(descending(&format!("S{i}"), 1.0, 2)).id;
+        let id = project.add_line(descending(&format!("S{i}"), 1.0, 2)).id;
         let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
         project
             .station_merges
@@ -1083,7 +1083,7 @@ fn station_positions_are_bit_exact_with_the_apps_own_open() {
                 merged_at: template.merged_at,
             });
     }
-    project.add_section(descending("Loose", 1.0, 3));
+    project.add_line(descending("Loose", 1.0, 3));
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &project);
     let app_copy = dir.path().join("app.stalx");
@@ -1179,7 +1179,7 @@ fn schema_rows_retyped_in_another_case_are_refused() {
 fn shots_carry_their_survey_credit() {
     let mut project = full_project();
     let person = |n: &str, e: Option<&str>| stalagmight_models::Person::new(n, e).unwrap();
-    project.sections[0].shots[0].set_credit(stalagmight_models::SurveyCredit {
+    project.lines[0].shots[0].set_credit(stalagmight_models::SurveyCredit {
         surveyors: vec![person("Ann", Some("ann@example.org")), person("Bo", None)],
         explorers: vec![person("Ex", None)],
         date: "2024-04-05".parse().ok(),
@@ -1206,7 +1206,7 @@ fn credit_rows_are_counted_against_their_own_caps() {
     let mut project = full_project();
     // An email: the legacy column cannot carry it, so every shot needs a row.
     let explorer = stalagmight_models::Person::new("Ex", Some("ex@example.org")).unwrap();
-    for shot in &mut project.sections[0].shots {
+    for shot in &mut project.lines[0].shots {
         shot.set_credit(stalagmight_models::SurveyCredit {
             explorers: vec![explorer.clone()],
             ..Default::default()

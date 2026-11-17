@@ -2,4 +2,4 @@
 import type { SurveyCredit } from "./SurveyCredit";
 import type { TmlShotType } from "./TmlShotType";
 
-export interface TmlShot { id: bigint, uuid?: string, from_id: bigint, shot_type: TmlShotType, azimuth: number, length: number, depth: number, depth_in: number, inclination: number, left: number, right: number, up: number, down: number, comment: string | null, explorer: string | null, date: string | null, credit?: SurveyCredit, color: string, excluded: boolean, latitude: number, longitude: number, closure_to_id: bigint, section: string, }
+export interface TmlShot { id: bigint, uuid?: string, from_id: bigint, shot_type: TmlShotType, azimuth: number, length: number, depth: number, depth_in: number, inclination: number, left: number, right: number, up: number, down: number, comment: string | null, explorer: string | null, date: string | null, credit?: SurveyCredit, color: string, excluded: boolean, latitude: number, longitude: number, closure_to_id: bigint, line: string, }

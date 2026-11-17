@@ -186,7 +186,7 @@ export function CacheSettings({
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.cache.title')}</h2>
 
-      <SettingsSection title={t('settings.cache.sections.tileCache')} data-testid="section-tile-cache">
+      <SettingsSection title={t('settings.cache.sections.tileCache')} data-testid="line-tile-cache">
         {/* Cache Statistics - Preserve data-testid="cache-stats" */}
         <div
           className="bg-background-50 rounded-lg p-4 space-y-3 mb-4"
@@ -239,7 +239,7 @@ export function CacheSettings({
         </div>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.cache.sections.configuration')} data-testid="section-cache-config">
+      <SettingsSection title={t('settings.cache.sections.configuration')} data-testid="line-cache-config">
         <SettingRow
           label={t('settings.cache.enabled.label')}
           helpText={t('settings.cache.enabled.help')}

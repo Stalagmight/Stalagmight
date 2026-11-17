@@ -112,10 +112,10 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
     expect(await rowOrder()).toEqual([row(BETA), row(LOCAL), row(GAMMA), row(ALPHA)]);
     await expect(page.locator('th[aria-sort="descending"]')).toContainText('Name');
 
-    // Switch to Sections → defaults to descending (largest first).
-    await page.getByTestId('recent-col-sections').click();
+    // Switch to Lines → defaults to descending (largest first).
+    await page.getByTestId('recent-col-lines').click();
     expect(await rowOrder()).toEqual([row(GAMMA), row(ALPHA), row(BETA), row(LOCAL)]);
-    await expect(page.locator('th[aria-sort="descending"]')).toContainText('Sections');
+    await expect(page.locator('th[aria-sort="descending"]')).toContainText('Lines');
   });
 
   test('header sorting stays in sync with the sort dropdown', async ({ page }) => {

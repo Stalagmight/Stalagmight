@@ -528,7 +528,7 @@ fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadErro
         if !((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)) {
             return bad(format!(
                 "zero datum on section {}: latitude/longitude out of range",
-                datum.station_ref.section_id
+                datum.station_ref.line_id
             ));
         }
     }
@@ -547,7 +547,7 @@ fn derive_missing_shot_uuids(
     project: &mut stalagmight_models::Project,
 ) -> std::collections::HashSet<(u32, String)> {
     let mut derived = std::collections::HashSet::new();
-    for section in &mut project.sections {
+    for section in &mut project.lines {
         let mut seen = std::collections::HashSet::new();
         for (i, shot) in section.shots.iter_mut().enumerate() {
             let keep = shot.uuid.as_ref().is_some_and(|u| seen.insert(u.clone()));
@@ -656,9 +656,9 @@ fn check_counts(
     project: &stalagmight_models::Project,
     limits: CountLimits,
 ) -> Result<(), ReadError> {
-    let shots = project.sections.iter().map(|s| s.shots.len()).sum();
+    let shots = project.lines.iter().map(|s| s.shots.len()).sum();
     for (what, count, max) in [
-        (Limit::Sections, project.sections.len(), limits.sections),
+        (Limit::Sections, project.lines.len(), limits.sections),
         (Limit::Shots, shots, limits.shots),
         (
             Limit::StationMerges,

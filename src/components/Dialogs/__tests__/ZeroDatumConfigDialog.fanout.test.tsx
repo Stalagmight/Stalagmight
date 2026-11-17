@@ -27,7 +27,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({
     children,
@@ -35,9 +35,9 @@ vi.mock('../DialogWrapper', () => ({
     children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
   }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
 }));
-vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
-  SectionMetadataForm: () => null,
+vi.mock('../../common/LineMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/LineMetadataForm')>()),
+  LineMetadataForm: () => null,
 }));
 
 const captured = vi.hoisted(() => ({ props: null as unknown }));
@@ -49,7 +49,7 @@ vi.mock('../../common/ShotTableEditor', () => ({
 }));
 
 import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
-import { buildZeroDatumSectionConfig } from '../../../utils/importSectionConfig';
+import { buildZeroDatumLineConfig } from '../../../utils/importLineConfig';
 import type { EditableShot, ShotTableEditorProps } from '../../common/ShotTableEditor';
 import type {
   DmpFile,
@@ -85,7 +85,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -93,7 +93,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: SHOT_COUNT }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -110,7 +110,7 @@ function renderDialog() {
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={vi.fn()}
@@ -158,7 +158,7 @@ function confirmedStationIndex(): number {
   });
   fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
   expect(onConfirm).toHaveBeenCalledTimes(1);
-  const { placement } = buildZeroDatumSectionConfig(onConfirm.mock.calls[0]![0]);
+  const { placement } = buildZeroDatumLineConfig(onConfirm.mock.calls[0]![0]);
   expect(placement.type).toBe('zero_datum');
   return (placement as Extract<ImportPlacement, { type: 'zero_datum' }>).station_index;
 }

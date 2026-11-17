@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { ExpressionSpecification } from 'maplibre-gl';
-import { buildPriorityExpression, compositeIdEquals, inSection } from './maplibre-expressions';
+import { buildPriorityExpression, compositeIdEquals, inLine } from './maplibre-expressions';
 
 describe('buildPriorityExpression', () => {
   it('returns literal expression when priorities array is empty', () => {
@@ -75,13 +75,13 @@ describe('buildPriorityExpression', () => {
 
 describe('compositeIdEquals', () => {
   it('creates concat + equality expression', () => {
-    const result = compositeIdEquals(['sectionId', 'stationIndex'], '123:0');
+    const result = compositeIdEquals(['lineId', 'stationIndex'], '123:0');
 
     expect(result).toEqual([
       '==',
       [
         'concat',
-        ['to-string', ['get', 'sectionId']],
+        ['to-string', ['get', 'lineId']],
         ':',
         ['to-string', ['get', 'stationIndex']],
       ],
@@ -90,37 +90,37 @@ describe('compositeIdEquals', () => {
   });
 
   it('handles different property names', () => {
-    const result = compositeIdEquals(['section', 'index'], '42:7');
+    const result = compositeIdEquals(['line', 'index'], '42:7');
 
     expect(result).toEqual([
       '==',
-      ['concat', ['to-string', ['get', 'section']], ':', ['to-string', ['get', 'index']]],
+      ['concat', ['to-string', ['get', 'line']], ':', ['to-string', ['get', 'index']]],
       '42:7',
     ]);
   });
 
   it('handles null value by returning false constant', () => {
-    const result = compositeIdEquals(['sectionId', 'stationIndex'], null);
+    const result = compositeIdEquals(['lineId', 'stationIndex'], null);
 
     expect(result).toBe(false);
   });
 });
 
-describe('inSection', () => {
+describe('inLine', () => {
   it('creates to-string + equality expression', () => {
-    const result = inSection('123');
+    const result = inLine('123');
 
-    expect(result).toEqual(['==', ['to-string', ['get', 'sectionId']], '123']);
+    expect(result).toEqual(['==', ['to-string', ['get', 'lineId']], '123']);
   });
 
-  it('handles different section ID values', () => {
-    const result = inSection('sec-abc-456');
+  it('handles different line ID values', () => {
+    const result = inLine('sec-abc-456');
 
-    expect(result).toEqual(['==', ['to-string', ['get', 'sectionId']], 'sec-abc-456']);
+    expect(result).toEqual(['==', ['to-string', ['get', 'lineId']], 'sec-abc-456']);
   });
 
-  it('handles null sectionId by returning false constant', () => {
-    const result = inSection(null);
+  it('handles null lineId by returning false constant', () => {
+    const result = inLine(null);
 
     expect(result).toBe(false);
   });
@@ -132,13 +132,13 @@ describe('expression builder with mocked map', () => {
       setPaintProperty: vi.fn(),
     };
 
-    const expr = buildPriorityExpression([{ condition: inSection('sec-1'), value: 3 }], 1);
+    const expr = buildPriorityExpression([{ condition: inLine('sec-1'), value: 3 }], 1);
 
     mockMap.setPaintProperty('layer-id', 'circle-stroke-width', expr);
 
     expect(mockMap.setPaintProperty).toHaveBeenCalledWith('layer-id', 'circle-stroke-width', [
       'case',
-      ['==', ['to-string', ['get', 'sectionId']], 'sec-1'],
+      ['==', ['to-string', ['get', 'lineId']], 'sec-1'],
       3,
       1,
     ]);
@@ -150,7 +150,7 @@ describe('expression builder with mocked map', () => {
     };
 
     const expr = buildPriorityExpression(
-      [{ condition: compositeIdEquals(['sectionId', 'stationIndex'], '1:5'), value: 4 }],
+      [{ condition: compositeIdEquals(['lineId', 'stationIndex'], '1:5'), value: 4 }],
       1
     );
 
@@ -160,7 +160,7 @@ describe('expression builder with mocked map', () => {
       'case',
       [
         '==',
-        ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]],
+        ['concat', ['to-string', ['get', 'lineId']], ':', ['to-string', ['get', 'stationIndex']]],
         '1:5',
       ],
       4,
@@ -168,7 +168,7 @@ describe('expression builder with mocked map', () => {
     ]);
   });
 
-  it('handles priority combinations (station > section > default)', () => {
+  it('handles priority combinations (station > line > default)', () => {
     const mockMap = {
       setPaintProperty: vi.fn(),
     };
@@ -176,8 +176,8 @@ describe('expression builder with mocked map', () => {
     // Build expression with station ID having highest priority
     const expr = buildPriorityExpression(
       [
-        { condition: compositeIdEquals(['sectionId', 'stationIndex'], '1:5'), value: 4 },
-        { condition: inSection('1'), value: 3 },
+        { condition: compositeIdEquals(['lineId', 'stationIndex'], '1:5'), value: 4 },
+        { condition: inLine('1'), value: 3 },
       ],
       1
     );
@@ -189,12 +189,12 @@ describe('expression builder with mocked map', () => {
       // First condition: exact station match (highest priority)
       [
         '==',
-        ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]],
+        ['concat', ['to-string', ['get', 'lineId']], ':', ['to-string', ['get', 'stationIndex']]],
         '1:5',
       ],
       4,
-      // Second condition: section match
-      ['==', ['to-string', ['get', 'sectionId']], '1'],
+      // Second condition: line match
+      ['==', ['to-string', ['get', 'lineId']], '1'],
       3,
       // Fallback
       1,
@@ -209,8 +209,8 @@ describe('expression builder with mocked map', () => {
     // When no selection, conditions should be false constants
     const expr = buildPriorityExpression(
       [
-        { condition: compositeIdEquals(['sectionId', 'stationIndex'], null), value: 4 },
-        { condition: inSection(null), value: 3 },
+        { condition: compositeIdEquals(['lineId', 'stationIndex'], null), value: 4 },
+        { condition: inLine(null), value: 3 },
       ],
       1
     );

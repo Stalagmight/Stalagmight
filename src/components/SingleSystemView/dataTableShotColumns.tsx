@@ -42,11 +42,11 @@ const FROZEN_LOCKED = new Set<string>([
 export interface ShotColumnContext {
   t: TFunction;
   precision: { length: number; azimuth: number; depth: number; inclination: number };
-  sectionId: number | null;
+  lineId: number | null;
   geometryReadOnly: boolean;
-  isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
-  getShotWarnings: (sectionId: number, shotId: number) => ProjectWarning[];
-  /** Map a grid row index to its index in the section's shots array - `null`
+  isShotFrozen: (lineId: number, shotIndex: number) => boolean;
+  getShotWarnings: (lineId: number, shotId: number) => ProjectWarning[];
+  /** Map a grid row index to its index in the line's shots array - `null`
    *  for draft rows (grid rows interleave drafts with the real shots). */
   shotIndexAt: (gridRowIndex: number) => number | null;
   /** Advance a shot's kind around the Normal -> Jump -> Reference ring (the
@@ -63,7 +63,7 @@ const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
 
 export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
-  const { t, precision, sectionId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt, onResolveWarning } = ctx;
+  const { t, precision, lineId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt, onResolveWarning } = ctx;
 
   // Editable iff the view is writable AND (non-geometry, or a non-frozen shot).
   // Draft rows (no shot index) are always editable.
@@ -71,9 +71,9 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     (key: string) =>
     (_row: Shot, rowIndex: number): boolean => {
       if (geometryReadOnly) return false;
-      if (FROZEN_LOCKED.has(key) && sectionId !== null) {
+      if (FROZEN_LOCKED.has(key) && lineId !== null) {
         const shotIndex = shotIndexAt(rowIndex);
-        return shotIndex === null || !isShotFrozen(sectionId, shotIndex);
+        return shotIndex === null || !isShotFrozen(lineId, shotIndex);
       }
       return true;
     };
@@ -144,18 +144,18 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       align: 'center',
       getValue: () => '',
       render: (shot, index): ReactNode => {
-        if (sectionId === null) return null;
+        if (lineId === null) return null;
         const shotIndex = shotIndexAt(index);
         if (shotIndex === null) return null; // draft rows carry no warnings/frozen state
-        const frozen = isShotFrozen(sectionId, shotIndex);
-        const shotWarnings = getShotWarnings(sectionId, shot.id).filter((w) => !w.isResolved);
+        const frozen = isShotFrozen(lineId, shotIndex);
+        const shotWarnings = getShotWarnings(lineId, shot.id).filter((w) => !w.isResolved);
         if (shotWarnings.length === 0 && !frozen) return null;
         const hasError = shotWarnings.some((w) => w.severity === 'error');
         const tooltip = [
           ...(frozen ? [t('dataTable.frozen')] : []),
           ...shotWarnings.map((w) => w.message),
         ].join('\n');
-        const testId = frozen ? `frozen-${sectionId}-${shot.id}` : `warning-${sectionId}-${shot.id}`;
+        const testId = frozen ? `frozen-${lineId}-${shot.id}` : `warning-${lineId}-${shot.id}`;
         const colorClass = hasError
           ? 'text-error'
           : frozen && shotWarnings.length === 0
@@ -199,11 +199,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     // Raw identifiers (read-only, hidden by default) - for cross-referencing and
     // copying out alongside the data.
     {
-      key: 'section_id',
+      key: 'line_id',
       header: t('dataTable.columns.sectionIdShort'),
       width: 60,
       align: 'right',
-      getValue: () => sectionId ?? '',
+      getValue: () => lineId ?? '',
     },
     {
       key: 'shot_id',

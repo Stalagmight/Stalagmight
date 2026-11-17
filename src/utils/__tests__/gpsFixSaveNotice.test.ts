@@ -20,7 +20,7 @@ const holdsFixes = {
 };
 
 function result(over: Partial<CommandResult>): CommandResult {
-  return { success: true, warnings: [], error: null, section_ids: [], ...over } as CommandResult;
+  return { success: true, warnings: [], error: null, line_ids: [], ...over } as CommandResult;
 }
 
 describe('noticeOlderVersionsDropFixes', () => {

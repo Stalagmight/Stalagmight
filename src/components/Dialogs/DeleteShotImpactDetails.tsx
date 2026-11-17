@@ -2,10 +2,10 @@ import type { DeleteShotImpact, DeleteShotRangeImpact } from '../../types/comman
 import type { StationRef } from '../../types/project';
 import { EntityBlob } from '../common/EntityBlob';
 
-/** A station reference as the entity pill (Full level) or plain "section:index". */
+/** A station reference as the entity pill (Full level) or plain "line:index". */
 function StationRefBlob({ station }: { station: StationRef }) {
   return (
-    <EntityBlob entity="station">{`${station.section_id}:${station.station_index}`}</EntityBlob>
+    <EntityBlob entity="station">{`${station.line_id}:${station.station_index}`}</EntityBlob>
   );
 }
 
@@ -155,7 +155,7 @@ export default function DeleteShotImpactDetails({
         {(impact.merge_rewire_skipped || impact.closure_rewire_skipped) && (
           <div className="text-warning">
             {impact.merge_rewire_skipped && (
-              <p>Some merge connectivity could not be preserved (only same-section candidates).</p>
+              <p>Some merge connectivity could not be preserved (only same-line candidates).</p>
             )}
             {impact.closure_rewire_skipped && (
               <p>Some closures could not be replaced (no valid replacement or duplicate).</p>

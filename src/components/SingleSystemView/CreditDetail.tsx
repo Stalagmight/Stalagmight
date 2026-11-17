@@ -1,6 +1,6 @@
 /**
  * Survey credit in the Detail panel: who surveyed and explored the selected
- * shot (or shots, or section), and when, editable in place.
+ * shot (or shots, or line), and when, editable in place.
  *
  * Every change is applied at once as ONE `editShotCredit` on exactly the
  * shots the selection covers, so each pill added or removed is one undo
@@ -23,9 +23,9 @@ import { useStablePeopleOrder } from '../../hooks/useStablePeopleOrder';
 import { setSource } from '../../utils/telemetry';
 import { CreditDateInput, CreditPeopleFields } from '../common/CreditFields';
 import { Panel } from '../common/Panel';
-import { shotCredit } from '../../utils/sectionCredit';
+import { shotCredit } from '../../utils/lineCredit';
 import { applyCreditEdit, aggregateCredits, type CreditRole } from '../../utils/creditEdit';
-import type { CreditEdit, CreditTargets, Project, Section, Shot, SurveyCredit } from '../../types/ipc.generated';
+import type { CreditEdit, CreditTargets, Project, Line, Shot, SurveyCredit } from '../../types/ipc.generated';
 import type { PersonLike } from '../../utils/people';
 import { formatNumber } from '../../i18n/format';
 import { toPerson } from '../../store/recentPeople';
@@ -34,13 +34,13 @@ export interface CreditDetailProps {
   targets: CreditTargets;
   /** The credits of exactly the shots `targets` covers. */
   credits: readonly SurveyCredit[];
-  /** `shot`, `shots` or `section`: read by tests and styling only. */
-  scope: 'shot' | 'shots' | 'section';
+  /** `shot`, `shots` or `line`: read by tests and styling only. */
+  scope: 'shot' | 'shots' | 'line';
 }
 
 /**
  * The editable Surveyors / Explorers / date block. Credit lives on shots, so
- * when the targets cover none (a section with no shots yet) there is nothing
+ * when the targets cover none (a line with no shots yet) there is nothing
  * to record it on: the fields are disabled with a hint instead of taking
  * input that would be dropped.
  */
@@ -105,25 +105,25 @@ export function CreditDetail({ targets, credits, scope }: CreditDetailProps) {
   );
 }
 
-/** The credits of a section's shots, in order. */
-export function sectionCredits(section: Pick<Section, 'shots'>): SurveyCredit[] {
-  return section.shots.map(shotCredit);
+/** The credits of a line's shots, in order. */
+export function lineCredits(line: Pick<Line, 'shots'>): SurveyCredit[] {
+  return line.shots.map(shotCredit);
 }
 
-export type ShotPick = { section: Section; shot: Shot };
+export type ShotPick = { line: Line; shot: Shot };
 
 /**
  * The selected shots, when the selection is two or more shots and nothing
  * else (hook); null otherwise, and the Detail panel shows the single item.
  */
-export function useSelectedShots(project: Pick<Project, 'sections'> | null): ShotPick[] | null {
+export function useSelectedShots(project: Pick<Project, 'lines'> | null): ShotPick[] | null {
   const multiSelection = useUIStore((s) => s.multiSelection);
   return useMemo(() => {
     if (multiSelection.length < 2 || multiSelection.some((s) => s.type !== 'shot')) return null;
     const picks = multiSelection.flatMap((s) => {
-      const section = project?.sections.find((x) => x.id === s.sectionId);
-      const shot = section?.shots.find((x) => x.id === s.shotId);
-      return section && shot ? [{ section, shot }] : [];
+      const line = project?.lines.find((x) => x.id === s.lineId);
+      const shot = line?.shots.find((x) => x.id === s.shotId);
+      return line && shot ? [{ line, shot }] : [];
     });
     return picks.length > 1 ? picks : null;
   }, [multiSelection, project]);
@@ -133,18 +133,18 @@ export function useSelectedShots(project: Pick<Project, 'sections'> | null): Sho
 export function MultiShotDetail({ picks }: { picks: readonly ShotPick[] }) {
   const { t } = useTranslation();
   const targets = useMemo<CreditTargets>(
-    () => ({ type: 'shots', shots: picks.map(({ section, shot }) => [section.id, shot.id] as [number, number]) }),
+    () => ({ type: 'shots', shots: picks.map(({ line, shot }) => [line.id, shot.id] as [number, number]) }),
     [picks],
   );
   const credits = useMemo(() => picks.map(({ shot }) => shotCredit(shot)), [picks]);
-  const sectionCount = new Set(picks.map(({ section }) => section.id)).size;
+  const lineCount = new Set(picks.map(({ line }) => line.id)).size;
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="multi-shot-detail">
       <Panel bare title={t('detailPanel.multiShot.title', { count: picks.length })}>
         <div className="space-y-3">
           <p className="text-sm text-text-secondary" data-testid="multi-shot-detail-summary">
             {t('detailPanel.multiShot.summary', {
-              count: sectionCount,
+              count: lineCount,
               shots: formatNumber(picks.length),
             })}
           </p>

@@ -6,11 +6,11 @@ set -euo pipefail
 # Usage:
 #   ./scripts/release.sh <major|minor|patch|X.Y.Z> [--no-edit] [--dry-run]
 #
-# The changelog is driven by the ## [Unreleased] section in CHANGELOG.md.
+# The changelog is driven by the ## [Unreleased] line in CHANGELOG.md.
 # Write your release notes there BEFORE running this script. The script
 # moves that content under the new version header.
 #
-# If the [Unreleased] section is empty, the script aborts (unless --no-edit
+# If the [Unreleased] line is empty, the script aborts (unless --no-edit
 # is omitted, in which case it opens $EDITOR so you can write notes).
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
@@ -208,7 +208,7 @@ if [ -n "$CHANGED" ]; then
   exit 1
 fi
 
-# --- Read [Unreleased] section from CHANGELOG.md ---
+# --- Read [Unreleased] line from CHANGELOG.md ---
 CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
 UNRELEASED=$(awk '
   /^## \[Unreleased\]/ { found=1; next }
@@ -217,13 +217,13 @@ UNRELEASED=$(awk '
 ' "$CHANGELOG" | sed '/^$/d')
 
 if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = true ]; then
-  echo "Error: ## [Unreleased] section in CHANGELOG.md is empty." >&2
+  echo "Error: ## [Unreleased] line in CHANGELOG.md is empty." >&2
   echo "Write release notes there before running with --no-edit." >&2
   exit 1
 fi
 
 if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
-  echo "## [Unreleased] section is empty. Opening editor..."
+  echo "## [Unreleased] line is empty. Opening editor..."
   EDITOR="${EDITOR:-${VISUAL:-vi}}"
   "$EDITOR" "$CHANGELOG"
   # Re-read after edit
@@ -233,7 +233,7 @@ if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
     found { print }
   ' "$CHANGELOG" | sed '/^$/d')
   if [ -z "$UNRELEASED" ]; then
-    echo "Error: [Unreleased] section is still empty. Aborting." >&2
+    echo "Error: [Unreleased] line is still empty. Aborting." >&2
     exit 1
   fi
 fi
@@ -301,7 +301,7 @@ awk -v ver="$NEW_VERSION" -v date="$TODAY" '
 # relaxed. CHANGELOG.md is deliberately NOT reverted: it can hold hand-written
 # release notes that are not committed yet.
 if ! grep -q "^## \[$NEW_RE\]" "$CHANGELOG"; then
-  echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' section after the rewrite." >&2
+  echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' line after the rewrite." >&2
   echo "The '## [Unreleased]' header was probably not found." >&2
   git -C "$PROJECT_ROOT" checkout -- \
     package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock \

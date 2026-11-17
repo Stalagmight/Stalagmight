@@ -4,7 +4,7 @@ import {
   createProject,
   getMapCenter,
   getSelection,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForMapIdle,
   waitForNoDialogs,
@@ -14,7 +14,7 @@ import {
   getDrawnGeometry,
   type MapCenter,
   type ScreenPoint,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -33,7 +33,7 @@ import {
  * too, and the drop is the still click that ends it.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Direct Manipulation Main',
     direction: 'in',
@@ -62,7 +62,7 @@ function centerDelta(a: MapCenter, b: MapCenter): number {
 
 /**
  * How many move commands have reached the backend. The mocked `move_station` /
- * `move_segment` / `move_section` handlers record every call in
+ * `move_segment` / `move_line` handlers record every call in
  * `__MOCK_MOVE_CALLS__` and deliberately do NOT mutate the project (see
  * mocks/tauri-ipc.ts), so this - not a coordinate read-back - is the oracle for
  * "was a move committed".
@@ -198,7 +198,7 @@ async function findEmptyPoint(
 async function mostIsolatedStation(page: Page): Promise<{
   x: number;
   y: number;
-  sectionId: number;
+  lineId: number;
   stationIndex: number;
 }> {
   const stations = await waitForDrawnStations(page, 2);
@@ -244,7 +244,7 @@ async function dragOnCanvas(page: Page, from: ScreenPoint, to: ScreenPoint): Pro
 
 async function setUpSurvey(page: Page): Promise<void> {
   await createProject(page, 'Direct Manipulation');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
@@ -308,7 +308,7 @@ test.describe('Map direct manipulation (#409)', () => {
 
     await expect.poll(() => getSelection(page)).toEqual({
       type: 'station',
-      stationRef: { section_id: station.sectionId, station_index: station.stationIndex },
+      stationRef: { line_id: station.lineId, station_index: station.stationIndex },
     });
   });
 

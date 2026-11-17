@@ -6,7 +6,7 @@
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    local_to_gps, GpsCoordinates, SectionId, ShotData, StationRef, SurveyDirection,
+    local_to_gps, GpsCoordinates, LineId, ShotData, StationRef, SurveyDirection,
 };
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
@@ -20,7 +20,7 @@ fn gps_at(east: f64, north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-fn section(state: &AppState, name: &str, count: usize) -> SectionId {
+fn line(state: &AppState, name: &str, count: usize) -> LineId {
     let shots = (0..count)
         .map(|_| ShotData {
             azimuth_in: 0.0,
@@ -30,7 +30,7 @@ fn section(state: &AppState, name: &str, count: usize) -> SectionId {
         })
         .collect();
     state
-        .execute(Command::CreateSection {
+        .execute(Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -38,7 +38,7 @@ fn section(state: &AppState, name: &str, count: usize) -> SectionId {
             direction: Some(SurveyDirection::In),
             shots,
         })
-        .section_id
+        .line_id
         .unwrap()
 }
 
@@ -64,8 +64,8 @@ fn new_project(name: &str) -> AppState {
 #[test]
 fn the_merge_check_says_which_placed_piece_moves_and_by_how_much() {
     let state = new_project("TwoPieces");
-    let a = section(&state, "A", 2);
-    let b = section(&state, "B", 2);
+    let a = line(&state, "A", 2);
+    let b = line(&state, "B", 2);
     let (end_a, start_b) = (StationRef::new(a, 2), StationRef::new(b, 0));
 
     // One placed piece: a merge moves the unplaced one, which says nothing.
@@ -79,7 +79,7 @@ fn the_merge_check_says_which_placed_piece_moves_and_by_how_much() {
     let two = state.check_merge_connectivity(start_b, end_a).unwrap();
     assert!(two.can_merge);
     let shift = two.datum_shift.expect("two placed pieces");
-    assert_eq!(shift.moving_section_ids, vec![b]);
+    assert_eq!(shift.moving_line_ids, vec![b]);
     assert_eq!(shift.datum_station, start_b);
     assert!(
         (shift.shift_m - 30.0).abs() < 0.01,
@@ -91,8 +91,8 @@ fn the_merge_check_says_which_placed_piece_moves_and_by_how_much() {
 #[test]
 fn the_adjustment_report_names_a_fix_that_fails_the_gap_check() {
     let state = new_project("Traverse");
-    let a = section(&state, "A", 5);
-    let b = section(&state, "B", 5);
+    let a = line(&state, "A", 5);
+    let b = line(&state, "B", 5);
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 5),
         station_b: StationRef::new(b, 0),

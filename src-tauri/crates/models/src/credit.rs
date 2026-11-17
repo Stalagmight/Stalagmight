@@ -1,8 +1,8 @@
 //! Per-shot survey credit: who surveyed a shot, who explored it, and when.
 //!
 //! Surveyors, explorers and the survey date live on every SHOT
-//! ([`crate::Shot::credit`]). A section holds none of them; it only aggregates
-//! its shots ([`crate::Section::credit_summary`]).
+//! ([`crate::Shot::credit`]). A line holds none of them; it only aggregates
+//! its shots ([`crate::Line::credit_summary`]).
 //!
 //! People are stored BY VALUE - a name and an optional email, no registry ids -
 //! so a shot copied between projects carries its credit with it.
@@ -13,7 +13,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{SectionId, ShotId};
+use crate::{LineId, ShotId};
 
 /// One person credited on a shot.
 ///
@@ -191,7 +191,7 @@ impl SurveyCredit {
     }
 
     /// The surveyors' names joined with `", "`, or `None` when there are none.
-    /// What the plain-text exports carry (the legacy `sections.surveyor`
+    /// What the plain-text exports carry (the legacy `lines.surveyor`
     /// column is [`legacy_credit_text`]).
     pub fn surveyor_names(&self) -> Option<String> {
         join_names(&self.surveyors)
@@ -221,7 +221,7 @@ pub fn join_names(people: &[Person]) -> Option<String> {
 /// as [`Person::name_key`] compares them, the first spelling kept), or `None`
 /// for an empty list.
 ///
-/// For the legacy `sections.surveyor` text ([`legacy_credit_text`]), which
+/// For the legacy `lines.surveyor` text ([`legacy_credit_text`]), which
 /// older builds and SpeleoDB show as-is: two different people sharing a name
 /// (different emails) are one name there, not "Jo Diver, Jo Diver". The
 /// per-shot tables still keep both people.
@@ -235,7 +235,7 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
     (!names.is_empty()).then(|| names.join(", "))
 }
 
-/// The legacy `sections.surveyor` text of a section's people: the only credit
+/// The legacy `lines.surveyor` text of a line's people: the only credit
 /// SpeleoDB reads, and all an older build keeps, since a released build saves
 /// by writing a fresh file and drops the per-shot tables (#718).
 ///
@@ -249,7 +249,7 @@ pub fn join_distinct_names(people: &[Person]) -> Option<String> {
 ///   form, each half joined with `", "` - read back as name lists
 ///   ([`NameSource::NameList`]), which have no `Last, First` rule.
 /// - Explorers only: `"Ida Ice /"`, with no space after the `/`, so the text
-///   survives trimming: an older build's Edit Section trims the surveyor on
+///   survives trimming: an older build's Edit Line trims the surveyor on
 ///   every save, and [`legacy_halves`] reads both `"Ida Ice /"` and
 ///   `"Ida Ice / "` as explorers only.
 ///
@@ -441,7 +441,7 @@ pub enum NameSource {
     /// form, and a Compass or Walls team line. Split on `,` and `;` only:
     /// `ds, kb` is two people.
     NameList,
-    /// Free text a person typed: a legacy `sections.surveyor` text that is NOT
+    /// Free text a person typed: a legacy `lines.surveyor` text that is NOT
     /// in the Ariane form. Split on `;` and `,`, except that exactly two comma
     /// parts, each one word, are one `Last, First` person (`Doe, John`).
     FreeText,
@@ -450,7 +450,7 @@ pub enum NameSource {
 /// Split a text naming people into `(explorers, surveyors)`: the one splitter
 /// every path shares - the TML import (`source` [`NameSource::NameList`]), a
 /// `.stalx` legacy column ([`legacy_people`], [`NameSource::FreeText`]), and
-/// the frontend's copies (`legacyPeople` in `src/utils/sectionCredit.ts`, the
+/// the frontend's copies (`legacyPeople` in `src/utils/lineCredit.ts`, the
 /// Playwright mock).
 ///
 /// * Text in the Ariane form ([`legacy_halves`]) gives the explorers from its
@@ -471,7 +471,7 @@ pub fn split_roles(text: &str, source: NameSource) -> (Vec<Person>, Vec<Person>)
     }
 }
 
-/// A `.stalx` legacy `sections.surveyor` text as `(explorers, surveyors)`:
+/// A `.stalx` legacy `lines.surveyor` text as `(explorers, surveyors)`:
 /// [`split_roles`] with text outside the Ariane form read as
 /// [`NameSource::FreeText`].
 pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
@@ -483,11 +483,11 @@ pub fn legacy_people(text: &str) -> (Vec<Person>, Vec<Person>) {
 ///
 /// * exactly two `" / "` halves: the Ariane importer's join of a file's
 ///   explorer and surveyor halves, and what [`legacy_credit_text`] writes for
-///   a section with both roles;
+///   a line with both roles;
 /// * no `" / "` at all, and the text ends in `" /"` once trimmed: explorers
 ///   only, the second half empty. [`legacy_credit_text`] writes `"Ida Ice /"`;
 ///   `"Ida Ice / "` (what it wrote before) reads the same, as does either
-///   after an older build's Edit Section trimmed it on save. A written name
+///   after an older build's Edit Line trimmed it on save. A written name
 ///   never ends in `" /"` ([`legacy_credit_text`] writes that `/` as `-`).
 pub fn legacy_halves(text: &str) -> Option<(&str, &str)> {
     // Lazily: a crafted text can hold a million separators.
@@ -604,10 +604,10 @@ pub fn clean_text(text: &str) -> std::borrow::Cow<'_, str> {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum CreditTargets {
-    /// Every shot of one section.
-    Section { section_id: SectionId },
-    /// Explicit shots, as `(section_id, shot_id)` pairs (in-session ids).
-    Shots { shots: Vec<(SectionId, ShotId)> },
+    /// Every shot of one line.
+    Line { line_id: LineId },
+    /// Explicit shots, as `(line_id, shot_id)` pairs (in-session ids).
+    Shots { shots: Vec<(LineId, ShotId)> },
 }
 
 /// One edit of the survey credit of a set of shots
@@ -766,7 +766,7 @@ fn edit_role(
     list
 }
 
-/// One person in a [`SectionCreditSummary`], with how many of the section's
+/// One person in a [`LineCreditSummary`], with how many of the line's
 /// shots credit them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct CreditedPerson {
@@ -774,10 +774,10 @@ pub struct CreditedPerson {
     pub shots: u32,
 }
 
-/// What a section's shots say about who surveyed it and when
-/// ([`crate::Section::credit_summary`]).
+/// What a line's shots say about who surveyed it and when
+/// ([`crate::Line::credit_summary`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct SectionCreditSummary {
+pub struct LineCreditSummary {
     /// Every surveyor of any shot, in first-appearance order, with a count.
     pub surveyors: Vec<CreditedPerson>,
     /// Every explorer of any shot, in first-appearance order, with a count.
@@ -788,14 +788,14 @@ pub struct SectionCreditSummary {
     /// The latest shot date.
     #[ts(type = "string | null")]
     pub date_max: Option<NaiveDate>,
-    /// How many shots the section has (the denominator of every count).
+    /// How many shots the line has (the denominator of every count).
     pub shot_count: u32,
 }
 
-impl SectionCreditSummary {
+impl LineCreditSummary {
     /// Aggregate a run of shot credits.
     ///
-    /// Shots that share ONE credit (every shot a section's legacy text
+    /// Shots that share ONE credit (every shot a line's legacy text
     /// credits shares one allocation) are keyed once, by address, and only
     /// counted after that: a long legacy list over many shots costs one pass
     /// over its people, not one per shot.
@@ -838,7 +838,7 @@ impl SectionCreditSummary {
 }
 
 /// People counted per shot, in first-appearance order, with their identity
-/// keys alongside so a long section is not re-keyed on every comparison.
+/// keys alongside so a long line is not re-keyed on every comparison.
 #[derive(Default)]
 struct Tally {
     keys: std::collections::HashMap<(String, Option<String>), usize>,

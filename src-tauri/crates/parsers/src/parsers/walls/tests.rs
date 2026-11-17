@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Datelike;
 
-use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
+use crate::models::line::{ImportClosure, ImportPlacement, ImportLineConfig};
 use crate::parsers::encoding::read_latin1;
 
 use super::*;
@@ -397,7 +397,7 @@ fn star_in_station_name_is_literal_not_lrud() {
     // kept verbatim. Previously `W-*/2/46  W-*/2/50` was torn into
     // from="W-", a bogus `*…*` span, and to="/2/50", collapsing every such
     // station onto a phantom "W-" hub (turning a chain into a star of
-    // single-shot sections all sharing one point).
+    // single-shot lines all sharing one point).
     let srv = "#UNITS meters order=DAV\n\
                W-*/2/46 W-*/2/50 9.2 242 25\n\
                W-*/2/50 W-*/2/51 7.3 262 8\n\
@@ -413,13 +413,13 @@ fn star_in_station_name_is_literal_not_lrud() {
         .vectors
         .iter()
         .all(|v| v.left.is_none() && v.right.is_none() && v.up.is_none() && v.down.is_none()));
-    // The three shots form ONE head-to-tail chain (one section), not three
+    // The three shots form ONE head-to-tail chain (one line), not three
     // fragments hanging off a phantom hub.
     let (configs, _closures, _w) = convert_one(parsed);
     assert_eq!(
         configs.len(),
         1,
-        "star-named stations must chain into a single section, got {configs:?}"
+        "star-named stations must chain into a single line, got {configs:?}"
     );
 }
 
@@ -557,7 +557,7 @@ fn comment_stripped_from_vector() {
 // ----- conversion: chains, closures -----------------------------------
 
 #[test]
-fn branch_splits_into_sections_with_closure() {
+fn branch_splits_into_lines_with_closure() {
     // A-B-C linear, then a branch D-B (shares B) plus a loop back C-A.
     let srv = "#UNITS meters order=DAV\n\
                A B 10 90 0\n\
@@ -565,11 +565,11 @@ fn branch_splits_into_sections_with_closure() {
                D B 10 45 0\n\
                C A 14 200 0\n";
     let (configs, closures, _w) = convert_one(parse_srv(srv));
-    // Three chains: section 0 = [A,B,C], section 1 = [D,B], section 2 = [C,A].
+    // Three chains: line 0 = [A,B,C], line 1 = [D,B], line 2 = [C,A].
     assert_eq!(configs.len(), 3);
-    // B (section 1) and C (section 2) are the spanning-tree merge edges, so they
+    // B (line 1) and C (line 2) are the spanning-tree merge edges, so they
     // do NOT close. The only non-tree shared station is A: it is canonical in
-    // section 0 (index 0) and revisited as the tail of section 2 (index 1), so
+    // line 0 (index 0) and revisited as the tail of line 2 (index 1), so
     // exactly ONE closure ties (2,1) back to (0,0).
     assert_eq!(
         closures.len(),
@@ -579,9 +579,9 @@ fn branch_splits_into_sections_with_closure() {
     let c = &closures[0];
     assert_eq!(
         (
-            c.from_section_index,
+            c.from_line_index,
             c.from_station_index,
-            c.to_section_index,
+            c.to_line_index,
             c.to_station_index
         ),
         (2, 1, 0, 0),
@@ -737,7 +737,7 @@ fn convert_survey_with(
     survey: ParsedSurvey,
     georef: Option<WallsRef>,
     opts: &WallsImportOptions,
-) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
+) -> (Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>) {
     let parsed = ParsedWalls {
         project_name: "T".to_string(),
         book_count: 0,
@@ -752,7 +752,7 @@ fn convert_survey_with(
 
 #[test]
 fn selected_surveys_filters_conversion() {
-    // Two surveys with disjoint station namespaces -> separate sections.
+    // Two surveys with disjoint station namespaces -> separate lines.
     let s0 = parse_srv("#UNITS meters order=DAV\nA0 A1 10 90 0\nA1 A2 10 90 0\n");
     let s1 = parse_srv("#UNITS meters order=DAV\nB0 B1 10 90 0\nB1 B2 10 90 0\n");
     let parsed = ParsedWalls {
@@ -781,7 +781,7 @@ fn selected_surveys_filters_conversion() {
     let only1 = conv(Some([1].into_iter().collect()));
     let none = conv(Some(HashSet::new()));
 
-    assert!(!all.is_empty(), "all surveys produce sections");
+    assert!(!all.is_empty(), "all surveys produce lines");
     assert!(!only0.is_empty() && !only1.is_empty());
     // Selecting each survey alone partitions the full output exactly.
     assert_eq!(
@@ -893,7 +893,7 @@ fn units_tolerates_stray_spaces_around_equals() {
 fn zero_length_tie_clamped_not_rejected() {
     // `A B 0 0 0` is a coincident-station tie; the model forbids 0 length, so
     // the importer must emit a positive (negligible) length instead of a
-    // zero-length shot that execute_import_sections would reject outright.
+    // zero-length shot that execute_import_lines would reject outright.
     let srv = "#UNITS meters order=DAV\nA B 0 0 0\nB C 10 90 0\n";
     let (configs, _closures, warnings) = convert_one(parse_srv(srv));
     assert!(
@@ -937,7 +937,7 @@ fn parse_srv_geo(content: &str, georef: Option<WallsRef>, derive_decl: bool) -> 
 }
 
 #[test]
-fn splays_do_not_merge_unrelated_sections() {
+fn splays_do_not_merge_unrelated_lines() {
     // Two geometrically unrelated sub-surveys, each with an anonymous wall
     // splay. Their "-" endpoints must NOT collapse to one shared station.
     let srv = "#UNITS meters order=DAV\n\
@@ -1010,7 +1010,7 @@ fn auto_declination_gated_on_derive_flag() {
     )
     .0;
     // #438: the READING is untouched - what the derive flag changes is the
-    // correction recorded on the section, not the number in the shot.
+    // correction recorded on the line, not the number in the shot.
     assert!(
         approx(on[0].shots[0].azimuth_in, 90.0),
         "the measured azimuth must survive the import verbatim, got {}",
@@ -1021,7 +1021,7 @@ fn auto_declination_gated_on_derive_flag() {
         .expect("the importer records a reference");
     assert!(
         reference.applied_correction().abs() > 1.0,
-        "derive flag -> IGRF declination lands on the section, got {}",
+        "derive flag -> IGRF declination lands on the line, got {}",
         reference.applied_correction()
     );
     assert!(
@@ -1073,8 +1073,8 @@ fn convergence_from_a_survey_georef_is_reported_not_applied() {
 }
 
 /// #438: a chain whose vectors declare DIFFERENT declinations cannot be
-/// expressed by one section-level constant, so each shot's own correction is
-/// folded into its readings and the section is declared true north.
+/// expressed by one line-level constant, so each shot's own correction is
+/// folded into its readings and the line is declared true north.
 ///
 /// The label is only honest because the per-vector correction reaches TRUE
 /// north (the grid convergence is never folded in): with a `Grid=` in play the
@@ -1115,7 +1115,7 @@ fn a_mid_survey_declination_change_bakes_true_north_bearings_under_a_grid() {
 }
 
 /// A chain whose vectors agree on the NUMBER but disagree on where it came from
-/// must not attribute the whole section to whichever vector happened to be
+/// must not attribute the whole line to whichever vector happened to be
 /// first: the provenance is what the UI explains and what a policy change may
 /// recompute, so an inconsistent one is `Unknown`.
 #[test]
@@ -1138,12 +1138,12 @@ fn a_chain_whose_vectors_disagree_about_provenance_claims_none() {
         .expect("the importer records a reference");
     assert!(
         reference.is_identity(),
-        "the corrections agree at 0, so the section is still uniform"
+        "the corrections agree at 0, so the line is still uniform"
     );
     assert_eq!(
         reference.source,
         crate::models::CorrectionSource::Unknown,
-        "disagreeing provenance cannot be claimed as one section's"
+        "disagreeing provenance cannot be claimed as one line's"
     );
 }
 
@@ -1435,7 +1435,7 @@ fn multiple_fixes_in_one_component_yield_single_datum() {
 }
 
 #[test]
-fn cross_section_loop_still_emits_closure() {
+fn cross_line_loop_still_emits_closure() {
     // A-B-C, D-C, D-A: a loop spanning three legs must be closed.
     let srv = "#UNITS meters order=DAV\n\
                A B 10 0 0\n\
@@ -1443,11 +1443,11 @@ fn cross_section_loop_still_emits_closure() {
                D C 10 180 0\n\
                D A 10 270 0\n";
     let (configs, closures, _w) = convert_one(parse_srv(srv));
-    // Three chains: section 0 = [A,B,C], section 1 = [D,C], section 2 = [D,A].
+    // Three chains: line 0 = [A,B,C], line 1 = [D,C], line 2 = [D,A].
     assert_eq!(configs.len(), 3);
-    // C (section 1) and A (section 2) are the spanning-tree merge edges and do
-    // NOT close; the one non-tree shared station is D, canonical in section 1
-    // (index 0) and revisited as the head of section 2 (index 0), so exactly ONE
+    // C (line 1) and A (line 2) are the spanning-tree merge edges and do
+    // NOT close; the one non-tree shared station is D, canonical in line 1
+    // (index 0) and revisited as the head of line 2 (index 0), so exactly ONE
     // closure ties (2,0) back to (1,0).
     assert_eq!(
         closures.len(),
@@ -1457,9 +1457,9 @@ fn cross_section_loop_still_emits_closure() {
     let c = &closures[0];
     assert_eq!(
         (
-            c.from_section_index,
+            c.from_line_index,
             c.from_station_index,
-            c.to_section_index,
+            c.to_line_index,
             c.to_station_index
         ),
         (2, 0, 1, 0),
@@ -1616,7 +1616,7 @@ fn real_qr_srv_dir() {
         let (configs, closures, warnings) =
             convert_walls_to_import_configs(&parsed, &WallsImportOptions::default()).unwrap();
         println!(
-            "{}: {} shots -> {} sections, {} closures, {} warnings",
+            "{}: {} shots -> {} lines, {} closures, {} warnings",
             p.file_name().unwrap().to_string_lossy(),
             shots,
             configs.len(),
@@ -1662,7 +1662,7 @@ fn corpus_sweep() {
     let (mut wpj_ok, mut srv_ok) = (0usize, 0usize);
     let (
         mut total_shots,
-        mut total_sections,
+        mut total_lines,
         mut total_closures,
         mut total_datums,
         mut total_warnings,
@@ -1689,14 +1689,14 @@ fn corpus_sweep() {
             Ok::<_, anyhow::Error>((shots, configs.len(), closures.len(), warnings.len(), datums))
         });
         match outcome {
-            Ok(Ok((shots, sections, closures, warnings, datums))) => {
+            Ok(Ok((shots, lines, closures, warnings, datums))) => {
                 if is_wpj {
                     wpj_ok += 1;
                 } else {
                     srv_ok += 1;
                 }
                 total_shots += shots;
-                total_sections += sections;
+                total_lines += lines;
                 total_closures += closures;
                 total_datums += datums;
                 total_warnings += warnings;
@@ -1716,7 +1716,7 @@ fn corpus_sweep() {
         panicked.len()
     );
     println!(
-        "  totals: {total_shots} shots, {total_sections} sections, {total_closures} closures, \
+        "  totals: {total_shots} shots, {total_lines} lines, {total_closures} closures, \
          {total_datums} zero-datums, {total_warnings} warnings"
     );
     by_shots.sort_by(|a, b| b.0.cmp(&a.0));
@@ -2116,7 +2116,7 @@ fn rect_vector_honors_units_grid() {
 }
 
 #[test]
-fn lrud_to_shifts_cross_section_forward() {
+fn lrud_to_shifts_cross_line_forward() {
     // `#Units LRUD=To`: the LRUD on leg A->B is measured at B, so it must ride
     // on the next shot (B->C), not on A->B.
     let srv = "#UNITS meters order=DAV LRUD=To\n\
@@ -2367,16 +2367,16 @@ fn quoted_units_value_emits_no_spurious_warning() {
 #[test]
 fn contiguous_self_loop_emits_closure() {
     // A->B->C->A in one survey is a single chain whose revisited station must
-    // get an intra-section loop closure (regression: it was dropped).
+    // get an intra-line loop closure (regression: it was dropped).
     let srv = "#UNITS meters order=DAV\nA B 10 90 0\nB C 10 0 0\nC A 14 200 0\n";
     let (_configs, closures, _w) = convert_one(parse_srv(srv));
     assert!(
         closures
             .iter()
-            .any(|c| c.from_section_index == c.to_section_index
+            .any(|c| c.from_line_index == c.to_line_index
                 && c.from_station_index == 3
                 && c.to_station_index == 0),
-        "an intra-chain loop must emit a same-section closure, got {closures:?}"
+        "an intra-chain loop must emit a same-line closure, got {closures:?}"
     );
 }
 
@@ -2450,8 +2450,8 @@ fn two_digit_leap_day_stays_2000() {
 fn parse_ref_rejects_infinite_field() {
     // An over-large numeric parses to +inf; it must be rejected, not turned
     // into NaN azimuths downstream.
-    let line = "0 0 16 1e400 0 0 20 25 42 87 18 44";
-    assert!(parse_ref(line).is_err());
+    let ref_text = "0 0 16 1e400 0 0 20 25 42 87 18 44";
+    assert!(parse_ref(ref_text).is_err());
 }
 
 // ----- byte-order marks -----------------------------------------------

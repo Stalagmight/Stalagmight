@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LoopClosure, SectionData, SectionId, SectionIdentity, ShotData, ShotId,
+    GpsCoordinates, LoopClosure, LineData, LineId, LineIdentity, ShotData, ShotId,
     StationRef, SurveyCredit,
 };
 
@@ -19,7 +19,7 @@ mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 
-/// Serialize a section-offset map in KEY order rather than in `HashMap`
+/// Serialize a line-offset map in KEY order rather than in `HashMap`
 /// iteration order.
 ///
 /// These maps ride inside the undo/redo payloads, which are persisted as
@@ -30,8 +30,8 @@ pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 /// next. That is what made the save/load fixpoint check RE-ROLL rather than
 /// settle (issue #413, finding 23; same class as finding 21). The map type is
 /// unchanged - only what it writes is pinned.
-fn ordered_section_offsets<S>(
-    map: &HashMap<SectionId, Option<(f64, f64)>>,
+fn ordered_line_offsets<S>(
+    map: &HashMap<LineId, Option<(f64, f64)>>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -142,7 +142,7 @@ pub struct UndoEntry {
 /// survives a save (see [`UndoData::ShotCredits`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShotCreditChange {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     /// The shot's persistent uuid; the executor mints one for a shot that had
     /// none, so every recorded change is addressable after a reload.
     pub shot_uuid: String,
@@ -163,11 +163,11 @@ pub enum UndoData {
 
     /// Previous values for an update operation (JSON serialized)
     PreviousValues {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: Option<ShotId>,
         /// The target shot's persistent UUID - the identity the restore path
         /// addresses it by. `shot_id` is an IN-SESSION id: the loader
-        /// renumbers every shot to `section_id * FEATURE_ID_STRIDE +
+        /// renumbers every shot to `line_id * FEATURE_ID_STRIDE +
         /// sequence_order` (`persistence/sqlite/read.rs`) while this entry
         /// reloads as opaque JSON, so after a save/reopen the id names
         /// whichever shot now occupies that slot (issue #413, findings 8, 12
@@ -179,10 +179,10 @@ pub enum UndoData {
         /// carries it whenever the target shot has a uuid.
         #[serde(default)]
         shot_uuid: Option<String>,
-        /// JSON serialized previous values (ShotUpdates or SectionUpdates)
+        /// JSON serialized previous values (ShotUpdates or LineUpdates)
         values_json: String,
-        /// The `section_offsets` entries the edited section's geometry epilogue
-        /// can reach, as they stood BEFORE the command - `None` for a section that
+        /// The `line_offsets` entries the edited line's geometry epilogue
+        /// can reach, as they stood BEFORE the command - `None` for a line that
         /// had no key.
         ///
         /// The undo of this variant RE-EXECUTES `update_shot` with the previous
@@ -190,69 +190,69 @@ pub enum UndoData {
         /// offsets. An inverse RESTORES; it does not re-derive (#413, finding 27).
         ///
         /// PRESENCE is no longer the reason: a dust-zero entry is unrepresentable
-        /// now (the invariant on `Project::write_section_offset`), so the
+        /// now (the invariant on `Project::write_line_offset`), so the
         /// re-derivation cannot drop a key the pre-edit state held. The VALUE
-        /// still is. The realign recomputes from section-local coordinates and is
+        /// still is. The realign recomputes from line-local coordinates and is
         /// self-correcting, but the sibling arm below genuinely accumulates, and
         /// keeping one rule for both is what makes either readable: an inverse
         /// hands back what it recorded.
         ///
-        /// Only the RIGID CONNECTED SET of the edited section
-        /// (`Project::capture_rigid_connected_section_offsets` - merges plus
+        /// Only the RIGID CONNECTED SET of the edited line
+        /// (`Project::capture_rigid_connected_line_offsets` - merges plus
         /// aligned loop closures), not the whole map: that is exactly what the
         /// geometry epilogue can displace, and this entry is written on every
         /// keystroke-scale shot edit.
         ///
         /// FORMAT EVOLUTION (additive, no schema bump): empty in entries written
         /// before this field existed and in entries for a command whose undo
-        /// re-derives nothing (a metadata-only shot edit, a section-metadata
+        /// re-derives nothing (a metadata-only shot edit, a line-metadata
         /// edit); an empty map restores nothing, which is the pre-fix behaviour.
         #[serde(default)]
         #[serde(skip_serializing_if = "HashMap::is_empty")]
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        #[serde(serialize_with = "ordered_line_offsets")]
+        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
     },
 
-    /// Full section snapshot for restoring deleted sections
-    SectionSnapshot {
-        section_id: SectionId,
-        /// Full section data including all shots
-        section_data: SectionData,
+    /// Full line snapshot for restoring deleted lines
+    LineSnapshot {
+        line_id: LineId,
+        /// Full line data including all shots
+        line_data: LineData,
     },
 
-    /// Snapshot of a newly created section (for CreateSection undo/redo ID preservation)
-    /// Distinct from SectionSnapshot (used by DeleteSection) to avoid ambiguity in redo logic.
-    CreatedSectionSnapshot {
-        section_id: SectionId,
-        /// Full section data including all shots
-        section_data: SectionData,
-        /// What `section_data` cannot carry: the shots' persistent uuids, the
+    /// Snapshot of a newly created line (for CreateLine undo/redo ID preservation)
+    /// Distinct from LineSnapshot (used by DeleteLine) to avoid ambiguity in redo logic.
+    CreatedLineSnapshot {
+        line_id: LineId,
+        /// Full line data including all shots
+        line_data: LineData,
+        /// What `line_data` cannot carry: the shots' persistent uuids, the
         /// reverse parity and the least-squares gauge pair. Without it the redo
-        /// rebuilds through `Section::new` and mints a fresh uuid per shot -
-        /// dangling every `StationKey::AfterShot` anchor onto the section, the
+        /// rebuilds through `Line::new` and mints a fresh uuid per shot -
+        /// dangling every `StationKey::AfterShot` anchor onto the line, the
         /// same way a fresh uuid would in `CreatedShotSnapshot` (#413, finding
         /// 1).
         ///
         /// REFRESHED BY THE UNDO, not only recorded at push: the gauge pair is
         /// a save-time heal (`capture_missing_gauge_anchors`) with no undo entry
-        /// of its own, so a section created, saved and then undone carries
+        /// of its own, so a line created, saved and then undone carries
         /// anchors that did not exist when this entry was pushed. The undo
-        /// re-reads the live section immediately before deleting it, so the redo
+        /// re-reads the live line immediately before deleting it, so the redo
         /// puts back what the undo destroyed.
         ///
         /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
         /// written before this field existed, where the default (no uuids,
         /// parity false, no anchors) reproduces the pre-fix mint.
         #[serde(default)]
-        identity: SectionIdentity,
+        identity: LineIdentity,
     },
 
     /// Shot snapshot for restoring deleted shots
     ShotSnapshot {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         shot_data: ShotData,
-        /// Position in the section's shot list (for re-insertion)
+        /// Position in the line's shot list (for re-insertion)
         position: usize,
         /// The deleted shot's persistent UUID, so undo restores the same
         /// identity (station cross-references anchor on it via
@@ -265,10 +265,10 @@ pub enum UndoData {
     /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
     /// Distinct from ShotSnapshot (used by DeleteShot) to avoid ambiguity in redo logic.
     CreatedShotSnapshot {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         shot_data: ShotData,
-        /// Position in the section's shot list (for re-insertion at correct position)
+        /// Position in the line's shot list (for re-insertion at correct position)
         position: usize,
         /// Station index from which to shift refs when restoring (redo).
         /// For insert_before: same as position. For insert_after/append: position + 1.
@@ -303,15 +303,15 @@ pub enum UndoData {
         /// (redo then mints a fresh UUID, the pre-fix behavior).
         #[serde(default)]
         uuid: Option<String>,
-        /// The `section_offsets` entries the insert's cascade can reach, as they
-        /// stood BEFORE it - `None` for a section that had no key. The RIGID
+        /// The `line_offsets` entries the insert's cascade can reach, as they
+        /// stood BEFORE it - `None` for a line that had no key. The RIGID
         /// CONNECTED SET, which is what `Project::cascade_connection_offsets`
         /// walks (merges plus aligned loop closures).
         ///
         /// Finding 27's second arm, and the one where the re-derivation genuinely
         /// ACCUMULATES rather than recomputing. Undoing a `CreateShot` REMOVES the
-        /// shot, and a mid-section remove pays the section's offset back by the
-        /// segment it took out (`Project::remove_shot*` -> `adjust_section_offset`),
+        /// shot, and a mid-line remove pays the line's offset back by the
+        /// segment it took out (`Project::remove_shot*` -> `adjust_line_offset`),
         /// so the undo computes `(v + d) - d` - which is not `v` in IEEE. One
         /// cycle of that drift is below every oracle's tolerance; it is the shape
         /// the horizon mode watches accumulate (finding 19). Handing the recorded
@@ -325,12 +325,12 @@ pub enum UndoData {
         /// pre-fix behaviour.
         #[serde(default)]
         #[serde(skip_serializing_if = "HashMap::is_empty")]
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
-        /// The legacy surveyor/date the section held when this shot was the
-        /// first one appended into it (`Section::legacy_surveyor`): the shot
-        /// took it as its credit and the section let it go. The undo, which
-        /// leaves the section shot-less again, gives it back.
+        #[serde(serialize_with = "ordered_line_offsets")]
+        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
+        /// The legacy surveyor/date the line held when this shot was the
+        /// first one appended into it (`Line::legacy_surveyor`): the shot
+        /// took it as its credit and the line let it go. The undo, which
+        /// leaves the line shot-less again, gives it back.
         ///
         /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
         /// written before it existed and for every other insert.
@@ -345,10 +345,10 @@ pub enum UndoData {
         /// Closures removed during unmerge (for restoring on undo)
         #[serde(default)]
         removed_closures: Vec<LoopClosure>,
-        /// Section offsets before the merge (for restoring positions on undo)
+        /// Line offsets before the merge (for restoring positions on undo)
         #[serde(default)]
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        #[serde(serialize_with = "ordered_line_offsets")]
+        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
     },
 
     /// Unmerge info for re-merging stations on undo (opposite of MergeInfo)
@@ -380,7 +380,7 @@ pub enum UndoData {
         position: Option<usize>,
     },
 
-    /// Zero datum info for restoring previous GPS and section offsets
+    /// Zero datum info for restoring previous GPS and line offsets
     ZeroDatumInfo {
         station_ref: StationRef,
         /// Previous GPS coordinates, None if there was no previous datum
@@ -408,23 +408,23 @@ pub enum UndoData {
         /// datum; both keep the push.
         #[serde(default)]
         position: Option<usize>,
-        /// Previous section offsets for affected sections
+        /// Previous line offsets for affected lines
         /// - None value means the key didn't exist (should be removed on undo)
         /// - Some value means the offset should be restored to that value
         #[serde(default)]
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        #[serde(serialize_with = "ordered_line_offsets")]
+        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
     },
 
-    /// Per-section previous offsets for segment moves (captured at execution time)
-    /// Unlike InverseCommand, this stores the exact set of affected sections and their
+    /// Per-line previous offsets for segment moves (captured at execution time)
+    /// Unlike InverseCommand, this stores the exact set of affected lines and their
     /// previous offsets so that undo/redo is correct even if the connectivity graph changes.
     SegmentMoveInfo {
-        /// Section IDs that were moved (captured at execution time)
-        affected_sections: Vec<SectionId>,
-        /// Previous offsets for each affected section (None = no offset existed)
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        /// Line IDs that were moved (captured at execution time)
+        affected_lines: Vec<LineId>,
+        /// Previous offsets for each affected line (None = no offset existed)
+        #[serde(serialize_with = "ordered_line_offsets")]
+        previous_offsets: HashMap<LineId, Option<(f64, f64)>>,
         /// The offset that was applied (for redo)
         offset: (f64, f64),
     },
@@ -440,36 +440,36 @@ pub enum UndoData {
         prev_shot_after: Option<(ShotId, ShotData)>,
         /// Previous station offset (None = no offset existed)
         prev_offset: Option<(f64, f64, f64)>,
-        /// Previous section offset (None = no offset existed)
+        /// Previous line offset (None = no offset existed)
         #[serde(default)]
-        prev_section_offset: Option<(f64, f64)>,
+        prev_line_offset: Option<(f64, f64)>,
     },
 
     /// Full project snapshot for batch operations (JSON serialized)
     ProjectSnapshot(String),
 
     /// Before and after project snapshots for operations that can't be re-executed
-    /// (e.g., batch operations that create sections with dynamic IDs)
+    /// (e.g., batch operations that create lines with dynamic IDs)
     /// - before: Snapshot before the operation (used for undo)
     /// - after: Snapshot after the operation (used for redo)
     ProjectSnapshotPair { before: String, after: String },
 
     /// Per-shot survey credit before and after an `EditShotCredit`, or an
-    /// `UpdateSectionMetadata` that set the legacy surveyor/date on every shot.
+    /// `UpdateLineMetadata` that set the legacy surveyor/date on every shot.
     ///
     /// Undo writes `before` back onto each shot, resolved by uuid; redo writes
     /// `after` (an `EditShotCredit`) or re-executes the command (an
-    /// `UpdateSectionMetadata`, which addresses its section by its stable id).
+    /// `UpdateLineMetadata`, which addresses its line by its stable id).
     /// A shot that no longer resolves is skipped with a warning rather than
     /// failing the step: a credit edit is metadata, and a failed undo would wedge
     /// every entry beneath it.
     ShotCredits {
         changes: Vec<ShotCreditChange>,
-        /// `UpdateSectionMetadata` only: the section and its OTHER previous
-        /// values (a `SectionUpdates` JSON with no surveyor/date), put back by
+        /// `UpdateLineMetadata` only: the line and its OTHER previous
+        /// values (a `LineUpdates` JSON with no surveyor/date), put back by
         /// the undo exactly as `PreviousValues` does.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        section_values: Option<(SectionId, String)>,
+        line_values: Option<(LineId, String)>,
     },
 
     /// What one "Add .stalx to current project" brought (#674): undo removes
@@ -483,7 +483,7 @@ pub enum UndoData {
 
 impl UndoData {
     /// The shot this entry's restore path addresses, when it addresses one:
-    /// `(section, the target's uuid if the entry records it, the in-session id
+    /// `(line, the target's uuid if the entry records it, the in-session id
     /// it was recorded with)`.
     ///
     /// The uuid is the address to use; the id is only the legacy fallback for
@@ -491,27 +491,27 @@ impl UndoData {
     /// 12, 13 and 16). `ShotSnapshot` is deliberately not here: its restore
     /// re-creates a shot that must be ABSENT, so "does the target resolve" is
     /// not a question about it.
-    pub fn shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
+    pub fn shot_target(&self) -> Option<(LineId, Option<&str>, ShotId)> {
         match self {
             UndoData::CreatedShotSnapshot {
-                section_id,
+                line_id,
                 shot_id,
                 uuid,
                 ..
-            } => Some((*section_id, uuid.as_deref(), *shot_id)),
+            } => Some((*line_id, uuid.as_deref(), *shot_id)),
             UndoData::PreviousValues {
-                section_id,
+                line_id,
                 shot_id: Some(shot_id),
                 shot_uuid,
                 ..
-            } => Some((*section_id, shot_uuid.as_deref(), *shot_id)),
+            } => Some((*line_id, shot_uuid.as_deref(), *shot_id)),
             // Legacy only - `SetShotKind` now records `PreviousValues`, which
             // can carry a uuid. A persisted one has nothing but the id.
             UndoData::InverseCommand(Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 ..
-            }) => Some((*section_id, None, *shot_id)),
+            }) => Some((*line_id, None, *shot_id)),
             _ => None,
         }
     }
@@ -531,7 +531,7 @@ impl UndoData {
     /// refuses precisely when the uuid DOES resolve (that would duplicate a shot
     /// identity, #413 finding 16). Filtering the redo stack by resolvability
     /// would therefore drop every persisted create-a-shot redo there is.
-    pub fn redo_shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
+    pub fn redo_shot_target(&self) -> Option<(LineId, Option<&str>, ShotId)> {
         if matches!(self, UndoData::CreatedShotSnapshot { .. }) {
             return None;
         }
@@ -541,7 +541,7 @@ impl UndoData {
     /// Does undoing this entry restore recorded state WHOLESALE?
     ///
     /// Such an entry is a wall for any reasoning about which shots exist: it
-    /// puts back a whole project, section or shot recorded in a different id
+    /// puts back a whole project, line or shot recorded in a different id
     /// space, so nothing below it can be judged against the project as loaded
     /// (issue #413, finding 12's write-up calls a `ProjectSnapshotPair` "a
     /// wall" for exactly this reason).
@@ -550,7 +550,7 @@ impl UndoData {
             self,
             UndoData::ProjectSnapshot(_)
                 | UndoData::ProjectSnapshotPair { .. }
-                | UndoData::SectionSnapshot { .. }
+                | UndoData::LineSnapshot { .. }
                 | UndoData::ShotSnapshot { .. }
         )
     }
@@ -560,8 +560,8 @@ impl UndoData {
         match self {
             UndoData::InverseCommand(_) => "InverseCommand",
             UndoData::PreviousValues { .. } => "PreviousValues",
-            UndoData::SectionSnapshot { .. } => "SectionSnapshot",
-            UndoData::CreatedSectionSnapshot { .. } => "CreatedSectionSnapshot",
+            UndoData::LineSnapshot { .. } => "LineSnapshot",
+            UndoData::CreatedLineSnapshot { .. } => "CreatedLineSnapshot",
             UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::CreatedShotSnapshot { .. } => "CreatedShotSnapshot",
             UndoData::MergeInfo { .. } => "MergeInfo",
@@ -927,8 +927,8 @@ mod tests {
     use crate::models::ShotData;
 
     /// Helper to create a test command
-    fn test_create_section_command(name: &str) -> Command {
-        Command::CreateSection {
+    fn test_create_line_command(name: &str) -> Command {
+        Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -938,14 +938,14 @@ mod tests {
         }
     }
 
-    /// Helper to create a test delete section command
-    fn test_delete_section_command(section_id: SectionId) -> Command {
-        Command::DeleteSection { section_id }
+    /// Helper to create a test delete line command
+    fn test_delete_line_command(line_id: LineId) -> Command {
+        Command::DeleteLine { line_id }
     }
 
-    /// Helper to create test section data
-    fn test_section_data(name: &str) -> SectionData {
-        SectionData {
+    /// Helper to create test line data
+    fn test_line_data(name: &str) -> LineData {
+        LineData {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -984,7 +984,7 @@ mod tests {
     #[test]
     fn test_push_enables_undo() {
         let mut stack = UndoStack::new();
-        let cmd = test_create_section_command("Test");
+        let cmd = test_create_line_command("Test");
 
         stack.push_with_data(cmd, UndoData::None);
 
@@ -996,9 +996,9 @@ mod tests {
     fn test_push_multiple_commands() {
         let mut stack = UndoStack::new();
 
-        stack.push_with_data(test_create_section_command("First"), UndoData::None);
-        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
-        stack.push_with_data(test_create_section_command("Third"), UndoData::None);
+        stack.push_with_data(test_create_line_command("First"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Second"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Third"), UndoData::None);
 
         assert_eq!(stack.len(), 3);
         assert!(stack.can_undo());
@@ -1008,14 +1008,14 @@ mod tests {
     fn test_pop_undo_returns_last_command() {
         let mut stack = UndoStack::new();
 
-        stack.push_with_data(test_create_section_command("First"), UndoData::None);
-        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
+        stack.push_with_data(test_create_line_command("First"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Second"), UndoData::None);
 
         let entry = stack.pop_undo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
+        if let Command::CreateLine { name, .. } = entry.command {
             assert_eq!(name, Some("Second".to_string()));
         } else {
-            panic!("Expected CreateSection command");
+            panic!("Expected CreateLine command");
         }
 
         assert_eq!(stack.len(), 1);
@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn test_peek_undo_does_not_modify_stack() {
         let mut stack = UndoStack::new();
-        let cmd = test_create_section_command("Test");
+        let cmd = test_create_line_command("Test");
 
         stack.push_with_data(cmd, UndoData::None);
 
@@ -1043,11 +1043,11 @@ mod tests {
     fn test_clear_removes_all_entries() {
         let mut stack = UndoStack::new();
 
-        stack.push_with_data(test_create_section_command("First"), UndoData::None);
-        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
+        stack.push_with_data(test_create_line_command("First"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Second"), UndoData::None);
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Redo"),
+            command: test_create_line_command("Redo"),
             undo_data: UndoData::None,
             timestamp: None,
         });
@@ -1067,7 +1067,7 @@ mod tests {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Test"),
+            command: test_create_line_command("Test"),
             undo_data: UndoData::None,
             timestamp: None,
         };
@@ -1084,22 +1084,22 @@ mod tests {
 
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("First"),
+            command: test_create_line_command("First"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Second"),
+            command: test_create_line_command("Second"),
             undo_data: UndoData::None,
             timestamp: None,
         });
 
         let entry = stack.pop_redo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
+        if let Command::CreateLine { name, .. } = entry.command {
             assert_eq!(name, Some("Second".to_string()));
         } else {
-            panic!("Expected CreateSection command");
+            panic!("Expected CreateLine command");
         }
 
         assert_eq!(stack.redo_len(), 1);
@@ -1116,7 +1116,7 @@ mod tests {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Test"),
+            command: test_create_line_command("Test"),
             undo_data: UndoData::None,
             timestamp: None,
         };
@@ -1135,13 +1135,13 @@ mod tests {
         // Add some redo entries
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Redo1"),
+            command: test_create_line_command("Redo1"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Redo2"),
+            command: test_create_line_command("Redo2"),
             undo_data: UndoData::None,
             timestamp: None,
         });
@@ -1149,7 +1149,7 @@ mod tests {
         assert!(stack.can_redo());
 
         // New command should clear redo stack
-        stack.push_with_data(test_create_section_command("New"), UndoData::None);
+        stack.push_with_data(test_create_line_command("New"), UndoData::None);
 
         assert!(!stack.can_redo());
         assert_eq!(stack.redo_len(), 0);
@@ -1162,7 +1162,7 @@ mod tests {
         // Add redo entries
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Redo"),
+            command: test_create_line_command("Redo"),
             undo_data: UndoData::None,
             timestamp: None,
         });
@@ -1170,7 +1170,7 @@ mod tests {
         // push_undo is used for redo operations and should NOT clear redo
         stack.push_undo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Restored"),
+            command: test_create_line_command("Restored"),
             undo_data: UndoData::None,
             timestamp: None,
         });
@@ -1186,7 +1186,7 @@ mod tests {
 
         for i in 0..5 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {i}")),
+                test_create_line_command(&format!("Line {i}")),
                 UndoData::None,
             );
         }
@@ -1195,10 +1195,10 @@ mod tests {
 
         // The oldest entries should be removed
         let entry = stack.pop_undo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
-            assert_eq!(name, Some("Section 4".to_string()));
+        if let Command::CreateLine { name, .. } = entry.command {
+            assert_eq!(name, Some("Line 4".to_string()));
         } else {
-            panic!("Expected Section 4");
+            panic!("Expected Line 4");
         }
     }
 
@@ -1208,7 +1208,7 @@ mod tests {
 
         for i in 0..10 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {i}")),
+                test_create_line_command(&format!("Line {i}")),
                 UndoData::None,
             );
         }
@@ -1223,17 +1223,17 @@ mod tests {
 
         // Verify we have the most recent entries
         let entry = stack.pop_undo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
-            assert_eq!(name, Some("Section 9".to_string()));
+        if let Command::CreateLine { name, .. } = entry.command {
+            assert_eq!(name, Some("Line 9".to_string()));
         } else {
-            panic!("Expected Section 9");
+            panic!("Expected Line 9");
         }
     }
 
     #[test]
     fn test_set_history_limit_zero() {
         let mut stack = UndoStack::new();
-        stack.push_with_data(test_create_section_command("Test"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Test"), UndoData::None);
 
         stack.set_history_limit(0);
 
@@ -1249,7 +1249,7 @@ mod tests {
         for i in 0..10 {
             stack.push_redo(UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command(&format!("Redo {i}")),
+                command: test_create_line_command(&format!("Redo {i}")),
                 undo_data: UndoData::None,
                 timestamp: None,
             });
@@ -1269,18 +1269,18 @@ mod tests {
     fn test_undo_data_inverse_command() {
         let mut stack = UndoStack::new();
 
-        let inverse = Command::DeleteSection { section_id: 42 };
+        let inverse = Command::DeleteLine { line_id: 42 };
         stack.push_with_data(
-            test_create_section_command("Test"),
+            test_create_line_command("Test"),
             UndoData::InverseCommand(inverse),
         );
 
         let data = stack.peek_undo_data().unwrap();
         if let UndoData::InverseCommand(cmd) = data {
-            if let Command::DeleteSection { section_id } = cmd {
-                assert_eq!(*section_id, 42);
+            if let Command::DeleteLine { line_id } = cmd {
+                assert_eq!(*line_id, 42);
             } else {
-                panic!("Expected DeleteSection");
+                panic!("Expected DeleteLine");
             }
         } else {
             panic!("Expected InverseCommand");
@@ -1288,28 +1288,28 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_data_section_snapshot() {
+    fn test_undo_data_line_snapshot() {
         let mut stack = UndoStack::new();
 
-        let section_data = test_section_data("Snapshot Test");
+        let line_data = test_line_data("Snapshot Test");
         stack.push_with_data(
-            test_delete_section_command(5),
-            UndoData::SectionSnapshot {
-                section_id: 5,
-                section_data,
+            test_delete_line_command(5),
+            UndoData::LineSnapshot {
+                line_id: 5,
+                line_data,
             },
         );
 
         let data = stack.peek_undo_data().unwrap();
-        if let UndoData::SectionSnapshot {
-            section_id,
-            section_data: stored_data,
+        if let UndoData::LineSnapshot {
+            line_id,
+            line_data: stored_data,
         } = data
         {
-            assert_eq!(*section_id, 5);
+            assert_eq!(*line_id, 5);
             assert_eq!(stored_data.name, Some("Snapshot Test".to_string()));
         } else {
-            panic!("Expected SectionSnapshot");
+            panic!("Expected LineSnapshot");
         }
     }
 
@@ -1328,11 +1328,11 @@ mod tests {
 
         stack.push_with_data(
             Command::DeleteShot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 100,
             },
             UndoData::ShotSnapshot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 100,
                 shot_data,
                 position: 2,
@@ -1342,14 +1342,14 @@ mod tests {
 
         let data = stack.peek_undo_data().unwrap();
         if let UndoData::ShotSnapshot {
-            section_id,
+            line_id,
             shot_id,
             shot_data: stored_data,
             position,
             ..
         } = data
         {
-            assert_eq!(*section_id, 1);
+            assert_eq!(*line_id, 1);
             assert_eq!(*shot_id, 100);
             assert_eq!(stored_data.length, 10.0);
             assert_eq!(*position, 2);
@@ -1383,9 +1383,9 @@ mod tests {
             ..
         } = data
         {
-            assert_eq!(station_a.section_id, 1);
+            assert_eq!(station_a.line_id, 1);
             assert_eq!(station_a.station_index, 0);
-            assert_eq!(station_b.section_id, 2);
+            assert_eq!(station_b.line_id, 2);
             assert_eq!(station_b.station_index, 3);
             assert!(removed_closures.is_empty());
         } else {
@@ -1426,7 +1426,7 @@ mod tests {
             ..
         } = data
         {
-            assert_eq!(station_ref.section_id, 1);
+            assert_eq!(station_ref.line_id, 1);
             let prev = previous_gps.as_ref().unwrap();
             assert_eq!(prev.latitude, 40.0);
             assert_eq!(previous_offsets.get(&1), Some(&Some((10.0, 20.0))));
@@ -1442,7 +1442,7 @@ mod tests {
     fn test_serialize_entry_basic() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Serialize Test"),
+            command: test_create_line_command("Serialize Test"),
             undo_data: UndoData::None,
             timestamp: None,
         };
@@ -1459,25 +1459,25 @@ mod tests {
     fn test_deserialize_entry_basic() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Deserialize Test"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(42)),
+            command: test_create_line_command("Deserialize Test"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(42)),
             timestamp: None,
         };
 
         let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry).unwrap();
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
 
-        if let Command::CreateSection { name, .. } = restored.command {
+        if let Command::CreateLine { name, .. } = restored.command {
             assert_eq!(name, Some("Deserialize Test".to_string()));
         } else {
-            panic!("Expected CreateSection");
+            panic!("Expected CreateLine");
         }
 
-        if let UndoData::InverseCommand(Command::DeleteSection { section_id }) = restored.undo_data
+        if let UndoData::InverseCommand(Command::DeleteLine { line_id }) = restored.undo_data
         {
-            assert_eq!(section_id, 42);
+            assert_eq!(line_id, 42);
         } else {
-            panic!("Expected InverseCommand with DeleteSection");
+            panic!("Expected InverseCommand with DeleteLine");
         }
     }
 
@@ -1491,13 +1491,13 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_entry_with_section_snapshot() {
+    fn test_serialize_entry_with_line_snapshot() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_delete_section_command(5),
-            undo_data: UndoData::SectionSnapshot {
-                section_id: 5,
-                section_data: test_section_data("Snapshot"),
+            command: test_delete_line_command(5),
+            undo_data: UndoData::LineSnapshot {
+                line_id: 5,
+                line_data: test_line_data("Snapshot"),
             },
             timestamp: None,
         };
@@ -1508,15 +1508,15 @@ mod tests {
         let (cmd_json, undo_json) = result.unwrap();
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
 
-        if let UndoData::SectionSnapshot {
-            section_id,
-            section_data,
+        if let UndoData::LineSnapshot {
+            line_id,
+            line_data,
         } = restored.undo_data
         {
-            assert_eq!(section_id, 5);
-            assert_eq!(section_data.name, Some("Snapshot".to_string()));
+            assert_eq!(line_id, 5);
+            assert_eq!(line_data.name, Some("Snapshot".to_string()));
         } else {
-            panic!("Expected SectionSnapshot");
+            panic!("Expected LineSnapshot");
         }
     }
 
@@ -1529,8 +1529,8 @@ mod tests {
             .map(|i| {
                 let entry = UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("Section {i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                    command: test_create_line_command(&format!("Line {i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(i as u32)),
                     timestamp: None,
                 };
                 UndoStack::serialize_entry(&entry).unwrap()
@@ -1545,10 +1545,10 @@ mod tests {
 
         // Verify entries loaded in correct order
         let entry = stack.pop_undo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
-            assert_eq!(name, Some("Section 2".to_string()));
+        if let Command::CreateLine { name, .. } = entry.command {
+            assert_eq!(name, Some("Line 2".to_string()));
         } else {
-            panic!("Expected Section 2");
+            panic!("Expected Line 2");
         }
     }
 
@@ -1563,8 +1563,8 @@ mod tests {
             .map(|i| {
                 let entry = UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("Section {i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                    command: test_create_line_command(&format!("Line {i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
                     timestamp: None,
                 };
                 UndoStack::serialize_entry(&entry).unwrap()
@@ -1577,10 +1577,10 @@ mod tests {
 
         // Should have the most recent entries
         let entry = stack.pop_undo().unwrap();
-        if let Command::CreateSection { name, .. } = entry.command {
-            assert_eq!(name, Some("Section 4".to_string()));
+        if let Command::CreateLine { name, .. } = entry.command {
+            assert_eq!(name, Some("Line 4".to_string()));
         } else {
-            panic!("Expected Section 4");
+            panic!("Expected Line 4");
         }
     }
 
@@ -1589,10 +1589,10 @@ mod tests {
         let mut stack = UndoStack::new();
 
         // Add some entries
-        stack.push_with_data(test_create_section_command("Existing"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Existing"), UndoData::None);
         stack.push_redo(UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Existing Redo"),
+            command: test_create_line_command("Existing Redo"),
             undo_data: UndoData::None,
             timestamp: None,
         });
@@ -1601,8 +1601,8 @@ mod tests {
         // filter keeps the entry and this stays a test of the clear.
         let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Loaded"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            command: test_create_line_command("Loaded"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
             timestamp: None,
         })
         .unwrap()];
@@ -1621,8 +1621,8 @@ mod tests {
         // malformed-JSON skip this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Valid"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            command: test_create_line_command("Valid"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
             timestamp: None,
         })
         .unwrap();
@@ -1650,22 +1650,22 @@ mod tests {
         let entries: Vec<(String, String)> = vec![
             UndoStack::serialize_entry(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Older"),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                command: test_create_line_command("Older"),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Poison"),
+                command: test_create_line_command("Poison"),
                 undo_data: UndoData::None,
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Newer"),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
+                command: test_create_line_command("Newer"),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(3)),
                 timestamp: None,
             })
             .unwrap(),
@@ -1677,12 +1677,12 @@ mod tests {
 
         let top = stack.pop_undo().unwrap();
         match top.command {
-            Command::CreateSection { name, .. } => assert_eq!(name, Some("Newer".to_string())),
+            Command::CreateLine { name, .. } => assert_eq!(name, Some("Newer".to_string())),
             other => panic!("Expected Newer, got {other:?}"),
         }
         let below = stack.pop_undo().unwrap();
         match below.command {
-            Command::CreateSection { name, .. } => assert_eq!(name, Some("Older".to_string())),
+            Command::CreateLine { name, .. } => assert_eq!(name, Some("Older".to_string())),
             other => panic!("Expected Older, got {other:?}"),
         }
     }
@@ -1696,22 +1696,22 @@ mod tests {
         let undo_entries: Vec<(String, String, Option<String>)> = vec![
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Older"),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                command: test_create_line_command("Older"),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Poison"),
+                command: test_create_line_command("Poison"),
                 undo_data: UndoData::None,
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Newer"),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
+                command: test_create_line_command("Newer"),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(3)),
                 timestamp: None,
             })
             .unwrap(),
@@ -1723,33 +1723,33 @@ mod tests {
 
         let top = stack.pop_undo().unwrap();
         match top.command {
-            Command::CreateSection { name, .. } => assert_eq!(name, Some("Newer".to_string())),
+            Command::CreateLine { name, .. } => assert_eq!(name, Some("Newer".to_string())),
             other => panic!("Expected Newer, got {other:?}"),
         }
         let below = stack.pop_undo().unwrap();
         match below.command {
-            Command::CreateSection { name, .. } => assert_eq!(name, Some("Older".to_string())),
+            Command::CreateLine { name, .. } => assert_eq!(name, Some("Older".to_string())),
             other => panic!("Expected Older, got {other:?}"),
         }
     }
 
     // === [#413] Entries whose shot target no longer resolves ===
 
-    /// A one-section project whose single shot carries `uuid`.
+    /// A one-line project whose single shot carries `uuid`.
     fn project_holding_one_shot(uuid: &str) -> crate::models::Project {
         let mut project = crate::models::Project::new("Addressing".to_string(), None);
-        let mut section = crate::models::Section::new(
+        let mut line = crate::models::Line::new(
             0,
-            SectionData {
+            LineData {
                 shots: vec![ShotData {
                     length: 5.0,
                     ..Default::default()
                 }],
-                ..test_section_data("Only")
+                ..test_line_data("Only")
             },
         );
-        section.shots[0].uuid = Some(uuid.to_string());
-        project.sections.push(section);
+        line.shots[0].uuid = Some(uuid.to_string());
+        project.lines.push(line);
         project
     }
 
@@ -1759,13 +1759,13 @@ mod tests {
         UndoEntry {
             command_bytes: None,
             command: Command::CreateShot {
-                section_id: 0,
+                line_id: 0,
                 shot: ShotData::default(),
                 after_shot_id: None,
                 before_shot_id: None,
             },
             undo_data: UndoData::CreatedShotSnapshot {
-                section_id: 0,
+                line_id: 0,
                 shot_id,
                 shot_data: ShotData::default(),
                 position: 0,
@@ -1787,8 +1787,8 @@ mod tests {
         let project = project_holding_one_shot("live-uuid");
         let mut stack = UndoStack::new();
         stack.push_with_data(
-            test_create_section_command("Older"),
-            UndoData::InverseCommand(test_delete_section_command(1)),
+            test_create_line_command("Older"),
+            UndoData::InverseCommand(test_delete_line_command(1)),
         );
         let doomed = created_shot_entry(Some("uuid-that-is-not-there"), 0);
         stack.push_with_data(doomed.command, doomed.undo_data);
@@ -1801,7 +1801,7 @@ mod tests {
         );
         assert!(matches!(
             stack.peek_undo(),
-            Some(Command::CreateSection { name: Some(name), .. }) if name == "Older"
+            Some(Command::CreateLine { name: Some(name), .. }) if name == "Older"
         ));
     }
 
@@ -1861,12 +1861,12 @@ mod tests {
         UndoEntry {
             command_bytes: None,
             command: Command::SetShotKind {
-                section_id: 0,
+                line_id: 0,
                 shot_id,
                 kind: crate::models::ShotKind::Jump,
             },
             undo_data: UndoData::PreviousValues {
-                section_id: 0,
+                line_id: 0,
                 shot_id: Some(shot_id),
                 shot_uuid: uuid.map(str::to_string),
                 values_json: "{}".to_string(),
@@ -1976,8 +1976,8 @@ mod tests {
         let mut stack = UndoStack::new();
         let entry = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Malformed"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            command: test_create_line_command("Malformed"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
             timestamp: None,
         })
         .unwrap();
@@ -1995,8 +1995,8 @@ mod tests {
         let row = |name: &str, timestamp: Option<&str>| {
             let serialized = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command(name),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                command: test_create_line_command(name),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
                 timestamp: None,
             })
             .unwrap();
@@ -2026,7 +2026,7 @@ mod tests {
         let redo_entries: Vec<(String, String, Option<String>)> =
             vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Redoable"),
+                command: test_create_line_command("Redoable"),
                 undo_data: UndoData::None,
                 timestamp: None,
             })
@@ -2044,7 +2044,7 @@ mod tests {
 
         for i in 0..5 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {i}")),
+                test_create_line_command(&format!("Line {i}")),
                 UndoData::None,
             );
         }
@@ -2059,7 +2059,7 @@ mod tests {
 
         for i in 0..10 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {i}")),
+                test_create_line_command(&format!("Line {i}")),
                 UndoData::None,
             );
         }
@@ -2069,7 +2069,7 @@ mod tests {
 
         // Should be the most recent 3
         assert!(
-            persisted[0].0.contains("Section 7"),
+            persisted[0].0.contains("Line 7"),
             "the window is the TAIL of the stack, got {}",
             persisted[0].0
         );
@@ -2084,8 +2084,8 @@ mod tests {
         // Push command
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("Test"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            command: test_create_line_command("Test"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
             timestamp: None,
         };
         stack.push_with_data(entry.command.clone(), entry.undo_data);
@@ -2115,8 +2115,8 @@ mod tests {
         // Push 3 commands
         for i in 0..3 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {i}")),
-                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                test_create_line_command(&format!("Line {i}")),
+                UndoData::InverseCommand(test_delete_line_command(i as u32)),
             );
         }
 
@@ -2146,7 +2146,7 @@ mod tests {
         let mut stack = UndoStack::new();
 
         // Create -> Undo -> New action (should clear redo)
-        stack.push_with_data(test_create_section_command("Original"), UndoData::None);
+        stack.push_with_data(test_create_line_command("Original"), UndoData::None);
 
         let entry = stack.pop_undo().unwrap();
         stack.push_redo(entry);
@@ -2154,7 +2154,7 @@ mod tests {
         assert!(stack.can_redo());
 
         // New command should clear redo
-        stack.push_with_data(test_create_section_command("New"), UndoData::None);
+        stack.push_with_data(test_create_line_command("New"), UndoData::None);
 
         assert!(!stack.can_redo());
         assert!(stack.can_undo());
@@ -2167,43 +2167,43 @@ mod tests {
         let test_cases: Vec<UndoEntry> = vec![
             UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("None"),
+                command: test_create_line_command("None"),
                 undo_data: UndoData::None,
                 timestamp: None,
             },
             UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Inverse"),
-                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                command: test_create_line_command("Inverse"),
+                undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
                 timestamp: None,
             },
             UndoEntry {
                 command_bytes: None,
-                command: test_delete_section_command(2),
-                undo_data: UndoData::SectionSnapshot {
-                    section_id: 2,
-                    section_data: test_section_data("Snapshot"),
+                command: test_delete_line_command(2),
+                undo_data: UndoData::LineSnapshot {
+                    line_id: 2,
+                    line_data: test_line_data("Snapshot"),
                 },
                 timestamp: None,
             },
             UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("Created Snapshot"),
-                undo_data: UndoData::CreatedSectionSnapshot {
-                    section_id: 3,
-                    section_data: test_section_data("Created"),
-                    identity: SectionIdentity::default(),
+                command: test_create_line_command("Created Snapshot"),
+                undo_data: UndoData::CreatedLineSnapshot {
+                    line_id: 3,
+                    line_data: test_line_data("Created"),
+                    identity: LineIdentity::default(),
                 },
                 timestamp: None,
             },
             UndoEntry {
                 command_bytes: None,
                 command: Command::DeleteShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 100,
                 },
                 undo_data: UndoData::ShotSnapshot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 100,
                     shot_data: ShotData {
                         length: 5.0,
@@ -2217,7 +2217,7 @@ mod tests {
             UndoEntry {
                 command_bytes: None,
                 command: Command::CreateShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot: ShotData {
                         length: 8.0,
                         ..Default::default()
@@ -2226,7 +2226,7 @@ mod tests {
                     before_shot_id: None,
                 },
                 undo_data: UndoData::CreatedShotSnapshot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 200,
                     shot_data: ShotData {
                         length: 8.0,
@@ -2285,7 +2285,7 @@ mod tests {
             UndoEntry {
                 command_bytes: None,
                 command: Command::UpdateShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 100,
                     updates: crate::models::ShotUpdates {
                         length: Some(10.0),
@@ -2293,7 +2293,7 @@ mod tests {
                     },
                 },
                 undo_data: UndoData::PreviousValues {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: Some(100),
                     shot_uuid: None,
                     values_json: r#"{"length":5.0}"#.to_string(),
@@ -2321,7 +2321,7 @@ mod tests {
     /// An entry whose estimated size is `payload` bytes plus the flat overhead.
     fn sized_entry(payload: usize, name: &str) -> (Command, UndoData) {
         (
-            test_create_section_command(name),
+            test_create_line_command(name),
             UndoData::ProjectSnapshot("x".repeat(payload)),
         )
     }
@@ -2385,7 +2385,7 @@ mod tests {
 
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("persisted"),
+            command: test_create_line_command("persisted"),
             undo_data: UndoData::ProjectSnapshot("x".repeat(256)),
             timestamp: None,
         };
@@ -2438,7 +2438,7 @@ mod tests {
         // The NEWEST entry is the one the user just did, so it must be the last to go.
         let top = stack.pop_undo().expect("newest");
         match top.command {
-            Command::CreateSection { name, .. } => assert_eq!(name, Some("S9".to_owned())),
+            Command::CreateLine { name, .. } => assert_eq!(name, Some("S9".to_owned())),
             other => panic!("expected the newest entry, got {other:?}"),
         }
     }
@@ -2501,13 +2501,13 @@ mod tests {
     fn undo_budget_size_estimate_tracks_the_snapshot_payload() {
         let small = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("small"),
-            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            command: test_create_line_command("small"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
             timestamp: None,
         };
         let big = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("big"),
+            command: test_create_line_command("big"),
             undo_data: UndoData::ProjectSnapshotPair {
                 before: "b".repeat(1_000_000),
                 after: "a".repeat(1_000_000),
@@ -2642,8 +2642,8 @@ mod tests {
             .map(|i| {
                 UndoStack::serialize_entry_with_timestamp(&UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("S{i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
+                    command: test_create_line_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(i)),
                     timestamp: None,
                 })
                 .expect("serialize")
@@ -2674,8 +2674,8 @@ mod tests {
         let mut stack = UndoStack::new();
         let push = |stack: &mut UndoStack, i: u32| {
             stack.push_with_data(
-                test_create_section_command(&format!("S{i}")),
-                UndoData::InverseCommand(test_delete_section_command(i)),
+                test_create_line_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_line_command(i)),
             );
         };
 
@@ -2735,7 +2735,7 @@ mod tests {
             })
             .collect();
         stack.push_with_data(
-            Command::CreateSection {
+            Command::CreateLine {
                 name: Some("Imported".to_string()),
                 surveyor: None,
                 date: None,
@@ -2760,7 +2760,7 @@ mod tests {
     fn restored_entries_use_the_documented_flat_command_estimate() {
         let small = UndoEntry {
             command_bytes: None,
-            command: test_create_section_command("S0"),
+            command: test_create_line_command("S0"),
             undo_data: UndoData::None,
             timestamp: None,
         };
@@ -2778,20 +2778,20 @@ mod tests {
     /// `PreviousValues` and `CreatedShotSnapshot` gained theirs late (#413,
     /// finding 27) and were charged as if they had none. The map is the one
     /// field on those two that grows with the SURVEY rather than with the edit -
-    /// the rigid connected set of the edited section - and a shot edit records
+    /// the rigid connected set of the edited line - and a shot edit records
     /// one per keystroke, so leaving it uncounted let a Full-mode history grow
     /// past its budget while the estimate said it had not.
     #[test]
     fn the_estimate_counts_a_previous_offsets_map_on_the_two_variants_that_gained_one() {
-        let offsets: HashMap<SectionId, Option<(f64, f64)>> =
+        let offsets: HashMap<LineId, Option<(f64, f64)>> =
             (0..4).map(|id| (id, Some((1.0, 2.0)))).collect();
 
         let previous_values =
-            |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| UndoEntry {
+            |previous_offsets: HashMap<LineId, Option<(f64, f64)>>| UndoEntry {
                 command_bytes: None,
-                command: test_create_section_command("S0"),
+                command: test_create_line_command("S0"),
                 undo_data: UndoData::PreviousValues {
-                    section_id: 0,
+                    line_id: 0,
                     shot_id: Some(1),
                     shot_uuid: None,
                     values_json: "x".repeat(64),
@@ -2809,7 +2809,7 @@ mod tests {
             "a shot edit's recorded offsets are 64 bytes apiece, as on MergeInfo"
         );
 
-        let created_shot = |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| {
+        let created_shot = |previous_offsets: HashMap<LineId, Option<(f64, f64)>>| {
             let mut entry = created_shot_entry(Some("uuid"), 1);
             if let UndoData::CreatedShotSnapshot {
                 previous_offsets: slot,
@@ -2846,8 +2846,8 @@ mod tests {
             .map(|(i, ts)| {
                 let entry = UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("S{i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(
+                    command: test_create_line_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(
                         u32::try_from(i).expect("small"),
                     )),
                     timestamp: Some(*ts),
@@ -2875,8 +2875,8 @@ mod tests {
             .map(|(i, ts)| {
                 let entry = UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("S{i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(
+                    command: test_create_line_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(
                         u32::try_from(i).expect("small"),
                     )),
                     timestamp: Some(*ts),
@@ -2908,15 +2908,15 @@ mod tests {
         // The stack as an Unwind leaves it: loaded rows, then undone back to the oldest,
         // so the entry BENEATH a new push is the five-minutes-under one.
         stack.push_with_data(
-            test_create_section_command("loaded"),
-            UndoData::InverseCommand(test_delete_section_command(0)),
+            test_create_line_command("loaded"),
+            UndoData::InverseCommand(test_delete_line_command(0)),
         );
         stack.undo_stack.back_mut().expect("seeded").timestamp = Some(oldest_loaded);
         stack.set_inherited_through(Some(watermark));
 
         stack.push_with_data(
-            test_create_section_command("mine"),
-            UndoData::InverseCommand(test_delete_section_command(1)),
+            test_create_line_command("mine"),
+            UndoData::InverseCommand(test_delete_line_command(1)),
         );
 
         let mine = stack.newest_stamp().expect("stamped");
@@ -2934,8 +2934,8 @@ mod tests {
         stack.set_inherited_through(None);
         let before = Utc::now();
         stack.push_with_data(
-            test_create_section_command("S0"),
-            UndoData::InverseCommand(test_delete_section_command(0)),
+            test_create_line_command("S0"),
+            UndoData::InverseCommand(test_delete_line_command(0)),
         );
         let after = Utc::now();
         let stamp = stack.newest_stamp().expect("stamped");
@@ -2952,8 +2952,8 @@ mod tests {
         stack.set_inherited_through(Some(Utc::now() - chrono::Duration::days(1)));
         let before = Utc::now();
         stack.push_with_data(
-            test_create_section_command("S0"),
-            UndoData::InverseCommand(test_delete_section_command(0)),
+            test_create_line_command("S0"),
+            UndoData::InverseCommand(test_delete_line_command(0)),
         );
         let after = Utc::now();
         let stamp = stack.newest_stamp().expect("stamped");
@@ -2970,8 +2970,8 @@ mod tests {
         let mut stack = UndoStack::new();
         let before = Utc::now();
         stack.push_with_data(
-            test_create_section_command("S0"),
-            UndoData::InverseCommand(test_delete_section_command(0)),
+            test_create_line_command("S0"),
+            UndoData::InverseCommand(test_delete_line_command(0)),
         );
         let after = Utc::now();
         let stamp = stack.newest_stamp().expect("stamped");
@@ -2993,8 +2993,8 @@ mod tests {
 
         for (i, secs) in [0, 10, 20, 30].into_iter().enumerate() {
             stack.push_with_data(
-                test_create_section_command(&format!("S{i}")),
-                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                test_create_line_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_line_command(i as u32)),
             );
             // Overwrite the auto-assigned timestamp so the boundary is deterministic.
             if let Some(entry) = stack.undo_stack.back_mut() {
@@ -3008,7 +3008,7 @@ mod tests {
         assert_eq!(stack.len(), 1, "the post-push-start edit survives");
         let survivor = stack.peek_undo().expect("survivor");
         match survivor {
-            Command::CreateSection { name, .. } => assert_eq!(*name, Some("S3".to_owned())),
+            Command::CreateLine { name, .. } => assert_eq!(*name, Some("S3".to_owned())),
             other => panic!("expected S3, got {other:?}"),
         }
     }
@@ -3021,8 +3021,8 @@ mod tests {
 
         for (i, secs) in [10, 20, 30].into_iter().enumerate() {
             stack.push_with_data(
-                test_create_section_command(&format!("S{i}")),
-                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                test_create_line_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_line_command(i as u32)),
             );
             stack.undo_stack.back_mut().unwrap().timestamp = Some(t(secs));
         }
@@ -3033,7 +3033,7 @@ mod tests {
         assert_eq!(stack.len(), 1);
         assert!(matches!(
             stack.peek_undo(),
-            Some(Command::CreateSection { name: Some(name), .. }) if name == "S2"
+            Some(Command::CreateLine { name: Some(name), .. }) if name == "S2"
         ));
     }
 
@@ -3044,8 +3044,8 @@ mod tests {
     fn drop_entries_up_to_clears_redo_wholesale() {
         let mut stack = UndoStack::new();
         stack.push_with_data(
-            test_create_section_command("a"),
-            UndoData::InverseCommand(test_delete_section_command(1)),
+            test_create_line_command("a"),
+            UndoData::InverseCommand(test_delete_line_command(1)),
         );
         let entry = stack.pop_undo().expect("pop");
         stack.push_redo(entry);
@@ -3092,8 +3092,8 @@ mod tests {
             .map(|i| {
                 let entry = UndoEntry {
                     command_bytes: None,
-                    command: test_create_section_command(&format!("legacy{i}")),
-                    undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
+                    command: test_create_line_command(&format!("legacy{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_line_command(i)),
                     timestamp: None,
                 };
                 UndoStack::serialize_entry_with_timestamp(&entry).expect("serialize")
@@ -3105,8 +3105,8 @@ mod tests {
 
         // A new edit is stamped and lands at the back, so the un-stamped rows stay below.
         stack.push_with_data(
-            test_create_section_command("mine"),
-            UndoData::InverseCommand(test_delete_section_command(9)),
+            test_create_line_command("mine"),
+            UndoData::InverseCommand(test_delete_line_command(9)),
         );
         assert!(none_timestamps_are_a_prefix(&stack));
 
@@ -3125,8 +3125,8 @@ mod tests {
         // And a trim evicts from the FRONT, which can only ever shorten the prefix.
         for i in 0..3 {
             stack.push_with_data(
-                test_create_section_command(&format!("more{i}")),
-                UndoData::InverseCommand(test_delete_section_command(20 + i)),
+                test_create_line_command(&format!("more{i}")),
+                UndoData::InverseCommand(test_delete_line_command(20 + i)),
             );
         }
         assert_eq!(
@@ -3147,8 +3147,8 @@ mod tests {
     fn drop_entries_up_to_drops_untimestamped_legacy_entries() {
         let mut stack = UndoStack::new();
         stack.push_with_data(
-            test_create_section_command("legacy"),
-            UndoData::InverseCommand(test_delete_section_command(1)),
+            test_create_line_command("legacy"),
+            UndoData::InverseCommand(test_delete_line_command(1)),
         );
         if let Some(entry) = stack.undo_stack.back_mut() {
             entry.timestamp = None;
@@ -3274,7 +3274,7 @@ mod tests {
     fn test_new_format_undo_history_survives_reload() {
         use std::collections::HashMap;
 
-        use crate::models::{Project, SectionData, ShotUpdates};
+        use crate::models::{Project, LineData, ShotUpdates};
         use crate::persistence::sqlite::Database;
         use tempfile::TempDir;
 
@@ -3282,7 +3282,7 @@ mod tests {
         let path = temp_dir.path().join("new_format_undo.stalx");
 
         let mut project = Project::new("New Undo".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![ShotData {
                 azimuth_in: 45.0,
                 azimuth_out: 225.0,
@@ -3297,8 +3297,8 @@ mod tests {
         let mut db = Database::open(&path).unwrap();
         db.save_project(&project).unwrap();
         let saved = db.load_project().unwrap();
-        let section_id = saved.sections[0].id;
-        let shot_id = saved.sections[0].shots[0].id;
+        let line_id = saved.lines[0].id;
+        let shot_id = saved.lines[0].shots[0].id;
 
         // New-format entry: only the edited field is present (untouched nullable
         // fields are omitted thanks to skip_serializing_if).
@@ -3314,7 +3314,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     comment: Some(Some("edited".to_string())),
@@ -3322,7 +3322,7 @@ mod tests {
                 },
             },
             undo_data: UndoData::PreviousValues {
-                section_id,
+                line_id,
                 shot_id: Some(shot_id),
                 shot_uuid: None,
                 values_json,
