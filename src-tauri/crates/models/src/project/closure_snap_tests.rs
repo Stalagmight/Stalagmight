@@ -6,7 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::closure_hand_move_tests::{assert_view_is_the_solve, plant as plant_hand};
+use super::closure_hand_move_tests::{
+    add_datums, assert_view_is_the_solve, choose_gps_fixes, plant as plant_hand, random_hand, Rng,
+};
 use super::combine_closure_tests::{add, dist, shot, xy};
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
@@ -1113,5 +1115,350 @@ fn a_survey_without_a_snap_keeps_its_closures_computed_view() {
             got.0,
             got.1,
         );
+    }
+}
+
+/// Move `id` so its station `index` sits exactly on `target`.
+fn place_at(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+    let now = xy(project, st(id, index));
+    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+}
+
+/// The bearing from `from` to `to`, in degrees.
+fn bearing(from: (f64, f64), to: (f64, f64)) -> f64 {
+    (to.0 - from.0)
+        .atan2(to.1 - from.1)
+        .to_degrees()
+        .rem_euclid(360.0)
+}
+
+/// One to three snaps onto `project`, as Move Station makes them: from a
+/// random station P a new passage of one or two shots whose end lands on a
+/// random station Q of the same survey (a loop station, a spur's, a merge
+/// point's, the held station...), exactly or a sub-centimetre gap off it,
+/// merged at P and snapped onto Q with a `Move` closure (the stamp measures
+/// it aligned, or refuses one that would join the two ends of a shot).
+/// Sometimes a snap across a near-vertical shot, as a file can carry one
+/// (skipped by the solve), and sometimes an ordinary loop recorded after the
+/// snaps, which may squeeze a shot through one. Its own random stream.
+fn add_snaps(project: &mut Project, rng: &mut Rng) {
+    for j in 0..=rng.below(3) {
+        let all = super::combine_closure_tests::every_station(project);
+        let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
+        if p == q
+            || !project
+                .get_connected_section_ids(p.section_id)
+                .contains(&q.section_id)
+        {
+            continue;
+        }
+        let (pp, qq) = (xy(project, p), xy(project, q));
+        if dist(pp, qq) < 1.0 {
+            continue;
+        }
+        let gap = match rng.below(3) {
+            0 => 0.0,
+            1 => rng.range(5e-5, 1e-3),
+            _ => rng.range(1e-3, 9.9e-3),
+        };
+        let towards = rng.range(0.0, std::f64::consts::TAU);
+        let end = (qq.0 + gap * towards.sin(), qq.1 + gap * towards.cos());
+        let shots = if rng.below(2) == 0 {
+            vec![shot(bearing(pp, end), dist(pp, end))]
+        } else {
+            let mid = (
+                (pp.0 + end.0) / 2.0 + rng.range(-3.0, 3.0),
+                (pp.1 + end.1) / 2.0 + rng.range(-3.0, 3.0),
+            );
+            vec![
+                shot(bearing(pp, mid), dist(pp, mid)),
+                shot(bearing(mid, end), dist(mid, end)),
+            ]
+        };
+        let n = shots.len() as u32;
+        let l = add(project, &format!("Snap{j}"), shots);
+        place_at(project, l, 0, pp);
+        if project.merge_stations(p, st(l, 0)).is_ok() {
+            let _ = project.create_loop_closure(st(l, n), q, ClosureStrategy::Move);
+        }
+    }
+    if rng.below(4) == 0 {
+        let all = super::combine_closure_tests::every_station(project);
+        let p = all[rng.below(all.len())];
+        let (across, drop) = (rng.range(5e-4, 8e-3), rng.range(2.0, 6.0));
+        let shaft = ShotData {
+            depth_in: 0.0,
+            depth_out: drop,
+            ..shot(rng.range(0.0, 360.0), drop.hypot(across))
+        };
+        let v = add(
+            project,
+            "Shaft",
+            vec![shaft, shot(rng.range(0.0, 360.0), rng.range(3.0, 8.0))],
+        );
+        let at = xy(project, p);
+        place_at(project, v, 0, at);
+        if project.merge_stations(p, st(v, 0)).is_ok() {
+            plant(project, st(v, 0), st(v, 1), ClosureStrategy::Move, false);
+        }
+    }
+    if rng.below(2) == 0 {
+        let all = super::combine_closure_tests::every_station(project);
+        let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
+        let (pp, qq) = (xy(project, p), xy(project, q));
+        if p.section_id != q.section_id && dist(pp, qq) >= 1.0 {
+            let l = add(
+                project,
+                "Loop",
+                vec![shot(bearing(pp, qq), dist(pp, qq) + rng.range(0.2, 1.5))],
+            );
+            place_at(project, l, 0, pp);
+            if project.merge_stations(p, st(l, 0)).is_ok() {
+                let _ = project.create_loop_closure(st(l, 1), q, ClosureStrategy::Batch);
+            }
+        }
+    }
+    // Settled as opening the file does: the stamp measures every snap.
+    project.redrive_offsets_after_load();
+}
+
+/// The two stations of every snap of `project`, resolved.
+fn snapped_stations(project: &Project) -> Vec<(u64, StationRef, StationRef)> {
+    project
+        .loop_closures
+        .iter()
+        .filter(|c| Project::closure_is_snap(c.strategy, c.is_aligned))
+        .filter_map(|c| {
+            Some((
+                c.id,
+                project.resolve_key(&c.station_a)?,
+                project.resolve_key(&c.station_b)?,
+            ))
+        })
+        .collect()
+}
+
+/// What the snap sweep reached, summed over its surveys.
+#[derive(Debug, Default)]
+struct SnapSweep {
+    surveys: usize,
+    /// Snaps in the surveys as settled (aligned `Move` closures).
+    snaps: usize,
+    /// Of those, the ones carrying a measured gap (over 1e-6 m).
+    with_gap: usize,
+    /// Of those, the ones the solve skips across one shot.
+    across: usize,
+    /// Snapped pairs checked on one point in a part the view solves.
+    held: usize,
+    /// Of those, the pairs the solve before #736 put over 1 mm apart.
+    torn_before: usize,
+    /// The worst such tear.
+    worst_tear: f64,
+    /// Parts the view adjusts.
+    parts: usize,
+    /// Parts that fail now and solved before: two placement datums tied into
+    /// one group through a snap, as a closure between them would.
+    new_failures: usize,
+    /// Parts that failed before and solve now.
+    fixed_failures: usize,
+    /// Parts holding no snap, compared bit for bit with the solve before.
+    unchanged: usize,
+    /// GPS fixes planted (#741).
+    fixes: usize,
+    /// Hand moves planted (#759), and the ones on a snapped station.
+    hand_moves: usize,
+    hand_on_snaps: usize,
+}
+
+/// Check one settled survey against every oracle of the snap sweep and add
+/// what it reached to `stats`.
+fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
+    let config = ClosureAdjustmentConfig::default();
+    stats.surveys += 1;
+    let snaps = snapped_stations(p);
+    let skipped: HashSet<u64> = p
+        .closures_across_one_shot()
+        .into_iter()
+        .map(|c| c.closure_id)
+        .collect();
+    stats.snaps += snaps.len();
+    stats.with_gap += snaps
+        .iter()
+        .filter(|(_, a, b)| dist(xy(p, *a), xy(p, *b)) > 1e-6)
+        .count();
+    stats.across += snaps.iter().filter(|(id, ..)| skipped.contains(id)).count();
+    // The view is the solve, snapped pairs as tie groups: each group on one
+    // point, held stations and hard fixes where they belong, the shots
+    // balanced at every free group (and, in a debug build, every merge
+    // within 1 cm after each component's solve).
+    let solve = assert_view_is_the_solve(p, what);
+    stats.parts += solve.adjusted;
+    stats.held += assert_snaps_held(p, what);
+    // Against the solve before #736: the same project with its snaps tying
+    // nothing.
+    let now = p.compute_adjusted_stations(&config);
+    let old = without_snaps(p).compute_adjusted_stations(&config);
+    let sections_of = |failures: &[super::AdjustmentFailure]| -> HashSet<SectionId> {
+        failures
+            .iter()
+            .flat_map(|f| f.section_ids.iter().copied())
+            .collect()
+    };
+    let (failed_now, failed_old) = (sections_of(&now.failures), sections_of(&old.failures));
+    // No part fails that solved before, but one whose snap ties two
+    // placement datums into one group: a closure between the two would fail
+    // it the same way (reported, with its plain reason).
+    for failure in &now.failures {
+        if failure.section_ids.iter().any(|s| failed_old.contains(s)) {
+            continue;
+        }
+        assert_eq!(
+            failure.error, "Multiple placement zero datums in a single constraint group",
+            "{what}: a part the solve adjusted before #736 fails now: {failure:?}"
+        );
+        assert!(
+            snaps
+                .iter()
+                .any(|(_, a, _)| failure.section_ids.contains(&a.section_id)),
+            "{what}: a part with no snap fails now: {failure:?}"
+        );
+        stats.new_failures += 1;
+    }
+    stats.fixed_failures += old
+        .failures
+        .iter()
+        .filter(|f| !f.section_ids.iter().any(|s| failed_now.contains(s)))
+        .count();
+    let at = |stations: &[Station]| -> HashMap<StationRef, [u64; 3]> {
+        stations
+            .iter()
+            .map(|s| {
+                (
+                    s.station_ref,
+                    [
+                        s.coordinates.x.to_bits(),
+                        s.coordinates.y.to_bits(),
+                        s.coordinates.z.to_bits(),
+                    ],
+                )
+            })
+            .collect()
+    };
+    let (view_now, view_old) = (at(&now.stations), at(&old.stations));
+    let xy_of = |bits: [u64; 3]| (f64::from_bits(bits[0]), f64::from_bits(bits[1]));
+    for (id, a, b) in &snaps {
+        if skipped.contains(id) || failed_now.contains(&a.section_id) {
+            continue;
+        }
+        let tear = dist(xy_of(view_old[a]), xy_of(view_old[b]));
+        if tear > 1e-3
+            && p.adjustment_anchors_for_tests().iter().any(|h| {
+                p.get_connected_section_ids(h.section_id)
+                    .contains(&a.section_id)
+            })
+        {
+            stats.torn_before += 1;
+            stats.worst_tear = stats.worst_tear.max(tear);
+        }
+    }
+    // A part holding no snap is solved exactly as before #736, bit for bit
+    // (each part is solved on its own, and nothing a snap does reaches
+    // another part's knots).
+    let mut seen: HashSet<SectionId> = HashSet::new();
+    for section in &p.sections {
+        if seen.contains(&section.id) {
+            continue;
+        }
+        let part = p.get_connected_section_ids(section.id);
+        seen.extend(part.iter().copied());
+        if snaps.iter().any(|(_, a, _)| part.contains(&a.section_id)) {
+            continue;
+        }
+        for s in p.sections.iter().filter(|s| part.contains(&s.id)) {
+            for i in 0..=s.shots.len() as u32 {
+                let at = st(s.id, i);
+                assert_eq!(
+                    view_now[&at], view_old[&at],
+                    "{what}: {at:?}, in a part with no snap, moved in the Closures Computed View"
+                );
+            }
+        }
+        stats.unchanged += 1;
+    }
+}
+
+/// Snaps anywhere in random surveys (#736): the combine sweeps' networks
+/// (merged branches, snapped and recorded loops, zero datums, second placed
+/// surveys tied on by a closure, side-by-side ends, legacy closures) with one
+/// to three more snaps on top ([`add_snaps`]: exact or up to 9.9 mm off, on
+/// loops, spurs and merge points, sometimes across a near-vertical shot,
+/// sometimes followed by an ordinary loop), then up to two hand moves (#759,
+/// half of them on a snapped station) settled as a file opens, then up to
+/// two GPS fixes (#741, hard or soft) on placed pieces. Every survey is
+/// checked by [`check_snapped_survey`]: the view is the solve with snapped
+/// pairs as tie groups (#774's oracle), every snapped pair is on one point
+/// (1e-6 m), no part fails that solved before #736 but for two placement
+/// datums tied through a snap, and a part with no snap is solved bit for bit
+/// as before.
+///
+/// `STALAGMIGHT_SNAP_VIEW_SEEDS` (default 100) seeds from
+/// `STALAGMIGHT_SNAP_VIEW_FIRST_SEED` (default 0), each over the three
+/// network kinds.
+#[test]
+fn snaps_anywhere_keep_the_closures_computed_view_the_solve() {
+    let env = |name: &str, default: u64| -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    };
+    let seeds = env("STALAGMIGHT_SNAP_VIEW_SEEDS", 100);
+    let first = env("STALAGMIGHT_SNAP_VIEW_FIRST_SEED", 0);
+    let mut stats = SnapSweep::default();
+    for seed in first..first + seeds {
+        for (kind, make) in [
+            (
+                "network",
+                super::combine_closure_tests::network as fn(u64) -> Project,
+            ),
+            ("passage", super::combine_closure_tests::passage_network),
+            (
+                "side by side",
+                super::combine_closure_tests::side_by_side_network,
+            ),
+        ] {
+            let mut p = make(seed);
+            let mut rng = Rng(seed.wrapping_mul(0x8EBC_6AF0_9C88_C6E3) | 1);
+            add_snaps(&mut p, &mut rng);
+            // Hand moves first, as a file written before GPS fixes carries
+            // them (see the hand-move sweep), half on a snapped station.
+            let snapped: Vec<StationRef> = snapped_stations(&p)
+                .into_iter()
+                .flat_map(|(_, a, b)| [a, b])
+                .collect();
+            let stations = super::combine_closure_tests::every_station(&p);
+            for _ in 0..rng.below(3) {
+                let on_snap = !snapped.is_empty() && rng.below(2) == 0;
+                let at = if on_snap {
+                    snapped[rng.below(snapped.len())]
+                } else {
+                    stations[rng.below(stations.len())]
+                };
+                stats.hand_moves += 1;
+                stats.hand_on_snaps += usize::from(on_snap);
+                plant_hand(&mut p, at, random_hand(&mut rng));
+            }
+            let fixes = choose_gps_fixes(&p, &mut rng);
+            stats.fixes += fixes.len();
+            add_datums(&mut p, &fixes);
+            check_snapped_survey(&p, &format!("{kind} seed {seed}"), &mut stats);
+        }
+    }
+    eprintln!("snap sweep seeds {first}..{}: {stats:?}", first + seeds);
+    if seeds >= 50 {
+        assert!(stats.held > 0 && stats.torn_before > 0, "{stats:?}");
+        assert!(stats.with_gap > 0 && stats.across > 0, "{stats:?}");
+        assert!(stats.hand_on_snaps > 0 && stats.fixes > 0, "{stats:?}");
+        assert!(stats.unchanged > 0, "{stats:?}");
     }
 }
