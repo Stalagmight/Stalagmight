@@ -3313,13 +3313,13 @@
           },
           "zeroDatumSelection": {
             "title": "Pick the Anchor Section",
-            "description": "A zero datum ties one station to a real-world GPS position, so every other section can be placed relative to it. Pick the section that should carry it, or skip to position everything manually and set it later."
+            "description": "A zero datum ties one station to a real-world GPS position, and places the sections connected to it. Pick the section that should carry it, or skip and set it later. You can add more later (right-click a station > Set Zero Datum): the first on each connected piece places that piece, later ones become GPS fixes that bend the Closures Computed View without moving the raw survey."
           },
           "zeroDatum": {
             "title": "GPS Anchor",
             "description": "Anchor one station to real-world coordinates. Optional - you can skip it and set it later. Accepted formats:",
             "descriptionItems": [
-              "DD, DMS, DDM, UTM, MGRS, Plus Codes",
+              "DD, DMS, DDM, UTM, Plus Codes",
               "Pasted Google Maps, OpenStreetMap, or Bing links"
             ]
           },
@@ -3327,15 +3327,16 @@
             "title": "Suggested Connections",
             "description": "Stalagmight scores likely overlaps from reference shots and geometry, then proposes a station-to-station merge. Check the confidence, then confirm or skip to place manually.",
             "descriptionItems": [
-              "Overlap handling: Interpolate, Keep Original, Keep Connected, or Keep Both."
+              "Overlap handling: Interpolate, Use import data, Use existing data, or Keep both (reference)."
             ]
           },
           "segmentPlacement": {
             "title": "Placing What Did Not Connect",
             "description": "Segments with no confident match land here. Choose per segment:",
             "descriptionItems": [
+              "Suggested connection: offered when you skipped one; use it after all.",
               "From existing station: anchor to a station you pick.",
-              "Place on map: position it by hand.",
+              "Manual placement: pick a station, then Place on map to position it by hand.",
               "Do not place: skip this segment entirely."
             ]
           }
