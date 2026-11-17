@@ -275,14 +275,15 @@ test.describe('Export Dialog', () => {
 
     const warningDialog = page.getByTestId('tml-unanchored-warning-dialog');
     await expect(warningDialog).toBeVisible();
-    // The claims a7d12ad0 settled this copy on: the consequence is that the
-    // export is not GEOREFERENCED, nothing is discarded, and the fix is named.
+    // The claims a7d12ad0 settled this copy on, as #741 corrected it: no GPS
+    // reading places the section (it exports at the spot the map shows),
+    // nothing is discarded, and the fix is named.
     // It must NOT promise entrance topology - that is merge-derived in the
     // exporter while this dialog classifies by zero-datum reachability, and the
     // two predicates disagree in both directions (see the comment above the
     // AlertDialog in ExportControls.tsx, and ExportControls.test.tsx).
     await expect(warningDialog).toContainText('1 of 2 sections is not connected to a zero datum');
-    await expect(warningDialog).toContainText('will export without georeferencing');
+    await expect(warningDialog).toContainText('no GPS reading places it');
     await expect(warningDialog).toContainText('Nothing is discarded');
     await expect(warningDialog).toContainText('Set Zero Datum');
     await expect(warningDialog).not.toContainText('entrance');
