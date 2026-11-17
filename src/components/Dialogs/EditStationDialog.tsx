@@ -86,8 +86,8 @@ export default function EditStationDialog() {
   );
   // The accuracy only weighs a GPS fix (#741): a placement datum puts its piece
   // on its GPS whatever it says. So the field shows only for a stored fix or a
-  // datum the preview says will be one; otherwise its stored value is kept and
-  // nothing is sent.
+  // datum the preview says will be one; otherwise its stored value is sent back
+  // unchanged.
   const showAccuracy = (preview?.role ?? storedDatum?.role) === 'GpsFix';
 
   // Entrance (#741). The backend resolves whether this datum is an entrance

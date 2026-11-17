@@ -174,6 +174,30 @@ fn an_invalid_accuracy_is_refused_and_changes_nothing() {
         .is_ok());
 }
 
+/// A re-set stores exactly the accuracy it is sent, for a placement datum
+/// too: nothing means the default, so a caller that wants a stored accuracy
+/// kept (Edit Station's GPS edit of a placement datum) must send it back.
+#[test]
+fn a_placement_datum_stores_the_accuracy_it_is_sent() {
+    let mut project = Project::new("Accuracy".to_string(), None);
+    let a = north_line(&mut project, 2, 10.0);
+    let datum = StationRef::new(a, 0);
+    project
+        .set_zero_datum_with_accuracy(datum, origin(), Some(7.0))
+        .unwrap();
+    assert_eq!(project.datum_roles()[0], Some(DatumRole::Placement));
+
+    project
+        .set_zero_datum_with_accuracy(datum, gps_at(0.0, 100.0), Some(7.0))
+        .unwrap();
+    assert_eq!(project.zero_datums[0].accuracy_m, Some(7.0));
+
+    project
+        .set_zero_datum_with_accuracy(datum, gps_at(0.0, 200.0), None)
+        .unwrap();
+    assert_eq!(project.zero_datums[0].accuracy_m, None);
+}
+
 #[test]
 fn preview_names_the_role_and_the_gap_before_anything_is_stored() {
     let (mut project, _a, b) = two_entrance_traverse();
