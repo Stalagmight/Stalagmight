@@ -6,7 +6,8 @@ Releases are created through Claude Code. The process:
 
 1. Claude reviews git log since the last tag
 2. Claude writes a human-readable summary into the `## [Unreleased]` section of `CHANGELOG.md`
-3. Claude commits the changelog update
+3. Claude commits the changelog update, after the
+   [user-facing docs check](#user-facing-docs-check) below
 4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit --no-tag`
 5. Claude tags with `./scripts/release-tag.sh vX.Y.Z[-rc.N]`, then pushes the
    commit and the tag
@@ -142,6 +143,54 @@ tag, which is the cheapest way to read the body you are about to publish.
 - **About shows the full version**, so a candidate reads `0.5.2-rc.1` and cannot
   be mistaken for the final release. Keep candidates rather than deleting them -
   a tester's bug report names one.
+
+## User-facing docs check
+
+Run this once per release, before the final tag (a candidate may skip it). It
+covers what ships beside the code and has no gate: the user guide
+(`docs/user-guide/`, published on the website), the in-app onboarding tour
+(`src/onboarding/flows.ts` with its `onboarding.*` strings in
+`src/i18n/locales/en.json`), and the Help menu links. A wrong step in the tour
+fails silently: a step whose target is gone shows as a centred card, and
+Playwright runs with onboarding off. Findings are fixed in the release or filed
+as issues; say which in the changelog commit.
+
+1. **Help menu links load.** Each URL in `src-tauri/src/app_menu.rs` must
+   answer 200, or a redirect (Report an Issue sends a signed-out visitor to
+   sign in). The guide's URL is served only while the website publishes the
+   guide (its own `PUBLISH_USER_GUIDE` switch), so a 404 there means the menu
+   item leads nowhere.
+
+   ```bash
+   grep -oE 'https://[^"]+' src-tauri/src/app_menu.rs | while read -r u; do
+     echo "$(curl -s -o /dev/null -w '%{http_code}' "$u") $u"; done
+   ```
+
+2. **Every `[Unreleased]` Added or Changed entry has its guide answer.** For
+   each one, either the guide page it changes was updated (workflows, screens,
+   concepts) or it has no guide impact. Read the onboarding strings against the
+   same entries: renamed labels, new modes, changed gestures.
+3. **Label sweep.** Every bold term in the guide should still be a label the app
+   shows. The list printed is to read, not to fix blindly: some bold terms are
+   headings or plain emphasis (Workflows, Screens), and a term split across a
+   line break prints as a fragment.
+
+   ```bash
+   grep -rhoE --include='*.md' '\*\*[^*]+\*\*' docs/user-guide | sed 's/\*\*//g' | sort -u |
+     while read -r t; do
+       git grep -qF -- "$t" src/i18n/locales/en.json src/components ||
+         echo "not in the app: $t"
+     done
+   ```
+
+4. **Screenshots older than the screen they show.** For each image under
+   `docs/user-guide/images/`, compare its last commit with the last commit to
+   the component it shows (`git log -1 --format=%cs -- <file>`). A newer
+   component is a candidate to re-shoot, following the screenshot rules in
+   `docs/user-guide/README.md`.
+5. **Tour targets resolve.** Every `targetSelector` in `src/onboarding/flows.ts`
+   must still be rendered by a component (`git grep -F` the `data-testid`
+   outside tests), in the state the step opens.
 
 ## Step-by-step (what Claude does)
 
