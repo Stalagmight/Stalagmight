@@ -206,7 +206,11 @@ impl Project {
                 .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
                 .collect();
             for (station_ref, gps) in promoted {
-                moved |= self.place_group_at(station_ref, gps_to_local(&gps, &frame_gps));
+                moved |= self.place_group_at(
+                    station_ref,
+                    gps_to_local(&gps, &frame_gps),
+                    "place a piece by its promoted datum",
+                );
             }
         }
         // Compared by key AND GPS: a promoted datum can inherit the old
@@ -219,36 +223,53 @@ impl Project {
         moved
     }
 
-    /// Re-place every placement datum's piece other than the frame's at
-    /// `gps_to_local(its gps, frame gps)`, after the frame datum got a new GPS
-    /// on the same station (#769). The frame stays on the origin, so without
-    /// this every other placed piece is off its own GPS by the edit. GPS fixes
-    /// ride with their piece. Returns true when anything moved.
-    pub(super) fn place_pieces_on_frame(&mut self) -> bool {
+    /// Move every placement datum's piece other than the frame's by the frame
+    /// correction, after the frame datum got a new GPS on the same station
+    /// (#769): `gps_to_local(its gps, new frame gps) - gps_to_local(its gps,
+    /// old frame gps)`. The frame stays on the origin, so without this every
+    /// other placed piece is off its own GPS by the edit. A piece on its GPS
+    /// stays on it; one an older file left off its GPS keeps its gap, as an
+    /// accuracy-only edit leaves it. GPS fixes ride with their piece. Returns
+    /// true when anything moved.
+    pub(super) fn place_pieces_on_frame(&mut self, old_frame_gps: &GpsCoordinates) -> bool {
         let Some((frame_key, frame_gps)) = self
             .frame_datum()
             .map(|zd| (zd.station_ref.clone(), zd.gps))
         else {
             return false;
         };
-        let pieces: Vec<(StationRef, GpsCoordinates)> = self
+        let pieces: Vec<(StationRef, (f64, f64))> = self
             .placement_datums()
             .into_iter()
             .filter(|zd| zd.station_ref != frame_key)
-            .filter_map(|zd| Some((self.resolve_key(&zd.station_ref)?, zd.gps)))
+            .filter_map(|zd| {
+                let station_ref = self.resolve_key(&zd.station_ref)?;
+                let current = self.compute_station_raw_coords(station_ref)?;
+                let (new_x, new_y) = gps_to_local(&zd.gps, &frame_gps);
+                let (old_x, old_y) = gps_to_local(&zd.gps, old_frame_gps);
+                Some((
+                    station_ref,
+                    (current.x + new_x - old_x, current.y + new_y - old_y),
+                ))
+            })
             .collect();
         let mut moved = false;
-        for (station_ref, gps) in pieces {
-            moved |= self.place_group_at(station_ref, gps_to_local(&gps, &frame_gps));
+        for (station_ref, target) in pieces {
+            moved |= self.place_group_at(station_ref, target, "move a piece with the frame's GPS");
         }
         moved
     }
 
     /// Translate `station_ref`'s rigid group so the station sits at `target`,
     /// then cascade through aligned closures: the same placement
-    /// [`Self::set_zero_datum`] applies to a subsequent datum. Returns true when
-    /// anything moved.
-    fn place_group_at(&mut self, station_ref: StationRef, target: (f64, f64)) -> bool {
+    /// [`Self::set_zero_datum`] applies to a subsequent datum. `purpose` names
+    /// the caller in the log. Returns true when anything moved.
+    fn place_group_at(
+        &mut self,
+        station_ref: StationRef,
+        target: (f64, f64),
+        purpose: &'static str,
+    ) -> bool {
         let Some(current) = self.compute_station_raw_coords(station_ref) else {
             return false;
         };
@@ -256,8 +277,7 @@ impl Project {
         if !dx.is_finite() || !dy.is_finite() {
             warn!(
                 ?station_ref,
-                purpose = "place a piece by its promoted datum",
-                "Datum placement is not finite; leaving the piece where it is"
+                purpose, "Datum placement is not finite; leaving the piece where it is"
             );
             return false;
         }
@@ -270,8 +290,8 @@ impl Project {
             ?station_ref,
             delta_x = dx,
             delta_y = dy,
-            purpose = "place a piece by its promoted datum",
-            "A datum became its piece's placement datum; moved the piece onto its GPS"
+            purpose,
+            "Moved a piece so its datum station sits on its target"
         );
         true
     }

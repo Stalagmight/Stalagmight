@@ -947,3 +947,85 @@ fn an_accuracy_or_entrance_edit_of_the_frame_moves_nothing() {
     assert_same_xy(&before, &raw_xy(&project));
     assert_eq!(project.zero_datums[0].accuracy_m, Some(3.0));
 }
+
+/// The frame correction for a datum at `gps`: where the new frame puts it,
+/// less where the old one did.
+fn frame_correction(
+    gps: &GpsCoordinates,
+    old: &GpsCoordinates,
+    new: &GpsCoordinates,
+) -> (f64, f64) {
+    let (nx, ny) = gps_to_local(gps, new);
+    let (ox, oy) = gps_to_local(gps, old);
+    (nx - ox, ny - oy)
+}
+
+#[test]
+fn a_new_frame_gps_moves_a_piece_off_its_gps_by_the_correction_and_keeps_its_gap() {
+    let (mut project, a, c) = frame_and_placed_piece();
+    // C left 5 m off its GPS, as an older file can.
+    project.adjust_section_offset(c, 5.0, 0.0);
+    let c_gps = project.zero_datums[1].gps;
+    let c0 = StationRef::new(c, 0);
+    let (bx, by) = xy(&project, c0);
+
+    let new_frame = gps_at(0.0, 2.0);
+    project
+        .set_zero_datum(StationRef::new(a, 0), new_frame)
+        .unwrap();
+
+    let (dx, dy) = frame_correction(&c_gps, &origin(), &new_frame);
+    let (cx, cy) = xy(&project, c0);
+    assert!(
+        (cx - bx - dx).abs() < 1e-9 && (cy - by - dy).abs() < 1e-9,
+        "C:0 moved by ({}, {}), the correction is ({dx}, {dy})",
+        cx - bx,
+        cy - by
+    );
+    let (gx, gy) = gps_to_local(&c_gps, &new_frame);
+    let gap = (cx - gx).hypot(cy - gy);
+    assert!((gap - 5.0).abs() < 1e-6, "C:0 is {gap} m off its GPS");
+}
+
+#[test]
+fn a_new_frame_gps_moves_a_merged_piece_as_one() {
+    let mut project = Project::new("MergedPiece".to_string(), None);
+    let a = north_line(&mut project, 2, 50.0);
+    let c = north_line(&mut project, 3, 40.0);
+    let d = north_line(&mut project, 2, 30.0);
+    project.ensure_shot_uuids();
+    project
+        .merge_stations(StationRef::new(c, 3), StationRef::new(d, 0))
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(a, 0), origin())
+        .unwrap();
+    let c_gps = gps_at(-200.0, 50.0);
+    project
+        .set_zero_datum(StationRef::new(c, 0), c_gps)
+        .unwrap();
+    let before = raw_xy(&project);
+
+    let new_frame = gps_at(30.0, -40.0);
+    project
+        .set_zero_datum(StationRef::new(a, 0), new_frame)
+        .unwrap();
+
+    let (dx, dy) = frame_correction(&c_gps, &origin(), &new_frame);
+    let after = raw_xy(&project);
+    for (sr, (bx, by)) in &before {
+        let (ax, ay) = after[sr];
+        let (ex, ey) = if sr.section_id == a {
+            (0.0, 0.0)
+        } else {
+            (dx, dy)
+        };
+        assert!(
+            (ax - bx - ex).abs() < 1e-9 && (ay - by - ey).abs() < 1e-9,
+            "{sr:?} moved by ({}, {}), expected ({ex}, {ey})",
+            ax - bx,
+            ay - by
+        );
+    }
+    assert!(project.check_merge_alignment().is_empty());
+}
