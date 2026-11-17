@@ -6,16 +6,16 @@ order: 10
 
 # Create Project for Import dialog
 
-Opening a survey from another program (Ariane, MNemo, Compass, Walls, GPX) on
-the [start screen](start-screen.md) first creates a new project to import it
-into.
+Opening a survey from another program (Ariane, Compass, Walls, GPX, or an
+MNemo file with no project open) first creates a new project to import it into.
 
 ![Create Project for Import dialog](../images/create-project-for-import.png)
 
 1. **Close**: nothing created.
 2. What is being imported.
 3. The original file is never changed.
-4. **Project Name**: required.
+4. **Project Name**: required. It starts as the name recorded in the file,
+   such as the cave name, or else the file name.
 5. **Project File Path**: where the `.stalx` file goes. Left empty, it uses the
    path shown.
 6. **Browse...**: pick the path in a file browser.
@@ -25,6 +25,10 @@ into.
 
 ## Details
 
-- The default path is `Documents/stalagmight/<name>.stalx`.
+- The default path is `Documents/stalagmight/<name>.stalx`, with every
+  character of the name other than letters and digits turned into `_`.
 - The project file is only written once the import brings data in. Cancelling
   before that leaves no file behind.
+- With a project open, an Ariane, Compass, Walls or GPX file asks first:
+  **Close and import** closes the open project. An MNemo file is added to the
+  open project instead, see [DMP import](dmp-import.md).

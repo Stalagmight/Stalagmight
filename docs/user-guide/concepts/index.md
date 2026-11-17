@@ -10,3 +10,4 @@ The survey terms Stalagmight uses.
 
 - [Sections, shots and stations](sections-shots-stations.md)
 - [Errors and warnings](errors-and-warnings.md)
+- [Zero datums and GPS fixes](zero-datums-and-gps-fixes.md)

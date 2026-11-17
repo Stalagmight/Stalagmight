@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: "Step-by-step guides for common tasks in Stalagmight: creating surveys, importing from MNemo and Ariane, zero datums, merging and closing loops."
+description: "Step-by-step guides for common tasks in Stalagmight: creating and importing surveys, zero datums, merging, loops, combining sections, export and dive planning."
 order: 1
 ---
 
@@ -16,3 +16,6 @@ Step-by-step guides that take one task from start to finish.
 - [Merging stations](merging-stations.md)
 - [Closing a loop](closing-a-loop.md)
 - [Adding comments](adding-comments.md)
+- [Combining and splitting sections](combining-and-splitting-sections.md)
+- [Exporting](exporting.md)
+- [Planning a dive](planning-a-dive.md)

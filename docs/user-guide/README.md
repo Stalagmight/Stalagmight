@@ -11,6 +11,9 @@ How to use Stalagmight. Pages link to each other.
 - [Merging stations](workflows/merging-stations.md)
 - [Closing a loop](workflows/closing-a-loop.md)
 - [Adding comments](workflows/adding-comments.md)
+- [Combining and splitting sections](workflows/combining-and-splitting-sections.md)
+- [Exporting](workflows/exporting.md)
+- [Planning a dive](workflows/planning-a-dive.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)
@@ -32,6 +35,7 @@ How to use Stalagmight. Pages link to each other.
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
 - [Errors and warnings](concepts/errors-and-warnings.md)
+- [Zero datums and GPS fixes](concepts/zero-datums-and-gps-fixes.md)
 
 ## Contributing
 

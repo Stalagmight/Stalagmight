@@ -17,20 +17,22 @@ the [Create Project for Import dialog](create-project-for-import.md).
 4. What will be imported: sections, shots, total length, depth range. Updates
    as you pick sections.
 5. Select all or none.
-6. Tick the sections to import.
+6. Tick the sections to import. Each row shows the section's color, shots,
+   **Surveyors**, **Explorers** and date. (The screenshot shows older
+   Surveyor and Color columns.)
 7. **Cancel**
 8. **Import**, followed by the [import report](import-report.md).
 
-Scrolled down, the import options:
+Scrolled down, **Where does this survey go?** and the import options:
 
 ![Import Ariane Survey options](../images/ariane-import-options.png)
 
-9. **Use the position in the file** (default): place the survey at the
-   [zero datum](../concepts/sections-shots-stations.md) recorded in the Ariane
-   file.
+9. **Use the position in the file** (default): place the survey at the GPS
+   position recorded in the Ariane file. Only offered when the file has one.
 10. **Place at the origin**: no real-world position. It can be
     [set later](../workflows/setting-a-zero-datum.md).
-11. **Enter coordinates**: type the position yourself.
+11. **Enter coordinates**: type the **Latitude** and **Longitude** in decimal
+    degrees.
 12. **Keep comments on shots**: see below.
 13. Virtual shots: how they are imported, see below.
 
@@ -47,15 +49,30 @@ them on the shots.
 - **All jumps**
 - **All references**
 
+## Where each section goes
+
+- The position (9-11) applies to the first section imported, named above the
+  options. With 9 or 11 it gets the project's first
+  [zero datum](../concepts/zero-datums-and-gps-fixes.md).
+- Every other section follows its connection in the file.
+- A section that starts at another entrance with its own GPS position in the
+  file is placed there, with a zero datum of its own. A cave with several
+  GPS-tagged entrances so gets one zero datum per entrance, each placing its
+  own piece of the survey.
+- A section marked **(moved to origin)** connects to nothing else being
+  imported and has no GPS position, so it is placed at the origin. The import
+  report lists it.
+
 ## Details
 
-- The position (9-11) applies to the first section imported. Everything else
-  follows the connections recorded in the file.
 - The total length (4) counts every shot, virtual ones included. Which of them
   become references, and so drop out of the project's length, is settled on
   import.
-- **Include excluded shots** appears when the file has shots marked excluded.
-- A section marked **(moved to origin)** connects to nothing else being
-  imported, so it is placed at the origin. **(branch)** marks a section split
-  off at a branch.
+- A tick box such as **Include 4 excluded shots** appears when the file has
+  shots marked excluded.
+- **Keep comments on shots** appears only when the file has comments, and the
+  virtual shots choice only when it has virtual shots.
+- **(branch)** marks a section split off at a branch.
 - Imperial files are converted to metric.
+- Cancelling, or an import that fails, leaves the new project empty. You are
+  asked to **Keep empty project** or **Discard it**.

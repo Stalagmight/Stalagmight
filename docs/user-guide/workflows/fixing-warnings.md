@@ -38,8 +38,20 @@ Always fix errors. A warning may just mean the shot needs retaking, see
 
 The fixes depend on the problem. Inclination in and out too far apart offers
 **Use inclination in**, **Use inclination out**, **Average** (the default) or
-**Set inclination**. A loop closure across a single shot offers **Remove this
-loop closure** (switch back to the **Raw Data View** first: editing is off in the
-Closures Computed View). A part of the survey the Closures Computed View could
-not adjust is a warning, not an error: it offers **Go to station** and can be
-ignored.
+**Set inclination**.
+
+Some entries are not about a shot's readings:
+
+- A GPS fix far from where the survey puts its station: check the GPS reading
+  and the survey between the zero datums. **Edit zero datum** corrects the GPS
+  in the [Edit Station dialog](../screens/edit-station-dialog.md), **Go to
+  station** shows the fix, and **Ignore (keep value, don't warn again)** keeps
+  it when the gap is real. The warning comes back if the GPS position changes.
+- A loop closure across a single shot (an error): **Remove this loop closure**.
+- A part of the survey the Closures Computed View could not adjust (a warning):
+  **Go to station**, then fix the closures or zero datums the message names, or
+  ignore it.
+
+Switch back to the **Raw Data View** before **Edit zero datum** or **Remove
+this loop closure**: editing is off in the Closures Computed View. See
+[Zero datums and GPS fixes](../concepts/zero-datums-and-gps-fixes.md).

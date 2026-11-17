@@ -7,11 +7,14 @@ order: 4
 # Importing from an MNemo
 
 1. In the [survey view](../screens/survey-view.md), click **Import** and pick
-   the `.dmp` file.
-2. Tick the sections to import and click **Continue to Section Setup**. Empty
-   and already imported sections are left out for you.
+   the `.dmp` file. Or, with the MNemo on its USB cable, choose **Import from
+   MNemo...** in the menu, pick the device, click **Read MNemo**, then
+   **Import...**.
+2. Tick the sections to import, add the **Surveyors** and **Explorers**, and
+   click **Continue to Section Setup**. Empty and already imported sections are
+   left out for you.
 3. Optional: click the section that should carry the
-   [zero datum](../concepts/sections-shots-stations.md), or **Skip Zero
+   [zero datum](../concepts/zero-datums-and-gps-fixes.md), or **Skip Zero
    Datum** and [set it later](setting-a-zero-datum.md).
 4. If you picked one: choose its station, enter the GPS position and click
    **Confirm Zero Datum**.
@@ -21,17 +24,32 @@ order: 4
    Connect them later, once the data is there.
 7. A section that does not belong to this survey: press **Esc**, pick **Do
    not place** and click **Next**.
-8. If an [import report](../screens/import-report.md) opens, read it and click
+8. If **Connect Orphaned Sections** opens, accept or skip each suggested
+   connection.
+9. If an [import report](../screens/import-report.md) opens, read it and click
    **Continue to map**.
 
 ## Step details
+
+### 1. Open the file
+
+- With no project open, start from **Open / Import** on the
+  [start screen](../screens/start-screen.md). The
+  [Create Project for Import dialog](../screens/create-project-for-import.md)
+  comes first.
+- Reading over USB saves a copy of the device's memory as a `.dmp` before
+  anything is imported. **Show file** shows it. Nothing on the device changes.
+- Import is for the Survey mode and the Raw Data View. From anywhere else, the
+  app offers to switch first.
 
 ### 2. Pick sections
 
 ![DMP import, step 1](../images/dmp-import-step1.png)
 
 - Ticked sections (6) are imported. Empty ones (5) can't be picked.
-- **Surveyor** (2) and **Date Override** (3) apply to every section.
+- The people (2) and **Date Override** (3) apply to every section. The
+  screenshot shows an older single Surveyor field where **Surveyors** and
+  **Explorers** now sit.
 - See [DMP import](../screens/dmp-import.md).
 
 ### 3. Zero datum
@@ -74,6 +92,8 @@ order: 4
   join them is not there.
 - Click the map to drop them. The station under the pointer (1) lands where you
   click.
+- To move the map, use Ctrl+drag or a middle-button drag: a plain drag does not
+  pan while placing.
 - It does not need to be accurate. They can be moved, or connected, later.
 
 ### 7. Leave a section out
