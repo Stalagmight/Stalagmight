@@ -57,11 +57,14 @@ export type UndoVariant =
   | 'ClosureInfo'
   | 'ZeroDatumInfo'
   | 'SegmentMoveInfo'
-  | 'ProjectSnapshotPair';
+  | 'Delta';
 
 /**
  * `UndoHistoryItem.commandType` -> the `UndoData` variant that command's entry
  * carries. Transcribed from `undo_capture.rs`; every row is a `match` arm there.
+ * A command captured as two whole-project snapshots (`ProjectSnapshotPair`) is
+ * STORED as the compact `Delta` between them (`UndoData::compact`), so that is
+ * the variant its entry carries.
  *
  * Two rows are conditional in the Rust and unconditional here, deliberately:
  *
@@ -92,19 +95,21 @@ export const VARIANT_BY_COMMAND_TYPE: Readonly<Record<string, UndoVariant>> = {
   create_loop_closure: 'ClosureInfo',
   remove_loop_closure: 'ClosureInfo',
   set_zero_datum: 'ZeroDatumInfo',
-  remove_zero_datum: 'ZeroDatumInfo',
+  // Captured as a snapshot pair (the removal can convert a closure), so a
+  // compact delta.
+  remove_zero_datum: 'Delta',
   move_section: 'SegmentMoveInfo',
   move_segment: 'SegmentMoveInfo',
-  delete_section: 'ProjectSnapshotPair',
-  delete_shot: 'ProjectSnapshotPair',
-  reverse_section: 'ProjectSnapshotPair',
-  merge_stations: 'ProjectSnapshotPair',
-  unmerge_stations: 'ProjectSnapshotPair',
-  unmerge_station_pair: 'ProjectSnapshotPair',
-  move_station: 'ProjectSnapshotPair',
-  move_comment: 'ProjectSnapshotPair',
-  batch: 'ProjectSnapshotPair',
-  repair_integrity: 'ProjectSnapshotPair',
+  delete_section: 'Delta',
+  delete_shot: 'Delta',
+  reverse_section: 'Delta',
+  merge_stations: 'Delta',
+  unmerge_stations: 'Delta',
+  unmerge_station_pair: 'Delta',
+  move_station: 'Delta',
+  move_comment: 'Delta',
+  batch: 'Delta',
+  repair_integrity: 'Delta',
 };
 
 /**
@@ -130,6 +135,7 @@ export const UNREACHABLE_VARIANTS: Readonly<Record<string, string>> = {
   ShotSnapshot: 'DeleteShot captures a ProjectSnapshotPair; this arm serves legacy persisted entries',
   SectionSnapshot: 'DeleteSection captures a ProjectSnapshotPair; no live producer',
   ProjectSnapshot: 'superseded by ProjectSnapshotPair; no live producer',
+  ProjectSnapshotPair: 'a capture shape only: every pair is stored as a compact Delta',
 };
 
 /** One `projectStore` action plus its args, exactly as the bridge dispatches it. */
@@ -352,21 +358,25 @@ function target(memo: CoverageMemo): number | null {
 // the obvious one. It was corrected after a 60-iteration run showed the first
 // arrangement could not expose a single stale-id defect.
 //
-// ## Why a ProjectSnapshotPair entry is a wall
+// ## Why the snapshot-captured steps sit low in the stack
 //
 // `Shot::id` IS serialized inside a project snapshot (models/shot.rs has no
-// `skip` on it), and `UndoData::ProjectSnapshotPair` restores the whole project
-// verbatim (`restore_snapshot_into`, core/state/undo.rs). So the moment a walk
-// crosses ONE snapshot-pair entry in either direction, the project is back in
-// the PRE-SAVE id space - and every stale id in every entry beyond it is
-// suddenly valid again. A snapshot-pair entry heals the very corruption this
-// scenario is looking for.
+// `skip` on it). Before compact undo entries, a `ProjectSnapshotPair` restored
+// the whole recorded project verbatim, so the moment a walk crossed ONE such
+// entry the project was back in the PRE-SAVE id space - and every stale id in
+// every entry beyond it was suddenly valid again: a snapshot-pair entry healed
+// the very corruption this scenario looks for. The exposed window was exactly
+// from the depth the reload lands on down to the first pair beneath it; in the
+// first arrangement every pair sat ABOVE the id-bearing steps, so that window
+// was two or three entries wide and contained none of them (60 iterations
+// reported only known bugs).
 //
-// The exposed window is therefore exactly: from the depth the reload lands on,
-// down to (not including) the first `ProjectSnapshotPair` beneath it. In the
-// first arrangement every snapshot-pair step sat ABOVE the id-bearing ones, so
-// that window was two or three entries wide and contained none of them. 60
-// iterations of it reported only bugs already known.
+// A snapshot-captured command is now STORED as a compact `Delta`, which
+// restores only what its command changed and settles the shot ids it puts back
+// against the live ones (`ProjectDelta::apply` in core/undo/delta.rs). It no
+// longer resets the id space, so it no longer shrinks the window - but the
+// arrangement below is kept, because it still puts every id-bearing entry where
+// the reload lands first.
 //
 // ## The arrangement that follows from that
 //
@@ -424,7 +434,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'deleteShotMid',
-    variant: 'ProjectSnapshotPair',
+    variant: 'Delta',
     guaranteed: true,
     purpose:
       'the DeleteShot ProjectSnapshotPair path. Runs on the SPARE section by default; ' +
@@ -448,12 +458,12 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'moveStation',
-    variant: 'ProjectSnapshotPair',
+    variant: 'Delta',
     guaranteed: true,
     purpose:
-      'a ProjectSnapshotPair recorded BEFORE the save: undoing or redoing it restores a whole ' +
-      'pre-save project, which is finding 11s mechanism and also puts the PRE-RENUMBER shot ids ' +
-      'back into a project the entries above it were captured against',
+      'a snapshot-captured entry recorded BEFORE the save (stored as a compact Delta): undoing ' +
+      'or redoing it after the reload must neither revert a save heal (finding 11) nor put a ' +
+      'PRE-RENUMBER shot id back beside the renumbered ones',
     build(ctx, digest, memo) {
       const sectionId = target(memo);
       if (sectionId === null) return null;
@@ -469,7 +479,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'reverseSection',
-    variant: 'ProjectSnapshotPair',
+    variant: 'Delta',
     guaranteed: true,
     purpose: 'the ReverseSection pair path, and it re-orders the diverged section once more',
     build(ctx, digest, memo) {
@@ -486,7 +496,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'executeBatch',
-    variant: 'ProjectSnapshotPair',
+    variant: 'Delta',
     guaranteed: true,
     purpose: 'one entry covering several sub-commands (execute_batch pushes its own pair)',
     build(ctx, digest, memo) {
@@ -534,7 +544,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'mergeStations',
-    variant: 'ProjectSnapshotPair',
+    variant: 'Delta',
     guaranteed: true,
     purpose:
       'the MergeStations pair path, and the connectivity createLoopClosure needs. One side is ' +
