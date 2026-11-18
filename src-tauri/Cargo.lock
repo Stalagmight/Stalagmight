@@ -4588,12 +4588,11 @@ dependencies = [
 
 [[package]]
 name = "speleodb-api"
-version = "0.6.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "868c71233774273092801837402fa563aaf7f2db4f68e0ffc0f623a78cbf9504"
+checksum = "437d3ade10076154df74bd0d26fbbb77277ac14cffba33234ebe8072aa1a25d7"
 dependencies = [
  "bytes",
- "chrono",
  "futures-util",
  "mime",
  "reqwest 0.13.5",
@@ -4602,6 +4601,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "thiserror 2.0.21",
+ "time",
  "url",
  "uuid",
 ]
@@ -4780,6 +4780,7 @@ dependencies = [
  "stalagmight-telemetry",
  "tempfile",
  "thiserror 1.0.69",
+ "time",
  "tokio",
  "tracing",
  "ts-rs",

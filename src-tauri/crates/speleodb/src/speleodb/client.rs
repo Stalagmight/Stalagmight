@@ -17,6 +17,7 @@ use super::{SpeleoDbError, TransportCause};
 
 mod collaborators;
 mod commit_dates;
+mod timestamps;
 pub use collaborators::{
     list_project_collaborators, lookup_user_name, ProjectCollaborator, MAX_COLLABORATORS,
 };
@@ -588,7 +589,7 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         },
     });
     Ok(Project {
-        modified_date: Some(value.modified_date.to_rfc3339()),
+        modified_date: Some(timestamps::project(value.modified_date, "+00:00")?),
         id: value.id.to_string(),
         name: value.name,
         permission,
@@ -669,10 +670,19 @@ pub fn list_projects(
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::ListProjects, true, || async {
         match c.http.v2_projects_list(None).await {
-            Ok(values) => list_projection(
-                serde_json::to_value(values)
-                    .map_err(|_| SpeleoDbError::Parse("invalid project list".into()))?,
-            ),
+            Ok(values) => {
+                let rows = values
+                    .into_iter()
+                    .map(|value| {
+                        let modified_date = timestamps::project(value.modified_date, "Z")?;
+                        let mut row = serde_json::to_value(value)
+                            .map_err(|_| SpeleoDbError::Parse("invalid project list".into()))?;
+                        row["modified_date"] = modified_date.into();
+                        Ok(row)
+                    })
+                    .collect::<Result<Vec<_>, SpeleoDbError>>()?;
+                list_projection(rows.into())
+            }
             // The SDK still owns transport, status handling and the bounded body.
             // List-only projection tolerates future enums without weakening mutations.
             Err(ApiOpError::Api(error)) if error.status == 200 => {
@@ -794,17 +804,19 @@ pub fn get_revisions(
                 .commits
                 .into_iter()
                 .enumerate()
-                .map(|(i, v)| RevisionCommit {
-                    authored_date: match reply.dates.get(i) {
-                        Some(date) => date.clone(),
-                        None => Some(commit_dates::instant(v.authored_date)),
-                    },
-                    id: v.id,
-                    parent_ids: v.parent_ids,
-                    author_email: v.author_email,
-                    message: Some(v.message),
+                .map(|(i, v)| {
+                    Ok(RevisionCommit {
+                        authored_date: match reply.dates.get(i) {
+                            Some(date) => date.clone(),
+                            None => Some(timestamps::revision(v.authored_date)?),
+                        },
+                        id: v.id,
+                        parent_ids: v.parent_ids,
+                        author_email: v.author_email,
+                        message: Some(v.message),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, SpeleoDbError>>()?,
         })
     })
 }
