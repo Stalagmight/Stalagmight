@@ -102,7 +102,9 @@ export function mapHiddenLines(
 /**
  * The survey data the MAP draws: the active geometry (measured or adjusted,
  * `selectActiveSurveyData`) without the hidden lines. Everything else that
- * reads survey data - statistics, tables, exports - keeps the whole project.
+ * reads survey data - statistics, tables, data exports - keeps the whole
+ * project; the image export leaves the hidden Sections out by itself
+ * (`withHiddenLines`).
  */
 export function selectMapSurveyData(
   project: GeometrySlice & { project: { lines: Line[] } | null },

@@ -9,7 +9,7 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import type { SaveErrorKind } from '../utils/saveErrors';
-import { exportScaleInputsFrom, withColorScales } from '../utils/exportOptions';
+import { exportScaleInputsFrom, withColorScales, withHiddenLines } from '../utils/exportOptions';
 import { useColorScaleStore } from './colorScaleStore';
 import {
   isEditDisabledError,
@@ -2465,9 +2465,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // Stamped here, not at the callers (#360): this is the one funnel every
     // image export passes through. Unconditional - the option is inert for the
     // non-depth modes. See `utils/exportOptions.ts`.
+    // The hidden Sections' lines are left out, like on the map; stamped here
+    // for the same one-funnel reason.
     await invokeIpc('export_image', {
       path,
-      options: withColorScales(options, exportScaleInputsFrom(get().config?.map_palette, useColorScaleStore.getState())),
+      options: withHiddenLines(
+        withColorScales(options, exportScaleInputsFrom(get().config?.map_palette, useColorScaleStore.getState())),
+        get().project?.lines,
+        useUIStore.getState().hiddenSections,
+      ),
     }, {
       purpose: 'export map image',
       fields: { path, format: options.format },

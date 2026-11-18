@@ -48,7 +48,7 @@ use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
 use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
-use crate::models::{Project, StationRef};
+use crate::models::{LineId, Project, StationRef};
 
 /// Output image format.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -408,6 +408,15 @@ pub struct ExportImageOptions {
     #[serde(default)]
     #[ts(optional)]
     pub distance_scale: Option<ExportColorScale>,
+    /// Lines the export leaves out: the lines of the Sections the map hides
+    /// (display setting `hiddenSections`). Their shots, stations, labels,
+    /// comments and closures are not drawn and do not count toward the
+    /// picture's extent; distances (penetration labels, the distance ramp)
+    /// are still measured along the whole survey. Absent or empty = every
+    /// line, the export before Sections could be hidden.
+    #[serde(default)]
+    #[ts(optional)]
+    pub hidden_line_ids: Option<Vec<LineId>>,
 }
 
 impl Default for ExportImageOptions {
@@ -429,6 +438,7 @@ impl Default for ExportImageOptions {
             depth_deep: None,
             depth_scale: None,
             distance_scale: None,
+            hidden_line_ids: None,
         }
     }
 }
@@ -609,6 +619,41 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
 /// map matches the on-screen (adjusted) geometry.
 pub fn generate_svg_string_with_stations(
     project: &Project,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<String> {
+    let hidden: HashSet<LineId> = options
+        .hidden_line_ids
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|id| project.get_line(*id).is_some())
+        .collect();
+    if hidden.is_empty() {
+        return render_svg(project, None, options, stations);
+    }
+    // Draw from a copy without the hidden lines: every pass below walks
+    // `project.lines` and the stations, and a merge, closure or comment
+    // whose station is on a hidden line no longer resolves, so it is left
+    // out with its line. The whole survey still measures the distances.
+    let mut drawn = project.clone();
+    drawn.lines.retain(|line| !hidden.contains(&line.id));
+    drawn.rebuild_line_index();
+    let shown: Vec<crate::models::Station> = stations
+        .iter()
+        .filter(|s| !hidden.contains(&s.station_ref.line_id))
+        .cloned()
+        .collect();
+    render_svg(&drawn, Some((project, &stations)), options, shown)
+}
+
+/// [`generate_svg_string_with_stations`] for the lines it draws: `project`
+/// and `stations` hold only what is drawn, and `whole` the whole survey
+/// (project and every station) when that is more, to measure distances
+/// along (`None` = `project` is the whole survey).
+fn render_svg(
+    project: &Project,
+    whole: Option<(&Project, &[crate::models::Station])>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<String> {
@@ -1051,8 +1096,9 @@ pub fn generate_svg_string_with_stations(
         // measured coords - see `AppState::distance_field`). Match that: distances
         // key by station_ref, so this stays consistent with the adjusted geometry
         // we draw. (It also skips the adjusted solve the map was designed to avoid.)
-        let field = project.distance_field_from_with(
-            &project.compute_station_coordinates(),
+        let measured = whole.map_or(project, |(whole, _)| whole);
+        let field = measured.distance_field_from_with(
+            &measured.compute_station_coordinates(),
             None,
             options.include_reference_legs,
         );
@@ -1296,14 +1342,35 @@ pub fn generate_svg_string_with_stations(
     // station. Only attempted when the project has at least one zero datum
     // (otherwise penetration distance is undefined). Labels carry a white
     // halo for readability and dodge collisions by trying eight placement
-    // offsets before giving up.
-    if options.show_penetration_labels && !zero_datum_indices.is_empty() {
+    // offsets before giving up. A datum on a hidden line still measures the
+    // drawn ones.
+    let has_datum = !zero_datum_indices.is_empty()
+        || whole.is_some_and(|(_, all)| all.iter().any(|s| s.is_zero_datum));
+    if options.show_penetration_labels && has_datum {
         // Use the project's shared along-cave penetration computation -
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        let pen_dist =
-            project.compute_penetration_distances_with(&stations, options.include_reference_legs);
+        // Along the whole survey, hidden lines included: hiding a Section
+        // does not make the cave beyond it any closer.
+        let pen_dist: Vec<f64> = match whole {
+            None => project
+                .compute_penetration_distances_with(&stations, options.include_reference_legs),
+            Some((whole, all)) => {
+                let by_ref: HashMap<StationRef, f64> =
+                    all.iter()
+                        .map(|s| s.station_ref)
+                        .zip(whole.compute_penetration_distances_with(
+                            all,
+                            options.include_reference_legs,
+                        ))
+                        .collect();
+                stations
+                    .iter()
+                    .map(|s| by_ref.get(&s.station_ref).copied().unwrap_or(f64::INFINITY))
+                    .collect()
+            }
+        };
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -2234,6 +2301,96 @@ mod tests {
         );
     }
 
+    /// A hidden Section's lines (`hidden_line_ids`) are not drawn: no shot,
+    /// station, label, comment or datum star of theirs, and the picture's
+    /// extent hugs what is drawn. Distances still run along the whole
+    /// survey: the datum on the hidden line still measures the drawn one.
+    #[test]
+    fn hidden_lines_are_not_drawn_but_still_measure_distances() {
+        let mut project = Project::new("Hidden".to_string(), None);
+        // "Far" runs 100 m east from the entrance to the start of "Main",
+        // which runs 10 m further east.
+        let far = project
+            .add_line(LineData {
+                name: Some("Far".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(50.0, 90.0, false), make_shot(50.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let main = project
+            .add_line(LineData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project
+            .set_zero_datum(
+                StationRef::new(far, 0),
+                GpsCoordinates::new(45.0, -122.0, 0.0).unwrap(),
+            )
+            .unwrap();
+        project
+            .merge_stations(StationRef::new(far, 2), StationRef::new(main, 0))
+            .unwrap();
+        let far_key = project.key_for_ref(StationRef::new(far, 1)).unwrap();
+        project
+            .station_comments
+            .insert(far_key, "far-note".to_string());
+        let main_key = project.key_for_ref(StationRef::new(main, 1)).unwrap();
+        project
+            .station_comments
+            .insert(main_key, "main-note".to_string());
+        let options = |hidden: Option<Vec<LineId>>| ExportImageOptions {
+            format: ImageFormat::Svg,
+            show_penetration_labels: false,
+            show_line_names: true,
+            show_station_comments: true,
+            hidden_line_ids: hidden,
+            ..Default::default()
+        };
+
+        let all = generate_svg_string(&project, &options(None)).unwrap();
+        assert!(all.contains(">Far</text>"), "{all}");
+        assert!(all.contains("far-note"), "{all}");
+        let (_, _, all_w, _) = parse_viewbox(&all);
+        assert!(all_w > 100.0, "the whole survey spans 110 m: {all_w}");
+
+        let svg = generate_svg_string(&project, &options(Some(vec![far]))).unwrap();
+        assert!(svg.contains(">Main</text>"), "{svg}");
+        assert!(svg.contains("main-note"), "{svg}");
+        assert!(!svg.contains(">Far</text>"), "hidden line name: {svg}");
+        assert!(!svg.contains("far-note"), "hidden station comment: {svg}");
+        assert!(
+            !svg.contains("<polygon"),
+            "the datum star sits on the hidden line: {svg}"
+        );
+        let (_, _, w, _) = parse_viewbox(&svg);
+        assert!(w < 60.0, "the extent hugs the drawn 10 m line: {w}");
+        // Main's far end is 110 m from the entrance along the survey, the
+        // hidden line included.
+        let measured = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                branching_threshold: 0,
+                show_penetration_labels: true,
+                hidden_line_ids: Some(vec![far]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(measured.contains(">p. 110</text>"), "{measured}");
+
+        // An empty list, or ids of lines that do not exist, hide nothing.
+        let none = generate_svg_string(&project, &options(Some(vec![]))).unwrap();
+        assert_eq!(none, all);
+        let stale = generate_svg_string(&project, &options(Some(vec![999]))).unwrap();
+        assert_eq!(stale, all);
+    }
+
     #[test]
     fn export_svg_writes_file() {
         let project = simple_project();
@@ -2884,7 +3041,7 @@ mod tests {
             })
             .id;
 
-        let mut leaf_id = |name: &str| -> crate::models::LineId {
+        let mut leaf_id = |name: &str| -> LineId {
             project
                 .add_line(LineData {
                     name: Some(name.to_string()),
@@ -2898,7 +3055,7 @@ mod tests {
         let b_id = leaf_id("LeafB");
         let c_id = leaf_id("LeafC");
 
-        let mut stub_id = || -> crate::models::LineId {
+        let mut stub_id = || -> LineId {
             project
                 .add_line(LineData {
                     name: Some("Stub".to_string()),
@@ -3067,7 +3224,7 @@ mod tests {
                 ..Default::default()
             })
             .id;
-        let mut leaf_id = |name: &str| -> crate::models::LineId {
+        let mut leaf_id = |name: &str| -> LineId {
             project
                 .add_line(LineData {
                     name: Some(name.to_string()),
@@ -3147,7 +3304,7 @@ mod tests {
         // share a segment_uf root via merges, so free_uf groups them into
         // one cluster, and the three attached anchors form a 3-clique.
         let mut project = Project::new("FreeHub".to_string(), None);
-        let mut real_seg = |name: &str| -> crate::models::LineId {
+        let mut real_seg = |name: &str| -> LineId {
             project
                 .add_line(LineData {
                     name: Some(name.to_string()),
@@ -3162,7 +3319,7 @@ mod tests {
         let c_id = real_seg("C");
 
         let merged_at = chrono::Utc::now();
-        let mut spoke_ids: Vec<crate::models::LineId> = Vec::new();
+        let mut spoke_ids: Vec<LineId> = Vec::new();
         for (label, leaf) in [("SpokeA", a_id), ("SpokeB", b_id), ("SpokeC", c_id)] {
             let spoke = project
                 .add_line(LineData {

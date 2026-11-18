@@ -57,7 +57,9 @@ there. The panel still lists them, dimmed. Click the eye again to show them.
 - Statistics still count hidden lines.
 - Hidden sections stay hidden in **Plan** and **Export**; show them again from
   the **Sections** panel in **Survey**.
-- An exported image draws every line, hidden or not.
+- An exported image leaves hidden sections out too, even a hidden line you
+  have selected. Distances in the image (the penetration labels and the
+  distance colors) still count the hidden lines.
 
 ## Color
 

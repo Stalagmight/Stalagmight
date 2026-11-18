@@ -1029,8 +1029,14 @@ empty: it is where a line is dragged to leave its Section).
   the user selects is drawn while it is selected (so a selection is never
   invisible and Zoom to Line frames something); the Section stays hidden. A
   station or shot drag still moves stations of hidden lines merged with (or
-  tied by an aligned closure to) the dragged one. The image export does not
-  read the setting: it draws every line.
+  tied by an aligned closure to) the dragged one. The image export and its
+  preview leave the hidden Sections' lines out too (`ExportImageOptions.
+  hidden_line_ids`, stamped by `withHiddenLines` in `utils/exportOptions.ts`):
+  no shots, stations, labels, comments, closures or datum stars of theirs, and
+  the picture's extent covers only what is drawn. Unlike the map, a selected
+  hidden line is still left out (the export follows the Sections, not the
+  selection). Penetration labels and the distance colouring still measure along
+  the whole survey, hidden lines included.
 
 ### 6.4 Undo/Redo History Dropdown
 
