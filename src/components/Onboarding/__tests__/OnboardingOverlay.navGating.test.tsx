@@ -18,8 +18,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
 /**
  * #409 - the tour must teach the toolbar the user actually has. The Navigate
  * group (Pan / Zoom) is off the toolbar unless
- * `map.controls.show_navigation_tools` is on, and the pan card leads with the
- * plain left-drag rather than CTRL+drag.
+ * `map.controls.show_navigation_tools` is on, and the pan card (placement mode
+ * only) teaches CTRL+drag and middle-drag, never a plain left-drag.
  *
  * The steps carry no `targetSelector`: these cases are about the illustration,
  * and an unresolvable anchor would only add the two-second give-up wait the
@@ -103,17 +103,15 @@ describe('OnboardingOverlay navigation-tool gating (#409)', () => {
     expect(screen.getByText('toolbar.tools.merge')).toBeTruthy();
   });
 
-  it('teaches the plain left-drag as the primary pan gesture', () => {
+  it('teaches only the pan gestures that work during placement', () => {
     render(<OnboardingOverlay {...props} step={stepWith('mouse-pan-zoom')} />);
 
     const illustration = screen.getByTestId('onboarding-illustration-mouse-pan-zoom');
-    // The primary row: left click + drag, with no CTRL badge in front of it.
-    expect(screen.getByText('+ drag')).toBeTruthy();
-    // CTRL+left and middle-drag survive as the demoted alternatives, so the
-    // secondary "Left click" and the CTRL badge are still there - which is why
-    // the primary row is identified by its "+ drag" sibling rather than by the
-    // label alone.
-    expect(screen.getAllByText('Left click').length).toBe(2);
+    // The illustration is shown only in placement mode, where a plain drag
+    // places instead of panning (mapGestureMode), so no plain-drag row: the one
+    // "Left click" is the CTRL+left gesture.
+    expect(screen.queryByText('+ drag')).toBeNull();
+    expect(screen.getAllByText('Left click').length).toBe(1);
     expect(illustration.textContent).toContain('CTRL');
     expect(illustration.textContent).toContain('Middle click');
   });
