@@ -311,9 +311,18 @@ reason is a page every push uploads and stores. What keeps it:
   (`Line::loaded_created_at`); builds before this one stamped it with the time
   of each save. A line with no usable stored time gets the project's
   `created_at`: a line new this session, a line an undo re-creates after a
-  delete, or a stored value that is not RFC 3339 text, is a leap second, or
-  falls outside years 0000-9999 in UTC. Restoring a whole-project snapshot
-  (undo or redo) carries each live line's time across by line id.
+  delete, or a stored value that is not RFC 3339 text or not a time every
+  reader parses (below). Restoring a whole-project snapshot (undo or redo)
+  carries each live line's time across by line id.
+- Every time the file stores (the project's `created_at` and `modified_at`,
+  each line's `created_at`, station merge and resolved-warning times) is read
+  and written through `persistence/sqlite/stored_times.rs`, which keeps it in
+  years 0001-9999 in UTC with no leap second, the range SpeleoDB's Python
+  reader parses. `to_rfc3339` would write a time past that range (only a
+  crafted file or undo entry holds one) as `-0001-...` or `+10000-...`, and a
+  file saved with that never opened again. Normalizing on the read as well
+  keeps the value in memory equal to the one on disk, which matters because a
+  `.plnx` matches its project by the `created_at` string.
 
 `a_resave_with_no_edit_writes_the_same_bytes` (`station_ids_tests.rs`) pins
 this for `Database::save_project` on a project without undo history. The undo

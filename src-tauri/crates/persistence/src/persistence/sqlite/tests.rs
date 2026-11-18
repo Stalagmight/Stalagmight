@@ -9041,6 +9041,7 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
         "Before year 0",
         "After year 9999",
         "Leap second",
+        "Year 0",
         "Integer",
         "Blob",
     ] {
@@ -9071,6 +9072,8 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
             "0000-01-01T00:00:00+23:59",
             "9999-12-31T23:59:59-23:59",
             "2016-12-31T23:59:60Z",
+            // In range for chrono, but Python's `datetime` starts at year 1.
+            "0000-06-01T12:00:00+00:00",
         ]) {
             db.conn
                 .execute(
@@ -9083,13 +9086,13 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
         db.conn
             .execute(
                 "UPDATE sections SET created_at = 42 WHERE id = ?1",
-                [ids[6]],
+                [ids[7]],
             )
             .unwrap();
         db.conn
             .execute(
                 "UPDATE sections SET created_at = x'0102' WHERE id = ?1",
-                [ids[7]],
+                [ids[8]],
             )
             .unwrap();
     }
@@ -9133,6 +9136,7 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
         "before year 0",
         "after year 9999",
         "a leap second",
+        "year 0",
         "an integer",
         "a blob",
     ]) {
@@ -9141,13 +9145,16 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
     assert_eq!(stored(new_line), fallback, "a new line has no stored time");
 }
 
-/// What `parse_from_rfc3339` accepts but `to_rfc3339` cannot write back
-/// as RFC 3339: an offset that moves year 0000 or 9999 past the range once in
-/// UTC, and a leap second.
-fn out_of_range_times() -> [chrono::DateTime<Utc>; 3] {
+/// What `parse_from_rfc3339` accepts but some reader cannot parse once it is
+/// written back: an offset that moves year 0000 or 9999 past the range in UTC
+/// (`to_rfc3339` writes `-0001-...` / `+10000-...`), year 0 itself (Python's
+/// `datetime`, which SpeleoDB's reader uses, starts at year 1), and a leap
+/// second (Python has no second 60).
+fn out_of_range_times() -> [chrono::DateTime<Utc>; 4] {
     [
         "0000-01-01T00:00:00+23:59",
         "9999-12-31T23:59:59-23:59",
+        "0000-06-01T12:00:00+00:00",
         "2016-12-31T23:59:60Z",
     ]
     .map(|text| {
@@ -9158,31 +9165,40 @@ fn out_of_range_times() -> [chrono::DateTime<Utc>; 3] {
 }
 
 #[test]
-fn every_saved_time_is_rfc3339_that_parses_again() {
-    let [before, after, leap] = out_of_range_times();
-    assert_eq!(write::stored_time(before), "0000-01-01T00:00:00+00:00");
-    assert_eq!(
-        write::stored_time(after),
-        "9999-12-31T23:59:59.999999999+00:00"
-    );
-    assert_eq!(
-        write::stored_time(leap),
-        "2016-12-31T23:59:59.999999999+00:00"
-    );
-    let ordinary = chrono::DateTime::parse_from_rfc3339("2024-03-05T10:20:30.123456789+00:00")
-        .unwrap()
-        .with_timezone(&Utc);
-    assert_eq!(
-        write::stored_time(ordinary),
-        "2024-03-05T10:20:30.123456789+00:00"
-    );
+fn every_saved_time_is_one_every_reader_parses() {
+    use chrono::{Datelike as _, Timelike as _};
+    let [before, after, year_zero, leap] = out_of_range_times();
+    let first = "0001-01-01T00:00:00+00:00";
+    let last = "9999-12-31T23:59:59.999999999+00:00";
+    for (at, stored) in [
+        (before, first),
+        (after, last),
+        (year_zero, first),
+        (leap, "2016-12-31T23:59:59.999999999+00:00"),
+        (
+            chrono::DateTime::parse_from_rfc3339("2024-03-05T10:20:30.123456789+00:00")
+                .unwrap()
+                .with_timezone(&Utc),
+            "2024-03-05T10:20:30.123456789+00:00",
+        ),
+    ] {
+        assert_eq!(stored_times::to_stored(at), stored);
+        // What the save writes reads back as the same value, inside the
+        // years and seconds every reader takes.
+        let back = stored_times::parse_stored(stored).unwrap();
+        assert_eq!(stored_times::to_stored(back), stored);
+        assert!((1..=9999).contains(&back.year()) && back.nanosecond() < 1_000_000_000);
+    }
 }
 
-/// A file whose project times are RFC 3339 that this build parses, but past
-/// years 0000-9999 once in UTC, opened (it always did) and then saved as
+/// A file whose project times are RFC 3339 that this build parses but past
+/// the years every reader takes opened (it always did) and was then saved as
 /// `-0001-...` / `+10000-...`, which the strict read refuses: the file never
-/// opened again. The save clamps them, so it reopens; a station merge time
-/// read from the file, or held in memory, is saved the same way.
+/// opened again. Times are now normalized as they are read and as they are
+/// written, so the file reopens and the value in memory (a `.plnx` matches
+/// the project by its `created_at` string) is the one on disk. The other
+/// times the save writes go the same way: a line's `created_at`, a station
+/// merge's, a resolved warning's.
 #[test]
 fn a_project_with_out_of_range_times_still_opens_after_a_save() {
     let dir = TempDir::new().unwrap();
@@ -9198,7 +9214,11 @@ fn a_project_with_out_of_range_times_still_opens_after_a_save() {
         });
     }
     let (a, b) = (project.lines[0].id, project.lines[1].id);
-    let [before, after, leap] = out_of_range_times();
+    let [before, after, _, leap] = out_of_range_times();
+    // Held in memory (an undo entry can carry one), not read from a file: the
+    // save itself must not write it as `-0001-...`, for the project row or
+    // for the lines that fall back to it.
+    project.created_at = before;
     project.station_merges.push(StationMerge {
         station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
         station_b: project.key_for_ref(StationRef::new(b, 0)).unwrap(),
@@ -9209,21 +9229,57 @@ fn a_project_with_out_of_range_times_still_opens_after_a_save() {
         .unwrap()
         .save_project(&project)
         .unwrap();
-    Database::open_existing(&written)
-        .unwrap()
-        .conn
-        .execute(
-            "UPDATE project SET created_at = '0000-01-01T00:00:00+23:59', \
-             modified_at = '9999-12-31T23:59:59-23:59'",
-            [],
-        )
+    {
+        let db = Database::open_existing(&written).unwrap();
+        let first_line_time: String = db
+            .conn
+            .query_row(
+                "SELECT created_at FROM sections ORDER BY id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_line_time, "0001-01-01T00:00:00+00:00");
+        db.conn
+            .execute(
+                "UPDATE project SET created_at = '0000-01-01T00:00:00+23:59', \
+                 modified_at = '9999-12-31T23:59:59-23:59'",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE sections SET created_at = '0001-01-01T00:00:00+23:59'",
+                [],
+            )
+            .unwrap();
+        db.save_resolved_warning(&ResolvedWarning {
+            line_id: a,
+            shot_id: project.lines[0].shots[0].id,
+            warning_code: "far_time".to_string(),
+            resolved_at: after,
+            resolved_comment: None,
+            shot_uuid: project.lines[0].shots[0].uuid.clone(),
+        })
         .unwrap();
+        let resolved_at: String = db
+            .conn
+            .query_row("SELECT resolved_at FROM resolved_warnings", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(resolved_at, "9999-12-31T23:59:59.999999999+00:00");
+    }
 
     let opened = Database::open_existing(&written)
         .unwrap()
         .load_project()
         .unwrap();
-    assert_eq!((opened.created_at, opened.modified_at), (before, after));
+    assert_eq!(opened.created_at.to_rfc3339(), "0001-01-01T00:00:00+00:00");
+    assert_eq!(
+        opened.modified_at.to_rfc3339(),
+        "9999-12-31T23:59:59.999999999+00:00"
+    );
     let resaved = dir.path().join("resaved.stalx");
     Database::open(&resaved)
         .unwrap()
@@ -9235,15 +9291,28 @@ fn a_project_with_out_of_range_times_still_opens_after_a_save() {
         .load_project()
         .expect("a saved file must open again");
     assert_eq!(
-        reopened.created_at.to_rfc3339(),
-        "0000-01-01T00:00:00+00:00"
-    );
-    assert_eq!(
-        reopened.modified_at.to_rfc3339(),
-        "9999-12-31T23:59:59.999999999+00:00"
+        (reopened.created_at, reopened.modified_at),
+        (opened.created_at, opened.modified_at),
+        "the times in memory are the times on disk"
     );
     assert_eq!(
         reopened.station_merges[0].merged_at.to_rfc3339(),
         "2016-12-31T23:59:59.999999999+00:00"
+    );
+    let line_times: Vec<String> = {
+        let db = Database::open_readonly(&resaved).unwrap();
+        let mut stmt = db
+            .conn
+            .prepare("SELECT created_at FROM sections ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(
+        line_times,
+        ["0001-01-01T00:00:00+00:00", "0001-01-01T00:00:00+00:00"],
+        "a line time out of range falls back to the project's"
     );
 }

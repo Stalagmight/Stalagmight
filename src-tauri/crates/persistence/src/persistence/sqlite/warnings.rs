@@ -215,8 +215,8 @@ impl Database {
             // An unparseable timestamp already fell back to "now"; a non-text
             // one now joins it rather than failing the read.
             let resolved_at = coerce_text(row.get_ref(3)?, MAX_RESOLVED_KEY_CHARS)
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+                .and_then(|s| super::stored_times::parse_stored(&s).ok())
+                .unwrap_or_else(Utc::now);
             Ok(Some(ResolvedWarning {
                 line_id,
                 shot_id,
@@ -308,7 +308,7 @@ impl Database {
                 warning.line_id,
                 warning.shot_id,
                 warning.warning_code,
-                super::write::stored_time(warning.resolved_at),
+                super::stored_times::to_stored(warning.resolved_at),
                 warning.resolved_comment,
                 warning.shot_uuid,
             ],
@@ -491,7 +491,7 @@ impl Database {
                     warning.line_id,
                     warning.shot_id,
                     warning.warning_code,
-                    super::write::stored_time(warning.resolved_at),
+                    super::stored_times::to_stored(warning.resolved_at),
                     warning.resolved_comment,
                     warning.shot_uuid,
                 ])?;

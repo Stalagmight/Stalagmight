@@ -41,9 +41,8 @@ impl Database {
             .context("Failed to read project metadata header")?;
         let t_header = start.elapsed();
 
-        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at_raw)
-            .context("Failed to parse modified_at")?
-            .with_timezone(&Utc);
+        let modified_at = super::stored_times::parse_stored(&modified_at_raw)
+            .context("Failed to parse modified_at")?;
 
         // Aggregate-only queries.
         let line_count: i64 = self
@@ -256,8 +255,10 @@ impl Database {
             (n, l, c, m, None)
         };
 
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
-        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
+        // Normalized on the way in, so the value in memory is the one the
+        // next save writes (`stored_times`).
+        let created_at = super::stored_times::parse_stored(&created_at)?;
+        let modified_at = super::stored_times::parse_stored(&modified_at)?;
 
         // Load lines
         let mut lines: Vec<Line> = Vec::new();
@@ -667,8 +668,7 @@ impl Database {
 
             for merge_row in merge_rows {
                 let (a_sec, a_idx, b_sec, b_idx, merged_at_str) = merge_row?;
-                let merged_at =
-                    chrono::DateTime::parse_from_rfc3339(&merged_at_str)?.with_timezone(&Utc);
+                let merged_at = super::stored_times::parse_stored(&merged_at_str)?;
                 // Persisted positionally; load as transitional Index anchors,
                 // which `reanchor_station_refs` (run on the load path) canonicalizes
                 // to stable shot-UUID anchors once shots are present.
@@ -1556,16 +1556,12 @@ impl Database {
     }
 }
 
-/// A line's stored `sections.created_at`, or `None` when it is not a time the
-/// save can write back as RFC 3339 text that readers parse: not text, not
-/// RFC 3339, a leap second (Python's `datetime`, which SpeleoDB's reader uses,
-/// has no second 60), or an offset that moves the instant out of years
-/// 0000-9999 once in UTC (`to_rfc3339` would then write `-0001-...` or
-/// `+10000-...`). The save then writes the fallback (`Line::loaded_created_at`).
+/// A line's stored `sections.created_at`, or `None` when it is not text, not
+/// RFC 3339, or not a time every reader parses (`stored_times`): the save
+/// then writes the fallback (`Line::loaded_created_at`).
 fn stored_line_time(value: rusqlite::types::ValueRef<'_>) -> Option<chrono::DateTime<Utc>> {
-    use chrono::{Datelike as _, Timelike as _};
     let at = chrono::DateTime::parse_from_rfc3339(value.as_str().ok()?)
         .ok()?
         .with_timezone(&Utc);
-    ((0..=9999).contains(&at.year()) && at.nanosecond() < 1_000_000_000).then_some(at)
+    (super::stored_times::normalized(at) == at).then_some(at)
 }

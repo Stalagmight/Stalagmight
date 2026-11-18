@@ -20,7 +20,8 @@
 //! lock it out. Since its 0.0.2 (c4bf036, 2026-11-13; the version SpeleoDB's
 //! lockfile pins at 792be226d) `_read` accepts `user_version` 18 or 19, with a
 //! `project.schema_version` that matches, and it also reads `loop_closures`,
-//! `section_offsets` and `station_offsets`, still by column lists. A server
+//! `section_offsets` and `station_offsets` (each optional, taking whichever of
+//! its known columns are present). A server
 //! still on 0.0.1 refuses anything but 18, so the rule stands until every
 //! deployment has moved. (The in-repo `stalx-reader` is not the constraint: its supported
 //! version is this crate's `SCHEMA_VERSION`, so it moves with any bump - though an

@@ -12,6 +12,7 @@ use super::shot_credits::{
 };
 use super::station_ids::{write_station_ids, CREATE_STATION_IDS};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
+use super::stored_times::to_stored;
 use super::{Database, SCHEMA_VERSION};
 
 impl Database {
@@ -83,8 +84,8 @@ impl Database {
             params![
                 project.name,
                 project.location,
-                stored_time(project.created_at),
-                stored_time(project.modified_at),
+                to_stored(project.created_at),
+                to_stored(project.modified_at),
                 SCHEMA_VERSION,
                 next_closure_id_i64
             ],
@@ -147,7 +148,7 @@ impl Database {
                         .and_then(|r| r.source.epoch_year()),
                     // What the file held, so an unchanged project saves to
                     // the same bytes (`Line::loaded_created_at`).
-                    stored_time(line.loaded_created_at.unwrap_or(project.created_at))
+                    to_stored(line.loaded_created_at.unwrap_or(project.created_at))
                 ],
             )?;
             // What this build wrote, so a later open can tell a pair retyped
@@ -236,7 +237,7 @@ impl Database {
                     a.station_index,
                     b.line_id,
                     b.station_index,
-                    stored_time(merge.merged_at)
+                    to_stored(merge.merged_at)
                 ],
             )?;
         }
@@ -520,26 +521,4 @@ pub(super) fn station_rows<'a, V>(
         .collect();
     rows.sort_unstable_by_key(|&(line_id, station_index, _)| (line_id, station_index));
     rows
-}
-
-/// `at` as RFC 3339 text that parses again. `to_rfc3339` writes a year past
-/// 0000-9999 (in UTC) as `-0001-...` or `+10000-...`, which no reader parses,
-/// and the project's own times are read strictly, so a file saved with one
-/// would never open again. Only a crafted file or undo entry can carry such a
-/// time (an offset like `+23:59` on year 0000 or 9999 reaches it); it is
-/// clamped to the nearest end of the range. A leap second (`:60`) is written
-/// as the last nanosecond before it, because Python's `datetime`, which
-/// SpeleoDB's reader uses, has no second 60.
-pub(super) fn stored_time(at: chrono::DateTime<chrono::Utc>) -> String {
-    use chrono::{Datelike as _, Timelike as _};
-    if at.year() < 0 {
-        return "0000-01-01T00:00:00+00:00".to_string();
-    }
-    if at.year() > 9999 {
-        return "9999-12-31T23:59:59.999999999+00:00".to_string();
-    }
-    if at.nanosecond() >= 1_000_000_000 {
-        return at.with_nanosecond(999_999_999).unwrap_or(at).to_rfc3339();
-    }
-    at.to_rfc3339()
 }
