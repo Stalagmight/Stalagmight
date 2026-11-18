@@ -556,3 +556,73 @@ fn walk_edit(edit: &mut Value, visit: &mut dyn FnMut(&mut Value)) {
         }
     }
 }
+
+// ===========================================================================
+// What FORMAT_CORRUPT found
+// ===========================================================================
+
+/// OPEN FINDING (FORMAT_CORRUPT, 15 of 210 corrupted runs over the knob
+/// matrix; shrunk from COMBINED seed 13 x300 to 11 moves): a row whose gzip
+/// member is damaged drops only ITS stack. `decompress_history_rows_within`
+/// fails the whole table, the load substitutes an empty stack for it and
+/// raises the discarded-history banner - and then loads the OTHER table
+/// as usual, so the project opens with its redo branch (or its undo history)
+/// intact under a banner saying the history could not be read.
+///
+/// Every other damaged row - bad JSON, an unknown envelope, a delta that
+/// breaks `check_shape` or does not fit - drops BOTH stacks
+/// (`drop_history_with_a_hole`, `drop_history_that_does_not_fit`), which is
+/// what docs/undo-redo.md promises: "this build drops a history it cannot read
+/// whole". The stack that survives is self-consistent (each stack is a chain
+/// of deltas from the live project outwards), so nothing restores the wrong
+/// state; what breaks is the contract, the banner's meaning, and the one rule
+/// the corrupt-row oracle holds every other path to.
+#[test]
+#[ignore = "open finding: a damaged gzip row drops only its own stack - see the doc comment"]
+fn a_damaged_gzip_row_drops_the_whole_history() {
+    use crate::core::Command;
+    let _config = crate::test_helpers::isolated_config();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("history.stalx");
+    let state = super::super::AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Gzip".to_string(),
+                location: None,
+            })
+            .success
+    );
+    for name in ["a", "b", "c"] {
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some(name.to_string()),
+                    surveyor: None,
+                    date: None,
+                    color: "#3388FF".to_string(),
+                    direction: None,
+                    shots: Vec::new(),
+                })
+                .success
+        );
+    }
+    // Something on BOTH stacks: three entries, one of them undone.
+    assert!(state.undo().success);
+    assert!(state.save_project(Some(path.clone())).success);
+    assert!(state.execute(Command::CloseProject).success);
+    rewrite_blob(
+        &path,
+        "undo_stack",
+        0,
+        Kind::TruncatedGzip,
+        &mut Rng::new(1),
+    );
+    assert!(state.execute(Command::OpenProject { path }).success);
+    assert!(state.history_discarded(), "the damaged row was noticed");
+    assert_eq!(
+        (state.get_undo_stack().len(), state.get_redo_stack().len()),
+        (0, 0),
+        "a history reported discarded kept part of itself"
+    );
+}

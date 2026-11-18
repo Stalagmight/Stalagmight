@@ -798,3 +798,71 @@ fn untrack_import_alone_is_undoable() {
         "an undoable command that changed the project pushed no undo entry"
     );
 }
+
+/// OPEN FINDING (LARGE, seed 1 x60, persistence half): Merge Stations joining
+/// two components that each hold a gauge leaves BOTH entries in
+/// `held_gauges`, and nothing in the session prunes them; the load keeps at
+/// most one per connected component (`normalize_held_gauges`, run by the
+/// load, Add and Merge Projects only). So a save and a reopen change the
+/// project - an undo-less change the history was recorded across - and the
+/// project at that depth depends on whether it went through the file.
+///
+/// The anchor lookup reads only the first entry per component, so no
+/// geometry moves. What it breaks is the delta engine's assumption for a
+/// list past 64 entries: a positional edit records its source length, and a
+/// load that drops an element from a long `held_gauges` makes every recorded
+/// edit of it refuse.
+#[test]
+#[ignore = "open finding: an in-session merge leaves two held gauges in one component - see the doc comment"]
+fn a_merge_of_two_held_components_survives_a_reopen() {
+    let _config = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("held.stalx");
+    let mut project = Project::new("Held".to_string(), None);
+    let mut rng = Rng::new(3);
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let data = SectionData {
+            name: Some(format!("island-{index}")),
+            color: "#123456".to_string(),
+            shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
+            ..SectionData::default()
+        };
+        let id = project.add_section(data).id;
+        let section = project.get_section(id).unwrap();
+        let shot = section.shots[1].uuid.clone().unwrap();
+        let parity = project.shot_record_parity(section, Some(&shot));
+        project.held_gauges.push(HeldGauge {
+            section_id: id,
+            shot,
+            neighbour: None,
+            end: false,
+            parity,
+        });
+        ids.push(id);
+    }
+    Database::open(&path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    let state = super::AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success);
+    assert_eq!(state.get_project_state().unwrap().held_gauges.len(), 2);
+    assert!(
+        state
+            .execute(Command::MergeStations {
+                station_a: StationRef::new(ids[0], 2),
+                station_b: StationRef::new(ids[1], 0),
+            })
+            .success
+    );
+    let in_session = state.get_project_state().unwrap().held_gauges;
+    assert!(state.save_project(Some(path.clone())).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.execute(Command::OpenProject { path }).success);
+    assert_eq!(
+        state.get_project_state().unwrap().held_gauges,
+        in_session,
+        "the reopen changed held_gauges the session had left as they were"
+    );
+}
