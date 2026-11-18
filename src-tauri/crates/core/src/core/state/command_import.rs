@@ -302,7 +302,11 @@ impl AppState {
             Err(result) => return result,
         };
 
-        // Create a Batch command that represents both operations for the description
+        // Create a Batch command that represents both operations for the
+        // description, named by the line and the station it was snapped onto.
+        let label = self.batch_label(|project| {
+            crate::core::undo::history_batch::create_line_at(project, new_line_id, target_station)
+        });
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateLine {
@@ -319,6 +323,7 @@ impl AppState {
                     station_b: target_station,
                 },
             ],
+            label,
         };
 
         self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
@@ -1455,10 +1460,19 @@ impl AppState {
             Err(result) => return result,
         };
 
-        // Push a single undo entry covering all lines + hash
+        // Push a single undo entry covering all lines + hash, named by the
+        // lines it made.
+        let mut imported: Vec<(u32, LineId)> =
+            created_ids.iter().map(|(&i, &id)| (i, id)).collect();
+        imported.sort_unstable();
+        let imported: Vec<LineId> = imported.into_iter().map(|(_, id)| id).collect();
+        let label = self.batch_label(|project| {
+            crate::core::undo::history_batch::import_lines(project, &imported)
+        });
         self.push_snapshot_undo(
             Command::Batch {
                 commands: batch_commands,
+                label,
             },
             before_snapshot,
             after_snapshot,

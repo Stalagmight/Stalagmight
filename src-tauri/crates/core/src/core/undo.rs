@@ -13,6 +13,7 @@ mod added_content;
 mod budget;
 mod cave_sections;
 mod created_station;
+pub(crate) mod history_batch;
 mod history_cave_section;
 mod history_credit;
 pub mod history_names;
@@ -1858,7 +1859,10 @@ mod tests {
         let buried = created_shot_entry(Some("uuid-that-is-not-there"), 0);
         stack.push_with_data(buried.command, buried.undo_data);
         stack.push_with_data(
-            Command::Batch { commands: vec![] },
+            Command::Batch {
+                commands: vec![],
+                label: None,
+            },
             UndoData::ProjectSnapshotPair {
                 before: "{}".to_string(),
                 after: "{}".to_string(),
@@ -2295,7 +2299,10 @@ mod tests {
             },
             UndoEntry {
                 command_bytes: None,
-                command: Command::Batch { commands: vec![] },
+                command: Command::Batch {
+                    commands: vec![],
+                    label: None,
+                },
                 undo_data: UndoData::ProjectSnapshot("{}".to_string()),
                 timestamp: None,
             },

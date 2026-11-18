@@ -694,6 +694,7 @@ fn merging_two_placed_pieces_removes_and_reports_the_closure_it_folds() {
         let result = state.execute(if batched {
             Command::Batch {
                 commands: vec![merge],
+                label: None,
             }
         } else {
             merge

@@ -1100,6 +1100,32 @@ impl AppState {
         }
     }
 
+    /// A history label worded from the open project as it is now
+    /// (`Command::Batch::label`, `undo::history_batch`); `None` when no
+    /// project is open. Takes the project lock briefly; never call it
+    /// holding that lock.
+    pub(super) fn batch_label(&self, word: impl FnOnce(&Project) -> String) -> Option<String> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().map(word)
+    }
+
+    /// The history label of a batch the frontend sent, summarized from its
+    /// sub-commands with the names the project holds now
+    /// (`history_batch::summarize`).
+    pub(super) fn batch_summary(&self, commands: &[crate::core::Command]) -> Option<String> {
+        use crate::core::undo::history_names::{referenced_lines, NameBook};
+        self.batch_label(|project| {
+            let mut lines = std::collections::HashSet::new();
+            for cmd in commands {
+                referenced_lines(cmd, &mut lines);
+            }
+            crate::core::undo::history_batch::summarize(commands, &NameBook::of(project, lines))
+        })
+    }
+
     /// Push a snapshot-pair undo entry onto the undo stack.
     pub(super) fn push_snapshot_undo(
         &self,

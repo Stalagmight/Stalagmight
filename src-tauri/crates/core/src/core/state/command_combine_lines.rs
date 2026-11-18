@@ -144,6 +144,11 @@ impl AppState {
             color: Some(options.color.clone()),
             ..Default::default()
         };
+        // Both lines by the names they have before the combine (the other one
+        // is gone after it, and the kept one may be renamed).
+        let history_label = self.batch_label(|project| {
+            crate::core::undo::history_batch::combine_lines(project, kept, other, &options.name)
+        });
         let warnings;
 
         {
@@ -216,6 +221,7 @@ impl AppState {
                 },
                 Command::DeleteLine { line_id: other },
             ],
+            label: history_label,
         };
         self.push_snapshot_undo(label, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): set-only; a no-op for a local project.

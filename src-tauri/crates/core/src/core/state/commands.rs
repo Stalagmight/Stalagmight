@@ -98,7 +98,7 @@ impl AppState {
     fn reverse_only_lines(cmd: &Command) -> Option<Vec<LineId>> {
         match cmd {
             Command::ReverseLine { line_id, .. } => Some(vec![*line_id]),
-            Command::Batch { commands } => {
+            Command::Batch { commands, .. } => {
                 let mut out = Vec::with_capacity(commands.len());
                 for c in commands {
                     match c {
@@ -233,7 +233,7 @@ impl AppState {
             // already-drifted project as a side effect of an edit whose undo
             // does not invert that geometry change (the asymmetric-undo hazard
             // spelled out for SetStationComment above).
-            Batch { commands } => commands.iter().fold(SAFE_REFS, |acc, c| {
+            Batch { commands, .. } => commands.iter().fold(SAFE_REFS, |acc, c| {
                 let f = Self::command_integrity(c);
                 CommandIntegrity {
                     can_dangle_refs: acc.can_dangle_refs || f.can_dangle_refs,
@@ -909,7 +909,9 @@ impl AppState {
                 target,
                 swap,
             } => return self.execute_move_comment(source.clone(), target.clone(), *swap, cmd),
-            Command::Batch { commands } => self.execute_batch(commands.clone(), true),
+            Command::Batch { commands, label } => {
+                self.execute_batch(commands.clone(), label.clone(), true)
+            }
             Command::MergeProjects {
                 source_paths,
                 output_path,
@@ -1235,7 +1237,12 @@ impl AppState {
     /// When `push_undo` is true (called from `execute()`), pushes a ProjectSnapshotPair
     /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
     /// Caller must already hold `command_lock`.
-    pub(super) fn execute_batch(&self, commands: Vec<Command>, push_undo: bool) -> CommandResult {
+    pub(super) fn execute_batch(
+        &self,
+        commands: Vec<Command>,
+        label: Option<String>,
+        push_undo: bool,
+    ) -> CommandResult {
         // No-op for empty batch: skip snapshot/undo overhead
         if commands.is_empty() {
             return CommandResult::success();
@@ -1291,6 +1298,14 @@ impl AppState {
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(result) => return result,
+        };
+        // The history label, from the names the project holds before the
+        // batch runs (a deleted line is gone after it). One the caller
+        // worded already is kept.
+        let label = if push_undo {
+            label.or_else(|| self.batch_summary(&commands))
+        } else {
+            None
         };
 
         let mut all_warnings = Vec::new();
@@ -1367,7 +1382,11 @@ impl AppState {
             };
 
             // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
-            self.push_snapshot_undo(Command::Batch { commands }, before_snapshot, after_snapshot);
+            self.push_snapshot_undo(
+                Command::Batch { commands, label },
+                before_snapshot,
+                after_snapshot,
+            );
             // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
             // (never a lifecycle command), so mark the remote project dirty after
             // its undo entry is pushed. Set-only; no-op for local-only.
@@ -1454,7 +1473,10 @@ mod integrity_capability_tests {
         // Empty batches never reach execute() (it early-returns), so INERT here
         // is just the identity of the fold.
         assert_eq!(
-            caps(&Command::Batch { commands: vec![] }),
+            caps(&Command::Batch {
+                commands: vec![],
+                label: None,
+            }),
             (false, false, false)
         );
         // Metadata-only bulk edit - the data table's fill-drag / paste over the
@@ -1469,6 +1491,7 @@ mod integrity_capability_tests {
                         ..Default::default()
                     },
                 }],
+                label: None,
             }),
             (false, false, false)
         );
@@ -1493,6 +1516,7 @@ mod integrity_capability_tests {
                         },
                     },
                 ],
+                label: None,
             }),
             (true, false, false)
         );

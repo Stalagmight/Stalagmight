@@ -90,6 +90,9 @@ fn get_command_type(command: &Command) -> String {
     }
 }
 
+/// The most sub-commands a batch's preview lists before it counts the rest.
+const BATCH_PREVIEW_ROWS: usize = 8;
+
 /// What a preview row shows for a station no name can be read for (its line
 /// is gone): never the positional handle.
 const UNKNOWN_STATION: &str = "-";
@@ -918,14 +921,31 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
             })
         }
 
-        // Batch - list all sub-commands with their details
-        (Command::Batch { commands }, _) => {
+        // Batch - list its sub-commands with their details: the first
+        // BATCH_PREVIEW_ROWS, then a count (an import records one per line,
+        // merge and move). A line the batch deleted is named from the
+        // entry's before-snapshot, as a Delete Line entry's label is.
+        (Command::Batch { commands, .. }, undo_data) => {
+            let before = match undo_data {
+                UndoData::ProjectSnapshotPair { before, .. } => Some(before.as_str()),
+                _ => None,
+            };
             let changes: Vec<FieldChange> = commands
                 .iter()
+                .take(BATCH_PREVIEW_ROWS)
                 .map(|cmd| {
                     let details = derive_command_details(cmd, line_names).unwrap_or_default();
+                    let gone = match cmd {
+                        Command::DeleteLine { line_id } if line_names.line(*line_id).is_none() => {
+                            before.and_then(|b| snapshot_line_name(b, *line_id))
+                        }
+                        _ => None,
+                    };
                     FieldChange {
-                        field: describe(cmd, line_names),
+                        field: gone.map_or_else(
+                            || describe(cmd, line_names),
+                            |name| format!("Delete line \"{name}\""),
+                        ),
                         old_value: String::new(),
                         new_value: details,
                     }
@@ -933,7 +953,7 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
                 .collect();
             Some(PreviewData {
                 changes,
-                additional_changes: 0,
+                additional_changes: commands.len().saturating_sub(BATCH_PREVIEW_ROWS),
             })
         }
 
@@ -1051,6 +1071,7 @@ mod tests {
         assert_eq!(
             get_command_type(&Command::Batch {
                 commands: vec![Command::CloseProject, Command::CloseProject],
+                label: None,
             }),
             "batch"
         );
@@ -1540,6 +1561,7 @@ mod tests {
                     },
                     Command::CloseProject,
                 ],
+                label: None,
             },
             undo_data: UndoData::None,
             timestamp: None,
@@ -1564,6 +1586,36 @@ mod tests {
         assert_eq!(preview.changes[2].new_value, "Three, 5.0m N");
         assert_eq!(preview.changes[3].field, "Close project");
         assert!(preview.changes[3].new_value.is_empty());
+    }
+
+    #[test]
+    fn a_labelled_batch_is_listed_by_its_label_and_previews_a_bounded_list() {
+        let moves: Vec<Command> = (0..12)
+            .map(|i| Command::MoveLine {
+                line_id: i % 2,
+                offset: Coordinates::new(0.0, 1.0, 0.0),
+            })
+            .collect();
+        let entry = |label: Option<&str>| UndoEntry {
+            command_bytes: None,
+            command: Command::Batch {
+                commands: moves.clone(),
+                label: label.map(str::to_string),
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+        let names = names_of(&["Main", "Side"]);
+        let item = entry_to_history_item(&entry(Some("Import 12 lines")), 0, &names);
+        assert_eq!(item.description, "Import 12 lines");
+        assert_eq!(item.command_type, "batch");
+        let preview = item.preview_data.unwrap();
+        assert_eq!(preview.changes.len(), BATCH_PREVIEW_ROWS);
+        assert_eq!(preview.additional_changes, 12 - BATCH_PREVIEW_ROWS);
+        assert_eq!(preview.changes[0].field, "Move line \"Main\"");
+        // An entry from before labels keeps its old wording.
+        let old = entry_to_history_item(&entry(None), 0, &names);
+        assert_eq!(old.description, "Batch of 12 commands");
     }
 
     #[test]

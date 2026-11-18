@@ -938,6 +938,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
             after_shot_id: None,
             before_shot_id: Some(victim_shot_id),
         }],
+        label: None,
     });
     assert!(
         !result.success,
@@ -980,6 +981,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
             shots: vec![smuggling_shot.clone()],
             cave_section_id: None,
         }],
+        label: None,
     });
     assert!(batched.success, "{:?}", batched.error);
     let project = state.get_project_state().unwrap();

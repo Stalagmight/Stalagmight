@@ -147,7 +147,7 @@ impl AppState {
                 station_ref,
                 offset,
             } => self.move_station(*station_ref, *offset),
-            Command::Batch { commands } => self.execute_batch(commands.clone(), false),
+            Command::Batch { commands, .. } => self.execute_batch(commands.clone(), None, false),
             // Reachable through a Batch, which runs its sub-commands here (#394):
             // the DMP wizard's withdrawal deletes its lines and forgets their
             // import tracking in ONE batch. Without this arm the catch-all below

@@ -159,7 +159,7 @@ pub fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
                 }
             }
         }
-        Command::Batch { commands } => {
+        Command::Batch { commands, .. } => {
             for sub in commands {
                 referenced_lines(sub, out);
             }

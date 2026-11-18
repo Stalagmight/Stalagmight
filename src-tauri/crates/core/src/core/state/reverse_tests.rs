@@ -800,6 +800,7 @@ fn batched_multi_line_reverse_is_atomic_and_undoes_in_one_step() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
     assert!(!failed.success, "batch with a missing line should fail");
     assert_eq!(
@@ -820,6 +821,7 @@ fn batched_multi_line_reverse_is_atomic_and_undoes_in_one_step() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
     assert!(ok.success, "batch failed: {:?}", ok.error);
 
@@ -1255,6 +1257,7 @@ fn reverse_reports_every_renumbered_line_through_batch_undo_and_redo() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
     assert!(batch.success, "{:?}", batch.error);
     assert_eq!(
@@ -1396,6 +1399,7 @@ fn batch_reversing_one_line_twice_reports_nothing_and_leaves_the_plnx_alone() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
     assert!(batch.success, "{:?}", batch.error);
     assert!(
@@ -1460,6 +1464,7 @@ fn batch_a_b_a_reports_only_b() {
     };
     let batch = state.execute(Command::Batch {
         commands: vec![reverse_of(first), reverse_of(second), reverse_of(first)],
+        label: None,
     });
     assert!(batch.success, "{:?}", batch.error);
     assert_eq!(
@@ -1527,6 +1532,7 @@ fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
     assert!(batch.success, "{:?}", batch.error);
 
@@ -1647,6 +1653,7 @@ fn reversing_a_shotless_line_leaves_redo_and_the_dirty_bit_alone() {
                     line_id: empty,
                     swap_left_right: false,
                 }],
+                label: None,
             })
             .success
     );

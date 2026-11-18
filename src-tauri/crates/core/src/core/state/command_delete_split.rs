@@ -1,4 +1,5 @@
 use super::AppState;
+use crate::core::undo::history_batch::{delete_shots, ShotsDeleted};
 use crate::core::{Command, CommandResult};
 use crate::models::{
     LineData, LineId, Project, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
@@ -28,6 +29,31 @@ pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<
 }
 
 impl AppState {
+    /// The history label of a delete of the shots from `first` to `last`
+    /// (either order) of `line_id`, worded before the delete names them
+    /// away (`history_batch::delete_shots`). `None` when a shot is not
+    /// there: the command then refuses before it records anything.
+    fn delete_label(
+        &self,
+        line_id: LineId,
+        first: ShotId,
+        last: ShotId,
+        then: ShotsDeleted,
+    ) -> Option<String> {
+        self.batch_label(|project| {
+            let pos = |id: ShotId| {
+                project
+                    .get_line(line_id)
+                    .and_then(|line| line.shots.iter().position(|s| s.id == id))
+            };
+            pos(first)
+                .zip(pos(last))
+                .map(|(a, b)| delete_shots(project, line_id, a.min(b), a.max(b), then))
+                .unwrap_or_default()
+        })
+        .filter(|label| !label.is_empty())
+    }
+
     /// The two halves' names of a delete-and-split of `line_id`, trimmed, or
     /// the refusal (`Project::validate_replacement_line_names`: empty, or
     /// another line's, as a rename is refused). A missing line or project is
@@ -99,6 +125,7 @@ impl AppState {
         let datums_before = self.datum_layout();
 
         let undo_line_b_name = name_b.clone();
+        let label = self.delete_label(line_id, shot_id, shot_id, ShotsDeleted::Split);
 
         // Step 2: Get split data and perform the operation
         let (new_line_id, swept_warnings) = {
@@ -349,6 +376,7 @@ impl AppState {
                     cave_section_id: None,
                 },
             ],
+            label,
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
@@ -413,6 +441,7 @@ impl AppState {
         // Same frame check as the single-shot split above (#469, item 1).
         let datums_before = self.datum_layout();
         let undo_line_b_name = name_b.clone();
+        let label = self.delete_label(line_id, start_shot_id, end_shot_id, ShotsDeleted::Split);
 
         let (new_line_id, swept_warnings) = {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -640,6 +669,7 @@ impl AppState {
                     cave_section_id: None,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
@@ -721,6 +751,7 @@ impl AppState {
 
         // Same frame check as the split paths above (#469, item 1).
         let datums_before = self.datum_layout();
+        let label = self.delete_label(line_id, start_shot_id, end_shot_id, ShotsDeleted::CloseUp);
 
         let (result_line, removed_closures) = {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -875,6 +906,7 @@ impl AppState {
                     shot_id: end_shot_id,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
@@ -924,6 +956,7 @@ impl AppState {
         // Same frame check as the split paths above (#469, item 1). This path
         // removes a whole LINE, so it can drop the primary datum outright.
         let datums_before = self.datum_layout();
+        let label = self.delete_label(line_id, shot_id, shot_id, ShotsDeleted::LastOfLine);
 
         // Step 2: Validate and mutate in a single lock scope. On any failure after
         // mutation we roll back from before_snapshot. `command_lock` is held for the
@@ -1065,6 +1098,7 @@ impl AppState {
                 Command::DeleteShot { line_id, shot_id },
                 Command::DeleteLine { line_id },
             ],
+            label,
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);

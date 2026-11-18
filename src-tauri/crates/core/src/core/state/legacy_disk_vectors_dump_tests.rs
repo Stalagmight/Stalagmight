@@ -343,6 +343,7 @@ fn legacy_entries(state: &AppState) -> Vec<(String, UndoEntry)> {
                         line_id: sid,
                         offset: Coordinates::new(1.0, 1.0, 0.0),
                     }],
+                    label: None,
                 },
                 UndoData::ProjectSnapshot(snapshot),
             ),
@@ -1020,6 +1021,7 @@ fn legacy_disk_vectors_dump() {
                     swap_left_right: false,
                 },
             ],
+            label: None,
         },
     );
 
@@ -1103,6 +1105,7 @@ fn legacy_disk_vectors_dump() {
                     line_hashes: vec!["synthetic-line-hash-1".to_string()],
                 },
             ],
+            label: None,
         },
     );
     let c_last = end(&state, c);

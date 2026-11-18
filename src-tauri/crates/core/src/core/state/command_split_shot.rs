@@ -88,6 +88,11 @@ impl AppState {
             Err(result) => return result,
         };
 
+        // The label names the station the split made, as the after-state
+        // (station names settled) holds it.
+        let label = self.batch_label(|project| {
+            crate::core::undo::history_batch::insert_station(project, line_id, new_shot_id)
+        });
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateShot {
@@ -102,6 +107,7 @@ impl AppState {
                     updates: tail_updates,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a split mutated a remote project.

@@ -1054,6 +1054,27 @@ cannot be resolved falls back to the wording without the handle (`Delete shot`,
 entry's label per depth (`expect_entry_prints`) therefore pins the entry's own
 `Command::description()`, not the displayed text.
 
+**Batch labels.** An entry recorded as one `Command::Batch` carries its label in
+the batch (`label`, an additive `#[serde(default, skip_serializing_if)]` key of
+the persisted `command_json`), worded once, **at record time**, with the names
+the project holds then (`core/undo/history_batch.rs`). A composite edit records
+placeholder sub-commands that only sketch it, and what it is named by is not in
+them (the station an Insert Station made has a name only the after-state knows;
+a shot id is renumbered by a reload), so each recorder words its own:
+`Insert station Main Line / 4a`, `Combine lines "Main Line" and "Downstream"`,
+`Create line "Side Passage" at Main Line / Junction` (a New Line snapped onto a
+station), `Split line "Main Line" at 5`, `Delete shot 4 → 5 and split line
+"Main Line"`, `Delete 3 shots (1 → 4) from line "Side"`, `Delete line "Stub"
+with its last shot`, `Import 5 lines ("A", "B", "C" and 2 more)`. A batch the
+frontend sends (`execute_batch`: a data-table paste, Reverse Lines, a move
+snapped onto a station) is summarized from its sub-commands with the names they
+have before it runs (`history_batch::summarize`: `Update 2 shots in line
+"Main"`, `Reverse lines "Main" and "Side"`, `Merge stations ...`). The label is
+`Command::description()`, so it holds through undo, redo, a save and a reopen;
+an entry written before labels existed keeps `Batch of N commands`. A batch's
+preview lists its first 8 sub-commands (then `+N more`), a line the batch
+deleted named from the entry's `before` snapshot.
+
 ### Preview Data Generation (`core/undo/history_view.rs`)
 
 `derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data - the fallback arm returns the command description as an "Action" field so hover is never empty.
@@ -1083,6 +1104,7 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
 | `src-tauri/crates/core/src/core/undo/history_names.rs` | `NameBook`, the named history labels (`describe`, `describe_entry`) |
+| `src-tauri/crates/core/src/core/undo/history_batch.rs` | The record-time labels of composite edits and frontend batches (`Command::Batch::label`) |
 | `src-tauri/crates/core/src/core/undo/created_station.rs` | `CreatedStation`: the id and name a redone `CreateShot` gives its station back |
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
 | `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Frontend dropdown + preview popup |

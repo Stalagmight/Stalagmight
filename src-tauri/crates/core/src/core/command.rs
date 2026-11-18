@@ -270,6 +270,20 @@ pub enum Command {
     // Batch commands
     Batch {
         commands: Vec<Command>,
+        /// The history label of the edit the batch records, written when it
+        /// is recorded, with the names the project held then. A composite
+        /// edit (Insert Station, Combine Lines, Split Line, Delete and Split,
+        /// an import...) records placeholder sub-commands that only sketch
+        /// what it did, so it says what it was here; a batch from the frontend
+        /// (a paste, Reverse Lines) is summarized from its sub-commands
+        /// (`undo::history_batch`). A history label only: the undo and the
+        /// redo restore the entry's snapshot pair and never read it.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before it existed, which keep the old `Batch of N
+        /// commands`; an older build ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
 
     // Project merge command
@@ -798,7 +812,7 @@ impl Command {
             | Command::ApplyCaveSectionColor { .. }
             | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
-            Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
+            Command::Batch { commands, .. } => commands.iter().any(Command::affects_geometry),
             Command::CreateLine { .. }
             | Command::DeleteLine { .. }
             | Command::ReverseLine { .. }
@@ -859,7 +873,7 @@ impl Command {
             | Command::DeleteCaveSection { .. }
             | Command::MoveLinesToCaveSection { .. }
             | Command::ApplyCaveSectionColor { .. } => false,
-            Command::Batch { commands } => {
+            Command::Batch { commands, .. } => {
                 commands.iter().any(Command::can_change_station_identity)
             }
             Command::CreateProject { .. }
@@ -934,7 +948,7 @@ impl Command {
     pub fn reversed_line_ids(&self) -> Vec<LineId> {
         match self {
             Command::ReverseLine { line_id, .. } => vec![*line_id],
-            Command::Batch { commands } => Self::net_reversed(
+            Command::Batch { commands, .. } => Self::net_reversed(
                 commands
                     .iter()
                     .flat_map(Command::reversed_line_ids)
@@ -1075,9 +1089,9 @@ impl Command {
                     format!("Move comment from {source} to {target}")
                 }
             }
-            Command::Batch { commands } => {
-                format!("Batch of {} commands", commands.len())
-            }
+            Command::Batch { commands, label } => label
+                .clone()
+                .unwrap_or_else(|| format!("Batch of {} commands", commands.len())),
             Command::MergeProjects {
                 source_paths,
                 output_name,
@@ -1380,6 +1394,7 @@ mod tests {
             (
                 Command::Batch {
                     commands: vec![Command::CloseProject],
+                    label: None,
                 },
                 false,
             ),
@@ -1449,6 +1464,7 @@ mod tests {
         assert!(!metadata_update.affects_geometry());
         assert!(Command::Batch {
             commands: vec![metadata_update, Command::DeleteLine { line_id: 1 }],
+            label: None,
         }
         .affects_geometry());
     }
@@ -1894,8 +1910,16 @@ mod tests {
             (
                 Command::Batch {
                     commands: vec![Command::CloseProject],
+                    label: None,
                 },
                 "Batch of 1 commands",
+            ),
+            (
+                Command::Batch {
+                    commands: vec![Command::CloseProject],
+                    label: Some("Split line \"Main\" at 5".to_string()),
+                },
+                "Split line \"Main\" at 5",
             ),
             (
                 Command::MergeProjects {

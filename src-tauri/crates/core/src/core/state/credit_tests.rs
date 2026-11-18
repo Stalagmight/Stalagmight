@@ -159,6 +159,7 @@ fn credit_edits_run_inside_a_batch_as_one_undo_step() {
 
     let r = state.execute(Command::Batch {
         commands: vec![set(ids[0], "Ann"), set(ids[1], "Bo")],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     assert_eq!(
@@ -196,6 +197,7 @@ fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
                 },
             },
         ],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     let name = |state: &AppState| {

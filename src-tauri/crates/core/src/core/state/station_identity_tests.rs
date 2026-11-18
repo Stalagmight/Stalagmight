@@ -355,6 +355,7 @@ fn a_user_line_rename_must_be_unique_and_non_empty() {
                 ..Default::default()
             },
         }],
+        label: None,
     });
     assert_eq!(
         batch.error.as_deref(),
@@ -596,6 +597,7 @@ fn metadata_commands_skip_the_identity_pass_and_structural_ones_run_it() {
                     ..Default::default()
                 },
             }],
+            label: None,
         },
     ];
     for cmd in metadata {

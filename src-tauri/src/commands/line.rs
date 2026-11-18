@@ -132,7 +132,10 @@ pub fn move_segment(state: State<AppState>, line_id: LineId, offset: Coordinates
 /// Execute a batch of commands as a single undo/redo unit
 #[tauri::command]
 pub fn execute_batch(state: State<AppState>, commands: Vec<Command>) -> CommandResult {
-    state.execute(Command::Batch { commands })
+    state.execute(Command::Batch {
+        commands,
+        label: None,
+    })
 }
 
 /// Get all line IDs connected through merges and aligned closures (rigid groups)

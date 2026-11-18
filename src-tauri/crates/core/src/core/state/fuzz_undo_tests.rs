@@ -5203,7 +5203,10 @@ impl Fuzzer {
                 }
                 Some(Drawn::new(
                     format!("batch(n={},poisoned={poisoned})", built.len()),
-                    self.state.execute(Command::Batch { commands: built }),
+                    self.state.execute(Command::Batch {
+                        commands: built,
+                        label: None,
+                    }),
                 ))
             }
         }

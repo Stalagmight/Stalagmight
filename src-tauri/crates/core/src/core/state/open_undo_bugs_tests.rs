@@ -3345,6 +3345,7 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
                 closure_strategy: ClosureStrategy::Move,
             },
         ],
+        label: None,
     });
     assert!(
         batched.success,

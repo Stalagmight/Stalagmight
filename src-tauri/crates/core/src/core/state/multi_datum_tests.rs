@@ -426,6 +426,7 @@ fn a_batch_that_deletes_the_frame_line_settles_the_promotion_once() {
 
     let r = state.execute(Command::Batch {
         commands: vec![Command::DeleteLine { line_id: a }],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     let p = project(&state);
@@ -1224,6 +1225,7 @@ fn a_batch_that_edits_a_fix_re_keys_it_and_promotes_it_still_places_it() {
             },
             Command::DeleteLine { line_id: a },
         ],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
 

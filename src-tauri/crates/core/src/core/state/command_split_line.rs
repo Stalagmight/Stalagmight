@@ -47,6 +47,10 @@ impl AppState {
         // (#469): moving a datum to the second half can re-define the frame.
         let datums_before = self.datum_layout();
         let undo_name_b = options.name_b.trim().to_string();
+        // The line by the name it has before the cut (the halves are renamed).
+        let line_name = self
+            .batch_label(|project| project.line_label(line_id).unwrap_or_default())
+            .unwrap_or_default();
 
         let second_id = {
             let Ok(mut proj_guard) = self.project.lock() else {
@@ -80,6 +84,16 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // The station the cut was made at ends the first half now (one the
+        // cut made inside a shot has its name only from here on).
+        let history_label = self.batch_label(|project| {
+            let end = project.get_line(line_id).map_or(0, |line| line.shots.len());
+            let at = u32::try_from(end)
+                .ok()
+                .and_then(|index| project.station_name_at(StationRef::new(line_id, index)))
+                .map_or_else(|| end.to_string(), str::to_string);
+            crate::core::undo::history_batch::split_line(&line_name, &at)
+        });
         // The label only names the operation in history. It must not contain a
         // ReverseLine: undo/redo settle reversed lines off this command.
         let label = Command::Batch {
@@ -92,6 +106,7 @@ impl AppState {
                 shots: Vec::new(),
                 cave_section_id: None,
             }],
+            label: history_label,
         };
         self.push_snapshot_undo(label, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): set-only; a no-op for a local project.

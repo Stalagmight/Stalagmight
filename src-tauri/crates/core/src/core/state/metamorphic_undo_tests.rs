@@ -1392,6 +1392,7 @@ fn pair_batch_vs_sequential(
     let commands = batch_commands(&twins.left, rng)?;
     let batched = twins.left.execute(Command::Batch {
         commands: commands.clone(),
+        label: None,
     });
     if !batched.success {
         return None;
@@ -1438,6 +1439,7 @@ fn pair_poisoned_batch_is_a_no_op(
     });
     let batched = twins.left.execute(Command::Batch {
         commands: commands.clone(),
+        label: None,
     });
     let mut problems: Vec<String> = Vec::new();
     if batched.success {

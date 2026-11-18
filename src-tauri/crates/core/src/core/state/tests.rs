@@ -1585,6 +1585,7 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
                 closure_strategy: ClosureStrategy::default(),
             },
         ],
+        label: None,
     });
     assert!(result.success, "batch should succeed: {:?}", result.error);
 
@@ -1808,6 +1809,7 @@ fn metadata_only_update_shot_batch_does_not_heal_drift() {
     };
     let result = state.execute(Command::Batch {
         commands: vec![mk(shot0), mk(shot1)],
+        label: None,
     });
     assert!(result.success, "{:?}", result.error);
     assert!(
@@ -2543,6 +2545,7 @@ fn test_undo_fails_with_invalid_project_snapshot() {
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
+            label: None,
         },
         UndoData::ProjectSnapshot("not-json".to_string()),
     );
@@ -6074,6 +6077,7 @@ fn test_undo_project_snapshot_fails_when_project_lock_poisoned() {
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
+            label: None,
         },
         UndoData::ProjectSnapshot(snapshot),
     );
@@ -6096,6 +6100,7 @@ fn test_undo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
+            label: None,
         },
         UndoData::ProjectSnapshotPair { before, after },
     );
@@ -7125,6 +7130,7 @@ fn test_batch_create_lines() {
                 cave_section_id: None,
             },
         ],
+        label: None,
     });
 
     assert!(result.success);
@@ -7157,6 +7163,7 @@ fn test_batch_fails_on_first_error() {
             },
             Command::DeleteLine { line_id: 999 },
         ],
+        label: None,
     });
 
     assert!(!result.success);
@@ -9498,6 +9505,7 @@ fn test_undo_failure_with_project_snapshot_preserves_entry() {
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
+            label: None,
         },
         UndoData::ProjectSnapshot("not-valid-json".to_string()),
     );
@@ -9528,6 +9536,7 @@ fn test_undo_failure_with_project_lock_preserves_entry() {
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
+            label: None,
         },
         UndoData::ProjectSnapshot(snapshot),
     );
@@ -12843,6 +12852,7 @@ fn test_batch_rollback_on_failure() {
                 offset: Coordinates::new(1.0, 1.0, 0.0),
             },
         ],
+        label: None,
     });
     assert!(!result.success, "Batch should fail");
 
@@ -12868,6 +12878,7 @@ fn test_batch_disallowed_command() {
         commands: vec![Command::OpenProject {
             path: PathBuf::from("/nonexistent"),
         }],
+        label: None,
     });
     assert!(
         !result.success,
@@ -19157,7 +19168,10 @@ fn test_batch_empty_is_noop() {
         name: "Test".to_string(),
         location: None,
     });
-    let result = state.execute(Command::Batch { commands: vec![] });
+    let result = state.execute(Command::Batch {
+        commands: vec![],
+        label: None,
+    });
     assert!(result.success);
 }
 
@@ -19172,6 +19186,7 @@ fn test_batch_disallowed_command_save_project() {
         commands: vec![Command::SaveProject {
             path: Some(PathBuf::from("/tmp/test.stalx")),
         }],
+        label: None,
     });
     assert!(!result.success);
     assert!(result
@@ -19207,6 +19222,7 @@ fn test_batch_partial_failure_rolls_back() {
                 station_b: StationRef::new(9998, 0),
             },
         ],
+        label: None,
     });
     assert!(!result.success);
 
@@ -19258,6 +19274,7 @@ fn batched_line_deletes_are_one_undo_entry() {
             Command::DeleteLine { line_id: a },
             Command::DeleteLine { line_id: b },
         ],
+        label: None,
     });
     assert!(removed.success, "batched delete: {:?}", removed.error);
     let after: Vec<_> = state
@@ -19336,6 +19353,7 @@ fn a_batch_may_reverse_a_line_and_then_delete_it() {
             },
             Command::DeleteLine { line_id: doomed },
         ],
+        label: None,
     });
 
     assert!(result.success, "mixed batch: {:?}", result.error);
@@ -19403,6 +19421,7 @@ fn a_batch_that_reverses_a_line_after_deleting_it_rolls_back() {
                 swap_left_right: false,
             },
         ],
+        label: None,
     });
 
     assert!(!result.success);
@@ -19513,6 +19532,7 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
                 entrance: None,
             },
         ],
+        label: None,
     });
     assert!(result.success, "batch failed: {:?}", result.error);
 
@@ -21755,6 +21775,7 @@ fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
                 line_hashes: vec!["sec-a".to_string()],
             },
         ],
+        label: None,
     });
     assert!(withdrawn.success, "withdrawal: {:?}", withdrawn.error);
 
@@ -21801,6 +21822,7 @@ fn untracking_an_unknown_hash_succeeds() {
             file_hashes: vec!["never-seen".to_string()],
             line_hashes: vec!["nor-this".to_string()],
         }],
+        label: None,
     });
 
     assert!(result.success, "{:?}", result.error);
@@ -24154,6 +24176,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     line_id: sid,
                     swap_left_right: false,
                 }],
+                label: None,
             }),
         );
         assert_disabled(
@@ -24177,6 +24200,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     station_ref: StationRef::new(sid, 1),
                     offset: Coordinates::new(1.0, 2.0, 0.0),
                 }],
+                label: None,
             }),
         );
         assert_disabled(
@@ -25988,6 +26012,7 @@ fn a_read_only_refusal_names_the_command_without_positional_ids() {
             station_ref: StationRef::new(sid, 1),
             comment: Some("sump".to_string()),
         }],
+        label: None,
     });
     assert_eq!(
         batch,
