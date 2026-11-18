@@ -7,7 +7,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { EntityBlob } from '../common/EntityBlob';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
 import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
@@ -16,6 +16,7 @@ import { reverseTargetShot, type TargetShotLike } from '../../utils/overlapHelpe
 export default function DrawShotDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { createShot, project, stations } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
   const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;
@@ -57,7 +58,6 @@ export default function DrawShotDialog() {
     return project?.lines.find((s) => s.id === fromStation.line_id);
   }, [fromStation, project]);
 
-  const lineName = line?.name ?? `Line ${fromStation?.line_id}`;
 
   // Get current station depth for default
   const currentStationDepth = useMemo(() => {
@@ -205,7 +205,7 @@ export default function DrawShotDialog() {
   }
 
   return (
-    <DialogWrapper title={prependMode ? 'Add Shot Before Line' : appendMode ? `Add Shot After Station #${fromStation.station_index}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
+    <DialogWrapper title={prependMode ? 'Add Shot Before Line' : appendMode ? `Add Shot After Station ${labels.station(fromStation)}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
@@ -215,8 +215,7 @@ export default function DrawShotDialog() {
         <div className="p-3 bg-background rounded">
           <span className="text-text-secondary">From:</span>{' '}
           <span className="inline-flex items-center gap-1.5 align-middle font-medium">
-            <EntityBlob entity="station">{formatStationId(fromStation.line_id, fromStation.station_index)}</EntityBlob>
-            <EntityBlob entity="line">{lineName}</EntityBlob>
+            <EntityBlob entity="station">{labels.station(fromStation, true)}</EntityBlob>
           </span>
         </div>
 

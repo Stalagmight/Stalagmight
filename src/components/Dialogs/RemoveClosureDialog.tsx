@@ -3,7 +3,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -20,7 +20,8 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 
 export default function RemoveClosureDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, removeLoopClosure } = useProjectStore();
+  const { stations, removeLoopClosure } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;
@@ -66,16 +67,9 @@ export default function RemoveClosureDialog() {
     [closures, selectedClosureId]
   );
 
-  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const line = project?.lines.find((item) => item.id === ref.line_id);
-    const lineLabel = line?.name?.trim() || `Line ${ref.line_id}`;
-    return (
-      <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.line_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="line">{lineLabel}</EntityBlob>
-      </span>
-    );
-  };
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => (
+    <EntityBlob entity="station">{labels.station(ref, true)}</EntityBlob>
+  );
 
   const handleConfirm = async () => {
     if (!selectedClosure) return;

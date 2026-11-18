@@ -6,6 +6,8 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { lineDisplayName } from '../../utils/stationIdentity';
 
 
 /**
@@ -20,6 +22,7 @@ import { DialogWrapper } from './DialogWrapper';
 export default function ReverseLineDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { reverseLine, executeBatch, project } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const lineIds = (dialogData.lineIds as number[] | undefined) ?? [];
   const [swapLeftRight, setSwapLeftRight] = useState(false);
@@ -120,8 +123,8 @@ export default function ReverseLineDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary">
           {isMulti
-            ? `Renumber ${changingCount} lines end-to-end, so each line's last station becomes station 0.`
-            : 'Renumber this line end-to-end, so the last station becomes station 0.'}
+            ? `Reverse ${changingCount} lines end-to-end, so each line starts at its last station.`
+            : 'Reverse this line end-to-end, so it starts at its last station.'}
         </p>
 
         {lines.length > 0 && (
@@ -131,11 +134,12 @@ export default function ReverseLineDialog() {
           >
             {lines.map((s) => (
               <li key={s.id}>
-                {s.name ?? `Line ${s.id}`}
+                {lineDisplayName(s.name)}
                 {s.shots.length > 0 && (
                   <span className="text-text-tertiary">
                     {' '}
-                    (station 0 &rarr; {s.shots.length}, station {s.shots.length} &rarr; 0)
+                    (will run from {labels.station({ line_id: s.id, station_index: s.shots.length })} to{' '}
+                    {labels.station({ line_id: s.id, station_index: 0 })})
                   </span>
                 )}
               </li>
@@ -145,8 +149,8 @@ export default function ReverseLineDialog() {
 
         <p className="text-sm text-text-tertiary">
           The cave does not move: every station keeps its position on the map, and merges, loop
-          closures, zero datums and comments stay on the station they were set on. Only the
-          numbering direction changes.
+          closures, zero datums, comments and station names stay on the station they were set
+          on. Only the direction of the line changes.
         </p>
 
         <label className="flex items-start gap-2 text-sm cursor-pointer">

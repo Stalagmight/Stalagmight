@@ -35,6 +35,9 @@ import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore, projectSwitched } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { dmpFileStationLabel, dmpFileStationName, suggestionTargetStationLabel } from '../../utils/importStationNames';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
@@ -842,6 +845,7 @@ export default function DmpNewImportDialog({
   autoStartManualPlacement = false,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
+  const labels = useIdentityLabels();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
   // Responsive preview - fills the available column so it never overflows the
@@ -1946,7 +1950,7 @@ export default function DmpNewImportDialog({
   const reportEmptyLines = useCallback((indices: number[]) => {
     if (indices.length === 0) return;
     const names = indices.map(
-      (i) => lineEditsRef.current.get(i)?.name ?? dmpFile.lines[i]?.name ?? `Line ${i}`,
+      (i) => lineDisplayName(lineEditsRef.current.get(i)?.name ?? dmpFile.lines[i]?.name),
     );
     useUIStore.getState().showToast(
       t('dmpWizard.toasts.emptySections', { names: names.join(', ') }),
@@ -2574,11 +2578,12 @@ export default function DmpNewImportDialog({
     return linePalette[(pos >= 0 ? pos : 0) % linePalette.length] ?? '#4ecdc4';
   }, [editState?.color, currentSuggestion?.importLineIndex, selectedIndices, linePalette]);
 
-  // Target line name for display
-  const targetLineName = useMemo(() => {
-    if (!currentSuggestion) return '';
-    return currentSuggestion.existingLineName;
-  }, [currentSuggestion]);
+  // A merge pair by the names the two stations have (will get, on the import side).
+  const mergePairLabel = (importStation: number, targetStation: number) =>
+    t('dialogs.dmpNewImport.mergeOption', {
+      importStation: dmpFileStationName(importStation),
+      targetStation: currentSuggestion ? suggestionTargetStationLabel(labels, currentSuggestion, targetStation) : '',
+    });
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
@@ -3736,7 +3741,7 @@ export default function DmpNewImportDialog({
   // Line names in current segment (for display)
   const segmentLineNames = useMemo(() => {
     if (!currentSegment) return [];
-    return currentSegment.map(idx => dmpFile.lines[idx]?.name ?? `Line ${idx}`);
+    return currentSegment.map(idx => lineDisplayName(dmpFile.lines[idx]?.name));
   }, [currentSegment, dmpFile.lines]);
 
   // Whether current placement mode is valid for submission
@@ -3826,15 +3831,13 @@ export default function DmpNewImportDialog({
                 {/* Connection description */}
                 <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
                   <div className="text-sm">
-                    <span className="font-medium">&ldquo;{currentSuggestion!.importLineName}&rdquo;</span>
-                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
+                    <span className="font-medium">{dmpFileStationLabel(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, currentSuggestion!.importLineName)}</span>
                   </div>
                   <div className="text-text-secondary text-sm my-1">
                     {t('dialogs.dmpNewImport.connectsTo')}
                   </div>
                   <div className="text-sm">
-                    <span className="font-medium">&ldquo;{targetLineName}&rdquo;</span>
-                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
+                    <span className="font-medium">{suggestionTargetStationLabel(labels, currentSuggestion!, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex)}</span>
                     {isImportTarget && (
                       <span className="ml-1 text-xs text-text-secondary">(importing)</span>
                     )}
@@ -3863,17 +3866,14 @@ export default function DmpNewImportDialog({
                       onChange={(v) => setSelectedMergeOffset(Number(v))}
                       options={mergeOptions.map((opt) => ({
                         value: String(opt.offset),
-                        label: `stn ${opt.importStation} → ${targetLineName} stn ${opt.existingStation}`,
+                        label: mergePairLabel(opt.importStation, opt.existingStation),
                       }))}
                       size="sm"
                       data-testid="merge-station-select"
                     />
                   ) : (
                     <span className="text-xs text-text-secondary">
-                      stn {selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
-                      {' → '}
-                      {targetLineName} stn{' '}
-                      {selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex}
+                      {mergePairLabel(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex)}
                     </span>
                   )}
                 </div>
@@ -3945,10 +3945,8 @@ export default function DmpNewImportDialog({
                             {t(`dialogs.dmpNewImport.confidence.${alt.confidence}`).split(' ')[0]}
                           </span>
                           <span className="flex-1 truncate">
-                            <span className="text-text-secondary">stn {alt.importStationIndex}</span>
-                            <span className="text-text-secondary"> → </span>
-                            <span className="font-medium">{alt.existingLineName}</span>
-                            <span className="text-text-secondary"> stn {alt.existingStationIndex}</span>
+                            <span className="text-text-secondary">{dmpFileStationName(alt.importStationIndex)} ↔ </span>
+                            <span className="font-medium">{suggestionTargetStationLabel(labels, alt, alt.existingStationIndex)}</span>
                             {alt.targetType === 'importing' && (
                               <span className="text-text-secondary text-[10px] ml-0.5">(imp)</span>
                             )}

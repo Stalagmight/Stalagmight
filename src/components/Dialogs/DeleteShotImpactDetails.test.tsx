@@ -3,9 +3,23 @@
  * confirms, the loop closures closing the gap would remove because they would
  * span a single shot - by the stations they were created with.
  */
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import DeleteShotImpactDetails, { type ShotImpactRelationships } from './DeleteShotImpactDetails';
+import { useProjectStore } from '../../store/projectStore';
+
+// Names that differ from the positional indices: a label built from the
+// handles (`0:1`) can never pass for one built from the names.
+beforeEach(() => {
+  useProjectStore.setState({
+    project: { lines: [{ id: 0, name: 'Main Line', shots: [] }] },
+    surveyData: null,
+    stations: [
+      { station_ref: { line_id: 0, station_index: 1 }, name: 'A1' },
+      { station_ref: { line_id: 0, station_index: 5 }, name: 'A5' },
+    ],
+  } as never);
+});
 
 const none: ShotImpactRelationships = {
   removed_merges: [],
@@ -38,7 +52,8 @@ describe('DeleteShotImpactDetails - closures across one shot (#737)', () => {
     expect(block).toHaveTextContent(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    expect(block).toHaveTextContent('#3: 0:1 <-> 0:5');
+    expect(block).toHaveTextContent('#3: Main Line / A1 <-> Main Line / A5');
+    expect(block.textContent).not.toMatch(/\d+:\d+ /);
     // Not mixed up with the closures removed because a station goes.
     expect(screen.queryByText('Removed closures')).toBeNull();
   });

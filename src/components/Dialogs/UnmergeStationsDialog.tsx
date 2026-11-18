@@ -3,7 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -20,6 +20,7 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 export default function UnmergeStationsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
@@ -56,16 +57,9 @@ export default function UnmergeStationsDialog() {
     mergedStations.find((ref) => stationRefKey(ref) === selectedKey) ?? null
   ), [mergedStations, selectedKey]);
 
-  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const line = project?.lines.find((item) => item.id === ref.line_id);
-    const lineLabel = line?.name?.trim() || `Line ${ref.line_id}`;
-    return (
-      <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.line_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="line">{lineLabel}</EntityBlob>
-      </span>
-    );
-  };
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => (
+    <EntityBlob entity="station">{labels.station(ref, true)}</EntityBlob>
+  );
 
   const isDirectMerge = (a: StationRef, b: StationRef): boolean => {
     return project?.station_merges.some((merge) => {

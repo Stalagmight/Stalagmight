@@ -16,6 +16,8 @@ import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { editableShotsToDmpSection } from '../../utils/shotConversion';
+import { importLineStationNames } from '../../utils/importStationNames';
+import { displayStationName } from '../../utils/formatters';
 import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
@@ -476,13 +478,16 @@ export default function ZeroDatumConfigDialog({
   /** Commit a station pick: the value sent, the map highlight and the hover-revert target. */
   const commitStation = useCallback((index: number) => dispatch({ type: 'pick', index }), []);
 
-  // Station options for the Select component
+  // Station options for the Select component: each station by the name the
+  // import will give it (its MNemo number, or the creation rules for a row the
+  // user added), never its position.
   const stationOptions = useMemo(() => {
+    const names = importLineStationNames(shots.filter(isCounted), reverse);
     return Array.from({ length: stationCount }, (_, i) => ({
       value: String(i),
-      label: `Station ${i}`,
+      label: `Station ${displayStationName(names[i] ?? String(i))}`,
     }));
-  }, [stationCount]);
+  }, [stationCount, shots, reverse]);
 
   // GPS origin for map preview - only set when valid GPS coordinates are entered
   const gpsOrigin = useMemo(() => {

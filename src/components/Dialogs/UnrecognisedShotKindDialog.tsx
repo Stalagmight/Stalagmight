@@ -7,6 +7,8 @@ import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { SHOT_KIND_CYCLE, SHOT_KIND_LABEL_KEY } from '../../utils/shotKind';
+import { formatShotLabel } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import type { ShotKind } from '../../types/ipc/ShotKind';
 import type { UnrecognisedShotKind } from '../../types/ipc/UnrecognisedShotKind';
 
@@ -28,6 +30,7 @@ export default function UnrecognisedShotKindDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const dialogData = useUIStore((s) => s.dialogData);
   const executeBatch = useProjectStore((s) => s.executeBatch);
+  const labels = useIdentityLabels();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,8 +114,13 @@ export default function UnrecognisedShotKindDialog() {
               {shots.map((shot) => (
                 <tr key={shot.shot_id} className="border-t border-border">
                   <td className="p-2">
-                    {shot.line_name ?? t('dialogs.unrecognisedShotKind.unnamedSection')}
-                    {` · #${shot.shot_number}`}
+                    {/* `Main Line: 4 → 5`: shot number n (1-based) runs from
+                        station n - 1 to station n of its line. */}
+                    {formatShotLabel(
+                      labels.stationName({ line_id: shot.line_id, station_index: shot.shot_number - 1 }),
+                      labels.stationName({ line_id: shot.line_id, station_index: shot.shot_number }),
+                      shot.line_name ?? t('dialogs.unrecognisedShotKind.unnamedSection'),
+                    )}
                   </td>
                   <td className="p-2 font-mono text-text-secondary">{shot.raw_value}</td>
                   <td className="p-2">

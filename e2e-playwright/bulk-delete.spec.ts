@@ -89,8 +89,7 @@ test.describe('Bulk delete dialog', () => {
     await openBulkDelete(page, interiorData(r));
 
     const dialog = page.getByTestId('bulk-delete-dialog');
-    await expect(dialog).toContainText('Delete 2 shots');
-    await expect(dialog).toContainText('Main Line');
+    await expect(dialog).toContainText('Delete 2 shots (stations 1 to 3 in Main Line).');
 
     // Interior → split offered with two prefilled name inputs.
     await expect(page.getByTestId('split-name-a')).toHaveValue('Main Line-A');
@@ -173,8 +172,8 @@ test.describe('Bulk delete dialog', () => {
     await expect(block).toContainText(
       'Close Gap & Delete removes these loop closures (they would span a single shot)'
     );
-    // The ids the closure was created with, not the renumbered ones.
-    await expect(block).toContainText(`#7: ${r.lineId}:1 <-> ${r.lineId}:4`);
+    // The stations the closure was created with, by name, not the renumbered ones.
+    await expect(block).toContainText('#7: Main Line / 1 <-> Main Line / 4');
   });
 
   test('prefix range offers only a single delete action (no split names)', async ({ page }) => {

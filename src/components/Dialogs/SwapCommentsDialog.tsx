@@ -6,6 +6,8 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { StationRef, LineId, ShotId } from '../../types/project';
 import type { CommentHolder } from '../../types/commands';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import type { IdentityLabels } from '../../utils/stationIdentity';
 
 interface CommentHolderUI {
   type: 'station' | 'shot';
@@ -13,6 +15,16 @@ interface CommentHolderUI {
   lineId?: LineId;
   shotId?: ShotId;
   comment: string;
+}
+
+/** `station Main Line / 17` or `shot Main Line: 4 → 5`; null when unknown. */
+function holderLabel(labels: IdentityLabels, h: CommentHolderUI): string | null {
+  if (h.type === 'station' && h.stationRef) return `station ${labels.station(h.stationRef, true)}`;
+  if (h.type === 'shot' && h.lineId !== undefined && h.shotId !== undefined) {
+    const shot = labels.shot(h.lineId, h.shotId, true);
+    return shot === null ? null : `shot ${shot}`;
+  }
+  return null;
 }
 
 /** Build a CommentHolder IPC payload from a UI holder */
@@ -28,11 +40,14 @@ export default function SwapCommentsDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const clearMoveCommentSource = useUIStore((s) => s.clearMoveCommentSource);
   const [busy, setBusy] = useState(false);
+  const labels = useIdentityLabels();
 
   const source = dialogData.source as CommentHolderUI | undefined;
   const target = dialogData.target as CommentHolderUI | undefined;
 
   if (!source || !target) return null;
+  const sourceLabel = holderLabel(labels, source);
+  const targetLabel = holderLabel(labels, target);
 
   // Cancel: no backend mutation happened on pickup, just clear UI state
   const handleCancel = () => {
@@ -70,13 +85,17 @@ export default function SwapCommentsDialog() {
     <DialogWrapper title="Move comment" onClose={handleCancel} size="md" data-testid="swap-comments-dialog">
       <div className="space-y-4">
         <div>
-          <p className="text-text-secondary text-sm mb-1">Comment being moved:</p>
+          <p className="text-text-secondary text-sm mb-1">
+            {sourceLabel ? `Comment being moved, from ${sourceLabel}:` : 'Comment being moved:'}
+          </p>
           <blockquote className="border-l-2 border-accent pl-3 text-text-primary italic">
             {source.comment}
           </blockquote>
         </div>
         <div>
-          <p className="text-text-secondary text-sm mb-1">Target already has a comment:</p>
+          <p className="text-text-secondary text-sm mb-1">
+            {targetLabel ? `The ${targetLabel} already has a comment:` : 'Target already has a comment:'}
+          </p>
           <blockquote className="border-l-2 border-warning pl-3 text-text-primary italic">
             {target.comment}
           </blockquote>

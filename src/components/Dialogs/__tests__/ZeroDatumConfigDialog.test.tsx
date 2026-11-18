@@ -190,9 +190,11 @@ function renderDialog() {
 }
 
 /** Open the station dropdown and choose `Station ${index}`. */
+/** Pick the station at `index` of the line being sent. By position, not by
+ *  label: the label is the station's name, which an edit can move off its index. */
 function pickStation(index: number) {
   fireEvent.click(screen.getByRole('combobox'));
-  fireEvent.click(screen.getByText(`Station ${index}`));
+  fireEvent.click(screen.getByTestId(`zero-datum-station-select-option-${index}`));
 }
 
 /** Materialize the trailing blank row, which is how a shot gets added.
@@ -267,6 +269,19 @@ describe('ZeroDatumConfigDialog station pick', () => {
     renderDialog();
     fireEvent.click(screen.getByRole('combobox'));
     expect(screen.getAllByRole('option')).toHaveLength(SHOT_COUNT + 1);
+  });
+
+  it('labels each station by the name the import gives it, not by its position', () => {
+    renderDialog();
+    deleteRow(0);
+    fireEvent.click(screen.getByRole('combobox'));
+    // The first shot is gone, so the line sent starts at MNemo station 1: the
+    // station at index 0 is named 1, the far end keeps its number.
+    expect(screen.getByTestId('zero-datum-station-select-option-0')).toHaveTextContent('Station 1');
+    expect(screen.getByTestId(`zero-datum-station-select-option-${SHOT_COUNT - 1}`)).toHaveTextContent(
+      `Station ${SHOT_COUNT}`
+    );
+    expect(screen.queryByTestId(`zero-datum-station-select-option-${SHOT_COUNT}`)).toBeNull();
   });
 
   it('keeps the pick on its physical station when a leading shot is deleted after it', () => {

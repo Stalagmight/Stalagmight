@@ -61,6 +61,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
 import type { Project } from '../../types/ipc/Project';
 import type { Shot } from '../../types/ipc/Shot';
+import type { Station } from '../../types/project';
 
 const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
 const refused = { success: false, error: 'Merge refused' } as CommandResult;
@@ -167,8 +168,17 @@ let updateShot: ReturnType<typeof vi.fn>;
 let setShotKind: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
 
+// Station names that differ from the positional indices (`O0`.. on Orphan,
+// `M0`.. on Mainline), so a label built from the handles can never pass.
+const named = (lineId: number, prefix: string, count: number) =>
+  Array.from({ length: count }, (_, i) => ({
+    station_ref: { line_id: lineId, station_index: i },
+    name: `${prefix}${i}`,
+  }));
+const STATIONS = [...named(1, 'O', 5), ...named(2, 'M', 6)] as unknown as Station[];
+
 function setup(project: Project = makeProject()) {
-  useProjectStore.setState({ project });
+  useProjectStore.setState({ project, stations: STATIONS, surveyData: null });
 }
 
 async function acceptAndFinish() {
@@ -210,15 +220,29 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(screen.queryByTestId('overlap-row-2')).toBeNull();
     expect(screen.queryByTestId('overlap-mode-select')).toBeNull();
 
-    expect(within(row0).getByText('Existing 2:4')).toBeTruthy();
-    expect(within(row0).getByText('New 1:1')).toBeTruthy();
+    expect(within(row0).getByText('Existing M3 \u2192 M4')).toBeTruthy();
+    expect(within(row0).getByText('New O0 \u2192 O1')).toBeTruthy();
     expect(row0.getAttribute('data-differs')).toBe('false');
 
-    expect(within(row1).getByText('Existing 2:5')).toBeTruthy();
+    expect(within(row1).getByText('Existing M4 \u2192 M5')).toBeTruthy();
     expect(within(row1).getByText('7.5')).toBeTruthy(); // new length
     expect(within(row1).getByText('0.5')).toBeTruthy(); // length difference
     expect(within(row1).getByText('2.0')).toBeTruthy(); // azimuth difference
     expect(row1.getAttribute('data-differs')).toBe('true');
+  });
+
+  it('names the stations it connects and the merge options by line and station name', async () => {
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    const suggestion = screen.getByTestId('wizard-suggestion');
+    // Default: the end of the repeat, Orphan station 2 = Mainline station 5.
+    expect(within(suggestion).getByText('Orphan / O2')).toBeTruthy();
+    expect(within(suggestion).getByText('Mainline / M5')).toBeTruthy();
+    expect(screen.getByTestId('merge-station-select')).toHaveTextContent('O2 \u2194 Mainline / M5');
+    await userEvent.click(screen.getByTestId('merge-station-select'));
+    expect(screen.getByTestId('merge-station-select-option-1')).toHaveTextContent('O1 \u2194 Mainline / M4');
+    expect(suggestion.textContent).not.toMatch(/stn|\d+:\d+/);
   });
 
   it('defaults the connection to the end of the repeat', async () => {
@@ -417,6 +441,10 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
     expect(screen.getByTestId('overlap-row-2').getAttribute('data-differs')).toBe('true');
     expect(screen.getByTestId('overlap-row-3').getAttribute('data-differs')).toBe('false');
+    // The new reading is turned to run Mainline's way, and so is its label:
+    // orphan station 4 is the merge station, Mainline 3.
+    expect(within(screen.getByTestId('overlap-row-3')).getByText('Existing M3 \u2192 M4')).toBeTruthy();
+    expect(within(screen.getByTestId('overlap-row-3')).getByText('New O4 \u2192 O3')).toBeTruthy();
     await userEvent.click(screen.getByTestId('overlap-set-all-use-new'));
     await acceptAndFinish();
 

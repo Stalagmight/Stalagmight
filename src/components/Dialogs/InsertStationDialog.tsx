@@ -7,6 +7,7 @@ import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 
 /** Clamp a 0..1 fraction; `projectParamOnSegment` already clamps, this is belt
  *  and braces against a NaN or an out-of-range value reaching the arithmetic. */
@@ -30,11 +31,14 @@ function formatPercent(pct: number): string {
 export default function InsertStationDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { splitShotAtDistance } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const shotLength = (dialogData.shotLength as number | undefined) ?? 0;
-  const lineName = dialogData.lineName as string | undefined;
+  const lineName = lineId !== undefined ? labels.lineName(lineId) : undefined;
+  // `4 → 5`: the line is in the title.
+  const shotLabel = lineId !== undefined && shotId !== undefined ? labels.shot(lineId, shotId) : null;
   /**
    * Where along the shot the map right-click landed, 0..1 from the from-station.
    * Only present for a map context menu; the data-table menu has no position on
@@ -163,7 +167,9 @@ export default function InsertStationDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Splits the shot into two, adding a station at the given distance from its start.
+          {shotLabel
+            ? `Splits the shot ${shotLabel} into two, adding a station at the given distance from its start.`
+            : 'Splits the shot into two, adding a station at the given distance from its start.'}
         </p>
 
         {error && (

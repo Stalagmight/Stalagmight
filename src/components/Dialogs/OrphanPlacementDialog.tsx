@@ -15,8 +15,10 @@ import type { Line } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
-import { formatShotId } from '../../utils/formatters';
-import { computeOverlapPairs, type MergeOption } from '../../utils/overlapHelpers';
+import { formatShotLabel, formatStationLabel } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { computeOverlapPairs, needsDirectionReversal, type MergeOption } from '../../utils/overlapHelpers';
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
 import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
 import OverlapShotTable, { type OverlapShotRow } from './OverlapShotTable';
@@ -96,6 +98,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     [t],
   );
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
+  const labels = useIdentityLabels();
+  // `Main Line / 17`. The line name comes with the suggestion (the backend
+  // names every line), the station name from the project.
+  const stationOn = useCallback(
+    (lineId: number, lineName: string, stationIndex: number) =>
+      formatStationLabel(labels.stationName({ line_id: lineId, station_index: stationIndex }), lineDisplayName(lineName)),
+    [labels],
+  );
   const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
 
   const [processing, setProcessing] = useState(false);
@@ -208,14 +218,20 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const overlapRows = useMemo((): OverlapShotRow[] => {
     if (!currentSuggestion || !orphanLine || !targetLine) return [];
     const params = overlapParamsOf(currentSuggestion);
+    // The new reading is shown turned to run the way the existing one does, so
+    // its label names its stations in that order too.
+    const reversed = needsDirectionReversal(params.importStationIndex, params.direction);
+    const orphanStation = (k: number) => labels.stationName({ line_id: orphanLine.id, station_index: k });
     return repeatedShots(params, mergeImportStation, orphanLine.shots, targetLine.shots).map((r) => ({
       orphanShotIndex: r.orphanShotIndex,
-      existingLabel: formatShotId(targetLine.id, r.targetShotIndex + 1),
-      newLabel: formatShotId(orphanLine.id, r.orphanShotIndex + 1),
+      existingLabel: labels.shotAt(targetLine.id, r.targetShotIndex),
+      newLabel: reversed
+        ? formatShotLabel(orphanStation(r.orphanShotIndex + 1), orphanStation(r.orphanShotIndex))
+        : labels.shotAt(orphanLine.id, r.orphanShotIndex),
       existing: r.targetShot,
       incoming: r.incoming,
     }));
-  }, [currentSuggestion, orphanLine, targetLine, mergeImportStation]);
+  }, [currentSuggestion, orphanLine, targetLine, mergeImportStation, labels]);
 
   // The choices that will be applied: a doubly-anchored target forces Keep
   // existing on every row, as the single overlap mode did before.
@@ -500,12 +516,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {/* Connection description */}
             <div className="p-3 rounded border border-border bg-surface-alt space-y-2">
               <div className="text-sm">
-                <span className="font-medium">{currentSuggestion!.orphanLineName}</span>
-                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayOrphanStation })}</span>
+                <span className="font-medium">
+                  {stationOn(currentSuggestion!.orphanLineId, currentSuggestion!.orphanLineName, displayOrphanStation)}
+                </span>
               </div>
               <div className="text-xs text-text-secondary">
-                &rarr; <span className="font-medium text-text-primary">{currentSuggestion!.targetLineName}</span>
-                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayTargetStation })}</span>
+                &rarr;{' '}
+                <span className="font-medium text-text-primary">
+                  {stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, displayTargetStation)}
+                </span>
               </div>
             </div>
 
@@ -550,9 +569,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                   options={mergeOptions.map((opt) => ({
                     value: String(opt.offset),
                     label: t('dialogs.orphanPlacement.mergeOption', {
-                      importStation: opt.importStation,
-                      targetName: currentSuggestion!.targetLineName,
-                      existingStation: opt.existingStation,
+                      importStation: labels.station({ line_id: currentSuggestion!.orphanLineId, station_index: opt.importStation }),
+                      targetStation: stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, opt.existingStation),
                     }),
                   }))}
                   size="sm"
@@ -636,10 +654,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                           {confidenceLabel(alt.confidence)}
                         </span>
                         <span className="truncate">
-                          {t('dialogs.orphanPlacement.alternativeTarget', {
-                            name: alt.targetLineName,
-                            index: alt.targetStationIndex,
-                          })}
+                          {stationOn(alt.targetLineId, alt.targetLineName, alt.targetStationIndex)}
                         </span>
                         <span className="text-text-tertiary ml-auto shrink-0">
                           {t('dialogs.orphanPlacement.alternativeSummary', {

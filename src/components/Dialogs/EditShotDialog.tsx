@@ -6,10 +6,12 @@ import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 
 export default function EditShotDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { updateShot, project, isShotFrozen } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
@@ -157,8 +159,8 @@ export default function EditShotDialog() {
           </div>
         )}
 
-        <div className="text-sm text-text-secondary">
-          Line: {line?.name ?? `Line ${lineId}`} | Shot ID: {shotId}
+        <div className="text-sm text-text-secondary" data-testid="edit-shot-identity">
+          {lineId !== undefined && shotIndex >= 0 ? labels.shotAt(lineId, shotIndex, true) : ''}
         </div>
 
         {frozen && (

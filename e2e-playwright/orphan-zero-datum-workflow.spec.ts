@@ -248,7 +248,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     await expect(async () => {
       await page.getByTestId('merge-station-select').click();
       await page.getByTestId('merge-station-select-option-1').click({ timeout: 2000 });
-      await expect(page.getByTestId('merge-station-select')).toContainText('stn 1 ', { timeout: 1000 });
+      await expect(page.getByTestId('merge-station-select')).toContainText('1 \u2194 ', { timeout: 1000 });
     }).toPass({ timeout: 15000 });
     await expect(page.getByTestId('overlap-row-0')).toBeVisible();
     await expect(page.getByTestId('overlap-row-1')).toHaveCount(0);

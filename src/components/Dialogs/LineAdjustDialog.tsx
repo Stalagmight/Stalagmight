@@ -7,6 +7,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { LineId } from '../../types/project';
+import { lineDisplayName } from '../../utils/stationIdentity';
 
 // A string the user can be partway through typing into a signed-decimal field:
 // '', '-', '.', '-.', '5', '-2.5', '.5'. Lets a controlled input hold these
@@ -216,7 +217,7 @@ export default function LineAdjustDialog() {
         )}
 
         <div className="text-sm text-text-secondary mb-4">
-          Adjusting: <EntityBlob entity="line">{line.name ?? `Line ${line.id}`}</EntityBlob>
+          Adjusting: <EntityBlob entity="line">{lineDisplayName(line.name)}</EntityBlob>
         </div>
 
         {connectedCount > 1 && (

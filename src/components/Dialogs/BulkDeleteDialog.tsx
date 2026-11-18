@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
@@ -22,6 +22,7 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 export default function BulkDeleteDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const lineId = dialogData.lineId as number | undefined;
   const startShotId = dialogData.startShotId as number | undefined;
@@ -59,7 +60,8 @@ export default function BulkDeleteDialog() {
     : isInterior
       ? removedComments.filter((c: StationRef) => c.station_index > endPos)
       : removedComments;
-  const fmt = (s: StationRef) => formatStationId(s.line_id, s.station_index);
+  // Every station listed is on this one line, which the summary names.
+  const fmt = (s: StationRef) => labels.station(s);
   // The preview is the only source of the datum/comment/shift-blocked warnings,
   // so keep the destructive actions disabled until it resolves (loaded or
   // errored) - otherwise a fast click could confirm before the warning renders.
@@ -99,7 +101,7 @@ export default function BulkDeleteDialog() {
     startStationIndex !== undefined &&
     endStationIndex !== undefined &&
     lineId !== undefined
-      ? `Delete ${shotCount} shots (stations ${formatStationId(lineId, startStationIndex)}-${formatStationId(lineId, endStationIndex)} in ${lineName ?? `Line ${lineId}`}).`
+      ? `Delete ${shotCount} shots (stations ${labels.station({ line_id: lineId, station_index: startStationIndex })} to ${labels.station({ line_id: lineId, station_index: endStationIndex })} in ${labels.lineName(lineId)}).`
       : `Delete ${shotCount ?? 0} shots.`;
 
   const finish = (split: boolean) => {

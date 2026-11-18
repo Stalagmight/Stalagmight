@@ -327,7 +327,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
       expect(lastIsDirty()).toBe(false);
 
       fireEvent.click(screen.getByTestId('zero-datum-station-select'));
-      fireEvent.click(screen.getByText('Station 1'));
+      fireEvent.click(screen.getByTestId('zero-datum-station-select-option-1'));
 
       expect(lastIsDirty()).toBe(true);
     });

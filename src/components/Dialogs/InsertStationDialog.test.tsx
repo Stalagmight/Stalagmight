@@ -24,8 +24,14 @@ const SHOT_ID = 2 as ShotId;
 const SHOT_LENGTH = 10;
 
 const baseProject = {
-  lines: [{ id: LINE_ID, shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
+  lines: [{ id: LINE_ID, name: 'Main Passage', shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
 } as unknown as Project;
+
+// The shot runs from station 0 to station 1, named unlike their indices.
+const baseStations = [
+  { station_ref: { line_id: LINE_ID, station_index: 0 }, name: '4' },
+  { station_ref: { line_id: LINE_ID, station_index: 1 }, name: '5' },
+];
 
 let splitShotAtDistance: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
@@ -42,8 +48,10 @@ beforeEach(() => {
     // The dialog reads the freshest project.lines via getState() after the
     // split resolves, to find the split shot's post-split index (#59 fix D).
     project: baseProject,
+    stations: baseStations,
+    surveyData: null,
     splitShotAtDistance,
-  });
+  } as never);
   useUIStore.setState({
     // Editable baseline (the read-only-guard test flips this to closureAdjusted;
     // reset here so it doesn't bleed into the other tests).
@@ -58,6 +66,16 @@ beforeEach(() => {
       shotLength: SHOT_LENGTH,
       lineName: 'Main Passage',
     },
+  });
+});
+
+describe('InsertStationDialog identity', () => {
+  it('names the line in the title and the shot it splits by its station names', () => {
+    render(<InsertStationDialog />);
+    expect(screen.getByText('Insert Station in Main Passage')).toBeInTheDocument();
+    expect(
+      screen.getByText('Splits the shot 4 \u2192 5 into two, adding a station at the given distance from its start.')
+    ).toBeInTheDocument();
   });
 });
 

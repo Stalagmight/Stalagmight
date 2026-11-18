@@ -600,7 +600,8 @@ test.describe('Reverse Line', () => {
     // And it reverses only the line that was right-clicked.
     await page.getByRole('button', { name: 'Reverse Line', exact: true }).click();
     await expect(page.getByTestId('reverse-line-list').locator('li')).toHaveCount(1);
-    await expect(page.getByTestId('reverse-line-list')).toContainText('Line 3');
+    // The line by its name, and where it will run by its station names.
+    await expect(page.getByTestId('reverse-line-list')).toContainText('Line 3 (will run from 3 to 0)');
   });
 
   test('counts a repeated line in the selection once', async ({ page }) => {

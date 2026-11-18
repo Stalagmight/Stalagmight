@@ -16,7 +16,14 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 
 const REFUSAL =
-  'This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.';
+  'This closure would join the two ends of one shot (Main Line / 4 to Main Line / 5) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.';
+
+// Station names differ from the positional indices, so a positional label
+// (`0:1`, `1`) can never pass for the name.
+const stations = [
+  { station_ref: { line_id: 0, station_index: 1 }, name: '4', id: 41 },
+  { station_ref: { line_id: 0, station_index: 2 }, name: '5', id: 42 },
+];
 
 const preview = {
   path_length: 10,
@@ -44,7 +51,12 @@ describe('ClosureDialog - refusal guard (#737)', () => {
   beforeEach(() => {
     createLoopClosure.mockReset();
     createLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
-    useProjectStore.setState({ createLoopClosure, project: null } as never);
+    useProjectStore.setState({
+      createLoopClosure,
+      project: { lines: [{ id: 0, name: 'Main Line', shots: [] }] },
+      stations,
+      surveyData: null,
+    } as never);
   });
 
   it('shows the backend refusal and disables Create', async () => {
@@ -67,6 +79,16 @@ describe('ClosureDialog - refusal guard (#737)', () => {
     expect(createLoopClosure).not.toHaveBeenCalled();
     // Cancel still works: the dialog is a dead end only for Create.
     expect(screen.getByTestId('closure-cancel')).toBeEnabled();
+  });
+
+  it('names both stations and their line, never the positional handles', () => {
+    open({});
+    render(<ClosureDialog />);
+
+    const dialog = screen.getByTestId('closure-dialog');
+    expect(dialog).toHaveTextContent('Station A:Main Line / 4');
+    expect(dialog).toHaveTextContent('Station B:Main Line / 5');
+    expect(dialog.textContent).not.toMatch(/\d+:\d+|Line 0/);
   });
 
   it('keeps Create for a pair that closes a real loop', async () => {

@@ -125,9 +125,11 @@ function editor(): ShotTableEditorProps {
   return captured.props as ShotTableEditorProps;
 }
 
+/** Pick the station at `index` of the line being sent. By position, not by
+ *  label: the label is the station's name, which an edit can move off its index. */
 function pickStation(index: number) {
   fireEvent.click(screen.getByRole('combobox'));
-  fireEvent.click(screen.getByText(`Station ${index}`));
+  fireEvent.click(screen.getByTestId(`zero-datum-station-select-option-${index}`));
 }
 
 /** The cells the editor writes for one filled row, in editor order. A complete

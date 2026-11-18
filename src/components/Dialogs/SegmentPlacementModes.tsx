@@ -14,6 +14,10 @@ import type { DmpFile } from '../../types/commands';
 import type { Line } from '../../types/project';
 import type { LineEditState } from '../../utils/batchImportHelpers';
 import type { SkippedSuggestionPlacement } from './DmpNewImportDialog';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { displayStationName } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { dmpFileStationName, importLineStationNames, suggestionTargetStationLabel } from '../../utils/importStationNames';
 
 export type SegmentPlacementMode = 'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard';
 
@@ -62,24 +66,31 @@ export function SegmentPlacementModes({
   onPlaceOnMap,
 }: SegmentPlacementModesProps) {
   const { t } = useTranslation();
+  const labels = useIdentityLabels();
+  const stationOption = (i: number, name: string): SelectOption => ({
+    value: String(i),
+    label: t('dialogs.dmpNewImport.manualPlacing.stationNamed', { name: displayStationName(name) }),
+  });
 
   const lineOptions = (): SelectOption[] =>
     (currentSegment ?? []).map((idx): SelectOption => ({
       value: String(idx),
-      label: lineEdits.get(idx)?.name ?? dmpSections[idx]?.name ?? `Line ${idx}`,
+      label: lineDisplayName(lineEdits.get(idx)?.name ?? dmpSections[idx]?.name),
     }));
 
+  // Each station of the anchor line by the name the import gives it: an
+  // edited line's rows as the user sees them, an unedited one by the file's
+  // MNemo numbers.
   const stationOptions = (): SelectOption[] => {
     const secIdx = segmentAnchor?.lineIndex;
     const secEdits = secIdx != null ? lineEdits.get(secIdx) : undefined;
     const sec = secIdx != null ? dmpSections[secIdx] : null;
-    const count = secEdits
-      ? secEdits.shots.filter((s) => !s.isDeleted).length + 1
-      : sec ? sec.shots.filter((s) => s.shot_type === 'Standard').length + 1 : 0;
-    return Array.from({ length: count }, (_, i): SelectOption => ({
-      value: String(i),
-      label: t('dialogs.dmpNewImport.manualPlacing.stationIndexed', { index: i }),
-    }));
+    if (secEdits) {
+      const names = importLineStationNames(secEdits.shots.filter((s) => !s.isDeleted), secEdits.reverse);
+      return names.map((name, i) => stationOption(i, name));
+    }
+    const count = sec ? sec.shots.filter((s) => s.shot_type === 'Standard').length + 1 : 0;
+    return Array.from({ length: count }, (_, i) => stationOption(i, dmpFileStationName(i)));
   };
 
   return (
@@ -102,7 +113,7 @@ export function SegmentPlacementModes({
             <div className="text-sm">
               <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
               <div className="text-xs text-text-secondary">
-                → {segmentSkippedSuggestion.suggestion.existingLineName} stn {segmentSkippedSuggestion.mergeExistingStation}
+                → {suggestionTargetStationLabel(labels, segmentSkippedSuggestion.suggestion, segmentSkippedSuggestion.mergeExistingStation)}
                 {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
               </div>
             </div>
@@ -182,7 +193,7 @@ export function SegmentPlacementModes({
                           { value: '', label: '-' } as SelectOption,
                           ...projectLines.map((s): SelectOption => ({
                             value: String(s.id),
-                            label: s.name ?? `Line ${s.id}`,
+                            label: lineDisplayName(s.name),
                           })),
                         ]}
                         className="flex-1"
@@ -197,10 +208,9 @@ export function SegmentPlacementModes({
                         <Select
                           value={String(fromExistingStationIdx)}
                           onChange={(v) => onFromExistingStationChange(Number(v))}
-                          options={Array.from({ length: fromExistingStationCount }, (_, i): SelectOption => ({
-                            value: String(i),
-                            label: t('dialogs.dmpNewImport.manualPlacing.stationIndexed', { index: i }),
-                          }))}
+                          options={Array.from({ length: fromExistingStationCount }, (_, i) =>
+                            stationOption(i, labels.stationName({ line_id: fromExistingLineId, station_index: i })),
+                          )}
                           className="flex-1"
                           data-testid="from-existing-station-select"
                         />

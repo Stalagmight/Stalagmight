@@ -101,3 +101,19 @@ describe('LineAdjustDialog negative / partial input (#161)', () => {
     expect(dx).toHaveValue('-2'); // rejected → field unchanged
   });
 });
+
+describe('LineAdjustDialog line identity', () => {
+  it('names the line it adjusts, never its id', async () => {
+    render(<LineAdjustDialog />);
+    expect(await screen.findByText('Main Passage')).toBeInTheDocument();
+  });
+
+  it('shows "Unnamed line" for a line without a name, not "Line <id>"', async () => {
+    useProjectStore.setState({
+      project: { lines: [{ id: LINE_ID, name: null }] } as unknown as Project,
+    });
+    render(<LineAdjustDialog />);
+    expect(await screen.findByText('Unnamed line')).toBeInTheDocument();
+    expect(screen.queryByText(`Line ${LINE_ID}`)).toBeNull();
+  });
+});
