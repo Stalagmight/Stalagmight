@@ -3,6 +3,7 @@ import { emptySurveyData, type SurveyData } from '../../types/survey-data';
 import {
   filterSurveyDataLines,
   filterSurveyDataLinesCached,
+  FILTER_CACHE_KEYS_PER_SOURCE,
   OTHER_FIELDS,
   SHOT_ARRAY_FIELDS,
   STATION_ARRAY_FIELDS,
@@ -105,5 +106,33 @@ describe('filterSurveyDataLines', () => {
     expect(filterSurveyDataLinesCached(data, new Set([20]), '20')).toBe(a);
     expect(filterSurveyDataLinesCached(data, new Set([30]), '30')).not.toBe(a);
     expect(filterSurveyDataLinesCached(data, new Set(), '')).toBe(data);
+  });
+
+  it('keeps a few hidden sets per source, so flipping between reveal states does not re-filter', () => {
+    const data = sample();
+    // A hidden Section of lines 20 and 30; selecting one of them reveals it.
+    const both = filterSurveyDataLinesCached(data, new Set([20, 30]), '20,30');
+    const only20 = filterSurveyDataLinesCached(data, new Set([20]), '20');
+    const only30 = filterSurveyDataLinesCached(data, new Set([30]), '30');
+    for (let i = 0; i < 3; i++) {
+      expect(filterSurveyDataLinesCached(data, new Set([20, 30]), '20,30')).toBe(both);
+      expect(filterSurveyDataLinesCached(data, new Set([20]), '20')).toBe(only20);
+      expect(filterSurveyDataLinesCached(data, new Set([30]), '30')).toBe(only30);
+    }
+    // Each source keeps its own entries.
+    const other = sample();
+    expect(filterSurveyDataLinesCached(other, new Set([20]), '20')).not.toBe(only20);
+    expect(filterSurveyDataLinesCached(data, new Set([20]), '20')).toBe(only20);
+  });
+
+  it('evicts the least recently used hidden set once the source holds too many', () => {
+    const data = sample();
+    const keys = Array.from({ length: FILTER_CACHE_KEYS_PER_SOURCE }, (_, i) => `k${i}`);
+    const first = new Map(keys.map((k) => [k, filterSurveyDataLinesCached(data, new Set([20]), k)]));
+    // Touch k0 so k1 is the oldest, then add one more key.
+    expect(filterSurveyDataLinesCached(data, new Set([20]), 'k0')).toBe(first.get('k0'));
+    filterSurveyDataLinesCached(data, new Set([30]), 'extra');
+    expect(filterSurveyDataLinesCached(data, new Set([20]), 'k0')).toBe(first.get('k0'));
+    expect(filterSurveyDataLinesCached(data, new Set([20]), 'k1')).not.toBe(first.get('k1'));
   });
 });

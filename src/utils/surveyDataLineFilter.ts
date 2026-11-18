@@ -97,10 +97,19 @@ export function filterSurveyDataLines(data: SurveyData, hidden: ReadonlySet<numb
   return out;
 }
 
-/** One cached result per source `SurveyData` (the measured and the adjusted
- *  copies each keep their own), so repeated flushes with the same hidden set
- *  hand the map the SAME object and its incremental paths stay available. */
-const cache = new WeakMap<SurveyData, { key: string; result: SurveyData }>();
+/** How many hidden sets each source keeps a filtered copy for. Selecting a
+ *  line of a hidden Section reveals it (a new hidden set), and selecting
+ *  something else hides it again: a few entries let the user flip between a
+ *  handful of reveal states without re-filtering - and, since the copy is the
+ *  SAME object, without the flush seeing new geometry it has to diff. Each
+ *  entry is a full copy of the shown lines, hence small. */
+export const FILTER_CACHE_KEYS_PER_SOURCE = 4;
+
+/** Per source `SurveyData` (the measured and the adjusted copies each keep
+ *  their own), its filtered copies by hidden-set key, least recently used
+ *  first. Repeated flushes with the same hidden set hand the map the SAME
+ *  object, so its incremental paths stay available. */
+const cache = new WeakMap<SurveyData, Map<string, SurveyData>>();
 
 /** {@link filterSurveyDataLines}, memoized on the source and the hidden set's
  *  `key` (any string that changes exactly when the set's contents do). */
@@ -110,9 +119,23 @@ export function filterSurveyDataLinesCached(
   key: string,
 ): SurveyData {
   if (hidden.size === 0) return data;
-  const hit = cache.get(data);
-  if (hit && hit.key === key) return hit.result;
+  let entries = cache.get(data);
+  const hit = entries?.get(key);
+  if (entries && hit) {
+    // Most recently used goes last.
+    entries.delete(key);
+    entries.set(key, hit);
+    return hit;
+  }
   const result = filterSurveyDataLines(data, hidden);
-  cache.set(data, { key, result });
+  if (!entries) {
+    entries = new Map();
+    cache.set(data, entries);
+  }
+  entries.set(key, result);
+  if (entries.size > FILTER_CACHE_KEYS_PER_SOURCE) {
+    const oldest = entries.keys().next().value;
+    if (oldest !== undefined) entries.delete(oldest);
+  }
   return result;
 }
