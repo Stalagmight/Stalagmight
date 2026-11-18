@@ -1036,7 +1036,13 @@ empty: it is where a line is dragged to leave its Section).
   the picture's extent covers only what is drawn. Unlike the map, a selected
   hidden line is still left out (the export follows the Sections, not the
   selection). Penetration labels and the distance colouring still measure along
-  the whole survey, hidden lines included.
+  the whole survey, hidden lines included. The setting forgets a Section that
+  no longer exists, on load and after every edit that refreshes the project
+  (Delete Section, an Undo of New Section; `pruneHiddenSections`), so a
+  Section created later with the same id starts shown. Fit to View, the fit
+  after a load or import and the map's initial centre frame what is drawn: the
+  hidden lines are left out while at least one line is shown
+  (`utils/surveyFrame.ts`); with every line hidden they frame the whole survey.
 
 ### 6.4 Undo/Redo History Dropdown
 

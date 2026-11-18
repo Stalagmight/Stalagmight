@@ -21,6 +21,12 @@ export interface SectionsViewSlice {
   hiddenSections: readonly number[];
   /** Hide or show one Section on the map, and save the setting. */
   setSectionHidden: (id: number, hidden: boolean) => void;
+  /** Forget the hidden ids that name no Section of the project any more (a
+   *  deleted Section, an undone creation, a file another build rewrote), and
+   *  save the setting when that changed it: a Section created later can reuse
+   *  the id and must not start hidden. Run on every load and every refresh of
+   *  the project. `undefined` (no Sections list at all) changes nothing. */
+  pruneHiddenSections: (sections: readonly { id: number }[] | undefined) => void;
   /** Collapsed groups per project (keyed by the project's `created_at`, the
    *  identity the store already uses across a project switch). A group is a
    *  Section id, or {@link UNGROUPED_GROUP_ID}. Session-only. */
@@ -53,6 +59,18 @@ function saveHiddenSections(ids: readonly number[]): void {
   });
 }
 
+/** `hidden` without the ids no Section of `sections` has, or `null` when
+ *  nothing goes (or the Sections are unknown). */
+export function prunedHiddenSections(
+  hidden: readonly number[],
+  sections: readonly { id: number }[] | undefined,
+): readonly number[] | null {
+  if (hidden.length === 0 || sections === undefined) return null;
+  const existing = new Set(sections.map((section) => section.id));
+  const kept = hidden.filter((id) => existing.has(id));
+  return kept.length === hidden.length ? null : kept;
+}
+
 export function createSectionsViewSlice(set: SliceSet): SectionsViewSlice {
   return {
     hiddenSections: [],
@@ -63,6 +81,14 @@ export function createSectionsViewSlice(set: SliceSet): SectionsViewSlice {
         if (has === hidden) return {};
         next = hidden ? [...state.hiddenSections, id] : state.hiddenSections.filter((s) => s !== id);
         return { hiddenSections: next };
+      });
+      if (next !== null) saveHiddenSections(next);
+    },
+    pruneHiddenSections: (sections) => {
+      let next: readonly number[] | null = null;
+      set((state) => {
+        next = prunedHiddenSections(state.hiddenSections, sections);
+        return next ? { hiddenSections: next } : {};
       });
       if (next !== null) saveHiddenSections(next);
     },

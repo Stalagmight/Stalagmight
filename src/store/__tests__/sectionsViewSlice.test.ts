@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { useUIStore } from '../uiStore';
 import { DISPLAY_DEFAULTS } from '../displaySelectors';
-import { HIDDEN_SECTIONS_SETTING, UNGROUPED_GROUP_ID } from '../sectionsViewSlice';
+import { HIDDEN_SECTIONS_SETTING, UNGROUPED_GROUP_ID, prunedHiddenSections } from '../sectionsViewSlice';
 
 const saves = () =>
   vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'save_display_setting').map(([, args]) => args);
@@ -45,6 +45,26 @@ describe('Sections view slice', () => {
     >[0];
     useUIStore.getState().applyDisplaySettings(legacy);
     expect(useUIStore.getState().hiddenSections).toEqual([]);
+  });
+
+  it('forgets hidden ids that name no Section, and saves the pruned list', () => {
+    useUIStore.setState({ hiddenSections: [3, 7, 9] });
+    useUIStore.getState().pruneHiddenSections([{ id: 3 }, { id: 9 }, { id: 12 }]);
+    expect(useUIStore.getState().hiddenSections).toEqual([3, 9]);
+    expect(saves()).toEqual([{ key: HIDDEN_SECTIONS_SETTING, value: '[3,9]' }]);
+    // A later Section reusing id 7 does not start hidden.
+    useUIStore.getState().pruneHiddenSections([{ id: 3 }, { id: 7 }, { id: 9 }]);
+    expect(useUIStore.getState().hiddenSections).toEqual([3, 9]);
+  });
+
+  it('pruning that changes nothing saves nothing, and an unknown Sections list prunes nothing', () => {
+    useUIStore.setState({ hiddenSections: [3] });
+    useUIStore.getState().pruneHiddenSections([{ id: 3 }]);
+    useUIStore.getState().pruneHiddenSections(undefined);
+    expect(useUIStore.getState().hiddenSections).toEqual([3]);
+    expect(saves()).toEqual([]);
+    expect(prunedHiddenSections([], [])).toBeNull();
+    expect(prunedHiddenSections([1, 2], [])).toEqual([]);
   });
 
   it('keeps collapse state per project', () => {

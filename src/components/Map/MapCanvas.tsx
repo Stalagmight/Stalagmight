@@ -14,6 +14,7 @@ import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { mapHiddenLines } from '../../store/sectionVisibility';
+import { surveyFrameBounds } from '../../utils/surveyFrame';
 import { withHiddenColocated } from './hiddenColocated';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
@@ -1715,7 +1716,9 @@ function MapCanvas() {
     // Calculate initial center from stations (in meters). Read the SoA coord
     // buffer directly so load does not materialize the whole ~89k Station graph
     // through the lazy proxy just to size the initial view (#mem).
-    const bounds = getBoundsFromStationCoords(surveyData?.stationCoords ?? new Float64Array(0));
+    const bounds = surveyData
+      ? surveyFrameBounds(surveyData, mapHiddenLines(project?.lines, useUIStore.getState()).ids)
+      : getBoundsFromStationCoords(new Float64Array(0));
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     // Transform to map coordinates
@@ -3295,27 +3298,16 @@ function MapCanvas() {
     // fit computes X/Y bounds without materializing the ~89k-object lazy
     // `activeStations` view - this callback runs on every load via the
     // requestFitToBounds effect. Fall back to `activeStations` only when
-    // surveyData isn't available yet (unusual early-init paths).
+    // surveyData isn't available yet (unusual early-init paths). Either way
+    // the hidden Sections' lines are left out while any line is shown (#327).
     let bounds: { minX: number; maxX: number; minY: number; maxY: number };
-    const coordsArr = activeSurveyData?.stationCoords;
-    if (coordsArr && coordsArr.length > 0) {
-      let minX = Infinity;
-      let maxX = -Infinity;
-      let minY = Infinity;
-      let maxY = -Infinity;
-      for (let i = 0; i + 2 < coordsArr.length; i += 3) {
-        const x = coordsArr[i]!;
-        const y = coordsArr[i + 1]!;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-      bounds = { minX, maxX, minY, maxY };
+    const hidden = mapHiddenLines(project?.lines, useUIStore.getState()).ids;
+    if (activeSurveyData && activeSurveyData.stationCoords.length > 0) {
+      bounds = surveyFrameBounds(activeSurveyData, hidden);
     } else {
       if (activeStations.length === 0) return;
-      const coords = activeStations.map((s) => s.coordinates);
-      bounds = getBounds(coords);
+      const shown = activeStations.filter((s) => !hidden.has(s.station_ref.line_id));
+      bounds = getBounds((shown.length > 0 ? shown : activeStations).map((s) => s.coordinates));
     }
 
     // Transform bounds to map coordinates
@@ -3340,7 +3332,7 @@ function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : { duration: animationDuration }),
     });
-  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config]);
+  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config, project?.lines]);
 
   // Fit to a specific line's bounds, or several lines' together (a Section, #327)
   const fitToLine = useCallback(

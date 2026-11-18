@@ -1115,6 +1115,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
+        useUIStore.getState().pruneHiddenSections(result.project.cave_sections); // #327
         useUIStore.getState().triggerFitToBounds();
         // Reset the Details panel to the project-level view on open (#54): a
         // stale shot/station/line selection from a previous project/session
@@ -1526,6 +1527,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });
+        // A deleted (or undone) Section leaves the hidden list (#327).
+        useUIStore.getState().pruneHiddenSections(state.project.cave_sections);
       }
       debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
