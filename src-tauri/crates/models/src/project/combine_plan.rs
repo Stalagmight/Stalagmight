@@ -61,6 +61,19 @@
 //!   the two now move apart. Nothing is folded into the shots: the
 //!   Closures Computed View solves shots, merges and closures, never manual
 //!   offsets, so it does not move for any of this.
+//! - **Snaps as the combined project measures them (#736).** A `Move`
+//!   closure's alignment is measured, and the app measures it again after
+//!   the combine; the Closures Computed solve ties a snap as one point, so it
+//!   decides what the joined survey's sweep reads. The plan asks the
+//!   measurement's own questions of the combined project for every `Move`
+//!   closure the rules above leave as one (`combine_alignment.rs`): a torn
+//!   snap the move re-closes where a snap would tie the combined section to
+//!   itself tears as such a snap does, a snap the combine pulls apart (a
+//!   dropped hand move) tears as one the moving side pulls apart does, and
+//!   any other keeps the alignment the combined project gives it, which the
+//!   anchor rule and the across-one-shot removal read. The combine measures
+//!   them itself before its backstop and checks it changed what the plan
+//!   said.
 
 use std::collections::{HashMap, HashSet};
 
@@ -71,10 +84,12 @@ use crate::{
 };
 
 use super::closure_shots::Knots;
+use super::combine_alignment::{Landing, Realignment, Shown};
 use super::Project;
 
 /// A rigid tie: a merge (by its index in `station_merges`) or a snapped,
-/// aligned loop closure (by id).
+/// aligned loop closure (by id). Among the ties a plan tears, a closure can
+/// also be a torn snap the combine would snap again (#736).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TieId {
     Merge(usize),
@@ -102,15 +117,18 @@ pub(crate) struct ResolvedClosure {
     pub aligned: bool,
 }
 
-/// What the anchor rule reads about loop closures, worked out once per
-/// candidate query (the station menu and Combine Sections plan two choices of
-/// kept section for every partner) and only when a shifting plan needs it:
-/// the closures the solve skips because they join the two ends of one shot
-/// (#737), and every closure resolved.
-#[derive(Debug, Default)]
+/// What the plans read about loop closures, worked out once per candidate
+/// query (the station menu and Combine Sections plan two choices of kept
+/// section for every partner) and only when a plan needs it: the closures the
+/// solve skips because they join the two ends of one shot (#737), every
+/// closure resolved, and the geometry as shown, for the alignment the
+/// combined project will give each `Move` closure (#736,
+/// `combine_alignment.rs`).
+#[derive(Default)]
 pub(crate) struct ClosureFacts {
     skipped: std::cell::OnceCell<HashSet<u64>>,
     closures: std::cell::OnceCell<Vec<ResolvedClosure>>,
+    shown: std::cell::OnceCell<Shown>,
 }
 
 impl ClosureFacts {
@@ -124,8 +142,12 @@ impl ClosureFacts {
         })
     }
 
-    fn closures(&self, project: &Project) -> &[ResolvedClosure] {
+    pub(super) fn closures(&self, project: &Project) -> &[ResolvedClosure] {
         self.closures.get_or_init(|| project.resolved_closures())
+    }
+
+    pub(super) fn shown(&self, project: &Project) -> &Shown {
+        self.shown.get_or_init(|| Shown::of(project))
     }
 }
 
@@ -138,6 +160,27 @@ impl ClosureFacts {
 enum Swept {
     Solved,
     Snap,
+}
+
+/// What `Project::joined_sweep` changes against the project: the merges the
+/// combine tears (`torn`), the closures it makes ordinary (`snaps`), and the
+/// `Move` closures it keeps whose alignment the combined project flips
+/// (`flipped`, #736, `combine_alignment.rs`).
+#[derive(Clone, Copy)]
+struct Changes<'a> {
+    torn: &'a HashSet<TieId>,
+    snaps: &'a HashSet<TieId>,
+    flipped: &'a HashSet<u64>,
+}
+
+impl Changes<'_> {
+    /// Is `closure` a snap in the combined project, unless made ordinary?
+    fn snapped(&self, closure: &ResolvedClosure) -> bool {
+        Project::closure_is_snap(
+            closure.strategy,
+            closure.aligned != self.flipped.contains(&closure.id),
+        )
+    }
 }
 
 /// The point two sections are joined at, from the kept section's side.
@@ -224,6 +267,12 @@ pub(crate) struct TiePlan {
     /// move with the joined station, by its move above, not by `shift`.
     /// Not in `moved`.
     pub joined_moved: Vec<SectionId>,
+    /// The `Move` closures the combine keeps whose alignment it changes
+    /// (#736, `combine_alignment.rs`): a torn snap it re-closes where the
+    /// re-closed snap ties nothing to itself, and a snap it leaves between
+    /// two placed groups. The combine re-measures every flag and checks it
+    /// changed exactly these, less any it removed.
+    pub realigned: HashSet<u64>,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
@@ -343,6 +392,15 @@ impl Project {
         let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
         let anchored =
             |sections: &HashSet<SectionId>| sections.iter().any(|s| datum_sections.contains(s));
+        // The sections that move with `moving` and the ones that stay with
+        // `fixed`, with `torn` merges torn.
+        let sides = |moving: SectionId, fixed: SectionId, torn: &HashSet<TieId>| {
+            let adjacency = adjacency_without(torn);
+            (
+                reach(&adjacency, moving, fixed),
+                reach(&adjacency, fixed, moving),
+            )
+        };
         // The snapped closures a plan tears when `moving` moves off `fixed`
         // with `torn` merges torn: one across the two sides closes a loop
         // through the combined section, and any from a side that moves stops
@@ -433,17 +491,36 @@ impl Project {
             let solved_now = self.component_has_gps_fix(&component)
                 || (self.component_has_eligible_closure(&component, &HashSet::new())
                     && self.component_has_eligible_closure(&component, facts.skipped(self)));
+            //
+            // The plain plan's move also changes which snaps the combined
+            // project holds aligned (#736): a torn snap it re-closes across
+            // the two sides tears, one it re-closes elsewhere is a snap again,
+            // and a snap it pulls apart or leaves between two placed groups is
+            // not one any more (`combine_alignment.rs`).
             let adjusted = solved_now || {
                 let plain_torn = loop_ties(join.other, join.kept);
-                let plain_snaps = snaps_torn(join.other, join.kept, &plain_torn, true);
-                (!plain_torn.is_empty() || !plain_snaps.is_empty())
+                let mut plain_snaps = snaps_torn(join.other, join.kept, &plain_torn, true);
+                let (side, fixed_side) = sides(join.other, join.kept, &plain_torn);
+                let landing = Landing {
+                    join,
+                    gap,
+                    moves: side.iter().map(|s| (*s, gap)).collect(),
+                    kept_offset_wins: true,
+                };
+                let torn: HashSet<TieId> = plain_torn.union(&plain_snaps).copied().collect();
+                let plain = self.plan_realignment(&landing, &torn, &side, &fixed_side, facts);
+                plain_snaps.extend(plain.torn.iter().map(|id| TieId::Closure(*id)));
+                (!plain_torn.is_empty() || !plain_snaps.is_empty() || !plain.flipped.is_empty())
                     && self.joined_survey_is_solved(
                         join,
                         &component,
                         ties,
                         facts.closures(self),
-                        &plain_torn,
-                        &plain_snaps,
+                        Changes {
+                            torn: &plain_torn,
+                            snaps: &plain_snaps,
+                            flipped: &plain.flipped,
+                        },
                     )
             };
             let anchor = if adjusted {
@@ -602,17 +679,63 @@ impl Project {
             };
             (dropped_at, toward)
         });
+        let sign = if moving == join.other { 1.0 } else { -1.0 };
+        let shift = (gap.0 * sign, gap.1 * sign);
 
-        let torn_ties: Vec<Tie> = ties
-            .iter()
-            .filter(|t| torn.contains(&t.id))
-            .copied()
-            .collect();
+        // What the combined project's alignment makes of the `Move` closures
+        // the rules above leave as they are (#736, `combine_alignment.rs`): a
+        // torn snap re-closed where it would tie the combined section to
+        // itself, or a snap pulled apart, tears too; the rest keep the
+        // alignment the combine gives them, which the model below reads.
+        let mut moves: HashMap<SectionId, (f64, f64)> = HashMap::new();
+        if shifting {
+            moves.extend(
+                side.iter()
+                    .filter(|s| !joined.contains(s))
+                    .map(|s| (*s, shift)),
+            );
+        }
+        if let Some((_, toward)) = dropped_hand_move {
+            moves.extend(joined.iter().map(|s| (*s, toward)));
+        }
+        let landing = Landing {
+            join,
+            gap,
+            moves,
+            kept_offset_wins: !shifting || moving == join.other,
+        };
+        let fixed_side = reach(&adjacency, fixed, moving);
+        let Realignment {
+            torn: retorn,
+            flipped: realigned,
+        } = self.plan_realignment(&landing, &torn, &side, &fixed_side, facts);
+        torn.extend(retorn.iter().map(|id| TieId::Closure(*id)));
+
+        // Merges first, then closures in list order, as `rigid_ties` lists
+        // them; a torn snap re-closed is not among those.
+        let torn_ties: Vec<Tie> = if retorn.is_empty() {
+            ties.iter()
+                .filter(|t| torn.contains(&t.id))
+                .copied()
+                .collect()
+        } else {
+            let closures = facts.closures(self).iter().map(|c| Tie {
+                id: TieId::Closure(c.id),
+                a: c.a,
+                b: c.b,
+            });
+            ties.iter()
+                .filter(|t| matches!(t.id, TieId::Merge(_)))
+                .copied()
+                .chain(closures)
+                .filter(|t| torn.contains(&t.id))
+                .collect()
+        };
         // What the combine would leave joining the two ends of one shot is
         // removed instead (#746). The anchor verdict above does not change for
         // it: a closure that collapses a shot is one the joined survey's solve
         // skips, so it never made that survey "solved".
-        let dropped = self.joined_across_one_shot(join, ties, &torn_ties, facts);
+        let dropped = self.joined_across_one_shot(join, ties, &torn_ties, &realigned, facts);
         let torn_ties: Vec<Tie> = torn_ties
             .into_iter()
             .filter(|t| !dropped.iter().any(|(d, _)| d.id == t.id))
@@ -635,6 +758,7 @@ impl Project {
                 dropped,
                 replaced,
                 dropped_hand_move,
+                realigned,
                 ..TiePlan::default()
             });
         }
@@ -646,11 +770,10 @@ impl Project {
         joined_moved.sort_unstable();
         moved.sort_unstable();
         moved.insert(0, moving);
-        let sign = if moving == join.other { 1.0 } else { -1.0 };
         Ok(TiePlan {
             moving: Some(moving),
             moved,
-            shift: (gap.0 * sign, gap.1 * sign),
+            shift,
             torn: torn_ties,
             held_by_datum,
             kept_moves_because,
@@ -659,6 +782,7 @@ impl Project {
             replaced,
             dropped_hand_move,
             joined_moved,
+            realigned,
         })
     }
 
@@ -684,11 +808,13 @@ impl Project {
     /// the `torn` ones, the two join stations as the one station they become,
     /// then the closures the solve ties in `loop_closures` order (the join's
     /// own gone, the `snaps` made ordinary taking part, and every snap the
-    /// combine leaves snapped, #736), then the torn merges as the `Batch`
-    /// closures `tear_ties` appends. Calls `visit` with each closure the solve
-    /// would see, in that order, how it takes it ([`Swept`]), and whether it
-    /// would skip it (it collapses a shot); a skipped one unites nothing, as
-    /// in the real sweep. Stops when `visit` returns false. `O(n)`.
+    /// combined project holds, #736: a `Move` closure as the combine leaves it
+    /// aligned, `flipped` from what it is now), then the torn merges as the
+    /// `Batch` closures `tear_ties` appends. Calls `visit` with each closure
+    /// the solve would see, in that order, how it takes it ([`Swept`]), and
+    /// whether it would skip it (it collapses a shot); a skipped one unites
+    /// nothing, as in the real sweep. Stops when `visit` returns false.
+    /// `O(n)`.
     ///
     /// A snap the combine's dedupe drops for a LATER closure the solve takes
     /// on the same two stations ([`Self::snaps_the_dedupe_defers`]) is not
@@ -719,10 +845,10 @@ impl Project {
         join: &JoinPoint,
         ties: &[Tie],
         closures: &[ResolvedClosure],
-        torn: &HashSet<TieId>,
-        snaps: &HashSet<TieId>,
+        changes: Changes,
         mut visit: impl FnMut(Tie, Swept, bool) -> bool,
     ) {
+        let Changes { torn, snaps, .. } = changes;
         let mut knots = Knots::new(self);
         let merges = || ties.iter().filter(|t| matches!(t.id, TieId::Merge(_)));
         for tie in merges().filter(|t| !torn.contains(&t.id)) {
@@ -736,7 +862,7 @@ impl Project {
             }
             visit(tie, swept, skipped)
         };
-        let deferred_ids = Self::snaps_the_dedupe_defers(join, ties, closures, torn, snaps);
+        let deferred_ids = Self::snaps_the_dedupe_defers(join, ties, closures, changes);
         let mut deferred: Vec<Tie> = Vec::new();
         for closure in closures {
             if join.is_join_tie(closure.a, closure.b) {
@@ -745,7 +871,7 @@ impl Project {
             let id = TieId::Closure(closure.id);
             let swept = if closure.eligible || snaps.contains(&id) {
                 Swept::Solved
-            } else if Self::closure_is_snap(closure.strategy, closure.aligned) {
+            } else if changes.snapped(closure) {
                 Swept::Snap
             } else {
                 continue;
@@ -789,9 +915,9 @@ impl Project {
         join: &JoinPoint,
         ties: &[Tie],
         closures: &[ResolvedClosure],
-        torn: &HashSet<TieId>,
-        snaps: &HashSet<TieId>,
+        changes: Changes,
     ) -> HashSet<u64> {
+        let Changes { torn, snaps, .. } = changes;
         let joined = |at: StationRef| if at == join.join_o { join.join_k } else { at };
         let on_combined = |a: StationRef, b: StationRef| {
             [a, b]
@@ -819,9 +945,7 @@ impl Project {
             let at = pair(closure.a, closure.b);
             if closure.eligible || snaps.contains(&TieId::Closure(closure.id)) {
                 later.insert(at);
-            } else if Self::closure_is_snap(closure.strategy, closure.aligned)
-                && later.contains(&at)
-            {
+            } else if changes.snapped(closure) && later.contains(&at) {
                 deferred.insert(closure.id);
             }
         }
@@ -829,12 +953,11 @@ impl Project {
     }
 
     /// Would the closure-adjusted view solve the survey this combine joins,
-    /// were `torn` merges torn and `snaps` snapped closures made ordinary
-    /// (the plain plan's, where the other section moves)? Solved when one
-    /// closure in `component` that the solve takes (not a snap, which only
-    /// ties) takes part in the joined survey's sweep ([`Self::joined_sweep`])
-    /// without collapsing a shot - what `plan_adjustment_anchors` asks of the
-    /// combined project. Reached only for a shifting plan with something to
+    /// with `changes` (the plain plan's, where the other section moves)?
+    /// Solved when one closure in `component` that the solve takes (not a
+    /// snap, which only ties) takes part in the joined survey's sweep
+    /// ([`Self::joined_sweep`]) without collapsing a shot - what
+    /// `plan_adjustment_anchors` asks of the combined project. Reached only for a shifting plan with something to
     /// solve.
     fn joined_survey_is_solved(
         &self,
@@ -842,11 +965,10 @@ impl Project {
         component: &HashSet<SectionId>,
         ties: &[Tie],
         closures: &[ResolvedClosure],
-        torn: &HashSet<TieId>,
-        snaps: &HashSet<TieId>,
+        changes: Changes,
     ) -> bool {
         let mut solved = false;
-        self.joined_sweep(join, ties, closures, torn, snaps, |tie, swept, skipped| {
+        self.joined_sweep(join, ties, closures, changes, |tie, swept, skipped| {
             solved = !skipped
                 && swept == Swept::Solved
                 && component.contains(&tie.a.section_id)
@@ -866,27 +988,32 @@ impl Project {
     /// survey's sweep ([`Self::joined_sweep`]), so the dialog and the combine
     /// read one answer.
     ///
-    /// Nothing changes for the sweep when no tie tears and the join stations
-    /// are already one point (merged), unless the dedupe drops a snap there
-    /// for a later closure ([`Self::snaps_the_dedupe_defers`]), or when the
-    /// solve ties no closure at all: then this is empty without the `O(n)`
-    /// sweep.
+    /// Nothing changes for the sweep when no tie tears, no `Move` closure's
+    /// alignment flips (`flipped`) and the join stations are already one
+    /// point (merged), unless the dedupe drops a snap there for a later
+    /// closure ([`Self::snaps_the_dedupe_defers`]), or when the solve ties no
+    /// closure at all: then this is empty without the `O(n)` sweep.
     fn joined_across_one_shot(
         &self,
         join: &JoinPoint,
         ties: &[Tie],
         torn_ties: &[Tie],
+        flipped: &HashSet<u64>,
         facts: &ClosureFacts,
     ) -> Vec<(Tie, CombineRemovedKind)> {
         let closures = facts.closures(self);
         if torn_ties.is_empty() {
-            let tied = closures
-                .iter()
-                .any(|c| c.eligible || Self::closure_is_snap(c.strategy, c.aligned));
             let none = HashSet::new();
+            let unchanged = Changes {
+                torn: &none,
+                snaps: &none,
+                flipped,
+            };
+            let tied = closures.iter().any(|c| c.eligible || unchanged.snapped(c));
             if !tied
                 || (join.merged
-                    && Self::snaps_the_dedupe_defers(join, ties, closures, &none, &none).is_empty())
+                    && flipped.is_empty()
+                    && Self::snaps_the_dedupe_defers(join, ties, closures, unchanged).is_empty())
             {
                 return Vec::new();
             }
@@ -903,31 +1030,31 @@ impl Project {
             .collect();
         let skipped_now = facts.skipped(self);
         let mut dropped = Vec::new();
-        self.joined_sweep(
-            join,
-            ties,
-            closures,
-            &torn,
-            &snaps,
-            |tie, swept, skipped| {
-                if skipped {
-                    let kind = match tie.id {
-                        TieId::Merge(_) => Some(CombineRemovedKind::Merge),
-                        // Skipped already (an eligible snap counts): it carries
-                        // its own warning, and the combine answers only for what
-                        // it causes.
-                        TieId::Closure(id) if skipped_now.contains(&id) => None,
-                        // Made ordinary by this combine, or left snapped (#736).
-                        TieId::Closure(_) if snaps.contains(&tie.id) || swept == Swept::Snap => {
-                            Some(CombineRemovedKind::SnappedClosure)
-                        }
-                        TieId::Closure(_) => Some(CombineRemovedKind::LoopClosure),
-                    };
-                    dropped.extend(kind.map(|kind| (tie, kind)));
-                }
-                true
-            },
-        );
+        let changes = Changes {
+            torn: &torn,
+            snaps: &snaps,
+            flipped,
+        };
+        self.joined_sweep(join, ties, closures, changes, |tie, swept, skipped| {
+            if skipped {
+                let kind = match tie.id {
+                    TieId::Merge(_) => Some(CombineRemovedKind::Merge),
+                    // Skipped already (an eligible snap counts): it carries
+                    // its own warning, and the combine answers only for what
+                    // it causes.
+                    TieId::Closure(id) if skipped_now.contains(&id) => None,
+                    // Made ordinary by this combine, or a snap in the
+                    // combined project (#736): one it leaves snapped, or a
+                    // torn snap it re-closes, named as the snap it becomes.
+                    TieId::Closure(_) if snaps.contains(&tie.id) || swept == Swept::Snap => {
+                        Some(CombineRemovedKind::SnappedClosure)
+                    }
+                    TieId::Closure(_) => Some(CombineRemovedKind::LoopClosure),
+                };
+                dropped.extend(kind.map(|kind| (tie, kind)));
+            }
+            true
+        });
         dropped
     }
 

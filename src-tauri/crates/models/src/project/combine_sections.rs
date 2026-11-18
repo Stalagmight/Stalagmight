@@ -43,7 +43,9 @@
 //! the one the component used), and when the two sections' reverse parities
 //! differ the other section's shots keep their own record parity for dive-plan
 //! pins (`Project::counter_parity_shots`). The closures the combine made or
-//! whose ends it moved apart are measured again off the final geometry.
+//! whose ends it moved apart are measured again off the final geometry, and
+//! every snap's alignment with them (#736), as the command's epilogue would:
+//! the plan predicted what that changes (`combine_alignment.rs`).
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot and
 //! travels with it, through the reverse too, so every shot keeps its own
@@ -64,6 +66,15 @@ use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
 use super::uuid_unique::{reminted_shot_uuid_avoiding, ShotUuidRemap};
 use super::Project;
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the last combine on this thread changed exactly the alignment
+    /// flags its plan predicted (`check_realigned_as_planned`), for the
+    /// sweeps, whose release builds skip the `debug_assert!`.
+    pub(crate) static REALIGNED_AS_PLANNED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(true) };
+}
 
 /// Everything `combine_sections` decided before it changes anything.
 struct CombineSetup {
@@ -283,6 +294,13 @@ impl Project {
         // station named by one shot reads.
         self.restore_component_gauges(&component_gauges);
         self.remeasure_closures(&remeasure);
+        // The command's epilogue re-measures every snap's alignment (#736),
+        // which decides what the Closures Computed solve ties. The combine
+        // does it first, so the backstop below and the state it returns are
+        // what the epilogue sees (it then changes nothing), and checks it
+        // changed the flags its plan predicted.
+        let realigned = self.remeasure_closure_alignment_ids();
+        self.check_realigned_as_planned(&realigned, &setup.ties.realigned);
         let mut removed: Vec<CombineRemovedClosure> = setup
             .ties
             .dropped
@@ -322,6 +340,40 @@ impl Project {
                 planned = planned.len(),
                 purpose = "list exactly the closures a combine replaces",
                 "Combine replaced closures its plan did not predict"
+            );
+        }
+    }
+
+    /// The backstop to the plan's alignment prediction (#736,
+    /// `combine_alignment.rs`): the alignment flags the combine's own
+    /// re-measure changed (`realigned`, in `loop_closures` order) are the ones
+    /// the plan said it would (`planned`), less any closure the combine
+    /// removed. A difference is the plan's model of the combined project
+    /// missing something, so the dialog's lists and the anchor rule read
+    /// another survey than the combine made: a `debug_assert!` failure in a
+    /// debug build, an error in the log in a release build (the flags stay
+    /// as measured).
+    fn check_realigned_as_planned(&self, realigned: &[u64], planned: &HashSet<u64>) {
+        let want: Vec<u64> = self
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| planned.contains(id))
+            .collect();
+        let as_planned = realigned == want.as_slice();
+        #[cfg(test)]
+        REALIGNED_AS_PLANNED.with(|cell| cell.set(as_planned));
+        debug_assert!(
+            as_planned,
+            "combine re-measured alignments its plan did not predict: {realigned:?}, planned \
+             {want:?}"
+        );
+        if !as_planned {
+            tracing::error!(
+                realigned = realigned.len(),
+                planned = want.len(),
+                purpose = "plan the alignment a combine leaves every snap with",
+                "Combine re-measured snap alignments its plan did not predict"
             );
         }
     }

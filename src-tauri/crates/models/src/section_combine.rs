@@ -86,7 +86,8 @@ pub enum TornTieKind {
     /// A station merge.
     Merge,
     /// A loop closure made by snapping one station onto another (a `Move`
-    /// closure, aligned and so rigid).
+    /// closure): aligned and so rigid, or torn and one the combine would
+    /// snap again (#736).
     SnappedClosure,
 }
 
@@ -120,7 +121,8 @@ pub struct TornTie {
 pub enum CombineRemovedKind {
     /// A station merge the combine would tear into a loop closure.
     Merge,
-    /// A snapped (`Move`) closure the combine would make an ordinary one.
+    /// A snapped (`Move`) closure the combine would make an ordinary one, or
+    /// leave snapped or snap again (#736).
     SnappedClosure,
     /// A loop closure already there.
     LoopClosure,

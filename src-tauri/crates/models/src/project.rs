@@ -42,6 +42,7 @@ mod adjustment_report;
 mod classify;
 mod closure_dedupe;
 mod closure_shots;
+mod combine_alignment;
 mod combine_candidate;
 mod combine_plan;
 mod combine_sections;
