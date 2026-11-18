@@ -69,4 +69,15 @@ describe('nearestReachableStationRef', () => {
       station_index: 3,
     });
   });
+
+  it('never picks a station of a hidden line (a hidden Section, #327), even the nearest', () => {
+    const withSide = [...stations, st(2, 0, 12, 0)];
+    expect(nearestReachableStationRef({ x: 12, y: 0 }, withSide, null)).toEqual({ line_id: 2, station_index: 0 });
+    expect(nearestReachableStationRef({ x: 12, y: 0 }, withSide, null, new Set([2]))).toEqual({
+      line_id: 1,
+      station_index: 1,
+    });
+    // Reachable or not, a hidden line's station is never the pick.
+    expect(nearestReachableStationRef({ x: 12, y: 0 }, withSide, new Set(['2:0']), new Set([2]))).toBeNull();
+  });
 });

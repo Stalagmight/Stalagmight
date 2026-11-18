@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
-import type { LineId, ShotId, StationRef, DistanceField } from '../../types/project';
+import type { LineId, ShotId, Station, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
@@ -16,6 +16,7 @@ import { selectActiveStations, selectActiveSurveyData } from '../../store/geomet
 import { mapHiddenLines } from '../../store/sectionVisibility';
 import { surveyFrameBounds } from '../../utils/surveyFrame';
 import { withHiddenColocated } from './hiddenColocated';
+import { heldSnapStation, nearestSnapStation } from './dragSnapTarget';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
@@ -1238,79 +1239,51 @@ function MapCanvas() {
       const dy = y - grabScreen.y;
       lastRawDragOffsetRef.current = { dx, dy };
 
-      // Station drag preview - translate station circles/labels + rebuild shot geometries
-      if (moveDrag.type === 'station' && surveyLayerRef.current) {
+      // Snap the drag's origin station onto the nearest other station the map
+      // draws (`dragSnapTarget.ts`); a segment drag snaps only when it started
+      // from a station. Returns the offset that puts the origin on the target,
+      // or null for no snap (the raw offset applies).
+      const snapOffset = (skip: (st: Station) => boolean): { dx: number; dy: number } | null => {
         const snapThreshold = config?.map.snap.threshold ?? 10;
+        const origin = dragOriginStationRef.current;
         // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
-        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
-          const originSt = stations.find(
-            (s) =>
-              s.station_ref.line_id === dragOriginStationRef.current!.line_id &&
-              s.station_ref.station_index === dragOriginStationRef.current!.station_index
-          );
-          if (originSt) {
-            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords);
-
-            let nearestRef: StationRef | null = dragSnapRef.current;
-            if (!skipSnapScan) {
-              const projectedX = originScreen.x + dx;
-              const projectedY = originScreen.y + dy;
-
-              // Find nearest non-co-located station to the projected origin position
-              nearestRef = null;
-              let nearestDist = Infinity;
-              const colocatedKeys = new Set(
-                stationDragColocatedRefsRef.current.map(r => `${r.line_id}:${r.station_index}`)
-              );
-              for (const st of stations) {
-                const key = `${st.station_ref.line_id}:${st.station_ref.station_index}`;
-                if (colocatedKeys.has(key)) continue;
-                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-                const sp = map.current!.project(mc);
-                const sdx = sp.x - projectedX;
-                const sdy = sp.y - projectedY;
-                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-                if (dist < snapThreshold && dist < nearestDist) {
-                  nearestDist = dist;
-                  nearestRef = st.station_ref;
-                }
-              }
-
-              // Update snap state only when target changes (avoids React churn)
-              const prev = dragSnapRef.current;
-              if (
-                nearestRef?.line_id !== prev?.line_id ||
-                nearestRef?.station_index !== prev?.station_index
-              ) {
-                dragSnapRef.current = nearestRef;
-                setSnappedStation(nearestRef);
-              }
-            }
-
-            // If snapped, align the origin station onto the target. Recomputed at the
-            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
-            // the scan above was skipped.
-            if (nearestRef) {
-              const targetSt = stations.find(
-                (s) =>
-                  s.station_ref.line_id === nearestRef!.line_id &&
-                  s.station_ref.station_index === nearestRef!.station_index
-              );
-              if (targetSt) {
-                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords);
-                const snapDx = targetScreen.x - originScreen.x;
-                const snapDy = targetScreen.y - originScreen.y;
-                surveyLayerRef.current.updateStationDragPreview(snapDx, snapDy);
-                return;
-              }
-            }
-          }
+        if ((skipSnapScan && !dragSnapRef.current) || !origin || snapThreshold <= 0) return null;
+        const originSt = stations.find(
+          (s) => s.station_ref.line_id === origin.line_id && s.station_ref.station_index === origin.station_index
+        );
+        if (!originSt) return null;
+        const m = map.current!;
+        const toScreen = (st: Station) => m.project(metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin));
+        const originScreen = toScreen(originSt);
+        // Hidden Sections' lines (#327) are never a target - nor a held one
+        // whose line was hidden since.
+        const hiddenLines = mapHiddenLines(useProjectStore.getState().project?.lines, useUIStore.getState()).ids;
+        let nearestRef: StationRef | null = skipSnapScan
+          ? dragSnapRef.current
+          : nearestSnapStation(stations, toScreen, { x: originScreen.x + dx, y: originScreen.y + dy }, snapThreshold, hiddenLines, skip);
+        const targetSt = nearestRef ? heldSnapStation(stations, nearestRef, hiddenLines) : undefined;
+        if (!targetSt) nearestRef = null;
+        // Update snap state only when target changes (avoids React churn)
+        const prev = dragSnapRef.current;
+        if (nearestRef?.line_id !== prev?.line_id || nearestRef?.station_index !== prev?.station_index) {
+          dragSnapRef.current = nearestRef;
+          setSnappedStation(nearestRef);
         }
+        if (!targetSt) return null;
+        // Recomputed at the CURRENT zoom (O(1)), so the snap holds through a
+        // mid-drag zoom even when the scan was skipped.
+        const targetScreen = toScreen(targetSt);
+        return { dx: targetScreen.x - originScreen.x, dy: targetScreen.y - originScreen.y };
+      };
 
-        // No snap (or no origin station): use raw offset
-        surveyLayerRef.current.updateStationDragPreview(dx, dy);
+      // Station drag preview - translate station circles/labels + rebuild shot
+      // geometries. Never snaps onto its own co-located stations.
+      if (moveDrag.type === 'station' && surveyLayerRef.current) {
+        const colocatedKeys = new Set(
+          stationDragColocatedRefsRef.current.map(r => `${r.line_id}:${r.station_index}`)
+        );
+        const snap = snapOffset((st) => colocatedKeys.has(`${st.station_ref.line_id}:${st.station_ref.station_index}`));
+        surveyLayerRef.current.updateStationDragPreview(snap?.dx ?? dx, snap?.dy ?? dy);
       }
 
       // Shot drag preview - same pipeline as station drag (both endpoints + co-located stations move)
@@ -1320,78 +1293,12 @@ function MapCanvas() {
 
       // For segment drags, update preview synchronously (no rAF needed). dx/dy comes
       // from the re-projected grab point above, so the *-translate (viewport anchor)
-      // tracks the cursor across zoom changes mid-drag (#79).
+      // tracks the cursor across zoom changes mid-drag (#79). Never snaps onto a
+      // station of the dragged segment's own lines.
       if (moveDrag.type === 'segment' && surveyLayerRef.current) {
-        // Snap-to-station detection during segment drag (only if drag started from a station)
-        const snapThreshold = config?.map.snap.threshold ?? 10;
-        // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
-        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
-          // Find origin station's screen position and apply drag offset
-          const originSt = stations.find(
-            (s) =>
-              s.station_ref.line_id === dragOriginStationRef.current!.line_id &&
-              s.station_ref.station_index === dragOriginStationRef.current!.station_index
-          );
-          if (originSt) {
-            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords);
-
-            let nearestRef: StationRef | null = dragSnapRef.current;
-            if (!skipSnapScan) {
-              const projectedX = originScreen.x + dx;
-              const projectedY = originScreen.y + dy;
-
-              // Find nearest non-segment station to the projected origin position
-              nearestRef = null;
-              let nearestDist = Infinity;
-              const connectedIds = dragConnectedLineIdsRef.current;
-              for (const st of stations) {
-                if (connectedIds.has(st.station_ref.line_id)) continue;
-                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-                const sp = map.current!.project(mc);
-                const sdx = sp.x - projectedX;
-                const sdy = sp.y - projectedY;
-                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-                if (dist < snapThreshold && dist < nearestDist) {
-                  nearestDist = dist;
-                  nearestRef = st.station_ref;
-                }
-              }
-
-              // Update snap state only when target changes (avoids React churn)
-              const prev = dragSnapRef.current;
-              if (
-                nearestRef?.line_id !== prev?.line_id ||
-                nearestRef?.station_index !== prev?.station_index
-              ) {
-                dragSnapRef.current = nearestRef;
-                setSnappedStation(nearestRef);
-              }
-            }
-
-            // If snapped, align the origin station onto the target. Recomputed at the
-            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
-            // the scan above was skipped.
-            if (nearestRef) {
-              const targetSt = stations.find(
-                (s) =>
-                  s.station_ref.line_id === nearestRef!.line_id &&
-                  s.station_ref.station_index === nearestRef!.station_index
-              );
-              if (targetSt) {
-                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords);
-                const snapDx = targetScreen.x - originScreen.x;
-                const snapDy = targetScreen.y - originScreen.y;
-                surveyLayerRef.current.updateDragPreview(snapDx, snapDy);
-                return;
-              }
-            }
-          }
-        }
-
-        // No snap (or no origin station): use raw offset
-        surveyLayerRef.current.updateDragPreview(dx, dy);
+        const connectedIds = dragConnectedLineIdsRef.current;
+        const snap = snapOffset((st) => connectedIds.has(st.station_ref.line_id));
+        surveyLayerRef.current.updateDragPreview(snap?.dx ?? dx, snap?.dy ?? dy);
       }
     },
     [moveDrag, config, stations, gpsOrigin, setSnappedStation]

@@ -8,7 +8,8 @@ import type { ToolType } from '../../store/uiStore';
 import type { StationLabelMode } from '../../store/displaySelectors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { selectMapSurveyData } from '../../store/sectionVisibility';
+import { mapHiddenLines, selectMapSurveyData } from '../../store/sectionVisibility';
+import { gasRouteFeatures } from './surveyLayer/gasRouteFeatures';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
@@ -1831,36 +1832,15 @@ export default class SurveyLayer {
   }
 
   /** Build one LineString per route leg (with `isJump` flagged) from `cachedStations` and push them
-   *  to the gas-route source. No-op without a live style or the source. */
+   *  to the gas-route source, leaving out legs on hidden lines. No-op without a live style or the source. */
   private applyGasRoute(): void {
     if (!this.map || !hasLiveStyle(this.map)) return;
     const source = this.map.getSource(this.sourceId + '-gas-route');
     if (!source || source.type !== 'geojson') return;
     const geojsonSource = source as maplibregl.GeoJSONSource;
-    // Index the stations once (keyed by line:index) so the per-leg endpoint lookups are O(1) -
-    // the route can be long and this re-runs after every setData() rebuild, so a linear scan per
-    // endpoint would be quadratic on large surveys.
-    const coordByRef = new Map<string, [number, number]>();
-    for (const s of this.cachedStations) {
-      coordByRef.set(
-        `${s.station_ref.line_id}:${s.station_ref.station_index}`,
-        metersToMapCoords(s.coordinates.x, s.coordinates.y, this.gpsOrigin) as [number, number],
-      );
-    }
-    const coordFor = (ref: StationRef): [number, number] | null =>
-      coordByRef.get(`${ref.line_id}:${ref.station_index}`) ?? null;
-    const features = this.gasRouteLegs.flatMap((leg) => {
-      const from = coordFor(leg.from);
-      const to = coordFor(leg.to);
-      if (!from || !to) return [];
-      return [
-        {
-          type: 'Feature' as const,
-          geometry: { type: 'LineString' as const, coordinates: [from, to] },
-          properties: { isJump: leg.is_jump, segmentColor: leg.color },
-        },
-      ];
-    });
+    // A hidden Section's line (#327) is not drawn, so neither are its legs.
+    const hidden = mapHiddenLines(useProjectStore.getState().project?.lines, useUIStore.getState()).ids;
+    const features = gasRouteFeatures(this.gasRouteLegs, this.cachedStations, hidden, this.gpsOrigin);
     geojsonSource.setData({ type: 'FeatureCollection', features });
   }
 

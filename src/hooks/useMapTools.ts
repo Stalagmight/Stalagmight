@@ -5,6 +5,7 @@ import { selectDistanceOverlayActive } from '../store/displaySelectors';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { pickUIKeys, type UIStoreState } from '../store/uiSelectKeys';
 import { useProjectStore } from '../store/projectStore';
+import { mapHiddenLines } from '../store/sectionVisibility';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
@@ -92,16 +93,19 @@ interface MapToolsOptions {
  * Pick the nearest reachable station to a point (in metres) - the Plan-mode "set a turnaround
  * anywhere" resolver (#236). Restricts to `reachable` station keys when provided, so the pick stays
  * meaningful (an unreachable endpoint would fall back to the deepest point in the engine); with no
- * field loaded yet (`reachable === null`) any station is eligible. Returns null when none match.
+ * field loaded yet (`reachable === null`) any station is eligible. Stations of `hiddenLines` (the
+ * lines of hidden Sections the map leaves out, #327) never are. Returns null when none match.
  */
 export function nearestReachableStationRef(
   point: { x: number; y: number },
   stations: ReadonlyArray<{ station_ref: StationRef; coordinates: { x: number; y: number } }>,
-  reachable: ReadonlySet<string> | null
+  reachable: ReadonlySet<string> | null,
+  hiddenLines: ReadonlySet<number> = new Set(),
 ): StationRef | null {
   let best: StationRef | null = null;
   let bestDist = Infinity;
   for (const st of stations) {
+    if (hiddenLines.has(st.station_ref.line_id)) continue;
     if (
       reachable &&
       !reachable.has(`${st.station_ref.line_id}:${st.station_ref.station_index}`)
@@ -963,13 +967,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         const reachField = useGasPlanStore.getState().reachField;
         const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
         const reachable = reachField ? reachableStationKeySet(reachField) : null;
+        // Never a station the map does not draw (a hidden Section's line, #327).
+        const hidden = mapHiddenLines(useProjectStore.getState().project?.lines, useUIStore.getState()).ids;
         // Prefer a reachable station, but fall back to the nearest station of ANY kind when none
         // is in reach - otherwise the menu simply would not open, and with way points able to
         // make the whole map unreachable (#298) the user would be locked out of the very menu
         // items ("Set as start point", removing a way point) that fix it.
         const best =
-          nearestReachableStationRef(clickM, activeStations, reachable) ??
-          nearestReachableStationRef(clickM, activeStations, null);
+          nearestReachableStationRef(clickM, activeStations, reachable, hidden) ??
+          nearestReachableStationRef(clickM, activeStations, null, hidden);
         if (best) {
           setSource('map');
           setSelection({ type: 'station', stationRef: best });
