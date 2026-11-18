@@ -2153,7 +2153,7 @@ fn an_undone_section_delete_after_a_reopen_restores_its_held_gauge() {
     );
     let adjusted_after = adjusted_by_position(&state);
     for (station, before) in &adjusted_before {
-        let after = adjusted_after.get(station).expect("the station is back");
+        let after = adjusted_after.get(station).unwrap();
         assert!(
             (before.0 - after.0).hypot(before.1 - after.1) < 1e-6,
             "station {station:?} moved: {before:?} -> {after:?}"
