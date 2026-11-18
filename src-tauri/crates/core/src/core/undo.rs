@@ -45,6 +45,38 @@ where
         .serialize(serializer)
 }
 
+/// `command` as an entry stores it: what the history shows and what a step
+/// needs, without a second copy of data the payload already holds.
+///
+/// A `CreateSection` carrying shots records the section it created whole in
+/// its `CreatedSectionSnapshot` (and refreshes it from the live section before
+/// an undo), and that record is what its redo restores; the command's own
+/// shots are read by nothing after the push (the history shows the name). Kept
+/// they would double the entry of every section created with data.
+fn stored_command(command: Command, data: &UndoData) -> Command {
+    match (command, data) {
+        (
+            Command::CreateSection {
+                name,
+                surveyor,
+                date,
+                color,
+                direction,
+                shots: _,
+            },
+            UndoData::CreatedSectionSnapshot { .. },
+        ) => Command::CreateSection {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots: Vec::new(),
+        },
+        (command, _) => command,
+    }
+}
+
 /// Default maximum number of undo entries to keep in memory
 const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
@@ -156,6 +188,78 @@ pub struct ShotCreditChange {
     /// persisted: the loader renumbers ids.
     #[serde(skip)]
     pub shot_id: ShotId,
+}
+
+/// `ShotCredits::changes` as the history stores it: runs of shots that share a
+/// section, a `before` and an `after` credit, written once per run with the
+/// shots' uuids. A credit edit over a whole line usually gives every shot the
+/// same credit from the same one, so this is one credit pair and a list of ids
+/// rather than two credits per shot. Read back to the same `Vec` in order.
+mod grouped_credit_changes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ShotCreditChange;
+    use crate::models::{SectionId, SurveyCredit};
+
+    #[derive(Serialize)]
+    struct RunOut<'a> {
+        s: SectionId,
+        b: &'a SurveyCredit,
+        a: &'a SurveyCredit,
+        u: Vec<&'a str>,
+    }
+
+    #[derive(Deserialize)]
+    struct RunIn {
+        s: SectionId,
+        b: SurveyCredit,
+        a: SurveyCredit,
+        u: Vec<String>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        changes: &[ShotCreditChange],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut runs: Vec<RunOut<'_>> = Vec::new();
+        for change in changes {
+            match runs.last_mut() {
+                Some(run)
+                    if run.s == change.section_id
+                        && *run.b == change.before
+                        && *run.a == change.after =>
+                {
+                    run.u.push(&change.shot_uuid);
+                }
+                _ => runs.push(RunOut {
+                    s: change.section_id,
+                    b: &change.before,
+                    a: &change.after,
+                    u: vec![&change.shot_uuid],
+                }),
+            }
+        }
+        runs.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<ShotCreditChange>, D::Error> {
+        let runs = Vec::<RunIn>::deserialize(deserializer)?;
+        Ok(runs
+            .into_iter()
+            .flat_map(|run| {
+                let RunIn { s, b, a, u } = run;
+                u.into_iter().map(move |shot_uuid| ShotCreditChange {
+                    section_id: s,
+                    shot_uuid,
+                    before: b.clone(),
+                    after: a.clone(),
+                    shot_id: 0,
+                })
+            })
+            .collect())
+    }
 }
 
 /// Data needed to undo a command
@@ -479,6 +583,7 @@ pub enum UndoData {
     /// failing the step: a credit edit is metadata, and a failed undo would wedge
     /// every entry beneath it.
     ShotCredits {
+        #[serde(with = "grouped_credit_changes")]
         changes: Vec<ShotCreditChange>,
         /// `UpdateSectionMetadata` only: the section and its OTHER previous
         /// values (a `SectionUpdates` JSON with no surveyor/date), put back by
@@ -569,6 +674,39 @@ impl UndoData {
                 | UndoData::SectionSnapshot { .. }
                 | UndoData::ShotSnapshot { .. }
         )
+    }
+
+    /// Drop every `previous_offsets` key whose recorded value is the one
+    /// `live` (the project the command left) holds, bit for bit: a key the
+    /// command did not change.
+    ///
+    /// The capture records the map before the command - the whole map, because
+    /// a re-frame or a cascade can reach any key - and this cuts it down to
+    /// what the command moved, which is all an undo has to put back. For the
+    /// two inverses that RE-DERIVE offsets before restoring them (a shot
+    /// edit's realign, a shot removal's cascade), the undo pins every key it
+    /// does not hold to its live value (`restore_offsets_pinning_the_rest`):
+    /// that value is the one the command left, so it is the one it found.
+    pub fn keep_changed_offsets(&mut self, live: &HashMap<SectionId, (f64, f64)>) {
+        let unchanged = |id: &SectionId, before: &Option<(f64, f64)>| {
+            let bits = |o: Option<(f64, f64)>| o.map(|(x, y)| (x.to_bits(), y.to_bits()));
+            bits(*before) == bits(live.get(id).copied())
+        };
+        match self {
+            UndoData::PreviousValues {
+                previous_offsets, ..
+            }
+            | UndoData::CreatedShotSnapshot {
+                previous_offsets, ..
+            }
+            | UndoData::ZeroDatumInfo {
+                previous_offsets, ..
+            }
+            | UndoData::SegmentMoveInfo {
+                previous_offsets, ..
+            } => previous_offsets.retain(|id, before| !unchanged(id, before)),
+            _ => {}
+        }
     }
 
     /// This payload as an entry holds it: a [`UndoData::ProjectSnapshotPair`]
@@ -775,6 +913,7 @@ impl UndoStack {
         // Production callers compact before taking the lock; this catches the
         // rest, so no snapshot pair is ever held.
         let undo_data = undo_data.compact(&command);
+        let command = stored_command(command, &undo_data);
         let entry = UndoEntry {
             // Measured once, HERE, and never again: this runs per edit, while
             // `estimated_size` runs on every trim after every edit. See the field's doc.

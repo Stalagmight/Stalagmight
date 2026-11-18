@@ -154,7 +154,9 @@ pub enum SectionRun {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ShotRun {
     /// `n` shots of the source section at position `sec`, from index `at`:
-    /// upwards, or downwards when `rev` (a reversed section). `m` edits the
+    /// upwards, or downwards when `rev` (a reversed section). `flip` turns
+    /// each copy around first, as Reverse Section turns a shot around
+    /// ([`flip_shot`]; the flag is its swap-left-right option). `m` edits the
     /// copies, by offset into the run, ascending.
     #[serde(rename = "c")]
     Copy {
@@ -163,12 +165,134 @@ pub enum ShotRun {
         n: usize,
         #[serde(default, skip_serializing_if = "is_false")]
         rev: bool,
+        #[serde(rename = "f", default, skip_serializing_if = "Option::is_none")]
+        flip: Option<bool>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         m: Vec<(usize, Edit)>,
     },
-    /// Literal shots.
-    #[serde(rename = "p")]
+    /// Literal shots. Written as tables of rows where consecutive shots share
+    /// their keys ([`shot_rows`]), so the keys are not repeated per shot.
+    #[serde(rename = "p", with = "shot_rows")]
     Put(Vec<Value>),
+}
+
+/// `ShotRun::Put` as the history stores it: consecutive objects with the same
+/// keys become one table - the keys once, then a row of values per shot - and
+/// anything else stays as it is. Read back to the same values in order.
+mod shot_rows {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::{Map, Value};
+
+    #[derive(Serialize, Deserialize)]
+    enum Chunk {
+        #[serde(rename = "o")]
+        One(Value),
+        #[serde(rename = "t")]
+        Table { k: Vec<String>, r: Vec<Vec<Value>> },
+    }
+
+    fn keys_of(value: &Value) -> Option<Vec<&String>> {
+        value.as_object().map(|object| object.keys().collect())
+    }
+
+    pub(super) fn serialize<S: Serializer>(values: &[Value], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut i = 0;
+        while i < values.len() {
+            let keys = keys_of(&values[i]);
+            let mut j = i + 1;
+            while keys.is_some() && j < values.len() && keys_of(&values[j]) == keys {
+                j += 1;
+            }
+            match keys {
+                Some(keys) if j - i > 1 => chunks.push(Chunk::Table {
+                    k: keys.into_iter().cloned().collect(),
+                    r: values[i..j]
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .map(|object| object.values().cloned().collect())
+                        .collect(),
+                }),
+                _ => chunks.extend(values[i..j].iter().cloned().map(Chunk::One)),
+            }
+            i = j;
+        }
+        chunks.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Value>, D::Error> {
+        let chunks = Vec::<Chunk>::deserialize(deserializer)?;
+        let mut out = Vec::new();
+        for chunk in chunks {
+            match chunk {
+                Chunk::One(value) => out.push(value),
+                Chunk::Table { k, r } => {
+                    for row in r {
+                        if row.len() != k.len() {
+                            return Err(serde::de::Error::custom("a shot row does not match its keys"));
+                        }
+                        let object: Map<String, Value> = k.iter().cloned().zip(row).collect();
+                        out.push(Value::Object(object));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// One shot turned around the way Reverse Section turns it
+/// (`crate::models::reverse_shots`): the bearing reversed, the depths and the
+/// pitches swapped end for end (the pitches negated), and left and right
+/// swapped when `swap_lr`. A member that is missing, or not a number where a
+/// number is expected, is left as it is: whatever this does not reproduce,
+/// the copy's edits (`m`) carry, so the result is exact either way.
+fn flip_shot(shot: &Value, swap_lr: bool) -> Value {
+    let Value::Object(members) = shot else {
+        return shot.clone();
+    };
+    let mut out = members.clone();
+    let number = |key: &str| members.get(key).and_then(Value::as_f64);
+    let set = |out: &mut Map<String, Value>, key: &str, value: f64| {
+        if let Some(n) = Number::from_f64(value) {
+            out.insert(key.to_string(), Value::Number(n));
+        }
+    };
+    if let (Some(a_in), Some(a_out)) = (number("azimuth_in"), number("azimuth_out")) {
+        let (r_in, r_out) = crate::models::reversed_azimuths(a_in, a_out);
+        set(&mut out, "azimuth_in", r_in);
+        set(&mut out, "azimuth_out", r_out);
+    }
+    let swap = |out: &mut Map<String, Value>, a: &str, b: &str| {
+        let (va, vb) = (members.get(a).cloned(), members.get(b).cloned());
+        match vb {
+            Some(v) => out.insert(a.to_string(), v),
+            None => out.remove(a),
+        };
+        match va {
+            Some(v) => out.insert(b.to_string(), v),
+            None => out.remove(b),
+        };
+    };
+    swap(&mut out, "depth_in", "depth_out");
+    let negated = |key: &str| -> Option<Value> {
+        match members.get(key)? {
+            Value::Number(n) => n.as_f64().and_then(|f| Number::from_f64(-f)).map(Value::Number),
+            other => Some(other.clone()),
+        }
+    };
+    match negated("pitch_out") {
+        Some(v) => out.insert("pitch_in".to_string(), v),
+        None => out.remove("pitch_in"),
+    };
+    match negated("pitch_in") {
+        Some(v) => out.insert("pitch_out".to_string(), v),
+        None => out.remove("pitch_out"),
+    };
+    if swap_lr {
+        swap(&mut out, "left", "right");
+    }
+    Value::Object(out)
 }
 
 fn is_false(b: &bool) -> bool {
@@ -522,7 +646,10 @@ impl ProjectDelta {
                 continue;
             };
             for shot_run in shots {
-                let ShotRun::Copy { sec, at, n, rev, m } = shot_run else {
+                let ShotRun::Copy {
+                    sec, at, n, rev, m, ..
+                } = shot_run
+                else {
                     continue;
                 };
                 let Some((_, held)) = view.get(*sec) else {
@@ -611,7 +738,9 @@ fn holder_shots(view: &[HolderSection], runs: &[ShotRun]) -> Option<Vec<Option<s
     let mut out = Vec::new();
     for run in runs {
         match run {
-            ShotRun::Copy { sec, at, n, rev, m } => {
+            ShotRun::Copy {
+                sec, at, n, rev, m, ..
+            } => {
                 let (_, shots) = view.get(*sec)?;
                 let mut mods = m.iter().peekable();
                 for k in 0..*n {
@@ -1238,7 +1367,7 @@ impl<'a> ShotPool<'a> {
     fn rebuild(&mut self, target: &[Value], home: Option<usize>) -> Vec<ShotRun> {
         let mut out = Vec::new();
         let mut open: Option<OpenCopy> = None;
-        for shot in target {
+        for (t, shot) in target.iter().enumerate() {
             let candidates: Vec<(usize, usize)> = shot
                 .get(UUID)
                 .and_then(Value::as_str)
@@ -1252,7 +1381,10 @@ impl<'a> ShotPool<'a> {
                 Some(next) => Some(next),
                 None => {
                     if let Some(run) = open.take() {
-                        out.push(run.finish());
+                        out.push({
+                        let shots = self.shots(run.sec);
+                        run.finish(shots, target)
+                    });
                     }
                     candidates
                         .iter()
@@ -1270,26 +1402,32 @@ impl<'a> ShotPool<'a> {
             if matches!(edit, Some(Edit::Set(_))) {
                 // Not an object any more: nothing to share with the source.
                 if let Some(run) = open.take() {
-                    out.push(run.finish());
+                    out.push({
+                        let shots = self.shots(run.sec);
+                        run.finish(shots, target)
+                    });
                 }
                 push_put(&mut out, shot);
                 continue;
             }
             match open.as_mut() {
-                Some(run) if extended.is_some() => run.extend(rev, edit),
+                Some(run) if extended.is_some() => run.extend(rev),
                 _ => {
                     open = Some(OpenCopy {
                         sec: p,
                         at: i,
                         n: 1,
                         rev: None,
-                        mods: edit.map(|e| (0, e)).into_iter().collect(),
+                        t0: t,
                     });
                 }
             }
         }
         if let Some(run) = open {
-            out.push(run.finish());
+            out.push({
+                        let shots = self.shots(run.sec);
+                        run.finish(shots, target)
+                    });
         }
         out
     }
@@ -1303,14 +1441,16 @@ fn push_put(out: &mut Vec<ShotRun>, shot: &Value) {
     out.push(ShotRun::Put(vec![shot.clone()]));
 }
 
-/// A copy run being extended shot by shot.
+/// A copy run being extended shot by shot; its edits are worked out when it
+/// is finished.
 struct OpenCopy {
     sec: usize,
     at: usize,
     n: usize,
     /// `None` until the second shot fixes the direction.
     rev: Option<bool>,
-    mods: Vec<(usize, Edit)>,
+    /// Where the run starts in the target.
+    t0: usize,
 }
 
 impl OpenCopy {
@@ -1330,23 +1470,50 @@ impl OpenCopy {
         None
     }
 
-    fn extend(&mut self, rev: Option<bool>, edit: Option<Edit>) {
+    fn extend(&mut self, rev: Option<bool>) {
         if self.rev.is_none() {
             self.rev = rev;
-        }
-        if let Some(edit) = edit {
-            self.mods.push((self.n, edit));
         }
         self.n += 1;
     }
 
-    fn finish(self) -> ShotRun {
+    /// The finished run over `source` (the copied section's shots) towards
+    /// `target`. A run copied in reverse is a reversed section, so its copies
+    /// are also tried turned around ([`flip_shot`], with and without the
+    /// left-right swap): whichever leaves the fewest edits is kept.
+    fn finish(self, source: &[Value], target: &[Value]) -> ShotRun {
+        let rev = self.rev == Some(true);
+        let mods_for = |flip: Option<bool>| -> Vec<(usize, Edit)> {
+            (0..self.n)
+                .filter_map(|k| {
+                    let index = if rev { self.at.checked_sub(k)? } else { self.at + k };
+                    let from = source.get(index)?;
+                    let to = target.get(self.t0 + k)?;
+                    let edit = match flip {
+                        Some(swap_lr) => diff(&flip_shot(from, swap_lr), to),
+                        None => diff(from, to),
+                    };
+                    Some((k, edit?))
+                })
+                .collect()
+        };
+        let candidates: &[Option<bool>] = if rev {
+            &[None, Some(false), Some(true)]
+        } else {
+            &[None]
+        };
+        let (flip, m) = candidates
+            .iter()
+            .map(|flip| (*flip, mods_for(*flip)))
+            .min_by_key(|(_, mods)| serde_json::to_string(mods).map_or(usize::MAX, |json| json.len()))
+            .unwrap_or((None, Vec::new()));
         ShotRun::Copy {
             sec: self.sec,
             at: self.at,
             n: self.n,
-            rev: self.rev == Some(true),
-            m: self.mods,
+            rev,
+            flip,
+            m,
         }
     }
 }
@@ -1509,7 +1676,14 @@ fn build_shots(
     let mut out = Vec::new();
     for run in runs {
         match run {
-            ShotRun::Copy { sec, at, n, rev, m } => {
+            ShotRun::Copy {
+                sec,
+                at,
+                n,
+                rev,
+                flip,
+                m,
+            } => {
                 let shots = source
                     .get(*sec)
                     .and_then(shots_array)
@@ -1523,9 +1697,17 @@ fn build_shots(
                             shots.len()
                         ));
                     };
+                    let flipped;
+                    let base = match flip {
+                        Some(swap_lr) => {
+                            flipped = flip_shot(shot, *swap_lr);
+                            &flipped
+                        }
+                        None => shot,
+                    };
                     match mods.next_if(|(offset, _)| *offset == k) {
-                        Some((_, edit)) => out.push(apply_edit(shot, edit)?),
-                        None => out.push(shot.clone()),
+                        Some((_, edit)) => out.push(apply_edit(base, edit)?),
+                        None => out.push(base.clone()),
                     }
                 }
                 if mods.next().is_some() {

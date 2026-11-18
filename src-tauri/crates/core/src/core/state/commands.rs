@@ -977,7 +977,12 @@ impl AppState {
             // Batch commands handle their own undo push inside execute_batch()
             // (with before+after snapshots), so skip them here.
             // For create commands, finalize undo data with snapshot-based ID preservation
-            let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
+            let mut final_undo_data = self.finalize_undo_data(&cmd, undo_data);
+            if let Ok(guard) = self.project.lock() {
+                if let Some(project) = guard.as_ref() {
+                    final_undo_data.keep_changed_offsets(&project.section_offsets);
+                }
+            }
 
             // An entry `undo()` cannot apply must never enter the stack: `undo()`
             // pops it, maps `UndoData::None` to a failure, and its epilogue pushes

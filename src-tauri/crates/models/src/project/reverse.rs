@@ -99,6 +99,26 @@ pub fn shot_run_displacement(shots: &[ShotData], reference: AzimuthReference) ->
     (dx, dy)
 }
 
+/// The `(azimuth_in, azimuth_out)` a reverse writes for one shot read
+/// `(azimuth_in, azimuth_out)` - the bearing half of [`reverse_shots`], shared
+/// with the compact undo history, which replays a reverse's shot transform to
+/// avoid recording every reversed reading.
+///
+/// Both readings are normalised first (see [`reverse_shots`] for why that is
+/// load-bearing). A degenerate pair - the two readings disagree by a full 180
+/// degrees, so the circular mean is undefined and reciprocate-and-swap is the
+/// identity - is swapped instead: both values stay exactly as recorded while
+/// the reading `average_azimuth` measures its ±180 tie-break from flips, which
+/// is what turns the bearing around. An involution either way.
+pub fn reversed_azimuths(azimuth_in: f64, azimuth_out: f64) -> (f64, f64) {
+    let (azimuth_in, azimuth_out) = (normalize_azimuth(azimuth_in), normalize_azimuth(azimuth_out));
+    if readings_are_antipodal(azimuth_in, azimuth_out) {
+        (azimuth_out, azimuth_in)
+    } else {
+        (reciprocal(azimuth_out), reciprocal(azimuth_in))
+    }
+}
+
 /// Re-associate one shot's readings with the opposite direction of travel.
 ///
 /// Reverses the whole vec of shots as well, so the caller gets a section that
@@ -119,7 +139,7 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
         // Normalise first so the transform and `average_azimuth_of` work from
         // the same canonical readings. All three wrap through `normalize_azimuth`
         // now, so they agree on any input's mod-360 class - but the degenerate
-        // branch below swaps its operands VERBATIM, so whatever this line leaves
+        // branch of `reversed_azimuths` swaps its operands VERBATIM, so whatever this line leaves
         // on the record is what a degenerate pair keeps, for every later
         // consumer; and the exact `== 180` antipodal test only holds once the
         // magnitudes are small enough that `azimuth_out - azimuth_in` does not
@@ -141,23 +161,7 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
         // rejects the value. The DMP parser (models::dmp) also stored
         // `heading_in`/`heading_out` verbatim in older builds, where the Compass
         // and TML importers normalised theirs.
-        shot.azimuth_in = normalize_azimuth(shot.azimuth_in);
-        shot.azimuth_out = normalize_azimuth(shot.azimuth_out);
-
-        if readings_are_antipodal(shot.azimuth_in, shot.azimuth_out) {
-            // Degenerate pair: the two readings disagree by a full 180 degrees,
-            // so the circular mean is undefined and reciprocate-and-swap is the
-            // identity.  Swapping the readings instead keeps both values exactly
-            // as recorded - they are the same two numbers either way - while
-            // flipping which one `average_azimuth` measures its ±180 tie-break
-            // from, which is what actually turns the bearing around.  Still an
-            // involution, so the round-trip guarantee holds.
-            std::mem::swap(&mut shot.azimuth_in, &mut shot.azimuth_out);
-        } else {
-            let azimuth_in = shot.azimuth_in;
-            shot.azimuth_in = reciprocal(shot.azimuth_out);
-            shot.azimuth_out = reciprocal(azimuth_in);
-        }
+        (shot.azimuth_in, shot.azimuth_out) = reversed_azimuths(shot.azimuth_in, shot.azimuth_out);
 
         std::mem::swap(&mut shot.depth_in, &mut shot.depth_out);
 

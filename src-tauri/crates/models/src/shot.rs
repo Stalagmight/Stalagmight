@@ -501,19 +501,19 @@ where
 /// (`values_json`), so an un-set field must serialize as absent, not `null`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotUpdates {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub azimuth_in: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub azimuth_out: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub length: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub depth_in: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub depth_out: Option<f64>,
     #[serde(

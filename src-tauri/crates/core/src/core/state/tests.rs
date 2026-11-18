@@ -9630,17 +9630,36 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
                 "previous_gps longitude should be GPS-A's longitude (-80.0), got {}",
                 prev.longitude
             );
-            // Assert previous_offsets contains the datum section and matches the pre-update value
-            assert!(
-                previous_offsets.contains_key(&section_a),
-                "previous_offsets must contain the datum section ({section_a})"
-            );
-            let captured_offset = previous_offsets.get(&section_a).unwrap();
-            let expected_offset = offsets_before_update.get(&section_a).copied();
-            assert_eq!(
-                *captured_offset, expected_offset,
-                "previous_offsets for datum section should match pre-update offset"
-            );
+            // The entry keeps exactly the offsets the update CHANGED, each at
+            // its pre-update value (`UndoData::keep_changed_offsets`).
+            let offsets_after_update = state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .section_offsets
+                .clone();
+            for (id, captured) in previous_offsets {
+                assert_eq!(
+                    *captured,
+                    offsets_before_update.get(id).copied(),
+                    "previous_offsets for section {id} should match the pre-update offset"
+                );
+                assert_ne!(
+                    *captured,
+                    offsets_after_update.get(id).copied(),
+                    "section {id} did not move, so the entry need not hold it"
+                );
+            }
+            for (id, after) in &offsets_after_update {
+                if offsets_before_update.get(id) != Some(after) {
+                    assert!(
+                        previous_offsets.contains_key(id),
+                        "section {id} moved, so the entry must hold its previous offset"
+                    );
+                }
+            }
         }
         other => panic!(
             "Expected UndoData::ZeroDatumInfo, got {:?}",

@@ -115,19 +115,22 @@ impl AppState {
                                 // produced rather than the one it was permitted
                                 // from. See that function for the single-command
                                 // route that makes the two differ.
+                                let realigns = prev_updates.touches_geometry();
+                                let pinned = self.live_section_offsets();
                                 let restored =
                                     self.restore_shot_values(*section_id, target_id, prev_updates);
-                                if restored.success {
+                                if restored.success && realigns {
                                     // The re-execution's `realign_after_shot_edit`
                                     // just RE-DERIVED the group's offsets. An
                                     // inverse restores rather than re-derives, and
                                     // the two part company on a key that lands
                                     // back on the origin: the adjusted write drops
                                     // it, and the pre-edit state may legitimately
-                                    // have HELD it (#413, finding 27). Hand the
-                                    // recorded map back verbatim, exactly as
-                                    // `SegmentMoveInfo` and `ZeroDatumInfo` do.
-                                    self.restore_captured_section_offsets(previous_offsets);
+                                    // have HELD it (#413, finding 27). The recorded
+                                    // map holds the keys the edit changed; every
+                                    // other key goes back to what the edit left,
+                                    // which is what it found.
+                                    self.restore_offsets_pinning_the_rest(previous_offsets, pinned);
                                 }
                                 restored
                             } else {
@@ -221,6 +224,7 @@ impl AppState {
                 // delete (finding 3).
                 match self.resolve_undo_shot(*section_id, uuid.as_deref(), *shot_id) {
                     Ok(target_id) => {
+                        let pinned = self.live_section_offsets();
                         let removed = self.remove_created_shot(
                             *section_id,
                             target_id,
@@ -232,8 +236,10 @@ impl AppState {
                             // which DROPS a key that lands on the origin whether
                             // or not the pre-insert state held one. Restore the
                             // recorded map instead of trusting that re-derivation
-                            // (#413, finding 27's second arm).
-                            self.restore_captured_section_offsets(previous_offsets);
+                            // (#413, finding 27's second arm). The map holds
+                            // only the keys the insert changed, so every other
+                            // key is pinned back to what the insert left.
+                            self.restore_offsets_pinning_the_rest(previous_offsets, pinned);
                             // Shot-less again: the section keeps the legacy
                             // pair its first shot took.
                             if let Some(pair) = consumed_legacy {
@@ -1159,24 +1165,33 @@ impl AppState {
         content.ignores = self.ignores_on_sections(&ids);
     }
 
-    /// Put a captured `section_offsets` slice back verbatim, `None` meaning "this
-    /// section had no key" (#413, finding 27).
+    /// The live `section_offsets` map, read before an inverse that re-derives
+    /// offsets runs (see [`Self::restore_offsets_pinning_the_rest`]).
+    fn live_section_offsets(&self) -> std::collections::HashMap<SectionId, (f64, f64)> {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard
+            .as_ref()
+            .map(|p| p.section_offsets.clone())
+            .unwrap_or_default()
+    }
+
+    /// After an inverse that RE-DERIVED offsets: put every key `recorded`
+    /// holds back to its recorded value, and every other key back to `pinned`
+    /// (the map before the inverse ran), dropping any key neither holds.
     ///
-    /// The counterpart of `Project::capture_rigid_connected_section_offsets`, and
-    /// the same restore `MergeInfo` / `ZeroDatumInfo` / `SegmentMoveInfo` already
-    /// do - factored out here because the two arms that need it run their inverse
-    /// first and so cannot restore inside its project lock.
-    ///
-    /// `Project::restore_section_offsets` routes every value through the one
-    /// writer, so this cannot install a dust-zero key even from an entry recorded
-    /// by a build that predates that invariant.
-    fn restore_captured_section_offsets(
+    /// `recorded` is cut to the keys the forward command changed
+    /// (`UndoData::keep_changed_offsets`); a key it did not change has the same
+    /// value before and after the command, so the live value read before the
+    /// inverse IS the value to restore. The whole map comes back exactly,
+    /// however the re-derivation moved it.
+    fn restore_offsets_pinning_the_rest(
         &self,
-        offsets: &std::collections::HashMap<SectionId, Option<(f64, f64)>>,
+        recorded: &std::collections::HashMap<SectionId, Option<(f64, f64)>>,
+        pinned: std::collections::HashMap<SectionId, (f64, f64)>,
     ) {
-        if offsets.is_empty() {
-            return;
-        }
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -1184,7 +1199,14 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
-        project.restore_section_offsets(offsets);
+        let mut desired: std::collections::HashMap<SectionId, Option<(f64, f64)>> = project
+            .section_offsets
+            .keys()
+            .map(|id| (*id, None))
+            .collect();
+        desired.extend(pinned.into_iter().map(|(id, offset)| (id, Some(offset))));
+        desired.extend(recorded.iter().map(|(id, offset)| (*id, *offset)));
+        project.restore_section_offsets(&desired);
     }
 
     /// The gauge pairs the half of a snapshot pair this step LEAVES BEHIND

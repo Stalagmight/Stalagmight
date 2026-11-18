@@ -37,7 +37,9 @@ impl AppState {
                 after_shot_uuid: None,
                 before_shot_uuid: None,
                 uuid: None,
-                previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+                // Every key, BEFORE the insert: `execute()` keeps only the ones
+                // the insert changed (`UndoData::keep_changed_offsets`).
+                previous_offsets: project.capture_all_section_offsets(),
                 // Read BEFORE the insert: a first shot takes the section's
                 // legacy pair (`AppState::create_shot`), and only the stub can
                 // still see it.
@@ -161,8 +163,10 @@ impl AppState {
                                 // `update_shot` realigns for - and `prev_updates`
                                 // mirrors which fields `updates` sets, so the undo
                                 // realigns exactly when the forward command did.
+                                // Every key here; `execute()` keeps the ones the
+                                // edit changed (`UndoData::keep_changed_offsets`).
                                 previous_offsets: if updates.touches_geometry() {
-                                    project.capture_rigid_connected_section_offsets(*section_id)
+                                    project.capture_all_section_offsets()
                                 } else {
                                     std::collections::HashMap::new()
                                 },

@@ -2840,11 +2840,15 @@ fn the_zero_datum_undo_capture_covers_every_section() {
     let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let _one = create_section(&state, "One", vec![shot(70.0, 7.0)]);
     let _two = create_section(&state, "Two", vec![shot(300.0, 12.0)]);
+    let before = state
+        .get_project_state()
+        .expect("no project open")
+        .capture_all_section_offsets();
 
     assert!(
         state
             .execute(Command::SetZeroDatum {
-                station_ref: StationRef::new(anchored, 0),
+                station_ref: StationRef::new(anchored, 1),
                 coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
                 accuracy_m: None,
                 entrance: None,
@@ -2853,11 +2857,18 @@ fn the_zero_datum_undo_capture_covers_every_section() {
         "SetZeroDatum failed"
     );
 
-    let sections = state
+    let after = state
         .get_project_state()
         .expect("no project open")
-        .sections
-        .len();
+        .capture_all_section_offsets();
+    // The frame change reaches every section, not just the datum's merge group:
+    // the datum sits one shot in, so re-framing on it moves all three.
+    let moved: std::collections::BTreeSet<_> = after
+        .iter()
+        .filter(|(id, offset)| before.get(*id) != Some(*offset))
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(moved.len(), 3, "premise: the re-frame moves every section");
 
     let stack = state.undo_stack.lock().unwrap();
     let recorded = stack.peek_undo_data();
@@ -2873,12 +2884,12 @@ fn the_zero_datum_undo_capture_covers_every_section() {
         // Unreachable: the assertion above already named the variant.
         return;
     };
+    // The capture is cut to what the command moved - which here is everything,
+    // so the inverse of a frame change hands every offset back.
+    let captured: std::collections::BTreeSet<_> = previous_offsets.keys().copied().collect();
     assert_eq!(
-        previous_offsets.len(),
-        sections,
-        "the capture covers {} of {sections} sections: the datum's merge group is not the set an \
-         inverse that changes the frame has to hand back",
-        previous_offsets.len()
+        captured, moved,
+        "the capture holds every offset the re-frame moved, and no other"
     );
 }
 

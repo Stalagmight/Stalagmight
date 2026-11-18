@@ -227,7 +227,7 @@ pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use merge_datum_shift::MergeDatumShift;
 pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
-pub use reverse::{reverse_shots, shot_run_displacement};
+pub use reverse::{reverse_shots, reversed_azimuths, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 pub use uuid_unique::{
     live_shot_uuid_for_stored, remap_project_json, remap_station_keys_json, reminted_shot_uuid,
