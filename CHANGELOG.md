@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-17
+
 ### Added
 
 - **Several GPS zero datums in one connected survey** - a cave with more than one GPS-fixed entrance no longer refuses the second zero datum. The first zero datum of each connected piece of the survey places it, as before; every later one becomes a GPS fix. A fix moves nothing in the Raw Data View, which stays the measurements; the Closures Computed View, Plan and Export bend the survey so it passes through the fix's GPS. In Edit Station each GPS fix can carry a horizontal accuracy (by default a hard pin) to soften that pull, and an Entrance setting: Plan mode starts dives and measures penetration from entrances. The zero datum that places a piece is always an entrance, and a GPS fix is one by default only at the first or last station of its section. A warning says when a fix is far from where the survey puts its station. Older versions of Stalagmight keep only the first zero datum of each connected piece and drop the GPS fixes and accuracies when they save the file, so saving a project that holds them shows a reminder once per session ([#741](https://github.com/Stalagmight/Stalagmight/issues/741))
