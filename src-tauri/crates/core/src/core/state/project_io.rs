@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
-use crate::models::{LineId, Project};
+use crate::models::{LineId, Project, StationRef};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
@@ -431,25 +431,83 @@ pub(super) fn reapply_heals_after_restore(
     }
 }
 
+/// A station told apart from every other by the shots on either side of it,
+/// as an unordered pair (`None` is the line's start or end), so it names the
+/// same physical station whichever way its line runs: a Reverse swaps the
+/// sides, not the pair. Shot uuids are project-unique, so the pair names the
+/// station across lines too (a split half); only a shot-less line's one
+/// station, `(None, None)`, needs its line to tell it apart.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StationSides {
+    line: Option<LineId>,
+    sides: (Option<String>, Option<String>),
+}
+
+/// Every station of `project` by [`StationSides`], with its position; a pair
+/// that names more than one station (a repeated or missing shot uuid) is
+/// dropped, since it cannot say which one it means.
+fn stations_by_sides(project: &Project) -> std::collections::HashMap<StationSides, StationRef> {
+    let mut out = std::collections::HashMap::new();
+    let mut ambiguous = std::collections::HashSet::new();
+    for line in &project.lines {
+        let uuid = |i: usize| line.shots.get(i).and_then(|s| s.uuid.clone());
+        for index in 0..=line.shots.len() {
+            let before = index.checked_sub(1).and_then(uuid);
+            let after = uuid(index);
+            let both_ends = before.is_none() && after.is_none();
+            let sides = if before <= after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let key = StationSides {
+                line: both_ends.then_some(line.id),
+                sides,
+            };
+            let at = StationRef::new(line.id, u32::try_from(index).unwrap_or(u32::MAX));
+            if out.insert(key.clone(), at).is_some() {
+                ambiguous.insert(key);
+            }
+        }
+    }
+    for key in ambiguous {
+        out.remove(&key);
+    }
+    out
+}
+
 /// A snapshot recorded by a build that predates Station IDs carries none (and
 /// may lack names the live project has seeded since). Give every station the
-/// restored state shares with the live one - the same physical station, the
-/// same key - the live station's id and, when the snapshot has none, its
-/// name, and keep the counter above both; the station-identity epilogue mints
-/// the rest. A current snapshot carries its own ids and is left exactly as
-/// recorded.
+/// restored state shares with the live one the live station's id and, when
+/// the snapshot has none, its name, and keep the counter above both; the
+/// station-identity epilogue mints and seeds the rest. A current snapshot
+/// carries its own ids and is left exactly as recorded.
+///
+/// "Shares" means the same PHYSICAL station: the same shots on either side
+/// ([`StationSides`]), not the same stored key. Across a Reverse or a
+/// first-shot delete one key (`LineStart`, `AfterShot(u)`) names a different
+/// station in the two states, and adopting by key put ids and names on the
+/// wrong stations; a station whose sides changed (the new first station after
+/// a first-shot delete) is left for the epilogue instead.
 fn adopt_station_identities(restored: &mut Project, live: &Project) {
     if !restored.station_ids.is_empty() || live.station_ids.is_empty() {
         return;
     }
-    for (key, id) in &live.station_ids {
-        if restored.resolve_key(key).is_some() {
-            restored.station_ids.insert(key.clone(), *id);
+    let live_stations = stations_by_sides(live);
+    for (sides, at) in stations_by_sides(restored) {
+        let Some(live_at) = live_stations.get(&sides) else {
+            continue;
+        };
+        let Some(key) = restored.key_for_ref(at) else {
+            continue;
+        };
+        if let Some(id) = live.station_id_at(*live_at) {
+            restored.station_ids.insert(key.clone(), id);
         }
-    }
-    for (key, name) in &live.station_names {
-        if !restored.station_names.contains_key(key) && restored.resolve_key(key).is_some() {
-            restored.station_names.insert(key.clone(), name.clone());
+        if restored.station_name_at(at).is_none() {
+            if let Some(name) = live.station_name_at(*live_at) {
+                restored.station_names.insert(key, name.to_string());
+            }
         }
     }
     restored.next_station_id = restored.next_station_id.max(live.next_station_id);

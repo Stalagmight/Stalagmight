@@ -614,3 +614,143 @@ fn metadata_commands_skip_the_identity_pass_and_structural_ones_run_it() {
     assert!(state.execute(append).success);
     assert!(name_of_1(&state).is_some(), "the pass ran");
 }
+
+/// Turn the snapshot pair on top of the undo (or redo) stack into what a
+/// build that predates Station IDs recorded: no ids, no counter, no names.
+fn make_snapshot_pair_legacy(state: &AppState, redo: bool) {
+    let mut stack = state.undo_stack.lock().unwrap();
+    let mut entry = if redo {
+        stack.pop_redo().unwrap()
+    } else {
+        stack.pop_undo().unwrap()
+    };
+    let crate::core::UndoData::ProjectSnapshotPair { before, after } = &mut entry.undo_data else {
+        panic!("expected a snapshot pair, got {:?}", entry.undo_data);
+    };
+    for snapshot in [before, after] {
+        let mut json: serde_json::Value = serde_json::from_str(snapshot).unwrap();
+        let object = json.as_object_mut().unwrap();
+        for key in ["station_ids", "next_station_id", "station_names"] {
+            object.remove(key);
+        }
+        *snapshot = serde_json::to_string(&json).unwrap();
+    }
+    if redo {
+        stack.push_redo(entry);
+    } else {
+        stack.push_undo(entry);
+    }
+}
+
+/// Every station of `line` by position: `(id, name)`.
+fn line_identities(state: &AppState, line: LineId) -> Vec<(Option<StationId>, Option<String>)> {
+    let p = project(state);
+    let count = p.get_line(line).unwrap().shots.len() as u32;
+    (0..=count)
+        .map(|i| {
+            let at = StationRef::new(line, i);
+            (
+                p.station_id_at(at),
+                p.station_name_at(at).map(str::to_string),
+            )
+        })
+        .collect()
+}
+
+fn name_stations(state: &AppState, line: LineId, names: &[&str]) {
+    for (i, name) in names.iter().enumerate() {
+        assert!(
+            state
+                .execute(Command::SetStationName {
+                    station_ref: StationRef::new(line, i as u32),
+                    name: (*name).to_string(),
+                })
+                .success
+        );
+    }
+}
+
+/// A legacy snapshot pair around a Reverse: the restored state's stations
+/// take the live ids and names of the SAME physical stations (matched by the
+/// shots on either side), not of whatever station now holds the same key -
+/// `LineStart` is the other end after a reverse.
+#[test]
+fn a_legacy_reverse_undo_adopts_ids_by_physical_station() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 3);
+    name_stations(&state, main, &["s0", "s1", "s2", "s3"]);
+    let original = line_identities(&state, main);
+    assert!(
+        state
+            .execute(Command::ReverseLine {
+                line_id: main,
+                swap_left_right: false,
+            })
+            .success
+    );
+    let reversed = line_identities(&state, main);
+    let mut expected = original.clone();
+    expected.reverse();
+    assert_eq!(
+        reversed, expected,
+        "a reverse keeps every station's identity"
+    );
+
+    make_snapshot_pair_legacy(&state, false);
+    assert!(state.undo().success);
+    assert_eq!(
+        line_identities(&state, main),
+        original,
+        "undo puts each id and name back on its own station"
+    );
+    make_snapshot_pair_legacy(&state, true);
+    assert!(state.redo().success);
+    assert_eq!(line_identities(&state, main), reversed);
+}
+
+/// A legacy snapshot pair around a first-shot delete: `LineStart` names the
+/// old station 1 live but station 0 in the restored state. Stations whose
+/// sides match keep their ids and names; the two whose sides changed are
+/// minted and seeded fresh, never given another station's.
+#[test]
+fn a_legacy_first_shot_delete_undo_never_moves_an_id_to_another_station() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 4);
+    name_stations(&state, main, &["s0", "s1", "s2", "s3", "s4"]);
+    let original = line_identities(&state, main);
+    let first = shot_id(&project(&state), main, 0);
+    assert!(
+        state
+            .execute(Command::DeleteShot {
+                line_id: main,
+                shot_id: first,
+            })
+            .success
+    );
+    let deleted = line_identities(&state, main);
+    assert_eq!(deleted, original[1..].to_vec());
+
+    make_snapshot_pair_legacy(&state, false);
+    assert!(state.undo().success);
+    let undone = line_identities(&state, main);
+    assert_eq!(undone[2..], original[2..], "unchanged sides keep their ids");
+    for (i, (id, name)) in undone[..2].iter().enumerate() {
+        assert!(id.is_some() && name.is_some(), "station {i}: {undone:?}");
+        assert!(
+            !original[1..].iter().any(|(o, _)| o == id),
+            "station {i} took another station's id: {undone:?}"
+        );
+        assert_ne!(name.as_deref(), Some("s1"), "station {i}: {undone:?}");
+    }
+    let ids: std::collections::HashSet<_> = undone.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids.len(), undone.len(), "ids stay unique: {undone:?}");
+
+    make_snapshot_pair_legacy(&state, true);
+    assert!(state.redo().success);
+    let redone = line_identities(&state, main);
+    assert_eq!(redone[1..], deleted[1..], "s2..s4 keep their ids and names");
+    assert!(
+        !original.iter().any(|(o, _)| *o == redone[0].0),
+        "the new first station gets a fresh id: {redone:?}"
+    );
+}
