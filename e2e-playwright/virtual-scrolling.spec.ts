@@ -84,8 +84,9 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
     const firstRow = page.getByTestId('grid-row-0');
     await expect(firstRow).toBeVisible();
-    // The row gutter shows the line:position shot id (positions are 1-based)
-    await expect(page.getByTestId('grid-gutter-0')).toContainText(`${ids.lineId}:1`);
+    // The row gutter names the shot by its two stations (seeded "0" and "1"),
+    // never by a line:position id.
+    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0 \u2192 1');
 
     const semanticRow = page.getByTestId(`shot-row-${ids.lineId}-${ids.shotId}`);
     const semanticCell = page.getByTestId(`shot-cell-${ids.lineId}-${ids.shotId}-length`);
