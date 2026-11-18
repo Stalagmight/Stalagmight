@@ -84,17 +84,26 @@ The joined station keeps the kept line's name and Station ID. Every other
 station keeps its Station ID, and its name too unless two names would clash
 in the combined line: when a station of the other line has the name of a
 station of the kept line, Stalagmight puts a letter in front of every name of
-both lines:
+both lines that starts with a digit:
 
 - the kept line takes the first free letter, usually `A`: `3` becomes `A3`;
 - the other line takes the next one, usually `B`: `1` becomes `B1`.
 
+A name that does not start with a digit, such as `Junction` or `Sump`, keeps
+its name. If both lines have it, the other line's copy gets a letter after a
+hyphen: `Sump` becomes `Sump-a`.
+
 So `0 1 2 3` (kept) combined with `0 1 2`, joined at the kept `3` and the
-other `0`, gives `A0 A1 A2 A3 B1 B2`. A line that is already lettered (every
-name a capital letter and a number, such as `A3` or `B12a`) keeps its letters,
-and the other line takes the next free one: combining that line with `0 1`
-adds `C1`. Two lines with no names in common, neither lettered, keep every
-name: `0 1 2 3` and `3 4 5` joined at `3` give `0 1 2 3 4 5`.
+other `0`, gives `A0 A1 A2 A3 B1 B2`, and `0 1 Junction Sump 4` (kept)
+combined with `0 1 Sump 3`, joined at the kept `4`, gives `A0 A1 Junction
+Sump A4 B1 Sump-a B3`. A line that is already lettered (every name a capital
+letter and a number, such as `A3` or `B12a`) keeps its letters, and the other
+line takes the next free one: combining that line with `0 1` adds `C1`. Two
+lines with no names in common, neither lettered, keep every name: `0 1 2 3`
+and `3 4 5` joined at `3` give `0 1 2 3 4 5`.
+
+Before you confirm, the dialog lists what will be renamed, and how many
+stations keep their names.
 
 Rename stations afterwards if your notes use other names; **Undo** puts the
 old names back with the rest of the combine. See

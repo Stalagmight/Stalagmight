@@ -92,7 +92,8 @@ afterwards:
 - **In the middle** (**Insert Station...**, a shot inserted before or after
   another in a shot table, **Split Line Here** inside a shot): the previous
   name plus the first free letter. After `2` that is `2a`, then `2b`; **Insert
-  Station...** on `4 → 5` gives `4a`.
+  Station...** on `4 → 5` gives `4a`. A name with no digit takes the letter
+  after a hyphen: after `Junction` comes `Junction-a`, then `Junction-b`.
 - **At the start** (**Add Shot Before**): the next number the line has not
   used: on a line `0` to `6`, the new first station is `7`; on `A0` to `A3`,
   it is `A4`.
@@ -100,4 +101,15 @@ afterwards:
   `2`, ... from its first station. An import keeps the station names in the
   file (an [MNemo import](../workflows/importing-from-mnemo.md) uses the MNemo
   station numbers) and names any others by the rules above. A name the line
-  already has gets a letter: a second `5` becomes `5a`.
+  already has gets a letter: a second `5` becomes `5a`, a second `Sump`
+  becomes `Sump-a`.
+
+### Labels at merged stations
+
+Merged stations are one point on the map, so the **Station IDs** and
+**Station names** labels draw one label there, not one per line. It is the
+station of the line that runs through the point rather than one that starts
+or ends there: where a side line starts from station `Junction` of the main
+line, the map and the exported image show `Junction`, not the side line's
+`0`. Where two lines meet end to end, the label is the station that ends its
+line, not the one that starts the next.

@@ -45,7 +45,10 @@ What the map shows. Opened by **Display** in the top right of the
   only one can be on: turning one on turns the other off. **Station IDs**
   shows each station's Station ID, the number unique in the project.
   **Station names** shows each station's name, unique within its line, such
-  as the MNemo station number from a `.dmp` import. See
+  as the MNemo station number from a `.dmp` import. Merged stations get one
+  label, the main line's (see
+  [Labels at merged stations](../concepts/sections-shots-stations.md#labels-at-merged-stations)).
+  See
   [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - **Closures Computed View** is unavailable when there are no loop closures
   and no GPS fixes to adjust. Edit in the **Raw Data View**.

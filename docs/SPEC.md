@@ -457,7 +457,8 @@ step that:
   that restores a snapshot restores the counter with it);
 - every station has a name, unique within its line: a missing name is seeded
   from the station's index (`i` -> `"i"`), and a name an earlier station of the
-  line holds gets the first free lowercase suffix (`5`, `5` -> `5`, `5a`).
+  line holds gets the first free lowercase suffix by the Mid rule below (`5`,
+  `5` -> `5`, `5a`; `Sump`, `Sump` -> `Sump`, `Sump-a`).
 
 A station or line that already has a valid name and id keeps them.
 
@@ -471,6 +472,10 @@ A station or line that already has a valid name and id keeps them.
   split shot at distance): the previous station's name plus the first free
   lowercase suffix, `a`..`z`, then `aa`..`zz`, `aaa`, ... - after `2` -> `2a`,
   again -> `2b` (giving `2 - 2b - 2a - 3`); Insert Station on `4 → 5` -> `4a`.
+  A name with a digit takes the suffix directly (`2a` -> `2aa`, `A3` ->
+  `A3a`); a name with no ASCII digit takes it after a hyphen, so a word does
+  not run into its letter: after `Junction` -> `Junction-a`, then
+  `Junction-b`.
 - **Prepend** (Add Shot Before at the start): the next free number of the old
   first station's prefix family - `0 1 .. 6` -> `7`, `A0 .. A3` -> `A4`.
 - **Imports**: a line whose file names some stations (or rows the user added in
@@ -499,20 +504,33 @@ When they are prefixed:
   other line's families whose letter the kept line uses are re-lettered to the
   next free capital (the kept line goes first);
 - a line with no letter family gets the first capital neither line uses as a
-  family letter - the kept line first (`3` -> `A3`), then the other (`0` ->
-  `B0`).
+  family letter on its **number-led** names only (the first character an
+  ASCII digit: `0`, `12`, `1a`) - the kept line first (`3` -> `A3`), then the
+  other (`0` -> `B0`). A name that does not start with a digit (a custom
+  `Junction` or `Sump`) keeps its name; a line with no number-led name spends
+  no letter;
+- a name of the other line (its join station aside) that still equals one of
+  the kept line's after that - a custom name both lines hold, or a plain name
+  of a lettered line - is made unique on the other line's copy by the Mid
+  rule (`Sump` -> `Sump-a`, `7` -> `7a`); the kept line's copy keeps it.
 
 So kept `0 1 2 3` + other `0 1 2` joined at kept `3` = other `0` gives
 `A0 A1 A2 A3 B1 B2`, and a later combine of that line with `0 1` gives
-`A0 .. A3 B1 B2 C1`. Lines whose names do not collide keep every name: `0 1 2 3`
-+ `3 4 5` joined at `3` gives `0 1 2 3 4 5`; kept `0 .. 200` + other `A1 .. A9`
-keeps both; a line imported as `E0 .. E10`, split at `E5` and combined back is
+`A0 .. A3 B1 B2 C1`. Kept `0 1 Junction Sump 4 .. 8` + other `0 1 Sump 3`
+joined at kept `8` = other `0` gives `A0 A1 Junction Sump A4 .. A8 B1 Sump-a
+B3`. Lines whose names do not collide keep every name: `0 1 2 3` + `3 4 5`
+joined at `3` gives `0 1 2 3 4 5`; kept `0 .. 200` + other `A1 .. A9` keeps
+both; a line imported as `E0 .. E10`, split at `E5` and combined back is
 `E0 .. E10` again. A final pass letter-suffixes any repeat the prefixing could
-not prevent (a plain name of a lettered line, or all 26 letters in use). The
-Combine Lines dialog says, for the line it shows as kept, which stations will
-be renamed ("Station names collide, so stations will be renamed: Main 0..3 ->
-A0..A3, Side 0..2 -> B0..B2") and names the joined station by its name after
-the combine.
+not prevent (all 26 letters in use). The Combine Lines dialog says, for the
+line it shows as kept, which stations will be renamed: each line's lettering
+by its first and last lettered station (the other line's join station, which
+becomes the joined station, left out), with how many are lettered and how
+many keep their names when not all are, then the names made unique by the Mid
+rule one by one (the first three, then a count): "Station names collide, so
+stations will be renamed: Main 0..8 -> A0..A8 (7 renamed, 2 keep their
+names), Side 1..3 -> B1..B3 (2 renamed), Side Sump -> Sump-a". It names the
+joined station by its name after the combine.
 
 **User edits.** Renaming a station (`SetStationName`, undoable) trims the
 name and refuses an empty one or one another station of the line holds ("Line
@@ -537,10 +555,21 @@ spaces is no rename: nothing is sent.
 
 **Labels.** The "Station IDs" map and image-export label draws the Station ID;
 the "Station names" label draws the name (every station has one). The two are
-exclusive. The undo history names lines, stations and shots by name (`Update
-shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`, `Delete
-line "Main Line"`); a name that can no longer be resolved falls back to the
-wording without it.
+exclusive. Merged stations are one point, so a merge group (the stations
+joined by station merges; the image export also counts the two ends of an
+aligned loop closure as one point) draws exactly ONE label, for its
+representative: a station that is not its line's first station if there is
+one, then one that is not its line's last, ties broken by the line's order in
+the project and then by station index. A branch merged onto the middle of the
+main line therefore shows the main line's name there (`Junction`), never the
+branch's `0`. The label keeps the first-in-line rule (it always shows when any
+member starts its line) and hides with the shots only when every member's
+marker would. Stations that are not merged each draw their own label.
+
+The undo history names lines, stations and shots by name (`Update shot Main
+Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`, `Delete line "Main
+Line"`); a name that can no longer be resolved falls back to the wording
+without it.
 
 A DMP import records each station's MNemo station number as its name (see
 [dmp-import.md](dmp-import.md#station-names)); MNemo restarts at 0 in every
