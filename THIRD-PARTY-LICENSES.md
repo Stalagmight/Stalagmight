@@ -11,12 +11,12 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=92a1da20b840d61c5418ee3fff019dba80adaf7c4fede3a0c9122eeb3017dd0d
+Cargo.lock=38a43fc9c516a4eb98aea76d27f488d1fd87b2a6e91b25ee21904e3a248b9b3d
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
 gen-third-party-licenses.mjs=5450d2ab535a7ad141d28dd699d64e10b5b513487cfa5906454d4d8af24bd0ba
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
 vendored-data=28e20e512c62abb53e4b4d75db3e11f7d47115249317907fd3b09daf2eeacf5c
-bundle-body=642f89c2521f6619fb2595386375ba032cb07e12e3a66b54efa05b8239726602
+bundle-body=2162dfed4f2d37973332011069dded30602e0a255ddbafde836825c35afb35ec
 -->
 
 ## npm packages
@@ -1820,7 +1820,7 @@ The dependency graph of the release binary (telemetry features included, dev-dep
 
 ### GNU Affero General Public License v3.0 only
 
-Applies to: `speleodb-api 0.6.2`
+Applies to: `speleodb-api 0.8.0`
 
 ````text
 GNU AFFERO GENERAL PUBLIC LICENSE
