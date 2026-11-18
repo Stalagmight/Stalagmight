@@ -93,10 +93,15 @@ function letterSuffix(index: number): string {
   return out;
 }
 
-/** Mid (and a repeat or taken seed): `base` + the first free lowercase suffix. */
-function nameWithFreeLetter(base: string, taken: ReadonlySet<string>): string {
+/**
+ * Mid (and a repeat or taken seed): `base` + the first free lowercase suffix
+ * (`2` -> `2a`, `A3` -> `A3a`). A base with no ASCII digit takes the suffix
+ * after a hyphen (`Junction` -> `Junction-a`), as `name_with_free_letter` does.
+ */
+export function nameWithFreeLetter(base: string, taken: ReadonlySet<string>): string {
+  const separator = /[0-9]/.test(base) ? '' : '-';
   for (let index = 0; ; index++) {
-    const candidate = `${base}${letterSuffix(index)}`;
+    const candidate = `${base}${separator}${letterSuffix(index)}`;
     if (!taken.has(candidate)) return candidate;
   }
 }

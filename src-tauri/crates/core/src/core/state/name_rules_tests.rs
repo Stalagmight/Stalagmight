@@ -355,17 +355,13 @@ fn a_split_given_a_taken_name_by_a_direct_caller_renames_its_own_half() {
     );
 }
 
-#[test]
-fn the_combine_candidate_names_the_renames_and_the_joined_station() {
-    // The contract's example: `0 1 2 3` + `0 1 2` collide.
-    let state = new_state();
-    let main = create_line(&state, "Main", 3);
-    let side = create_line(&state, "Side", 2);
-    // Put Side's start on Main's end, so the two lines touch there.
-    let end = project(&state)
-        .compute_station_raw_coords(StationRef::new(main, 3))
+/// Put `side`'s start on `main`'s last station (`main_end`) and merge them,
+/// so the two lines touch there and can be combined.
+fn merge_start_onto_end(state: &AppState, main: LineId, main_end: u32, side: LineId) {
+    let end = project(state)
+        .compute_station_raw_coords(StationRef::new(main, main_end))
         .unwrap();
-    let start = project(&state)
+    let start = project(state)
         .compute_station_raw_coords(StationRef::new(side, 0))
         .unwrap();
     ok(state.execute(Command::MoveLine {
@@ -377,9 +373,18 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
         },
     }));
     ok(state.execute(Command::MergeStations {
-        station_a: StationRef::new(main, 3),
+        station_a: StationRef::new(main, main_end),
         station_b: StationRef::new(side, 0),
     }));
+}
+
+#[test]
+fn the_combine_candidate_names_the_renames_and_the_joined_station() {
+    // The contract's example: `0 1 2 3` + `0 1 2` collide.
+    let state = new_state();
+    let main = create_line(&state, "Main", 3);
+    let side = create_line(&state, "Side", 2);
+    merge_start_onto_end(&state, main, 3, side);
     let candidate = state
         .combine_candidate_for_lines(main, side)
         .unwrap()
@@ -395,10 +400,17 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
         (kept.last_from.as_str(), kept.last_to.as_str()),
         ("3", "A3")
     );
+    assert_eq!(kept.unchanged, 0);
+    // The other line's join station is no rename: it becomes `A3`.
     let other = renames.other.unwrap();
     assert_eq!(
-        (other.first_to.as_str(), other.last_to.as_str()),
-        ("B0", "B2")
+        (
+            other.count,
+            other.first_from.as_str(),
+            other.first_to.as_str(),
+            other.last_to.as_str()
+        ),
+        (2, "1", "B1", "B2")
     );
     assert_eq!(renames.join_name, "A3");
 
@@ -410,6 +422,57 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
         .map(Option::unwrap)
         .collect();
     assert_eq!(names, ["A0", "A1", "A2", "A3", "B1", "B2"]);
+}
+
+#[test]
+fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
+    // Main `0 1 Junction Sump 4 .. 8`, Side `0 1 Sump 3` joined at Main's
+    // end: the digits collide and are lettered, Main's custom names stay, and
+    // Side's `Sump` (Main has one) becomes `Sump-a`.
+    let state = new_state();
+    let main = create_line(&state, "Main", 8);
+    let side = create_line(&state, "Side", 3);
+    for (line, index, name) in [(main, 2, "Junction"), (main, 3, "Sump"), (side, 2, "Sump")] {
+        ok(state.execute(Command::SetStationName {
+            station_ref: StationRef::new(line, index),
+            name: name.to_string(),
+        }));
+    }
+    merge_start_onto_end(&state, main, 8, side);
+    let candidate = state
+        .combine_candidate_for_lines(main, side)
+        .unwrap()
+        .unwrap();
+    let renames = candidate.plan_keeping_a.station_renames.unwrap();
+    assert_eq!(renames.reason, CombineRenameReason::Collision);
+    let kept = renames.kept.unwrap();
+    assert_eq!((kept.count, kept.unchanged), (7, 2));
+    assert_eq!(
+        (kept.first_from.as_str(), kept.first_to.as_str()),
+        ("0", "A0")
+    );
+    assert_eq!(
+        (kept.last_from.as_str(), kept.last_to.as_str()),
+        ("8", "A8")
+    );
+    let other = renames.other.unwrap();
+    assert_eq!((other.count, other.unchanged), (3, 0));
+    assert_eq!(
+        (other.first_from.as_str(), other.first_to.as_str()),
+        ("1", "B1")
+    );
+    assert_eq!(renames.join_name, "A8");
+
+    ok(state.execute_combine_lines(main, side, combine_options("Main")));
+    let names: Vec<_> = project(&state)
+        .line_station_names(main)
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert_eq!(
+        names,
+        ["A0", "A1", "Junction", "Sump", "A4", "A5", "A6", "A7", "A8", "B1", "Sump-a", "B3"]
+    );
 }
 
 #[test]

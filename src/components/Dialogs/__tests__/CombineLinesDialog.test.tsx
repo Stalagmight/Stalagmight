@@ -180,6 +180,7 @@ describe('CombineLinesDialog', () => {
     stations = [{ station_ref: { line_id: 2, station_index: 3 }, name: '3' }];
     const range = (from: [string, string], to: [string, string], count: number) => ({
       count,
+      unchanged: 0,
       first_from: from[0],
       last_from: from[1],
       first_to: to[0],
@@ -191,7 +192,7 @@ describe('CombineLinesDialog', () => {
           station_renames: {
             reason: 'collision',
             kept: range(['0', '3'], ['A0', 'A3'], 4),
-            other: range(['0', '2'], ['B0', 'B2'], 3),
+            other: range(['1', '2'], ['B1', 'B2'], 2),
             join_name: 'A3',
           },
         }),
@@ -199,7 +200,7 @@ describe('CombineLinesDialog', () => {
     };
     render(<CombineLinesDialog />);
     expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
-      'Station names collide, so stations will be renamed: Main-A 0..3 \u2192 A0..A3, Main-B 0..2 \u2192 B0..B2'
+      'Station names collide, so stations will be renamed: Main-A 0..3 \u2192 A0..A3, Main-B 1..2 \u2192 B1..B2'
     );
     expect(screen.getByTestId('combine-summary')).toHaveTextContent('at station Main-A / A3');
     // Keeping the other line renames nothing here: no note, the join as it is.
@@ -208,13 +209,34 @@ describe('CombineLinesDialog', () => {
     expect(screen.getByTestId('combine-summary')).toHaveTextContent('at station Main-B / 0');
   });
 
+  it('says how many stations keep their custom names, so the range does not read as renaming them', () => {
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          station_renames: {
+            reason: 'collision',
+            kept: { count: 9, unchanged: 2, first_from: '0', last_from: '10', first_to: 'A0', last_to: 'A10' },
+            other: { count: 3, unchanged: 1, first_from: '1', last_from: 'Sump', first_to: 'B1', last_to: 'Sump-a' },
+            join_name: 'A10',
+          },
+        }),
+      }),
+    };
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
+      'Station names collide, so stations will be renamed: ' +
+        'Main-A 0..10 \u2192 A0..A10 (9 renamed, 2 keep their names), ' +
+        'Main-B 1..Sump \u2192 B1..Sump-a (3 renamed, 1 keeps its name)'
+    );
+  });
+
   it('says when the other line continues a lettered kept line', () => {
     dialogData = {
       candidate: candidate({
         plan_keeping_a: quietPlan(2, {
           station_renames: {
             reason: 'lettered',
-            other: { count: 1, first_from: '7', last_from: '7', first_to: 'C7', last_to: 'C7' },
+            other: { count: 1, unchanged: 0, first_from: '7', last_from: '7', first_to: 'C7', last_to: 'C7' },
             join_name: 'B2',
           },
         }),

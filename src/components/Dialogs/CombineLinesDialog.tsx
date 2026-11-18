@@ -60,10 +60,19 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
   );
 }
 
-/** One line's renames as the note reads them: `Main 0..3 → A0..A3`. */
+/**
+ * One line's renames as the note reads them: `Main 0..3 → A0..A3`. The range
+ * spans the renamed stations only; when some of the line's stations keep their
+ * names (a custom `Junction` between `1` and `5` is not lettered), the counts
+ * say so, so the range never reads as renaming them: `Main 0..10 → A0..A10
+ * (9 renamed, 2 keep their names)`.
+ */
 function lineRenameText(lineName: string, renames: CombineLineRenames): string {
   const span = (first: string, last: string) => (renames.count > 1 ? `${first}..${last}` : first);
-  return `${lineName} ${span(renames.first_from, renames.last_from)} \u2192 ${span(renames.first_to, renames.last_to)}`;
+  const text = `${lineName} ${span(renames.first_from, renames.last_from)} \u2192 ${span(renames.first_to, renames.last_to)}`;
+  if (renames.unchanged === 0) return text;
+  const kept = renames.unchanged === 1 ? '1 keeps its name' : `${renames.unchanged} keep their names`;
+  return `${text} (${renames.count} renamed, ${kept})`;
 }
 
 /**

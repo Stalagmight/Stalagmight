@@ -9,6 +9,7 @@ import {
   dmpFileStationName,
   fillLineStationNames,
   importLineStationNames,
+  nameWithFreeLetter,
   settleLineStationNames,
   suggestionTargetStationLabel,
 } from '../importStationNames';
@@ -67,6 +68,22 @@ describe('station naming port', () => {
     const lettered = [null, 'A0', 'A1', 'A2', 'A3'];
     fillLineStationNames(lettered);
     expect(lettered[0]).toBe('A4');
+  });
+
+  it('hyphenates the Mid suffix of a name with no digit', () => {
+    expect(nameWithFreeLetter('Junction', new Set(['Junction']))).toBe('Junction-a');
+    expect(nameWithFreeLetter('Junction', new Set(['Junction', 'Junction-a']))).toBe('Junction-b');
+    expect(nameWithFreeLetter('2a', new Set())).toBe('2aa');
+    expect(nameWithFreeLetter('A3', new Set())).toBe('A3a');
+    expect(nameWithFreeLetter('Sump2', new Set())).toBe('Sump2a');
+
+    const repeats = ['Sump', 'Sump', 'Sump'];
+    settleLineStationNames(repeats);
+    expect(repeats).toEqual(['Sump', 'Sump-a', 'Sump-b']);
+
+    const run = ['Junction', null, null, '6'];
+    fillLineStationNames(run);
+    expect(run).toEqual(['Junction', 'Junction-a', 'Junction-b', '6']);
   });
 
   it('continues past z with two-letter suffixes', () => {

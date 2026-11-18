@@ -3,10 +3,10 @@
 use std::collections::{BTreeSet, HashSet};
 
 use super::station_naming::{
-    dedupe_line_name, family_letter, fill_line_station_names, letter_families, name_after_end,
-    name_before_start, name_with_free_letter, next_free_integer, plan_combine_prefixes,
-    seed_line_name, settle_line_station_names, trailing_number, CombinePrefixReason,
-    CombinePrefixes,
+    dedupe_line_name, family_letter, fill_line_station_names, is_number_led, letter_families,
+    name_after_end, name_before_start, name_with_free_letter, next_free_integer,
+    plan_combine_prefixes, seed_line_name, settle_line_station_names, trailing_number,
+    CombinePrefixReason, CombinePrefixes,
 };
 
 fn set<'a>(names: &'a [&'a str]) -> HashSet<&'a str> {
@@ -57,6 +57,30 @@ fn the_mid_rule_takes_the_first_free_letter() {
 }
 
 #[test]
+fn the_mid_rule_hyphenates_a_name_with_no_digit() {
+    // A custom name keeps reading as its own word: `Junction-a`, not
+    // `Junctiona`.
+    let taken = set(&["Junction"]);
+    assert_eq!(
+        name_with_free_letter("Junction", &|n| taken.contains(n)),
+        "Junction-a"
+    );
+    let taken = set(&["Junction", "Junction-a"]);
+    assert_eq!(
+        name_with_free_letter("Junction", &|n| taken.contains(n)),
+        "Junction-b"
+    );
+    // Any digit in the base keeps the plain concatenation.
+    let none = set(&[]);
+    assert_eq!(name_with_free_letter("2a", &|n| none.contains(n)), "2aa");
+    assert_eq!(name_with_free_letter("A3", &|n| none.contains(n)), "A3a");
+    assert_eq!(
+        name_with_free_letter("Sump2", &|n| none.contains(n)),
+        "Sump2a"
+    );
+}
+
+#[test]
 fn the_prepend_rule_takes_the_next_number_of_the_first_station_family() {
     assert_eq!(
         name_before_start("0", ["0", "1", "2", "3", "4", "5", "6"]),
@@ -91,6 +115,11 @@ fn settling_seeds_by_index_and_letters_the_later_repeat() {
     let mut names = slots(&[Some("  "), Some("x")]);
     settle_line_station_names(&mut names);
     assert_eq!(filled(&names), ["0", "x"]);
+
+    // A repeated custom name takes the hyphenated suffix.
+    let mut names = slots(&[Some("Sump"), Some("Sump"), Some("Sump")]);
+    settle_line_station_names(&mut names);
+    assert_eq!(filled(&names), ["Sump", "Sump-a", "Sump-b"]);
 }
 
 #[test]
@@ -104,6 +133,14 @@ fn filling_a_partly_named_line_follows_the_creation_rules() {
     // Nothing named: left for the seeding rule.
     let mut names = slots(&[None, None]);
     assert_eq!(fill_line_station_names(&mut names), 0);
+
+    // A run after a custom name takes hyphenated letters.
+    let mut names = slots(&[Some("Junction"), None, None, Some("6")]);
+    fill_line_station_names(&mut names);
+    assert_eq!(
+        filled(&names),
+        ["Junction", "Junction-a", "Junction-b", "6"]
+    );
 }
 
 #[test]
@@ -205,4 +242,92 @@ fn a_lettered_kept_line_with_a_plain_name_keeps_it_and_the_other_takes_a_free_le
     assert!(plan.kept.is_empty());
     assert_eq!(plan.other["7"], "B7");
     assert_eq!(plan.other["8"], "B8");
+}
+
+#[test]
+fn a_number_led_name_starts_with_a_digit() {
+    assert!(is_number_led("0"));
+    assert!(is_number_led("12"));
+    assert!(is_number_led("1a"));
+    assert!(!is_number_led("A3"));
+    assert!(!is_number_led("Junction"));
+    assert!(!is_number_led(""));
+}
+
+#[test]
+fn a_combine_letters_only_number_led_names_and_keeps_custom_ones() {
+    // The real-app case: kept `0 1 Junction Junctiona 5 .. 10` + other
+    // `0 1 2 3` joined at the other's `0`. The digits collide; the custom
+    // names are the kept line's own and keep their names.
+    let kept = [
+        "0",
+        "1",
+        "Junction",
+        "Junctiona",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+    ];
+    let plan = plan_combine_prefixes(&kept, &["0", "1", "2", "3"], Some("0"));
+    assert_eq!(plan.reason, Some(CombinePrefixReason::Collision));
+    assert_eq!(plan.kept["0"], "A0");
+    assert_eq!(plan.kept["1"], "A1");
+    assert_eq!(plan.kept["5"], "A5");
+    assert_eq!(plan.kept["10"], "A10");
+    assert!(!plan.kept.contains_key("Junction"));
+    assert!(!plan.kept.contains_key("Junctiona"));
+    assert_eq!(plan.kept.len(), 8);
+    assert_eq!(plan.other["1"], "B1");
+    assert_eq!(plan.other["3"], "B3");
+}
+
+#[test]
+fn a_custom_name_both_lines_hold_is_suffixed_on_the_other_line() {
+    // `Sump` is in both lines: the kept line's copy keeps it, the other
+    // line's takes the hyphenated Mid suffix; the digits are lettered.
+    let plan = plan_combine_prefixes(&["0", "1", "Sump", "3"], &["0", "Sump", "2"], Some("0"));
+    assert_eq!(plan.reason, Some(CombinePrefixReason::Collision));
+    assert!(!plan.kept.contains_key("Sump"));
+    assert_eq!(plan.kept["3"], "A3");
+    assert_eq!(plan.other["Sump"], "Sump-a");
+    assert_eq!(plan.other["2"], "B2");
+
+    // The suffix avoids every name either line ends up with.
+    let plan = plan_combine_prefixes(&["0", "Sump", "Sump-a"], &["0", "Sump", "2"], Some("0"));
+    assert_eq!(plan.other["Sump"], "Sump-b");
+
+    // A custom name that is the other line's join station is retired, so it
+    // collides with nothing.
+    let plan = plan_combine_prefixes(&["0", "1", "Sump"], &["Sump", "5", "6"], Some("Sump"));
+    assert_eq!(plan, CombinePrefixes::default());
+}
+
+#[test]
+fn a_line_of_custom_names_spends_no_letter() {
+    // The kept line has no number-led name, so it keeps every name and the
+    // other line takes the first letter, `A`.
+    let plan = plan_combine_prefixes(&["Entrance", "Sump", "Pit"], &["0", "Sump", "2"], Some("0"));
+    assert!(plan.kept.is_empty());
+    assert_eq!(plan.other["2"], "A2");
+    assert_eq!(plan.other["Sump"], "Sump-a");
+
+    // A lettered kept line continued by a line of custom names renames
+    // nothing.
+    let kept = ["A0", "A1", "B1", "B2"];
+    let plan = plan_combine_prefixes(&kept, &["Pit", "Dome"], Some("Pit"));
+    assert_eq!(plan, CombinePrefixes::default());
+}
+
+#[test]
+fn a_plain_name_a_lettered_other_line_shares_is_suffixed_on_the_other_line() {
+    // Both lines are lettered with letters of their own; their plain `7`
+    // collides, and only the other line's copy changes.
+    let plan = plan_combine_prefixes(&["A0", "B1", "7"], &["C0", "7"], Some("C0"));
+    assert_eq!(plan.reason, Some(CombinePrefixReason::Collision));
+    assert!(plan.kept.is_empty());
+    assert_eq!(plan.other.len(), 1);
+    assert_eq!(plan.other["7"], "7a");
 }

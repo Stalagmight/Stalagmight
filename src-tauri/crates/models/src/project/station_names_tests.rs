@@ -106,6 +106,26 @@ fn splitting_a_shot_names_the_station_it_adds_after_its_from_station() {
 }
 
 #[test]
+fn a_station_inserted_after_a_custom_name_takes_a_hyphenated_letter() {
+    let (mut project, id) = named_line(2);
+    project
+        .set_station_name(StationRef::new(id, 1), "Junction")
+        .unwrap();
+    let first = shot_id(&project, id, 1);
+    project.split_shot_at_distance(id, first, 4.0).unwrap();
+    assert_eq!(
+        names(&project, id),
+        some(&["0", "Junction", "Junction-a", "2"])
+    );
+    let again = shot_id(&project, id, 1);
+    project.split_shot_at_distance(id, again, 1.0).unwrap();
+    assert_eq!(
+        names(&project, id),
+        some(&["0", "Junction", "Junction-b", "Junction-a", "2"])
+    );
+}
+
+#[test]
 fn reversing_a_line_keeps_each_name_on_its_physical_station() {
     let (mut project, id) = named_line(3);
     assert!(project.reverse_line(id, false));

@@ -285,12 +285,18 @@ pub enum CombineRenameReason {
     Lettered,
 }
 
-/// How a combine renames one line's stations: how many, and the first and
-/// the last renamed station in the line's own station order, before and
-/// after (`0` -> `A0` .. `3` -> `A3`).
+/// How a combine renames one line's stations: how many, how many keep their
+/// names, and the first and the last renamed station in the line's own
+/// station order, before and after (`0` -> `A0` .. `3` -> `A3`). The first
+/// and last are of the renamed stations only: a custom name the combine
+/// keeps (`Junction` between `1` and `5`) is counted in `unchanged`, never
+/// implied by the range.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct CombineLineRenames {
     pub count: u32,
+    /// The line's stations that keep their names (the other line's join
+    /// station, whose name the combine retires, is in neither count).
+    pub unchanged: u32,
     pub first_from: String,
     pub first_to: String,
     pub last_from: String,

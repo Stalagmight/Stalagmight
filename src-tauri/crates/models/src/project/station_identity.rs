@@ -736,9 +736,12 @@ impl Project {
     /// What combining `other` into `kept` (joined at `kept_join` and
     /// `other_join`) will rename, for the Combine Lines dialog to say before
     /// the user confirms: `None` when no station is renamed. Each line's
-    /// renames are summarized by the first and the last renamed station in
-    /// its own station order, and `join_name` is the joined station's name
-    /// after the combine (the kept join station's, prefixed when it is).
+    /// renames are summarized by how many stations are renamed and how many
+    /// keep their names, and the first and the last renamed station in its
+    /// own station order; the other line's join station is left out (its name
+    /// is retired: it becomes the joined station). `join_name` is the joined
+    /// station's name after the combine (the kept join station's, prefixed
+    /// when it is).
     pub fn combine_station_renames(
         &self,
         kept: LineId,
@@ -751,26 +754,34 @@ impl Project {
             CombinePrefixReason::Collision => crate::CombineRenameReason::Collision,
             CombinePrefixReason::Lettered => crate::CombineRenameReason::Lettered,
         };
+        let retired = self.station_name_at(other_join).map(str::to_string);
         let summarize = |line: LineId,
-                         renames: &HashMap<String, String>|
+                         renames: &HashMap<String, String>,
+                         skip: Option<&str>|
          -> Option<crate::CombineLineRenames> {
-            let changes: Vec<(String, String)> = self
+            let names: Vec<String> = self
                 .line_station_names(line)
                 .into_iter()
                 .flatten()
-                .filter_map(|old| renames.get(&old).map(|new| (old, new.clone())))
+                .filter(|name| Some(name.as_str()) != skip)
+                .collect();
+            let changes: Vec<(&String, &String)> = names
+                .iter()
+                .filter_map(|old| renames.get(old).map(|new| (old, new)))
                 .collect();
             let (first, last) = (changes.first()?, changes.last()?);
             Some(crate::CombineLineRenames {
                 count: u32::try_from(changes.len()).unwrap_or(u32::MAX),
+                unchanged: u32::try_from(names.len().saturating_sub(changes.len()))
+                    .unwrap_or(u32::MAX),
                 first_from: first.0.clone(),
                 first_to: first.1.clone(),
                 last_from: last.0.clone(),
                 last_to: last.1.clone(),
             })
         };
-        let kept_renames = summarize(kept, &plan.kept);
-        let other_renames = summarize(other, &plan.other);
+        let kept_renames = summarize(kept, &plan.kept, None);
+        let other_renames = summarize(other, &plan.other, retired.as_deref());
         if kept_renames.is_none() && other_renames.is_none() {
             return None;
         }

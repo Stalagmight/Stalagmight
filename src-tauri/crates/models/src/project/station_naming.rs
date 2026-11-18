@@ -14,7 +14,9 @@
 //! - **Mid** (a station inserted inside a line: Insert Shot after/before,
 //!   Insert Station, split shot at distance): the previous station's name plus
 //!   the first free lowercase suffix, `a`..`z`, then `aa`..`zz`, `aaa`, ... -
-//!   after `2` -> `2a`, again -> `2b`, giving `2 - 2b - 2a - 3`.
+//!   after `2` -> `2a`, again -> `2b`, giving `2 - 2b - 2a - 3`. A name with
+//!   no digit takes the suffix after a hyphen, so it still reads as its own
+//!   word: after `Junction` -> `Junction-a`, then `Junction-b`.
 //! - **Prepend** (a shot added before the first station): the next free number
 //!   of the old first station's prefix family - `0 1 .. 6` -> `7`, `A0..A3` ->
 //!   `A4`; a first name with no trailing number gives the next free integer.
@@ -125,11 +127,19 @@ fn letter_suffix(index: u64) -> String {
 }
 
 /// The Mid rule: `base` plus the first lowercase suffix whose name is not
-/// taken. Also the rule a repeated name and a taken seed are made unique by.
+/// taken (`2` -> `2a`, `2a` -> `2aa`, `A3` -> `A3a`). A `base` with no ASCII
+/// digit takes the suffix after a hyphen (`Junction` -> `Junction-a`), so a
+/// word does not run into its letter. Also the rule a repeated name and a
+/// taken seed are made unique by.
 pub fn name_with_free_letter(base: &str, taken: &dyn Fn(&str) -> bool) -> String {
+    let separator = if base.bytes().any(|b| b.is_ascii_digit()) {
+        ""
+    } else {
+        "-"
+    };
     let mut index: u64 = 0;
     loop {
-        let candidate = format!("{base}{}", letter_suffix(index));
+        let candidate = format!("{base}{separator}{}", letter_suffix(index));
         if !taken(&candidate) {
             return candidate;
         }
@@ -210,6 +220,14 @@ pub fn letter_families<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet
     names.into_iter().filter_map(family_letter).collect()
 }
 
+/// Whether a name is number-led: its first character is an ASCII digit
+/// (`0`, `12`, `1a`). Only such a name takes a Combine Lines family letter;
+/// a custom name (`Junction`, `Sump`) or a lettered one (`A3`) keeps its
+/// form.
+pub fn is_number_led(name: &str) -> bool {
+    name.bytes().next().is_some_and(|b| b.is_ascii_digit())
+}
+
 /// Decide the Combine Lines prefixing (decision 5 of the line-identity
 /// contract, as refined after review; documented in docs/SPEC.md 4.2).
 ///
@@ -228,12 +246,17 @@ pub fn letter_families<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet
 ///   the other line's families whose letter the kept line uses are
 ///   re-lettered to the next free capital (the kept line goes first);
 /// - a line with no letter family gets the first free capital no name of
-///   either line uses - the kept line first, then the other (`3` -> `A3`,
-///   `0` -> `B0`).
+///   either line uses on its NUMBER-LED names ([`is_number_led`]) - the kept
+///   line first, then the other (`3` -> `A3`, `0` -> `B0`); a name that does
+///   not start with a digit (`Junction`) keeps it;
+/// - a name of the other line (its join station aside) that still equals a
+///   name of the kept line after that - a custom name both lines hold, or a
+///   plain name of a lettered line - is made unique by the Mid rule on the
+///   other line's copy (`Sump` -> `Sump-a`, `7` -> `7a`); the kept line's
+///   copy keeps it.
 ///
-/// The caller then makes every name unique (a lettered line may still hold a
-/// plain name that collides). With all 26 letters in use nothing is
-/// prefixed; the uniquify still makes every name unique.
+/// With all 26 letters in use nothing is prefixed; the caller's uniquify
+/// still makes every name unique.
 pub fn plan_combine_prefixes(
     kept: &[&str],
     other: &[&str],
@@ -260,26 +283,17 @@ pub fn plan_combine_prefixes(
         ..CombinePrefixes::default()
     };
     let kept_letters: BTreeSet<char> = if kept_families.is_empty() {
-        let Some(letter) = free_letter(&used) else {
+        let Some(letters) = letter_number_led(kept, &mut plan.kept, &mut used) else {
             return CombinePrefixes::default();
         };
-        used.insert(letter);
-        for name in kept {
-            plan.kept
-                .insert((*name).to_string(), format!("{letter}{name}"));
-        }
-        BTreeSet::from([letter])
+        letters
     } else {
         kept_families
     };
 
     if other_families.is_empty() {
-        let Some(letter) = free_letter(&used) else {
+        if letter_number_led(other, &mut plan.other, &mut used).is_none() {
             return CombinePrefixes::default();
-        };
-        for name in other {
-            plan.other
-                .insert((*name).to_string(), format!("{letter}{name}"));
         }
     } else {
         let mut relettered: HashMap<char, char> = HashMap::new();
@@ -301,10 +315,61 @@ pub fn plan_combine_prefixes(
             }
         }
     }
+    suffix_other_line_clashes(kept, other, other_join, &mut plan);
     if plan.is_empty() {
         return CombinePrefixes::default();
     }
     plan
+}
+
+/// Letter the number-led names of a line with no letter family with the first
+/// capital not in `used`, recording the renames: the letters it applied
+/// (none for a line of custom names only, which leaves the letter free), or
+/// `None` when every letter is in use.
+fn letter_number_led(
+    names: &[&str],
+    renames: &mut HashMap<String, String>,
+    used: &mut BTreeSet<char>,
+) -> Option<BTreeSet<char>> {
+    if !names.iter().any(|name| is_number_led(name)) {
+        return Some(BTreeSet::new());
+    }
+    let letter = free_letter(used)?;
+    used.insert(letter);
+    for name in names.iter().filter(|name| is_number_led(name)) {
+        renames.insert((*name).to_string(), format!("{letter}{name}"));
+    }
+    Some(BTreeSet::from([letter]))
+}
+
+/// The last step of [`plan_combine_prefixes`]: a name of the other line (its
+/// join station aside, whose name is retired) that still equals a name of the
+/// kept line once both are lettered gets the Mid rule on the other line's
+/// copy, avoiding every name either line ends up with.
+fn suffix_other_line_clashes(
+    kept: &[&str],
+    other: &[&str],
+    other_join: Option<&str>,
+    plan: &mut CombinePrefixes,
+) {
+    let after = |renames: &HashMap<String, String>, name: &str| -> String {
+        renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    };
+    let kept_after: HashSet<String> = kept.iter().map(|name| after(&plan.kept, name)).collect();
+    let mut taken: HashSet<String> = kept_after.clone();
+    taken.extend(other.iter().map(|name| after(&plan.other, name)));
+    for name in other.iter().filter(|name| Some(**name) != other_join) {
+        let current = after(&plan.other, name);
+        if !kept_after.contains(&current) {
+            continue;
+        }
+        let fresh = name_with_free_letter(&current, &|n| taken.contains(n));
+        taken.insert(fresh.clone());
+        plan.other.insert((*name).to_string(), fresh);
+    }
 }
 
 /// Whether `c` may not appear in a name the user types for a station, a line
