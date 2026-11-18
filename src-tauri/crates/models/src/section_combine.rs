@@ -88,6 +88,10 @@ pub enum TornTieKind {
     /// A loop closure made by snapping one station onto another (a `Move`
     /// closure, aligned and so rigid).
     SnappedClosure,
+    /// A loop closure left from a snap whose two stations had since moved
+    /// apart (a `Move` closure no longer aligned), which the combine brings
+    /// back together and would otherwise snap again (#736).
+    FormerSnappedClosure,
 }
 
 /// Why a rigid tie becomes a loop closure.
@@ -100,6 +104,10 @@ pub enum TornTieReason {
     /// A zero datum holds the section on its far side, which stays while the
     /// moving side moves.
     ZeroDatum,
+    /// A snapped closure at a join station: the joined station keeps the
+    /// other join station's position as shown (its hand move), which takes
+    /// the snap's two stations more than 1 cm apart (#736).
+    JoinedStationMoves,
 }
 
 /// A rigid tie the combine turns into an ordinary loop closure, because it
@@ -120,8 +128,12 @@ pub struct TornTie {
 pub enum CombineRemovedKind {
     /// A station merge the combine would tear into a loop closure.
     Merge,
-    /// A snapped (`Move`) closure the combine would make an ordinary one.
+    /// A snapped (`Move`) closure, which the combine would make an ordinary
+    /// one or leave snapped (#736).
     SnappedClosure,
+    /// A loop closure left from a snap whose two stations had since moved
+    /// apart, which the combine brings back together (#736).
+    FormerSnappedClosure,
     /// A loop closure already there.
     LoopClosure,
 }

@@ -150,8 +150,8 @@ pub(crate) struct EndTable {
     /// junction's station query plans two choices of kept section for every
     /// partner, and each plan reads all of them.
     ties: std::cell::OnceCell<Vec<Tie>>,
-    /// The loop-closure facts the anchor rule reads, once per query and only
-    /// when a shifting plan needs them (#737; [`ClosureFacts`]).
+    /// The loop-closure facts the plans read, once per query and only when a
+    /// plan needs them (#737, #736; [`ClosureFacts`]).
     closure_facts: ClosureFacts,
 }
 

@@ -366,6 +366,12 @@ impl Project {
     /// their GPS ([`FixObservation`]); with neither, `anchor_station` holds
     /// the component. `closures` may be empty: a component whose only reason
     /// to adjust is a GPS fix is solved the same way. Horizontal only.
+    ///
+    /// `closures` is every closure the solve ties as one point, in list
+    /// order: the eligible ones and the snapped ones (#736,
+    /// [`Self::closure_is_snap`]), none that the across-one-shot sweep skips.
+    /// A snap is tied exactly as a merge is: one constraint group, one edge of
+    /// the spur graph, and an attachment point for a section that is all spur.
     pub(super) fn adjust_least_squares(
         &mut self,
         component: &HashSet<SectionId>,
@@ -481,9 +487,11 @@ impl Project {
                 .copied()
                 .collect();
             // Two placement datums are in different merge components by
-            // construction, so they share a group only when a closure ties the
-            // two datum stations themselves. The group cannot sit at both raw
-            // positions; refusing leaves the component in Raw Data View.
+            // construction, so they share a group only when closures tie the
+            // two datum stations together - directly, through a chain of
+            // closures, or through a snapped closure (#736). The group cannot
+            // sit at both raw positions; refusing leaves the component in Raw
+            // Data View.
             if datum_members.len() > 1 {
                 return Err(
                     "Multiple placement zero datums in a single constraint group".to_string(),
@@ -1034,16 +1042,27 @@ impl Project {
             // For all-spur sections (no non-spur station set a delta), derive the
             // translation from the merge attachment point.  That station's group
             // is shared with a loop station, so its solved position is exact.
+            // A snapped closure attaches a section as a merge does (#736), so
+            // it is an attachment point too, after every merge.
             if delta_xy.is_none() {
-                for merge in &self.station_merges {
-                    let local_key = if merge.station_a.section_id == section.id
-                        && component.contains(&merge.station_b.section_id)
+                let snaps = closures
+                    .iter()
+                    .filter(|c| Self::closure_is_snap(c.strategy, c.is_aligned))
+                    .map(|c| (&c.station_a, &c.station_b));
+                let attachments = self
+                    .station_merges
+                    .iter()
+                    .map(|m| (&m.station_a, &m.station_b))
+                    .chain(snaps);
+                for (key_a, key_b) in attachments {
+                    let local_key = if key_a.section_id == section.id
+                        && component.contains(&key_b.section_id)
                     {
-                        &merge.station_a
-                    } else if merge.station_b.section_id == section.id
-                        && component.contains(&merge.station_a.section_id)
+                        key_a
+                    } else if key_b.section_id == section.id
+                        && component.contains(&key_a.section_id)
                     {
-                        &merge.station_b
+                        key_b
                     } else {
                         continue;
                     };

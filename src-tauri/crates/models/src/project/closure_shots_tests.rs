@@ -169,8 +169,10 @@ fn chained_closures_report_the_one_that_closes_the_shot_in_vector_order() {
 
 #[test]
 fn a_move_closure_does_not_tie_stations_for_the_solve() {
-    // A Move closure is not solved, so it puts nothing in a knot: the Batch
-    // closure from its far end to A:2 closes a real loop, not a shot.
+    // A Move closure that is not aligned (torn, here metres apart) is not a
+    // snap, so it puts nothing in a knot: the Batch closure from its far end
+    // to A:2 closes a real loop, not a shot. An aligned one does (#736,
+    // `closure_snap_tests.rs`).
     let (mut p, a, _) = issue_loop();
     let far = add(&mut p, vec![shot(180.0, 30.0)]);
     p.merge_stations(st(far, 0), st(a, 0)).unwrap();
@@ -590,9 +592,11 @@ fn a_component_whose_only_closure_spans_one_shot_solves_to_measured_without_erro
 #[test]
 fn random_closures_never_fail_the_solve_and_match_the_solve_without_the_skipped_ones() {
     // Adversarial: random chains and side passages with random Batch/LSW
-    // closures planted between random stations (no datums), so ties across one
-    // shot arise directly, through merges and through other closures. The solve
-    // must never fail, and dropping the reported closures must not change it.
+    // closures and snaps (aligned Move closures, #736, which the solve ties as
+    // one point whatever their gap as planted) between random stations (no
+    // datums), so ties across one shot arise directly, through merges and
+    // through other closures. The solve must never fail, and dropping the
+    // reported closures must not change it.
     let config = ClosureAdjustmentConfig::default();
     let mut seed: u64 = 0x0737_5eed;
     let mut next = |m: u64| -> u64 {
@@ -626,12 +630,17 @@ fn random_closures_never_fail_the_solve_and_match_the_solve_without_the_skipped_
             let x = stations[next(stations.len() as u64) as usize];
             let y = stations[next(stations.len() as u64) as usize];
             if x != y {
-                let strategy = if next(2) == 0 {
-                    ClosureStrategy::Batch
-                } else {
-                    ClosureStrategy::LeastSquaresWeighted
+                let (strategy, aligned) = match next(3) {
+                    0 => (ClosureStrategy::Batch, false),
+                    1 => (ClosureStrategy::LeastSquaresWeighted, false),
+                    _ => (ClosureStrategy::Move, true),
                 };
-                plant(&mut p, x, y, strategy);
+                let id = plant(&mut p, x, y, strategy);
+                p.loop_closures
+                    .iter_mut()
+                    .find(|lc| lc.id == id)
+                    .unwrap()
+                    .is_aligned = aligned;
             }
         }
         let skipped = p.closures_across_one_shot();
@@ -871,7 +880,8 @@ fn many_skipped_closures_between_two_big_knots_stay_cheap() {
 }
 
 /// The rule, spelled out the slow way: a plain union-find over stations; a
-/// closure is skipped when some shot of the project has one end in each of its
+/// closure the solve ties (eligible, or snapped: aligned and not eligible,
+/// #736) is skipped when some shot of the project has one end in each of its
 /// two (distinct) knots, the lowest such shot is reported, and a skipped
 /// closure unites nothing.
 fn across_one_shot_by_brute_force(p: &Project) -> Vec<ClosureAcrossOneShot> {
@@ -905,10 +915,11 @@ fn across_one_shot_by_brute_force(p: &Project) -> Vec<ClosureAcrossOneShot> {
     }
     let mut out = Vec::new();
     for lc in &p.loop_closures {
-        if !matches!(
+        let eligible = matches!(
             lc.strategy,
             ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
-        ) {
+        );
+        if !(eligible || lc.is_aligned) {
             continue;
         }
         let (Some(a), Some(b)) = (p.resolve_key(&lc.station_a), p.resolve_key(&lc.station_b))
@@ -976,12 +987,20 @@ fn the_helper_matches_a_brute_force_reference_on_random_projects() {
         let pick = |r: u64| stations[r as usize % stations.len()];
         for _ in 0..=next(8) {
             let (x, y) = (pick(next(1000)), pick(next(1000)));
-            let strategy = match next(4) {
-                0 => ClosureStrategy::Move,
-                1 => ClosureStrategy::LeastSquaresWeighted,
-                _ => ClosureStrategy::Batch,
+            let (strategy, aligned) = match next(6) {
+                0 => (ClosureStrategy::Move, false),
+                // A snap (#736), and a legacy aligned one of each kind.
+                1 => (ClosureStrategy::Move, true),
+                2 => (ClosureStrategy::ProportionalByLength, next(2) == 0),
+                3 => (ClosureStrategy::LeastSquaresWeighted, next(2) == 0),
+                _ => (ClosureStrategy::Batch, next(4) == 0),
             };
-            plant(&mut p, x, y, strategy);
+            let id = plant(&mut p, x, y, strategy);
+            p.loop_closures
+                .iter_mut()
+                .find(|lc| lc.id == id)
+                .unwrap()
+                .is_aligned = aligned;
         }
         let expected = across_one_shot_by_brute_force(&p);
         assert_eq!(p.closures_across_one_shot(), expected);

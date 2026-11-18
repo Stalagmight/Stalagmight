@@ -42,6 +42,7 @@ mod adjustment_report;
 mod classify;
 mod closure_dedupe;
 mod closure_shots;
+mod combine_alignment;
 mod combine_candidate;
 mod combine_plan;
 mod combine_sections;
@@ -82,6 +83,14 @@ mod closure_shots_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point, and the sweep prints \
+              what it covered"
+)]
+mod closure_snap_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod closure_sweep_tests;
@@ -116,6 +125,13 @@ mod combine_dedupe_tests;
               planted exactly is compared exactly"
 )]
 mod combine_hand_move_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_realign_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

@@ -13,24 +13,29 @@
 //!
 //! Why an eligible one wins: the plan's model of the joined survey
 //! (`joined_sweep`, which the anchor rule and the across-one-shot removal
-//! read) sweeps every closure before this dedupe, eligible ones only, in
-//! vector order. Keeping the first one instead dropped, whenever an ineligible
+//! read) sweeps every closure before this dedupe, the ones the solve ties
+//! only, in vector order, and only an eligible one gives the survey something
+//! to solve. Keeping the first one instead dropped, whenever an ineligible
 //! closure came first, the only closure the solve would have joined there:
 //! the plan moved a side for a solved survey that the Closures Computed View
 //! then showed unadjusted.
 //!
 //! With this rule the stations the solve joins are the same with or without
 //! the dropped closures, so the plan's model holds after the dedupe too: a
-//! dropped ineligible closure never takes part in the solve, and a dropped
-//! eligible one comes after an eligible closure on the same two stations,
-//! which either joined them already (the later one changes nothing) or
-//! collapsed a shot between their two groups, in which case the later one
-//! collapses one too or finds them joined by something in between - it never
-//! joins anything itself. Connectivity and the held gauges see the same pair
-//! either way. What goes with a dropped snapped (aligned) closure is its
-//! rigidity and its depth co-location, which the plan never models after the
-//! join: its two stations stay on one point horizontally, but each reads its
-//! own depth from then on.
+//! dropped ineligible closure that is not a snap never takes part in the
+//! solve, and a dropped eligible one comes after an eligible closure on the
+//! same two stations, which either joined them already (the later one changes
+//! nothing) or collapsed a shot between their two groups, in which case the
+//! later one collapses one too or finds them joined by something in between -
+//! it never joins anything itself. A snap (an aligned closure the solve ties
+//! as one point, #736) dropped for an EARLIER eligible one is the same later
+//! duplicate; one dropped for a LATER eligible one would have joined the pair
+//! where it stands, so the plan's model leaves it out where it stands and
+//! lets that later closure join the pair (`Project::joined_sweep`).
+//! Connectivity and the held gauges see the same pair either way. What goes
+//! with a dropped snapped (aligned) closure is its rigidity and its depth
+//! co-location, which the plan never models after the join: its two stations
+//! stay on one point horizontally, but each reads its own depth from then on.
 //!
 //! A closure dropped for one the solve takes while it is not one itself
 //! changes something the user can see (a legacy closure the view ignored, a
@@ -239,8 +244,13 @@ impl Project {
                 };
                 let (by_station_a, by_station_b, by_kind) = match model.get(stays)? {
                     (_, Origin::Merge(tie)) => (tie.a, tie.b, CombineRemovedKind::Merge),
-                    (_, Origin::Closure(by, true)) => {
+                    // A tie the combine tears: a snap, or a torn snap it
+                    // re-closes (#736).
+                    (_, Origin::Closure(by, true)) if by.aligned => {
                         (by.a, by.b, CombineRemovedKind::SnappedClosure)
+                    }
+                    (_, Origin::Closure(by, true)) => {
+                        (by.a, by.b, CombineRemovedKind::FormerSnappedClosure)
                     }
                     (_, Origin::Closure(by, false)) => {
                         (by.a, by.b, CombineRemovedKind::LoopClosure)
@@ -275,12 +285,14 @@ impl Project {
     /// Name what [`Self::dedupe_closures_in`] replaced as the plan does
     /// ([`Self::closures_replaced`]): each closure by its stations before the
     /// combine (`before`, by id), the replacing one by the tie it came from
-    /// when the combine tore one into it (`torn_into`), else by its own
-    /// stations before, as a loop closure already there.
+    /// when the combine tore one into it (`torn_into`, a torn snap of
+    /// `former` named as such, #736), else by its own stations before, as a
+    /// loop closure already there.
     pub(super) fn name_replaced(
         replaced: &[(LoopClosure, LoopClosure)],
         before: &HashMap<u64, (StationRef, StationRef)>,
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineReplacedClosure> {
         replaced
             .iter()
@@ -288,11 +300,7 @@ impl Project {
                 let &(station_a, station_b) = before.get(&gone.id)?;
                 let (by_station_a, by_station_b, by_kind) = if let Some(tie) = torn_into.get(&by.id)
                 {
-                    let kind = match tie.id {
-                        TieId::Merge(_) => CombineRemovedKind::Merge,
-                        TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
-                    };
-                    (tie.a, tie.b, kind)
+                    (tie.a, tie.b, tie.removed_kind(former))
                 } else {
                     let &(a, b) = before.get(&by.id)?;
                     (a, b, CombineRemovedKind::LoopClosure)

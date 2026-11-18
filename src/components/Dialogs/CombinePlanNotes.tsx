@@ -6,6 +6,7 @@ import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePlan } from '../../types/ipc/CombinePlan';
 import type { CombineRemovedKind } from '../../types/ipc/CombineRemovedKind';
 import type { CombineReplacedKind } from '../../types/ipc/CombineReplacedKind';
+import type { TornTieKind } from '../../types/ipc/TornTieKind';
 import type { SectionId, StationRef } from '../../types/project';
 import { formatLength } from '../../utils/formatStats';
 import {
@@ -55,6 +56,10 @@ export function CombinePlanNotes({
   const { t } = useTranslation();
   const distance = (m: number) => formatLength(m, lengthUnit, 2);
   const listNames = (ids: SectionId[]) => ids.map(sectionName).join(', ');
+  // The section whose join station the joined station keeps as shown: the
+  // fixed side's, so the kept one unless the kept side moves.
+  const otherId = candidate.section_a === keptId ? candidate.section_b : candidate.section_a;
+  const fixedId = plan.moving_section === keptId ? otherId : keptId;
   const notes: Array<{ key: string; text: string }> = [];
 
   // A move within the side-by-side tolerance (#740) is planned exactly but
@@ -184,14 +189,16 @@ export function CombinePlanNotes({
             <ul className="list-[circle] pl-5 mt-1 space-y-0.5">
               {plan.torn_ties.map((tie) => {
                 const id = tieId(tie.station_a, tie.station_b);
-                const key = tie.kind === 'merge' ? 'tornMerge' : 'tornSnapped';
                 // The datum side is the end that does not move with the moving section.
                 const held = [tie.station_a, tie.station_b].find(
                   (s) => !plan.moved_sections.includes(s.section_id)
                 );
                 return (
                   <li key={id} data-testid={`combine-torn-tie-${id}`}>
-                    <Trans i18nKey={`dialogs.combineSections.${key}`} components={ends(tie.station_a, tie.station_b)} />
+                    <Trans
+                      i18nKey={`dialogs.combineSections.${TORN_KEY[tie.kind]}`}
+                      components={ends(tie.station_a, tie.station_b)}
+                    />
                     {tie.reason === 'zero_datum' && held && (
                       <>
                         {/* The tie, then the held section as its own sentence. */}
@@ -199,6 +206,17 @@ export function CombinePlanNotes({
                         <Trans
                           i18nKey="dialogs.combineSections.tornHeld"
                           components={{ held: <SectionPill id={held.section_id} name={sectionName(held.section_id)} /> }}
+                        />
+                      </>
+                    )}
+                    {tie.reason === 'joined_station_moves' && (
+                      <>
+                        {/* The joined station keeps the fixed side's position as shown (#736). */}
+                        {'. '}
+                        <Trans
+                          i18nKey="dialogs.combineSections.tornJoinedStation"
+                          values={{ distance: distance(SNAP_ALIGNMENT_M) }}
+                          components={{ fixed: <SectionPill id={fixedId} name={sectionName(fixedId)} /> }}
                         />
                       </>
                     )}
@@ -268,10 +286,25 @@ export function CombinePlanNotes({
   );
 }
 
+/** The dialog line for each kind of tie that becomes a loop closure. */
+const TORN_KEY: Record<TornTieKind, string> = {
+  merge: 'tornMerge',
+  snapped_closure: 'tornSnapped',
+  former_snapped_closure: 'tornFormerSnap',
+};
+
+/**
+ * How close a snapped closure's two stations must be for it to stay snapped
+ * (`Project::MERGE_ALIGNMENT_INVARIANT_M`): the distance a pair the joined
+ * station takes apart ends up past (#736).
+ */
+const SNAP_ALIGNMENT_M = 0.01;
+
 /** The dialog line for each kind of tie the combine removes (#746). */
 const REMOVED_KEY: Record<CombineRemovedKind, string> = {
   merge: 'removedMerge',
   snapped_closure: 'removedSnapped',
+  former_snapped_closure: 'removedFormerSnap',
   loop_closure: 'removedClosure',
 };
 
@@ -286,6 +319,7 @@ const REPLACED_KEY: Record<CombineReplacedKind, string> = {
 const REPLACED_BY_KEY: Record<CombineRemovedKind, string> = {
   merge: 'replacedByMerge',
   snapped_closure: 'replacedBySnapped',
+  former_snapped_closure: 'replacedByFormerSnap',
   loop_closure: 'replacedByClosure',
 };
 
