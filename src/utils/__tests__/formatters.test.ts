@@ -1,73 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../formatters';
+import { SHOT_ARROW, displayStationName, formatShotLabel, formatStationLabel } from '../formatters';
 
-describe('formatShotId', () => {
-  it('formats line and shot position', () => {
-    expect(formatShotId(5, 3)).toBe('5:3');
+describe('formatStationLabel', () => {
+  it('is the station name alone without line context', () => {
+    expect(formatStationLabel('17')).toBe('17');
+    expect(formatStationLabel('4a', null)).toBe('4a');
+    expect(formatStationLabel('0', '')).toBe('0');
   });
 
-  it('formats first shot in first line', () => {
-    expect(formatShotId(1, 1)).toBe('1:1');
+  it('prefixes the line name with a slash', () => {
+    expect(formatStationLabel('17', 'Main Line')).toBe('Main Line / 17');
   });
 
-  it('formats larger numbers', () => {
-    expect(formatShotId(123, 456)).toBe('123:456');
+  it('never shows a positional line:index handle', () => {
+    expect(formatStationLabel('3', 'Side')).not.toMatch(/\d+:\d+/);
   });
 
-  it('handles single digit values', () => {
-    expect(formatShotId(1, 2)).toBe('1:2');
-    expect(formatShotId(9, 9)).toBe('9:9');
-  });
-
-  it('formats zero values (edge case, though typically 1-indexed)', () => {
-    expect(formatShotId(0, 0)).toBe('0:0');
+  it('cannot reorder or disguise the label with bidi or control characters', () => {
+    expect(formatStationLabel('\u202e9\u202c', 'Main\u2067')).toBe('Main / 9');
+    expect(formatStationLabel('1\n2')).toBe('12');
   });
 });
 
-describe('formatStationId', () => {
-  it('formats line and station index', () => {
-    expect(formatStationId(5, 3)).toBe('5:3');
+describe('formatShotLabel', () => {
+  it('joins the two station names with the arrow', () => {
+    expect(SHOT_ARROW).toBe('\u2192');
+    expect(formatShotLabel('4', '5')).toBe('4 \u2192 5');
   });
 
-  it('formats first station in first line (0-indexed)', () => {
-    expect(formatStationId(1, 0)).toBe('1:0');
+  it('prefixes the line name with a colon', () => {
+    expect(formatShotLabel('4', '5', 'Main Line')).toBe('Main Line: 4 \u2192 5');
   });
 
-  it('formats larger numbers', () => {
-    expect(formatStationId(123, 456)).toBe('123:456');
+  it('keeps lettered and prefixed names', () => {
+    expect(formatShotLabel('A3', '2a', 'Side')).toBe('Side: A3 \u2192 2a');
   });
 
-  it('handles single digit values', () => {
-    expect(formatStationId(1, 2)).toBe('1:2');
-    expect(formatStationId(9, 9)).toBe('9:9');
-  });
-
-  it('handles zero values', () => {
-    expect(formatStationId(0, 0)).toBe('0:0');
-  });
-});
-
-describe('formatStationIdWithName', () => {
-  it('appends the name beside the positional id', () => {
-    expect(formatStationIdWithName(5, 3, '17')).toBe('5:3 · 17');
-  });
-
-  it('is the plain id for a station without a name', () => {
-    expect(formatStationIdWithName(5, 3)).toBe('5:3');
-    expect(formatStationIdWithName(5, 3, null)).toBe('5:3');
-    expect(formatStationIdWithName(5, 3, '')).toBe('5:3');
-  });
-
-  it('keeps a name of 0 (an MNemo line start)', () => {
-    expect(formatStationIdWithName(2, 0, '0')).toBe('2:0 · 0');
-  });
-
-  it('cannot reorder or disguise the id with bidi or control characters', () => {
-    // A right-to-left override followed by a fake id, from a hostile file.
-    expect(formatStationIdWithName(5, 3, '\u202e9:9\u202c')).toBe('5:3 · 9:9');
-    expect(formatStationIdWithName(5, 3, '1\n2\u2067\u200f')).toBe('5:3 · 12');
-    // A name of nothing but control characters shows as no name.
-    expect(formatStationIdWithName(5, 3, '\u202e\u0007')).toBe('5:3');
+  it('sanitizes both station names and the line name', () => {
+    expect(formatShotLabel('\u202e4', '5\u0007', '\u200fLine')).toBe('Line: 4 \u2192 5');
   });
 });
 

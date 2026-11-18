@@ -4103,5 +4103,13 @@
       "hint": "Enter to save, Esc to cancel",
       "done": "Done"
     }
+  },
+  "identity": {
+    "lineNameEmpty": "A line needs a name.",
+    "lineNameTaken": "A line named \"{{name}}\" already exists. Line names must be unique in the project.",
+    "stationNameEmpty": "A station needs a name.",
+    "stationNameTaken": "{{line}} already has a station named \"{{name}}\". Station names must be unique within their line.",
+    "stationId": "Station ID",
+    "stationName": "Name"
   }
 }
