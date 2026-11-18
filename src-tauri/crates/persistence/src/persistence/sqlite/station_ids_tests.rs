@@ -245,3 +245,125 @@ fn ids_leave_every_table_an_outside_reader_reads_unchanged() {
     assert_eq!(dump(numbered, "station_ids", &[]).len(), 6);
     assert!(dump(plain, "station_ids", &[]).is_empty());
 }
+
+/// `page number -> owning table or index`, from SQLite's `dbstat`.
+fn page_owners(db: &Database) -> BTreeMap<i64, String> {
+    let mut stmt = db.conn.prepare("SELECT pageno, name FROM dbstat").unwrap();
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// The station side tables are filled from `HashMap`s, whose order changes on
+/// every open, and so were their rows, rowids and page splits: an unchanged
+/// project saved, opened and saved again gave a different file. Only
+/// `sections` may differ now (it stamps each line's `created_at` with the
+/// time of the save); every other page of the two files is the same.
+#[test]
+fn a_resave_with_no_edit_writes_the_same_pages() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Order".to_string(), None);
+    for line in 0..12_u32 {
+        project.add_line(LineData {
+            name: Some(format!("L{line}")),
+            shots: (0..8_u32)
+                .map(|i| ShotData {
+                    length: f64::from(i) + 3.0,
+                    azimuth_in: 45.0,
+                    azimuth_out: 45.0,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+    }
+    project.ensure_station_identities();
+    let line_ids: Vec<u32> = project.lines.iter().map(|line| line.id).collect();
+    for line_id in line_ids {
+        project
+            .line_offsets
+            .insert(line_id, (f64::from(line_id), -1.0));
+        for index in (0..=8_u32).step_by(2) {
+            let key = project
+                .key_for_ref(StationRef::new(line_id, index))
+                .unwrap();
+            project
+                .station_comments
+                .insert(key.clone(), format!("c{line_id}-{index}"));
+            project
+                .station_offsets
+                .insert(key, (f64::from(index), 1.0, -1.0));
+        }
+    }
+
+    let first = dir.path().join("first.stalx");
+    Database::open(&first)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    let reopened = Database::open_existing(&first)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let second = dir.path().join("second.stalx");
+    Database::open(&second)
+        .unwrap()
+        .save_project(&reopened)
+        .unwrap();
+
+    let (a, b) = (
+        Database::open_readonly(&first).unwrap(),
+        Database::open_readonly(&second).unwrap(),
+    );
+    // `(table, rows, key columns)`: the station tables are keyed by line and
+    // station index, `section_offsets` by line alone.
+    for (table, count, key_columns) in [
+        ("station_ids", 108, 2),
+        ("station_names", 108, 2),
+        ("station_comments", 60, 2),
+        ("station_offsets", 60, 2),
+        ("section_offsets", 12, 1),
+    ] {
+        let rows = dump(&a, table, &[]);
+        assert_eq!(rows.len(), count, "{table}");
+        let positions: Vec<Vec<u32>> = rows
+            .iter()
+            .map(|row| {
+                row[..key_columns]
+                    .iter()
+                    .map(|v| v.parse().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert!(
+            positions.is_sorted(),
+            "{table} rows are not in station order"
+        );
+    }
+
+    let owners = page_owners(&a);
+    assert_eq!(owners, page_owners(&b), "the two files lay out differently");
+    let (bytes_a, bytes_b) = (
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap(),
+    );
+    let page_size: i64 = a
+        .conn
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let page = |bytes: &[u8], number: i64| -> Vec<u8> {
+        let start = usize::try_from((number - 1) * page_size).unwrap();
+        bytes[start..start + usize::try_from(page_size).unwrap()].to_vec()
+    };
+    let changed: Vec<&str> = owners
+        .iter()
+        .filter(|(_, owner)| owner.as_str() != "sections")
+        .filter(|(&number, _)| page(&bytes_a, number) != page(&bytes_b, number))
+        .map(|(_, owner)| owner.as_str())
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "pages changed on a re-save: {changed:?}"
+    );
+}

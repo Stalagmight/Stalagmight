@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::models::Project;
+use crate::models::{LineId, Project, StationKey};
 
 use super::cave_sections::write_cave_sections;
 use super::datum_extras::{write_zero_datums, CREATE_DATUM_EXTRAS, RECREATE_DATUM_EXTRAS};
@@ -243,8 +245,12 @@ impl Database {
         // whose written uuids the extras record.
         write_zero_datums(&tx, project)?;
 
-        // Save line offsets
-        for (line_id, (offset_x, offset_y)) in &project.line_offsets {
+        // Save line offsets, in line order: `section_offsets` is keyed by its
+        // rowid, but rows inserted in map order still split its pages
+        // differently on every save (see `station_rows`).
+        let mut line_offsets: Vec<_> = project.line_offsets.iter().collect();
+        line_offsets.sort_unstable_by_key(|&(line_id, _)| *line_id);
+        for (line_id, (offset_x, offset_y)) in line_offsets {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
                 params![line_id, offset_x, offset_y],
@@ -252,17 +258,16 @@ impl Database {
         }
 
         // Save station offsets
-        for (key, (offset_x, offset_y, offset_z)) in &project.station_offsets {
-            let Some(sr) = project.resolve_key(key) else {
-                tracing::warn!(
-                    purpose = "skip orphan station offset on save",
-                    "Dropping a station offset whose station no longer resolves"
-                );
-                continue;
-            };
+        let offsets = station_rows(project, &project.station_offsets, || {
+            tracing::warn!(
+                purpose = "skip orphan station offset on save",
+                "Dropping a station offset whose station no longer resolves"
+            );
+        });
+        for (line_id, station_index, (offset_x, offset_y, offset_z)) in offsets {
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![sr.line_id, sr.station_index, offset_x, offset_y, offset_z],
+                params![line_id, station_index, offset_x, offset_y, offset_z],
             )?;
         }
 
@@ -272,16 +277,15 @@ impl Database {
             (StationTextTable::Names, &project.station_names),
         ] {
             let mut insert = tx.prepare_cached(table.insert_sql())?;
-            for (key, text) in texts {
-                let Some(sr) = project.resolve_key(key) else {
-                    tracing::warn!(
-                        purpose = "skip orphan station text on save",
-                        table = table.name(),
-                        "Dropping a station comment or name whose station no longer resolves"
-                    );
-                    continue;
-                };
-                insert.execute(params![sr.line_id, sr.station_index, text])?;
+            let rows = station_rows(project, texts, || {
+                tracing::warn!(
+                    purpose = "skip orphan station text on save",
+                    table = table.name(),
+                    "Dropping a station comment or name whose station no longer resolves"
+                );
+            });
+            for (line_id, station_index, text) in rows {
+                insert.execute(params![line_id, station_index, text])?;
             }
         }
         // Save station ids and the allocation counter.
@@ -488,4 +492,31 @@ impl Database {
 
         Ok(())
     }
+}
+
+/// The rows of a station-keyed side table (`station_offsets`,
+/// `station_comments`, `station_names`, `station_ids`), sorted by line id and
+/// then station index. The maps are `HashMap`s, whose order changes from one
+/// open to the next, and the order rows are inserted in decides the table's
+/// rowids and how its pages and its key index split. Written in map order, an
+/// unchanged project gave a different file on every save, which costs a full
+/// upload's worth of changed pages in a SpeleoDB push. A key that no longer
+/// resolves is skipped, and `orphan` is called once for it.
+pub(super) fn station_rows<'a, V>(
+    project: &Project,
+    map: &'a HashMap<StationKey, V>,
+    mut orphan: impl FnMut(),
+) -> Vec<(LineId, u32, &'a V)> {
+    let mut rows: Vec<_> = map
+        .iter()
+        .filter_map(|(key, value)| {
+            let resolved = project.resolve_key(key);
+            if resolved.is_none() {
+                orphan();
+            }
+            resolved.map(|sr| (sr.line_id, sr.station_index, value))
+        })
+        .collect();
+    rows.sort_unstable_by_key(|&(line_id, station_index, _)| (line_id, station_index));
+    rows
 }

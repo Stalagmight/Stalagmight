@@ -27,6 +27,7 @@ use rusqlite::{params, Connection, Transaction};
 use crate::models::{Project, StationId, StationKey};
 
 use super::shot_credits::{extended_code, is_schema_error};
+use super::write::station_rows;
 
 const TABLE: &str = "station_ids";
 
@@ -42,22 +43,21 @@ pub(super) const CREATE_STATION_IDS: &str = "CREATE TABLE IF NOT EXISTS station_
                 PRIMARY KEY (section_id, station_index)
             )";
 
-/// Write every station's id (orphans skipped, as for the station texts) and
-/// the counter. The caller has emptied the table.
+/// Write every station's id (orphans skipped, as for the station texts) in
+/// station order, and the counter. The caller has emptied the table.
 pub(super) fn write_station_ids(tx: &Transaction<'_>, project: &Project) -> Result<()> {
     let mut insert = tx.prepare_cached(
         "INSERT OR REPLACE INTO station_ids (section_id, station_index, station_id) \
          VALUES (?1, ?2, ?3)",
     )?;
-    for (key, id) in &project.station_ids {
-        let Some(sr) = project.resolve_key(key) else {
-            tracing::warn!(
-                purpose = "skip orphan station id on save",
-                "Dropping a Station ID whose station no longer resolves"
-            );
-            continue;
-        };
-        insert.execute(params![sr.line_id, sr.station_index, id])?;
+    let rows = station_rows(project, &project.station_ids, || {
+        tracing::warn!(
+            purpose = "skip orphan station id on save",
+            "Dropping a Station ID whose station no longer resolves"
+        );
+    });
+    for (line_id, station_index, id) in rows {
+        insert.execute(params![line_id, station_index, id])?;
     }
     tx.execute(
         "INSERT OR REPLACE INTO project_settings (key, value) VALUES (?1, ?2)",
