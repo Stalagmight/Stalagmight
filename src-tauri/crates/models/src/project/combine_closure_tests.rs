@@ -3252,7 +3252,30 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
             check_combined(&project, &after, &c, k, op, &[]);
             replay.replaced.extend(outcome.replaced);
             replay.plans.push(plan.clone());
-            settle_like_the_epilogue(&mut after);
+            if verbose {
+                let flags: Vec<(u64, bool)> = after
+                    .loop_closures
+                    .iter()
+                    .map(|c| (c.id, c.is_aligned))
+                    .collect();
+                settle_like_the_epilogue(&mut after);
+                for c in &after.loop_closures {
+                    if let Some(&(_, was)) = flags.iter().find(|(id, _)| *id == c.id) {
+                        if was != c.is_aligned {
+                            eprintln!(
+                                "  the epilogue re-measures closure {} ({:?}-{:?}, {:?}) to aligned={}",
+                                c.id,
+                                after.resolve_key(&c.station_a),
+                                after.resolve_key(&c.station_b),
+                                c.strategy,
+                                c.is_aligned
+                            );
+                        }
+                    }
+                }
+            } else {
+                settle_like_the_epilogue(&mut after);
+            }
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
@@ -3269,8 +3292,10 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
                 .split_section_at_station(id, at.parse().unwrap(), &opts)
                 .unwrap();
             project.convert_orphan_closures_to_merges();
+            settle_like_the_epilogue(&mut project);
         } else if let Some(rest) = op.strip_prefix("reverse(") {
             project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
+            settle_like_the_epilogue(&mut project);
         }
     }
     replay
