@@ -5,7 +5,7 @@ import type React from 'react';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
- *  buttons (station/shot/section) below. */
+ *  buttons (station/shot/line) below. */
 export function CenterLocateIcon() {
   return (
     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">

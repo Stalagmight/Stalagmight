@@ -45,8 +45,8 @@ const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<ty
 const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
   source_format: 'Ariane TML',
   file_name: 'cave.tml',
-  sections_found: 2,
-  sections_imported: 2,
+  lines_found: 2,
+  lines_imported: 2,
   shot_count: 40,
   closures_requested: 0,
   closures_created: 0,
@@ -240,7 +240,7 @@ describe('deferredSaveWarnings (#110)', () => {
     // ALSO carries routine validation warnings must not be treated as a save
     // failure.
     const result = deferredSaveWarnings([
-      w('LONG_SHOT', 'Shot 3:5 length above threshold'),
+      w('LONG_SHOT', 'Shot Main: 4 \u2192 5 length above threshold'),
       w('SYSTEM', 'Imported, but could not save … please save manually.'),
       w('AZIMUTH_DEVIATION'),
     ]);
@@ -284,14 +284,14 @@ describe('finalizeDeferredSaveWarnings (#110)', () => {
       [val('LONG_SHOT'), sys(saveMsg)],
       'tml-import',
       ui,
-      receiptFixture(['2 zero-shot sections were skipped']),
+      receiptFixture(['2 zero-shot lines were skipped']),
     );
 
     expect(handled).toBe(true);
     expect(ui.closeDialog).toHaveBeenCalled();
     expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
       receipt: expect.objectContaining({
-        warnings: [saveMsg, '2 zero-shot sections were skipped'],
+        warnings: [saveMsg, '2 zero-shot lines were skipped'],
       }),
     });
   });
@@ -324,17 +324,17 @@ describe('presentImportReceipt (#411/#420)', () => {
   it('keeps the modal for a receipt with even one warning, never toasts', () => {
     const ui = mockUi();
 
-    presentImportReceipt(receiptFixture(['2 zero-shot sections were skipped']), ui);
+    presentImportReceipt(receiptFixture(['2 zero-shot lines were skipped']), ui);
 
     expect(ui.showToast).not.toHaveBeenCalled();
     expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
-      receipt: expect.objectContaining({ warnings: ['2 zero-shot sections were skipped'] }),
+      receipt: expect.objectContaining({ warnings: ['2 zero-shot lines were skipped'] }),
     });
   });
 
   it('keeps the modal for a zero-count receipt even with no warnings (#442)', () => {
     const ui = mockUi();
-    const empty: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 0 };
+    const empty: ImportReceipt = { ...receiptFixture(), lines_imported: 0, shot_count: 0 };
 
     presentImportReceipt(empty, ui);
 
@@ -342,15 +342,15 @@ describe('presentImportReceipt (#411/#420)', () => {
     expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty });
   });
 
-  it('keeps the modal when sections_imported is zero even if shot_count disagrees (#442)', () => {
-    // shot_count is summed from the sections the import ATTEMPTED
-    // (command_import.rs), sections_imported from what actually landed - they
+  it('keeps the modal when lines_imported is zero even if shot_count disagrees (#442)', () => {
+    // shot_count is summed from the lines the import ATTEMPTED
+    // (command_import.rs), lines_imported from what actually landed - they
     // only agree today because the import loop is all-or-nothing. Pin the
-    // guard on sections_imported alone so a future partial-drop path can't
+    // guard on lines_imported alone so a future partial-drop path can't
     // slip a "nothing landed" receipt through as a toast just because
     // shot_count is stale/nonzero.
     const ui = mockUi();
-    const disagreeing: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 40 };
+    const disagreeing: ImportReceipt = { ...receiptFixture(), lines_imported: 0, shot_count: 40 };
 
     presentImportReceipt(disagreeing, ui);
 
@@ -401,7 +401,7 @@ describe('presentImportReceipt (#411/#420)', () => {
     // form is driven by `unanchoredCount` (item 5).
     const withInfo: ImportReceiptWithUnanchoredCount = {
       ...receiptFixture(),
-      info: ['1 section is not connected to a zero datum'],
+      info: ['1 line is not connected to a zero datum'],
       unanchoredCount: 1,
     };
 
@@ -415,26 +415,26 @@ describe('presentImportReceipt (#411/#420)', () => {
     const ui = mockUi();
     const withInfo: ImportReceiptWithUnanchoredCount = {
       ...receiptFixture(),
-      info: ['3 sections are not connected to a zero datum'],
+      info: ['3 lines are not connected to a zero datum'],
       unanchoredCount: 3,
     };
 
     presentImportReceipt(withInfo, ui);
 
     const [message] = ui.showToast.mock.calls[0] as [string, string, string];
-    expect(message).toContain('3 sections unanchored');
-    expect(message).not.toContain('3 sections are not connected to a zero datum');
+    expect(message).toContain('3 lines unanchored');
+    expect(message).not.toContain('3 lines are not connected to a zero datum');
   });
 
   it('the modal path (ImportReceiptDialog via importReceiptSummaryParts) still gets the full sentence', () => {
     const withInfo: ImportReceipt = {
       ...receiptFixture(['triggers the modal']),
-      info: ['3 sections are not connected to a zero datum'],
+      info: ['3 lines are not connected to a zero datum'],
     };
 
     const parts = importReceiptSummaryParts(withInfo, i18n.t);
 
-    expect(parts).toContain('3 sections are not connected to a zero datum');
+    expect(parts).toContain('3 lines are not connected to a zero datum');
   });
 });
 
@@ -450,13 +450,13 @@ describe('finishImportWithoutOrphanSuggestions (#446)', () => {
     await finishImportWithoutOrphanSuggestions('tml-import', ui, [1, 2], receiptFixture());
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
-      'count_unanchored_sections',
-      { newlyImportedSectionIds: [1, 2] },
+      'count_unanchored_lines',
+      { newlyImportedLineIds: [1, 2] },
       expect.anything(),
     );
     expect(ui.showToast).toHaveBeenCalledTimes(1);
     const [message] = ui.showToast.mock.calls[0] as [string, string, string];
-    expect(message).toContain('2 sections unanchored');
+    expect(message).toContain('2 lines unanchored');
   });
 
   it('leaves the receipt untouched when the count is 0', async () => {
@@ -537,7 +537,7 @@ describe('finishImportWithoutOrphanSuggestions (#446)', () => {
       'import-receipt',
       expect.objectContaining({
         receipt: expect.objectContaining({
-          info: ['1 section is not connected to a zero datum'],
+          info: ['1 line is not connected to a zero datum'],
         }),
       }),
     );

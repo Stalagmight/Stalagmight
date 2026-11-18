@@ -21,7 +21,7 @@ function fakeCtx(seed: number): ScenarioContext {
   } as unknown as ScenarioContext;
 }
 
-/** Two sections, enough stations for a cross-section pair. */
+/** Two lines, enough stations for a cross-line pair. */
 const digest: TargetingDigest = {
   s: [
     [1, [100000, 100001, 100002]],
@@ -46,9 +46,9 @@ describe('buildBatch', () => {
     const known = new Set([
       'update_shot',
       'move_station',
-      'move_section',
-      'reverse_section',
-      'create_section',
+      'move_line',
+      'reverse_line',
+      'create_line',
       'merge_stations',
     ]);
 
@@ -58,7 +58,7 @@ describe('buildBatch', () => {
       expect(batch.commands.length).toBeGreaterThanOrEqual(1);
       for (const command of batch.commands) {
         expect(typeof command.type).toBe('string');
-        // The poison entry is a move_section, which is in the union too.
+        // The poison entry is a move_line, which is in the union too.
         expect(known.has(String(command.type))).toBe(true);
       }
       // Every command must survive the JSON round trip WebDriver performs.
@@ -73,8 +73,8 @@ describe('buildBatch', () => {
       if (batch?.label.endsWith('POISON')) {
         poisoned += 1;
         const last = batch.commands[batch.commands.length - 1];
-        expect(last?.type).toBe('move_section');
-        expect(last?.section_id).toBe(999999);
+        expect(last?.type).toBe('move_line');
+        expect(last?.line_id).toBe(999999);
       }
     }
 
@@ -84,7 +84,7 @@ describe('buildBatch', () => {
   it('returns null rather than an empty batch when nothing can be targeted', () => {
     const empty: TargetingDigest = { s: [], st: [], m: [], z: [], c: [] };
 
-    // No sections and no stations: every sub-command generator declines.
+    // No lines and no stations: every sub-command generator declines.
     for (let seed = 1; seed <= 10; seed++) {
       const batch = buildBatch(fakeCtx(seed), empty);
       if (batch) expect(batch.commands.length).toBeGreaterThan(0);
@@ -113,7 +113,7 @@ describe('swarm profiles', () => {
     const names = weightedNamesFor(profile);
     const count = (name: string): number => names.filter((entry) => entry === name).length;
 
-    expect(count('deleteShot')).toBeGreaterThan(count('deleteSection'));
+    expect(count('deleteShot')).toBeGreaterThan(count('deleteLine'));
     // Every generator stays reachable whatever the profile.
     expect(count('mergeStations')).toBeGreaterThan(0);
     expect(count('updateShot')).toBeGreaterThan(0);
@@ -121,7 +121,7 @@ describe('swarm profiles', () => {
 
   it('includes the v2 generators only on the v2 stream', () => {
     const names = weightedNamesFor(swarmProfileFor(1));
-    const v2Only = ['executeBatch', 'splitShotAtDistance', 'moveComment', 'importSections'];
+    const v2Only = ['executeBatch', 'splitShotAtDistance', 'moveComment', 'importLines'];
 
     for (const name of v2Only) {
       expect(names.includes(name)).toBe(streamV2());

@@ -29,9 +29,9 @@ export function visitColorPatch(s: UIStore, mode: ColorMode): Patch {
   };
 }
 
-/** Toggle one colour mode during a visit (on, or back to Section). */
+/** Toggle one colour mode during a visit (on, or back to Line). */
 export function visitToggleColorPatch(s: UIStore, mode: ColorMode): Patch {
-  return visitColorPatch(s, selectEffectiveColorMode(s) === mode ? 'section' : mode);
+  return visitColorPatch(s, selectEffectiveColorMode(s) === mode ? 'line' : mode);
 }
 
 /** Flip the Errors labels during a visit. */

@@ -43,7 +43,7 @@ function MoveDeco() {
  * ([`MoveDeco`]'s compass arms) without colliding
  * with it. The standalone [`ENTITY_GLYPHS`] fill the whole 24x24 box and would.
  *
- * A section is a plain polyline; a segment is a BRANCHING run of shots, so it
+ * A line is a plain polyline; a segment is a BRANCHING run of shots, so it
  * adds the fork (extra path + node) - the one visual difference between them.
  */
 const INNER_GLYPHS: Record<BlobEntity, () => ReactNode> = {
@@ -55,7 +55,7 @@ const INNER_GLYPHS: Record<BlobEntity, () => ReactNode> = {
       <Station cx={15.5} cy={8.5} r={1.9} />
     </g>
   ),
-  section: () => (
+  line: () => (
     <g>
       <path className="s" d="M7.5 15.5 L11 11 L14 13.5 L16.5 9.5" />
       <circle className="d" cx="7.5" cy="15.5" r="1.3" />
@@ -217,7 +217,7 @@ export function ToolGlyph({ tool, size = 20 }: ToolGlyphProps) {
 /**
  * Standalone object glyphs for each geometry entity (no action modifier), used
  * to mark entity hyperlinks. Same duotone language as the toolbar icons: the
- * object color (segment > section > shot > station) plus comment.
+ * object color (segment > line > shot > station) plus comment.
  */
 const ENTITY_GLYPHS: Record<BlobEntity, () => ReactNode> = {
   station: () => <Station cx={12} cy={12} r={5.5} />,
@@ -228,7 +228,7 @@ const ENTITY_GLYPHS: Record<BlobEntity, () => ReactNode> = {
       <Station cx={17.5} cy={7} r={2.8} />
     </g>
   ),
-  section: () => (
+  line: () => (
     <g>
       <path className="s" d="M3 17.5 L8.5 8 L13.5 16 L19 8.5" />
       <circle className="d" cx="3" cy="17.5" r="1.7" />
@@ -526,7 +526,7 @@ const BADGE_POS: Record<BlobEntity, { bx: number; by: number; br: number }> = {
   station: { bx: 17.4, by: 17.4, br: 6.2 },
   shot: { bx: 17.6, by: 17.6, br: 5.9 },
   segment: { bx: 17.6, by: 17.6, br: 5.7 },
-  section: { bx: 17.6, by: 17.6, br: 5.7 },
+  line: { bx: 17.6, by: 17.6, br: 5.7 },
   comment: { bx: 17.6, by: 17.6, br: 5.7 },
 };
 
@@ -650,7 +650,7 @@ function EntityDecoSymbol({
 }
 
 /** Duotone "move/reposition <entity>" (entity color + slate move compass) - the
- * menu counterpart of the move tools, e.g. a section's "Adjust Position...". */
+ * menu counterpart of the move tools, e.g. a line's "Adjust Position...". */
 export function EntityMoveSymbol(props: EntitySymbolProps) {
   return <EntityDecoSymbol {...props} deco={<MoveDeco />} />;
 }

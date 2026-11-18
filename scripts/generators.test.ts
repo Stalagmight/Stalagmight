@@ -194,7 +194,7 @@ beforeAll(() => {
       seq: 16,
       ts: ts(17),
       tool: 'map_feature_click',
-      params: { featureType: 'shot', sectionId: 7, shotId: 42, verifySelection: true },
+      params: { featureType: 'shot', lineId: 7, shotId: 42, verifySelection: true },
       resolved: { point: { x: 888, y: 666 }, clearancePx: 12 },
       outcome: { ok: true, durationMs: 20 },
     }),
@@ -250,7 +250,7 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('999, 777');
     // Semantic feature clicks resolve the current geometry again during replay.
     expect(spec).toContain(
-      `await mapFeatureClick(browser, {"featureType":"shot","sectionId":7,"shotId":42,"verifySelection":true});`,
+      `await mapFeatureClick(browser, {"featureType":"shot","lineId":7,"shotId":42,"verifySelection":true});`,
     );
     expect(spec).not.toContain('888, 666');
     // Semantic waits remain semantic and keep their recorded arguments.
@@ -290,6 +290,34 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('os_keys (observation; not replayed)');
     expect(spec).not.toContain('toolbar-save-button"]');
     expect(spec).not.toContain('browser.keys(["cmd+s"])');
+  });
+});
+
+describe('generate-replay.mjs, traces recorded before the Section -> Line rename', () => {
+  it('replays a map_feature_click that names its line sectionId', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-legacy-'));
+    try {
+      const ts = new Date(1751970000000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'legacy', startedAt: ts }),
+        record({
+          type: 'action', v: 1, seq: 1, ts, tool: 'map_feature_click',
+          params: { featureType: 'station', sectionId: 3, stationIndex: 8 },
+          outcome: { ok: true, durationMs: 5 },
+        }),
+      ];
+      fs.writeFileSync(path.join(dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      const out = path.join(dir, 'replay.spec.ts');
+      execFileSync(process.execPath, [replayGen, dir, '--out', out], { encoding: 'utf8' });
+      const spec = fs.readFileSync(out, 'utf8');
+      expect(spec).toContain(
+        `await mapFeatureClick(browser, {"featureType":"station","stationIndex":8,"lineId":3});`,
+      );
+      expect(spec).not.toContain('sectionId');
+      expect(spec).not.toContain('had no recorded feature identity');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -373,7 +401,7 @@ describe('generate-repro-report.mjs', () => {
         }),
         record({
           type: 'action', v: 1, seq: 5, ts: ts(5), tool: 'map_feature_click', mutating: true,
-          params: { featureType: 'shot', sectionId: 2, shotId: 17 },
+          params: { featureType: 'shot', lineId: 2, shotId: 17 },
           outcome: { ok: true, durationMs: 10 },
         }),
         // A mutation that THREW is still the step that reproduces the bug.
@@ -444,7 +472,7 @@ describe('generate-repro-report.mjs', () => {
       expect(md).toContain('open dialog answered <file.dmp>');
       expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
       expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
-      expect(md).toContain('`map_feature_click` shot id=17 in section 2');
+      expect(md).toContain('`map_feature_click` shot id=17 in line 2');
       // A failed mutation stays, flagged.
       expect(md).toContain('`hover` testid=toolbar-undo-button **(failed)**');
     });

@@ -4,11 +4,11 @@ import {
   findReverseImportConnection,
   findOverlapForStation,
   redirectDeletedTargets,
-  type SectionEditState,
+  type LineEditState,
   type ConfirmedOverlapInfo,
 } from '../batchImportHelpers';
 import type { VirtualConnection } from '../segmentContext';
-import type { CrossSectionSuggestion } from '../../types/commands';
+import type { CrossLineSuggestion } from '../../types/commands';
 
 // ─── Test data helpers ──────────────────────────────────────────────────────
 
@@ -27,8 +27,8 @@ function makeShot(id: number, overrides: Partial<{
   };
 }
 
-/** Create a minimal SectionEditState. */
-function makeEdits(shots: ReturnType<typeof makeShot>[]): SectionEditState {
+/** Create a minimal LineEditState. */
+function makeEdits(shots: ReturnType<typeof makeShot>[]): LineEditState {
   return { name: 'S', date: '', color: '', direction: 'in', quality: 1.0, reverse: false, shots };
 }
 
@@ -38,7 +38,7 @@ function importingConn(
   targetIdx: number, targetStation: number,
 ): VirtualConnection {
   return {
-    importSectionIndex: importIdx,
+    importLineIndex: importIdx,
     importStationIndex: importStation,
     targetType: 'importing',
     targetImportIndex: targetIdx,
@@ -46,10 +46,10 @@ function importingConn(
   };
 }
 
-/** Create a minimal CrossSectionSuggestion for the pool. */
-function makeSuggestion(overrides: Partial<CrossSectionSuggestion>): CrossSectionSuggestion {
+/** Create a minimal CrossLineSuggestion for the pool. */
+function makeSuggestion(overrides: Partial<CrossLineSuggestion>): CrossLineSuggestion {
   return {
-    importSectionIndex: 0,
+    importLineIndex: 0,
     importStationIndex: 0,
     existingStationIndex: 0,
     matchedShots: 3,
@@ -57,13 +57,13 @@ function makeSuggestion(overrides: Partial<CrossSectionSuggestion>): CrossSectio
     direction: 'forward',
     isPartial: false,
     confidence: 'High',
-    existingSectionName: 'target',
-    importSectionName: 'import',
+    existingLineName: 'target',
+    importLineName: 'import',
     targetType: 'importing',
-    existingSectionId: null,
+    existingLineId: null,
     targetImportIndex: null,
     ...overrides,
-  } as CrossSectionSuggestion;
+  } as CrossLineSuggestion;
 }
 
 // ─── adjustStationForDeletedShots ────────────────────────────────────────────
@@ -98,9 +98,9 @@ describe('adjustStationForDeletedShots', () => {
 // ─── findReverseImportConnection ─────────────────────────────────────────────
 
 describe('findReverseImportConnection', () => {
-  it('returns undefined when no connection targets the section', () => {
+  it('returns undefined when no connection targets the line', () => {
     const conns = [importingConn(0, 5, 1, 0)]; // 0→1
-    const emitted = new Map([[0, 0]]); // section 0 emitted
+    const emitted = new Map([[0, 0]]); // line 0 emitted
     expect(findReverseImportConnection(2, conns, emitted)).toBeUndefined();
   });
 
@@ -110,14 +110,14 @@ describe('findReverseImportConnection', () => {
     expect(findReverseImportConnection(1, conns, emitted)).toBeUndefined();
   });
 
-  it('returns a reversed connection when section is target and source is emitted', () => {
+  it('returns a reversed connection when line is target and source is emitted', () => {
     // Connection A(0)→B(1): A at station 5, B at station 0
     const conns = [importingConn(0, 5, 1, 0)];
     const emitted = new Map([[0, 0]]); // A is emitted at position 0
 
     const result = findReverseImportConnection(1, conns, emitted);
     expect(result).toBeDefined();
-    expect(result!.importSectionIndex).toBe(1);    // B becomes the import side
+    expect(result!.importLineIndex).toBe(1);    // B becomes the import side
     expect(result!.importStationIndex).toBe(0);     // B's station (was target)
     expect(result!.targetType).toBe('importing');
     expect(result!.targetImportIndex).toBe(0);      // A becomes the target
@@ -152,14 +152,14 @@ describe('findReverseImportConnection', () => {
 
   it('skips existing-type connections', () => {
     const conns: VirtualConnection[] = [{
-      importSectionIndex: 0,
+      importLineIndex: 0,
       importStationIndex: 5,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       existingStationIndex: 3,
     }];
     const emitted = new Map([[0, 0]]);
-    // Section 99 is not targetImportIndex, so no reverse
+    // Line 99 is not targetImportIndex, so no reverse
     expect(findReverseImportConnection(1, conns, emitted)).toBeUndefined();
   });
 });
@@ -178,7 +178,7 @@ describe('findOverlapForStation', () => {
       direction: 'forward',
       existingStationIndex: 5,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       targetImportIndex: null,
       mergeImportStation: 2,
     }]]);
@@ -190,7 +190,7 @@ describe('findOverlapForStation', () => {
 
   it('finds back overlap from suggestion pool', () => {
     const pool = [makeSuggestion({
-      importSectionIndex: 0,
+      importLineIndex: 0,
       importStationIndex: 10, // back-end overlap
       matchedShots: 3,
       targetType: 'importing',
@@ -223,32 +223,32 @@ describe('redirectDeletedTargets', () => {
     const conns = [conn];
 
     // B's overlap: front, 3 matched shots → mergeStation=3
-    // B is importSectionIndex, so B's overlap shots are on the import (deleted) side
+    // B is importLineIndex, so B's overlap shots are on the import (deleted) side
     const pool = [makeSuggestion({
-      importSectionIndex: 1,
+      importLineIndex: 1,
       importStationIndex: 0,
       matchedShots: 3,
       direction: 'forward',
       existingStationIndex: 5,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       targetImportIndex: null,
     })];
 
-    // B's sectionEdits: shots 0,1,2 are deleted (actual deletion)
+    // B's lineEdits: shots 0,1,2 are deleted (actual deletion)
     const bEdits = makeEdits([
       makeShot(0, { isDeleted: true }),
       makeShot(1, { isDeleted: true }),
       makeShot(2, { isDeleted: true }),
       makeShot(3), makeShot(4), makeShot(5),
     ]);
-    const edits = new Map<number, SectionEditState>([[1, bEdits]]);
+    const edits = new Map<number, LineEditState>([[1, bEdits]]);
 
     redirectDeletedTargets(conns, edits, new Map(), pool);
 
-    // Should redirect to existing section 99
+    // Should redirect to existing line 99
     expect(conn.targetType).toBe('existing');
-    expect(conn.existingSectionId).toBe(99);
+    expect(conn.existingLineId).toBe(99);
   });
 
   it('does NOT redirect when import-to-import overlap shots are interpolated, not deleted', () => {
@@ -256,10 +256,10 @@ describe('redirectDeletedTargets', () => {
     const conn = importingConn(0, 5, 1, 1);
     const conns = [conn];
 
-    // Pool has B→A suggestion (B is importSectionIndex) - but B's shots are
+    // Pool has B→A suggestion (B is importLineIndex) - but B's shots are
     // actually INTERPOLATED (not deleted) because A→B was processed first
     const pool = [makeSuggestion({
-      importSectionIndex: 1,     // B is the "import" side of this suggestion
+      importLineIndex: 1,     // B is the "import" side of this suggestion
       importStationIndex: 0,     // front overlap
       matchedShots: 3,
       direction: 'forward',
@@ -268,14 +268,14 @@ describe('redirectDeletedTargets', () => {
       targetImportIndex: 0,      // target is A
     })];
 
-    // B's sectionEdits: overlap shots 0,1,2 are ALIVE (interpolated, not deleted)
+    // B's lineEdits: overlap shots 0,1,2 are ALIVE (interpolated, not deleted)
     const bEdits = makeEdits([
       makeShot(0), // interpolated but alive
       makeShot(1), // interpolated but alive
       makeShot(2), // interpolated but alive
       makeShot(3), makeShot(4), makeShot(5),
     ]);
-    const edits = new Map<number, SectionEditState>([[1, bEdits]]);
+    const edits = new Map<number, LineEditState>([[1, bEdits]]);
 
     redirectDeletedTargets(conns, edits, new Map(), pool);
 
@@ -298,14 +298,14 @@ describe('redirectDeletedTargets', () => {
     // Pool has both directions
     const pool = [
       makeSuggestion({
-        importSectionIndex: 0,   // A→B: A is import side
+        importLineIndex: 0,   // A→B: A is import side
         importStationIndex: 8,   // back overlap on A
         matchedShots: 3,
         targetType: 'importing',
         targetImportIndex: 1,
       }),
       makeSuggestion({
-        importSectionIndex: 1,   // B→A: B is import side
+        importLineIndex: 1,   // B→A: B is import side
         importStationIndex: 0,   // front overlap on B
         matchedShots: 3,
         targetType: 'importing',
@@ -326,7 +326,7 @@ describe('redirectDeletedTargets', () => {
       makeShot(0), makeShot(1), makeShot(2), // interpolated but alive
       makeShot(3), makeShot(4), makeShot(5),
     ]);
-    const edits = new Map<number, SectionEditState>([[0, aEdits], [1, bEdits]]);
+    const edits = new Map<number, LineEditState>([[0, aEdits], [1, bEdits]]);
 
     redirectDeletedTargets(conns, edits, new Map(), pool);
 
@@ -345,7 +345,7 @@ describe('redirectDeletedTargets', () => {
 
     const pool = [
       makeSuggestion({
-        importSectionIndex: 1, // B→A (reverse of confirmed A→B)
+        importLineIndex: 1, // B→A (reverse of confirmed A→B)
         importStationIndex: 0,
         matchedShots: 3,
         direction: 'forward',
@@ -361,7 +361,7 @@ describe('redirectDeletedTargets', () => {
       makeShot(2, { isDeleted: true }),
       makeShot(3), makeShot(4),
     ]);
-    const edits = new Map<number, SectionEditState>([[1, bEdits]]);
+    const edits = new Map<number, LineEditState>([[1, bEdits]]);
 
     const confirmed = new Map<number, ConfirmedOverlapInfo>([
       [0, {
@@ -370,7 +370,7 @@ describe('redirectDeletedTargets', () => {
         direction: 'forward',
         existingStationIndex: 0,
         targetType: 'importing',
-        existingSectionId: null,
+        existingLineId: null,
         targetImportIndex: 1,
         mergeImportStation: 3,
       }],

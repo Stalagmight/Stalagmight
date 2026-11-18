@@ -21,7 +21,7 @@ import { creditEditForCells } from './dataTableEdits';
 
 interface Options {
   t: TFunction;
-  sectionId: number | null;
+  lineId: number | null;
   /** Grid rows (drafts materialized), by grid row index. */
   rows: readonly Shot[];
   shotIndexAt: (gridRowIndex: number) => number | null;
@@ -38,7 +38,7 @@ export interface DataTableCredit {
   applyCell: (shot: Shot, colKey: string, value: unknown) => void;
 }
 
-export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlocked }: Options): DataTableCredit {
+export function useDataTableCredit({ t, lineId, rows, shotIndexAt, editingBlocked }: Options): DataTableCredit {
   const editShotCredit = useProjectStore((s) => s.editShotCredit);
   const [editing, setEditing] = useState<{ shotId: number; field: CreditColumnKey; seed: string } | null>(null);
 
@@ -75,11 +75,11 @@ export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlo
 
   const send = useCallback(
     (shotId: number, edit: CreditEdit) => {
-      if (sectionId === null || editingBlocked) return;
+      if (lineId === null || editingBlocked) return;
       setSource('data-table');
-      void editShotCredit({ type: 'shots', shots: [[sectionId, shotId]] }, edit);
+      void editShotCredit({ type: 'shots', shots: [[lineId, shotId]] }, edit);
     },
-    [sectionId, editingBlocked, editShotCredit],
+    [lineId, editingBlocked, editShotCredit],
   );
 
   const applyCell = useCallback(
@@ -97,7 +97,7 @@ export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlo
   // popover; any other key moves the focus into the field, and a printable one
   // is left to land there (the browser types into whatever keydown focused).
   const shot = editing ? rows.find((r) => r.id === editing.shotId) : undefined;
-  const isOpen = editing !== null && shot !== undefined && sectionId !== null;
+  const isOpen = editing !== null && shot !== undefined && lineId !== null;
   const onKeyDownCapture = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
       if (!isOpen || (event.target as Element).closest(`[data-testid="${CREDIT_EDITOR_TEST_ID}"]`)) return;
@@ -122,12 +122,12 @@ export function useDataTableCredit({ t, sectionId, rows, shotIndexAt, editingBlo
         field={editing.field}
         seed={editing.seed}
         anchor={document.querySelector<HTMLElement>(
-          `[data-testid="shot-cell-${sectionId}-${editing.shotId}-${editing.field}"]`,
+          `[data-testid="shot-cell-${lineId}-${editing.shotId}-${editing.field}"]`,
         )}
         onCommit={(edit) => send(editing.shotId, edit)}
         onClose={() => {
           const cell = document.querySelector<HTMLElement>(
-            `[data-testid="shot-cell-${sectionId}-${editing.shotId}-${editing.field}"]`,
+            `[data-testid="shot-cell-${lineId}-${editing.shotId}-${editing.field}"]`,
           );
           setEditing(null);
           // Back to the grid, so the keyboard carries on where it was.

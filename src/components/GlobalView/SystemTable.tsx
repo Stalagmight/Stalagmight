@@ -63,7 +63,7 @@ interface ColumnDef {
 const COLUMNS: ColumnDef[] = [
   { key: 'name', field: 'name', align: 'left' },
   { key: 'path', align: 'left' },
-  { key: 'sections', field: 'sections', align: 'right' },
+  { key: 'lines', field: 'lines', align: 'right' },
   { key: 'length', field: 'length', align: 'right' },
   { key: 'edited', field: 'last_edited', align: 'left' },
 ];
@@ -319,7 +319,7 @@ export function SystemTable({
                   />
                 )}
               </td>
-              <td className={`${cellClass} text-right tabular-nums`}>{formatNumber(project.section_count)}</td>
+              <td className={`${cellClass} text-right tabular-nums`}>{formatNumber(project.line_count)}</td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatLength(project.total_length)}</td>
               <td className={`${cellClass} text-text-secondary`}>
                 <Tooltip content={absolute(project.modified_at)}>

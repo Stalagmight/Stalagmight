@@ -34,7 +34,7 @@ function project(partial: Partial<ProjectMetadata> & { file_path: string }): Pro
     name: 'Project',
     location: null,
     modified_at: '2026-01-01T00:00:00Z',
-    section_count: 0,
+    line_count: 0,
     total_length: 0,
     station_count: 0,
     gps_center: null,

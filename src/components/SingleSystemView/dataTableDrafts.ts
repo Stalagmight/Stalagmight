@@ -6,7 +6,7 @@
  * shot. Drafts live entirely in DataTable state until their required fields
  * are present, then commit via create_shot with the anchor as the insertion
  * point. These helpers own the anchor bookkeeping: interleaving drafts with
- * the section's shots into the grid's row list, mapping a grid insertion
+ * the line's shots into the grid's row list, mapping a grid insertion
  * boundary to an anchor, completeness, and the missing-field marking.
  *
  * Kept free of React/store imports so it is unit-testable in the node vitest env.
@@ -253,7 +253,7 @@ export function draftMissing(
  *
  *  Split out of {@link completeDraftData} so a caller that only needs the answer
  *  does not pay for the ShotData it would otherwise allocate and discard - the
- *  new-section dialog asks this for every row on every keystroke to decide
+ *  new-line dialog asks this for every row on every keystroke to decide
  *  whether Create is available. The rule itself still lives in ONE place; the
  *  builder below delegates to it. */
 export function isDraftComplete(draft: ShotDraft): boolean {

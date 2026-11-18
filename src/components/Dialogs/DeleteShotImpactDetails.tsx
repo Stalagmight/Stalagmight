@@ -1,12 +1,16 @@
 import type { DeleteShotImpact, DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { EntityBlob } from '../common/EntityBlob';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 
-/** A station reference as the entity pill (Full level) or plain "section:index". */
+/**
+ * A station as the entity pill (Full level) or plain text: `Main Line / 17`.
+ * Every station named here exists before the delete, so the open project
+ * names it.
+ */
 function StationRefBlob({ station }: { station: StationRef }) {
-  return (
-    <EntityBlob entity="station">{`${station.section_id}:${station.station_index}`}</EntityBlob>
-  );
+  const labels = useIdentityLabels();
+  return <EntityBlob entity="station">{labels.station(station, true)}</EntityBlob>;
 }
 
 function Pair({ a, b }: { a: StationRef; b: StationRef }) {
@@ -155,7 +159,7 @@ export default function DeleteShotImpactDetails({
         {(impact.merge_rewire_skipped || impact.closure_rewire_skipped) && (
           <div className="text-warning">
             {impact.merge_rewire_skipped && (
-              <p>Some merge connectivity could not be preserved (only same-section candidates).</p>
+              <p>Some merge connectivity could not be preserved (only same-line candidates).</p>
             )}
             {impact.closure_rewire_skipped && (
               <p>Some closures could not be replaced (no valid replacement or duplicate).</p>

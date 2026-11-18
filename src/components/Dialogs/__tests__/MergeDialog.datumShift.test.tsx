@@ -17,12 +17,18 @@ const projectState = {
   mergeStations: vi.fn(),
   executeBatch: vi.fn(),
   project: {
-    sections: [
+    lines: [
       { id: 1, name: 'Upstream' },
       { id: 2, name: 'Second entrance' },
       { id: 3, name: 'Side passage' },
     ],
   },
+  // Names that differ from the positional indices (both stations sit at index 5).
+  stations: [
+    { station_ref: { line_id: 1, station_index: 5 }, name: '17' },
+    { station_ref: { line_id: 2, station_index: 5 }, name: 'B4' },
+  ],
+  surveyData: null,
 };
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: Object.assign(
@@ -38,18 +44,25 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import MergeDialog from '../MergeDialog';
 
-const A = { section_id: 1, station_index: 5 };
-const B = { section_id: 2, station_index: 5 };
+const A = { line_id: 1, station_index: 5 };
+const B = { line_id: 2, station_index: 5 };
 const shift = (extra: Partial<MergeDatumShift> = {}): MergeDatumShift => ({
-  moving_section_ids: [2],
+  moving_line_ids: [2],
   shift_m: 12.047,
-  datum_station: { section_id: 2, station_index: 0 },
+  datum_station: { line_id: 2, station_index: 0 },
   ...extra,
 });
 
 describe('MergeDialog datum shift (#741)', () => {
   beforeEach(() => {
     dialogData = { stationA: A, stationB: B };
+  });
+
+  it('names both stations with their lines, never the positional handles', () => {
+    render(<MergeDialog />);
+    expect(screen.getByText('Upstream / 17')).toBeInTheDocument();
+    expect(screen.getByText('Second entrance / B4')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d+:\d+|Line \d/);
   });
 
   it('says nothing about datums when the merge moves no placed piece', () => {
@@ -61,15 +74,15 @@ describe('MergeDialog datum shift (#741)', () => {
     dialogData = { ...dialogData, datumShift: shift() };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
-      'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at 2:0 becomes a GPS fix.'
+      'Second entrance is placed by its own GPS. It moves 12 m to meet the other piece, and its zero datum at Second entrance / 0 becomes a GPS fix.'
     );
   });
 
-  it('counts the other sections of a moving piece', () => {
-    dialogData = { ...dialogData, datumShift: shift({ moving_section_ids: [2, 3], shift_m: 4.26 }) };
+  it('counts the other lines of a moving piece', () => {
+    dialogData = { ...dialogData, datumShift: shift({ moving_line_ids: [2, 3], shift_m: 4.26 }) };
     render(<MergeDialog />);
     expect(screen.getByTestId('merge-datum-shift')).toHaveTextContent(
-      'Second entrance and 1 more section is placed by its own GPS. It moves 4.3 m'
+      'Second entrance and 1 more line is placed by its own GPS. It moves 4.3 m'
     );
   });
 

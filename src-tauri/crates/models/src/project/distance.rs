@@ -2,8 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use crate::{
-    Coordinates, FrozenShotRef, Section, SectionId, ShotData, ShotId, Station, StationKey,
-    StationRef,
+    Coordinates, FrozenShotRef, Line, LineId, ShotData, ShotId, Station, StationKey, StationRef,
 };
 
 use super::{AlongLineResult, DistanceField, PathShot, Project, RulerEndpoint};
@@ -199,7 +198,7 @@ impl Project {
             return none();
         }
         let idx = Self::station_index_map(stations);
-        let section_lookup = self.build_section_lookup();
+        let line_lookup = self.build_line_lookup();
 
         // Shot lengths come from the euclidean distance between the (adjusted)
         // station coordinates, so the along-line distance sums the closure-adjusted
@@ -234,10 +233,10 @@ impl Project {
         let resolve = |ep: &RulerEndpoint| -> Option<Resolved> {
             // Shot-point endpoint.
             if let (Some(shot_id), Some(t)) = (ep.shot_id, ep.t) {
-                let section = section_lookup.get(&ep.section_id)?;
-                let pos = section.shots.iter().position(|s| s.id == shot_id)?;
-                let from = *idx.get(&StationRef::new(ep.section_id, pos as u32))?;
-                let to = *idx.get(&StationRef::new(ep.section_id, (pos + 1) as u32))?;
+                let line = line_lookup.get(&ep.line_id)?;
+                let pos = line.shots.iter().position(|s| s.id == shot_id)?;
+                let from = *idx.get(&StationRef::new(ep.line_id, pos as u32))?;
+                let to = *idx.get(&StationRef::new(ep.line_id, (pos + 1) as u32))?;
                 let len = shot_len(from, to);
                 let tt = t.clamp(0.0, 1.0);
                 if tt <= EPS {
@@ -252,15 +251,15 @@ impl Project {
                     t: tt,
                     len,
                     shot: PathShot {
-                        section_id: ep.section_id,
+                        line_id: ep.line_id,
                         shot_id,
                     },
-                    swimmable: include_reference || section.shots[pos].kind.is_swum(),
+                    swimmable: include_reference || line.shots[pos].kind.is_swum(),
                 });
             }
             // Station endpoint.
             let si = ep.station_index?;
-            let node = *idx.get(&StationRef::new(ep.section_id, si))?;
+            let node = *idx.get(&StationRef::new(ep.line_id, si))?;
             Some(Resolved::Station(node))
         };
 
@@ -308,13 +307,13 @@ impl Project {
         // reconstructed pair not in the map is a tie to skip (never tinted).
         let mut adj = self.build_survey_graph(n, &idx, Some(&coords), include_reference);
         let mut shot_edge: HashMap<(usize, usize), PathShot> = HashMap::new();
-        for section in &self.sections {
-            for (i, shot) in section.shots.iter().enumerate() {
-                let from = StationRef::new(section.id, i as u32);
-                let to = StationRef::new(section.id, (i + 1) as u32);
+        for line in &self.lines {
+            for (i, shot) in line.shots.iter().enumerate() {
+                let from = StationRef::new(line.id, i as u32);
+                let to = StationRef::new(line.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (idx.get(&from), idx.get(&to)) {
                     let ps = PathShot {
-                        section_id: section.id,
+                        line_id: line.id,
                         shot_id: shot.id,
                     };
                     shot_edge.insert((fi, ti), ps);
@@ -476,15 +475,15 @@ impl Project {
     /// Build adjacency from aligned loop closures (bidirectional).
     pub(crate) fn build_aligned_closure_adjacency(
         &self,
-        section_lookup: &HashMap<SectionId, &Section>,
+        line_lookup: &HashMap<LineId, &Line>,
     ) -> HashMap<StationRef, Vec<StationRef>> {
         let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         for closure in &self.loop_closures {
             if !closure.is_aligned {
                 continue;
             }
-            if !section_lookup.contains_key(&closure.station_a.section_id)
-                || !section_lookup.contains_key(&closure.station_b.section_id)
+            if !line_lookup.contains_key(&closure.station_a.line_id)
+                || !line_lookup.contains_key(&closure.station_b.line_id)
             {
                 continue;
             }
@@ -504,9 +503,9 @@ impl Project {
     fn can_reach_datum_excluding_shot(
         &self,
         start: StationRef,
-        exclude_section_id: SectionId,
+        exclude_line_id: LineId,
         exclude_shot_index: usize,
-        section_lookup: &HashMap<SectionId, &Section>,
+        line_lookup: &HashMap<LineId, &Line>,
         merge_adj: &HashMap<StationRef, Vec<StationRef>>,
         closure_adj: &HashMap<StationRef, Vec<StationRef>>,
         datum_stations: &HashSet<StationRef>,
@@ -521,17 +520,16 @@ impl Project {
         queue.push_back(start);
 
         while let Some(node) = queue.pop_front() {
-            let Some(section) = section_lookup.get(&node.section_id) else {
+            let Some(line) = line_lookup.get(&node.line_id) else {
                 continue;
             };
 
             // Adjacent stations via shots (backward: station_index - 1 via shot index-1)
             if node.station_index > 0 {
                 let shot_idx = (node.station_index - 1) as usize;
-                let is_excluded =
-                    node.section_id == exclude_section_id && shot_idx == exclude_shot_index;
-                if !is_excluded && shot_idx < section.shots.len() {
-                    let neighbor = StationRef::new(node.section_id, node.station_index - 1);
+                let is_excluded = node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
+                if !is_excluded && shot_idx < line.shots.len() {
+                    let neighbor = StationRef::new(node.line_id, node.station_index - 1);
                     if visited.insert(neighbor) {
                         if datum_stations.contains(&neighbor) {
                             return true;
@@ -542,12 +540,11 @@ impl Project {
             }
 
             // Adjacent stations via shots (forward: station_index + 1 via shot at station_index)
-            if (node.station_index as usize) < section.shots.len() {
+            if (node.station_index as usize) < line.shots.len() {
                 let shot_idx = node.station_index as usize;
-                let is_excluded =
-                    node.section_id == exclude_section_id && shot_idx == exclude_shot_index;
+                let is_excluded = node.line_id == exclude_line_id && shot_idx == exclude_shot_index;
                 if !is_excluded {
-                    let neighbor = StationRef::new(node.section_id, node.station_index + 1);
+                    let neighbor = StationRef::new(node.line_id, node.station_index + 1);
                     if visited.insert(neighbor) {
                         if datum_stations.contains(&neighbor) {
                             return true;
@@ -591,9 +588,9 @@ impl Project {
     /// closures. GPS fixes (#741) do not freeze anything.
     pub(crate) fn is_shot_frozen(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_index: usize,
-        section_lookup: &HashMap<SectionId, &Section>,
+        line_lookup: &HashMap<LineId, &Line>,
         merge_adj: &HashMap<StationRef, Vec<StationRef>>,
         closure_adj: &HashMap<StationRef, Vec<StationRef>>,
         datum_stations: &HashSet<StationRef>,
@@ -602,22 +599,22 @@ impl Project {
             return false;
         }
 
-        let station_a = StationRef::new(section_id, shot_index as u32);
-        let station_b = StationRef::new(section_id, (shot_index + 1) as u32);
+        let station_a = StationRef::new(line_id, shot_index as u32);
+        let station_b = StationRef::new(line_id, (shot_index + 1) as u32);
 
         self.can_reach_datum_excluding_shot(
             station_a,
-            section_id,
+            line_id,
             shot_index,
-            section_lookup,
+            line_lookup,
             merge_adj,
             closure_adj,
             datum_stations,
         ) && self.can_reach_datum_excluding_shot(
             station_b,
-            section_id,
+            line_id,
             shot_index,
-            section_lookup,
+            line_lookup,
             merge_adj,
             closure_adj,
             datum_stations,
@@ -625,27 +622,27 @@ impl Project {
     }
 
     /// Convenience wrapper around [`Self::is_shot_frozen`] that resolves the
-    /// shot's index from its id and builds the section lookup / adjacency /
-    /// datum-station structures internally. Returns `false` if the section or
+    /// shot's index from its id and builds the line lookup / adjacency /
+    /// datum-station structures internally. Returns `false` if the line or
     /// shot id cannot be found. Call sites that need to check a single shot
     /// should prefer this over hand-rolling the adjacency setup.
-    pub fn is_shot_frozen_by_id(&self, section_id: SectionId, shot_id: ShotId) -> bool {
-        let Some(section) = self.sections.iter().find(|s| s.id == section_id) else {
+    pub fn is_shot_frozen_by_id(&self, line_id: LineId, shot_id: ShotId) -> bool {
+        let Some(line) = self.lines.iter().find(|s| s.id == line_id) else {
             return false;
         };
-        let Some(shot_index) = section.shots.iter().position(|s| s.id == shot_id) else {
+        let Some(shot_index) = line.shots.iter().position(|s| s.id == shot_id) else {
             return false;
         };
-        let section_lookup = self.build_section_lookup();
-        let merge_adj = self.build_merge_adjacency(&section_lookup);
-        let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
+        let line_lookup = self.build_line_lookup();
+        let merge_adj = self.build_merge_adjacency(&line_lookup);
+        let closure_adj = self.build_aligned_closure_adjacency(&line_lookup);
         // Placement datums only: a GPS fix (#741) never moves raw geometry, so a
         // shot between a placement datum and a fix is free to edit.
         let datum_stations: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
         self.is_shot_frozen(
-            section_id,
+            line_id,
             shot_index,
-            &section_lookup,
+            &line_lookup,
             &merge_adj,
             &closure_adj,
             &datum_stations,
@@ -665,9 +662,9 @@ impl Project {
             return Vec::new();
         }
 
-        let section_lookup = self.build_section_lookup();
-        let merge_adj = self.build_merge_adjacency(&section_lookup);
-        let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
+        let line_lookup = self.build_line_lookup();
+        let merge_adj = self.build_merge_adjacency(&line_lookup);
+        let closure_adj = self.build_aligned_closure_adjacency(&line_lookup);
         // Placement datums only: a GPS fix (#741) never moves raw geometry, so a
         // shot between a placement datum and a fix is free to edit.
         let datum_stations: HashSet<StationRef> = self.placement_datum_refs().into_iter().collect();
@@ -675,9 +672,9 @@ impl Project {
         // Assign each station a compact integer index
         let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();
         let mut idx_to_station: Vec<StationRef> = Vec::new();
-        for section in &self.sections {
-            for i in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, i as u32);
+        for line in &self.lines {
+            for i in 0..=line.shots.len() {
+                let sr = StationRef::new(line.id, i as u32);
                 let idx = idx_to_station.len();
                 station_to_idx.insert(sr, idx);
                 idx_to_station.push(sr);
@@ -688,18 +685,18 @@ impl Project {
             return Vec::new();
         }
 
-        // Edge descriptor: (neighbor_idx, is_shot, section_id, shot_index)
+        // Edge descriptor: (neighbor_idx, is_shot, line_id, shot_index)
         // is_shot=true means this edge corresponds to a shot that could be frozen.
-        let mut adj: Vec<Vec<(usize, bool, SectionId, u32)>> = vec![Vec::new(); v];
+        let mut adj: Vec<Vec<(usize, bool, LineId, u32)>> = vec![Vec::new(); v];
 
         // Add shot edges
-        for section in &self.sections {
-            for shot_index in 0..section.shots.len() {
-                let a = StationRef::new(section.id, shot_index as u32);
-                let b = StationRef::new(section.id, (shot_index + 1) as u32);
+        for line in &self.lines {
+            for shot_index in 0..line.shots.len() {
+                let a = StationRef::new(line.id, shot_index as u32);
+                let b = StationRef::new(line.id, (shot_index + 1) as u32);
                 if let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b)) {
-                    adj[ai].push((bi, true, section.id, shot_index as u32));
-                    adj[bi].push((ai, true, section.id, shot_index as u32));
+                    adj[ai].push((bi, true, line.id, shot_index as u32));
+                    adj[bi].push((ai, true, line.id, shot_index as u32));
                 }
             }
         }
@@ -814,10 +811,10 @@ impl Project {
         //   child-side has subtree_datums[child], other side has
         //   component_datums[root] - subtree_datums[child].
         let mut frozen = Vec::new();
-        for section in &self.sections {
-            for shot_index in 0..section.shots.len() {
-                let a = StationRef::new(section.id, shot_index as u32);
-                let b = StationRef::new(section.id, (shot_index + 1) as u32);
+        for line in &self.lines {
+            for shot_index in 0..line.shots.len() {
+                let a = StationRef::new(line.id, shot_index as u32);
+                let b = StationRef::new(line.id, (shot_index + 1) as u32);
                 let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b))
                 else {
                     continue;
@@ -844,14 +841,14 @@ impl Project {
                     let other_datums = total - child_datums;
                     if child_datums > 0 && other_datums > 0 {
                         frozen.push(FrozenShotRef {
-                            section_id: section.id,
+                            line_id: line.id,
                             shot_index: shot_index as u32,
                         });
                     }
                 } else {
                     // Non-bridge in a component with datums: frozen
                     frozen.push(FrozenShotRef {
-                        section_id: section.id,
+                        line_id: line.id,
                         shot_index: shot_index as u32,
                     });
                 }
@@ -861,30 +858,30 @@ impl Project {
     }
 
     /// Find orphaned connected components and suggest placements for their leaf
-    /// ends against datum-anchored sections.
+    /// ends against datum-anchored lines.
     ///
-    /// An orphaned component is a set of sections connected via merges that has
+    /// An orphaned component is a set of lines connected via merges that has
     /// no zero datum. Leaf ends are terminal stations with at least 3 free shots
     /// (shots not adjacent to a merge or aligned closure).
     ///
-    /// Which anchored sections an orphan may be placed onto depends on whether
+    /// Which anchored lines an orphan may be placed onto depends on whether
     /// THIS import touched it:
-    /// - an orphan containing a newly imported section may go onto ANY anchored
-    ///   section, pre-existing ones included - adding a datum-less `.stalx`
+    /// - an orphan containing a newly imported line may go onto ANY anchored
+    ///   line, pre-existing ones included - adding a datum-less `.stalx`
     ///   into an anchored project must be offered a spot on the host (#674);
     /// - a pre-existing orphan may only go onto a newly imported anchored
-    ///   section, so an unrelated later import never re-raises a pairing the
+    ///   line, so an unrelated later import never re-raises a pairing the
     ///   user already had their chance to act on (#446).
     pub fn suggest_orphan_placements(
         &self,
-        newly_imported_section_ids: &[SectionId],
+        newly_imported_line_ids: &[LineId],
         ps_config: &crate::config::PlacementSuggestionConfig,
     ) -> Vec<super::placement_suggest::OrphanPlacementSuggestion> {
         use super::placement_suggest::{
-            suggest_placements, ExistingSection, OrphanPlacementSuggestion,
+            suggest_placements, ExistingLine, OrphanPlacementSuggestion,
         };
 
-        if newly_imported_section_ids.is_empty() {
+        if newly_imported_line_ids.is_empty() {
             return Vec::new();
         }
 
@@ -892,7 +889,7 @@ impl Project {
         // all, so no component can ever be a valid suggestion TARGET (targets
         // must themselves be datum-anchored - see the per-component filter
         // below). Without this, a datum-less project makes EVERY component an
-        // "orphan" and the O(components x sections) walk below runs for
+        // "orphan" and the O(components x lines) walk below runs for
         // nothing (#446).
         if !self
             .zero_datums
@@ -903,7 +900,7 @@ impl Project {
         }
 
         // 1. Build all connected components (via merges only), over the WHOLE
-        // post-import project - not just pre-existing sections - so a first
+        // post-import project - not just pre-existing lines - so a first
         // import into an empty project can suggest an unanchored component
         // against an anchored one from the SAME import (#446).
         let components = self.connected_components();
@@ -913,20 +910,20 @@ impl Project {
         // is neither. The two sets are disjoint by construction, which is
         // what keeps a component from being suggested onto itself: every
         // target below comes from an anchored component, never an orphan one.
-        let mut orphan_components: Vec<&HashSet<SectionId>> = Vec::new();
-        let mut anchored_section_ids: HashSet<SectionId> = HashSet::new();
+        let mut orphan_components: Vec<&HashSet<LineId>> = Vec::new();
+        let mut anchored_line_ids: HashSet<LineId> = HashSet::new();
         for comp in &components {
             let Some(&any_member) = comp.iter().next() else {
                 continue;
             };
             if self.rigid_group_has_datum(any_member) {
-                anchored_section_ids.extend(comp.iter().copied());
+                anchored_line_ids.extend(comp.iter().copied());
             } else {
                 orphan_components.push(comp);
             }
         }
 
-        if orphan_components.is_empty() || anchored_section_ids.is_empty() {
+        if orphan_components.is_empty() || anchored_line_ids.is_empty() {
             return Vec::new();
         }
 
@@ -934,34 +931,31 @@ impl Project {
         // without that, two distinct floating components can be suggested onto
         // each other - a "placement" that is circular and anchors nothing
         // (#446).
-        let new_ids: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
-        let to_target = |s: &Section| ExistingSection {
+        let new_ids: HashSet<LineId> = newly_imported_line_ids.iter().copied().collect();
+        let to_target = |s: &Line| ExistingLine {
             id: s.id,
-            name: s
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Section {}", s.id)),
+            name: s.name.clone().unwrap_or_else(|| format!("Line {}", s.id)),
             shots: s.shots.clone(),
             azimuth_reference: self.azimuth_reference_for(s),
         };
-        // Anchored sections from THIS import - the only targets a
+        // Anchored lines from THIS import - the only targets a
         // pre-existing orphan may use (#446).
-        let new_anchored_targets: Vec<ExistingSection> = newly_imported_section_ids
+        let new_anchored_targets: Vec<ExistingLine> = newly_imported_line_ids
             .iter()
-            .filter(|id| anchored_section_ids.contains(id))
-            .filter_map(|&id| self.get_section(id))
+            .filter(|id| anchored_line_ids.contains(id))
+            .filter_map(|&id| self.get_line(id))
             .map(to_target)
             .collect();
-        // Every anchored section in the project - the targets for an orphan
+        // Every anchored line in the project - the targets for an orphan
         // this import touched (#674). Only built when such an orphan exists,
         // so an import that leaves nothing floating never copies the host.
         let import_left_an_orphan = orphan_components
             .iter()
             .any(|comp| comp.iter().any(|id| new_ids.contains(id)));
-        let all_anchored_targets: Vec<ExistingSection> = if import_left_an_orphan {
-            self.sections
+        let all_anchored_targets: Vec<ExistingLine> = if import_left_an_orphan {
+            self.lines
                 .iter()
-                .filter(|s| anchored_section_ids.contains(&s.id))
+                .filter(|s| anchored_line_ids.contains(&s.id))
                 .map(to_target)
                 .collect()
         } else {
@@ -993,7 +987,7 @@ impl Project {
         // candidates.
         for component in &orphan_components {
             let touched_by_import = component.iter().any(|id| new_ids.contains(id));
-            let component_targets: &[ExistingSection] = if touched_by_import {
+            let component_targets: &[ExistingLine] = if touched_by_import {
                 &all_anchored_targets
             } else {
                 &new_anchored_targets
@@ -1001,27 +995,27 @@ impl Project {
             if component_targets.is_empty() {
                 continue;
             }
-            for &section_id in *component {
-                let section = match self.get_section(section_id) {
+            for &line_id in *component {
+                let line = match self.get_line(line_id) {
                     Some(s) => s,
                     None => continue,
                 };
-                if section.shots.is_empty() {
+                if line.shots.is_empty() {
                     continue;
                 }
 
-                let section_name = section
+                let line_name = line
                     .name
                     .clone()
-                    .unwrap_or_else(|| format!("Section {}", section_id));
-                let n_shots = section.shots.len();
+                    .unwrap_or_else(|| format!("Line {}", line_id));
+                let n_shots = line.shots.len();
 
                 // Try both ends: station 0 and station N
                 let ends: [(u32, bool); 2] = [(0, true), (n_shots as u32, false)];
 
                 for &(terminal_station_idx, is_start) in &ends {
                     let terminal = StationRef {
-                        section_id,
+                        line_id,
                         station_index: terminal_station_idx,
                     };
 
@@ -1037,7 +1031,7 @@ impl Project {
                         for shot_idx in 0..n_shots {
                             // Check the far station of this shot
                             let far_station = StationRef {
-                                section_id,
+                                line_id,
                                 station_index: (shot_idx + 1) as u32,
                             };
                             if station_is_constrained(far_station) {
@@ -1050,7 +1044,7 @@ impl Project {
                         for shot_idx in (0..n_shots).rev() {
                             // Check the far station of this shot (going inward)
                             let far_station = StationRef {
-                                section_id,
+                                line_id,
                                 station_index: shot_idx as u32,
                             };
                             if station_is_constrained(far_station) {
@@ -1068,12 +1062,12 @@ impl Project {
 
                     // Collect the shots as ShotData
                     let leaf_shots: Vec<ShotData> = if is_start {
-                        section.shots[..max_shots]
+                        line.shots[..max_shots]
                             .iter()
                             .map(|s| s.to_shot_data())
                             .collect()
                     } else {
-                        section.shots[n_shots - max_shots..]
+                        line.shots[n_shots - max_shots..]
                             .iter()
                             .rev()
                             .map(|s| {
@@ -1089,11 +1083,11 @@ impl Project {
 
                     // 5. Run suggest_placements for this leaf against the
                     // component's targets. The "import" side here is an existing
-                    // ORPHAN section, so its own reference is on record (#438) -
+                    // ORPHAN line, so its own reference is on record (#438) -
                     // unlike the wizard path.
                     let placement_suggestions = suggest_placements(
                         &leaf_shots,
-                        self.azimuth_reference_for(section),
+                        self.azimuth_reference_for(line),
                         component_targets,
                         ps_config,
                     );
@@ -1107,11 +1101,11 @@ impl Project {
                             continue;
                         }
                         suggestions.push(OrphanPlacementSuggestion {
-                            orphan_section_id: section_id,
-                            orphan_section_name: section_name.clone(),
+                            orphan_line_id: line_id,
+                            orphan_line_name: line_name.clone(),
                             orphan_station_index: terminal_station_idx as usize,
-                            target_section_id: ps.existing_section_id,
-                            target_section_name: ps.existing_section_name,
+                            target_line_id: ps.existing_line_id,
+                            target_line_name: ps.existing_line_name,
                             target_station_index: ps.existing_station_index,
                             score: ps.score,
                             matched_shots: ps.matched_shots,
@@ -1132,19 +1126,19 @@ impl Project {
         suggestions
     }
 
-    /// Build all connected components of the project's sections (via merges
-    /// only), covering every section exactly once. Shared by
-    /// [`Self::suggest_orphan_placements`] and [`Self::count_unanchored_sections`]
+    /// Build all connected components of the project's lines (via merges
+    /// only), covering every line exactly once. Shared by
+    /// [`Self::suggest_orphan_placements`] and [`Self::count_unanchored_lines`]
     /// so the two walks cannot drift apart.
-    fn connected_components(&self) -> Vec<HashSet<SectionId>> {
-        let mut visited: HashSet<SectionId> = HashSet::new();
-        let mut components: Vec<HashSet<SectionId>> = Vec::new();
+    fn connected_components(&self) -> Vec<HashSet<LineId>> {
+        let mut visited: HashSet<LineId> = HashSet::new();
+        let mut components: Vec<HashSet<LineId>> = Vec::new();
 
-        for section in &self.sections {
-            if visited.contains(&section.id) {
+        for line in &self.lines {
+            if visited.contains(&line.id) {
                 continue;
             }
-            let component = self.get_merged_section_ids(section.id);
+            let component = self.get_merged_line_ids(line.id);
             for &sid in &component {
                 visited.insert(sid);
             }
@@ -1154,16 +1148,16 @@ impl Project {
         components
     }
 
-    /// Count sections not connected to a zero datum (directly or through
+    /// Count lines not connected to a zero datum (directly or through
     /// merges), restricted to components that contain at least one of
-    /// `newly_imported_section_ids`. Used to add an info line to the import
+    /// `newly_imported_line_ids`. Used to add an info line to the import
     /// receipt when an import leaves unanchored data and the
     /// placement-suggestion pass could not offer anything to fix it - scoped
     /// to THIS import so a clean import into a project with unrelated,
     /// pre-existing orphans doesn't blame this receipt for orphans it didn't
     /// create (#446).
-    pub fn count_unanchored_sections(&self, newly_imported_section_ids: &[SectionId]) -> u32 {
-        let new_set: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
+    pub fn count_unanchored_lines(&self, newly_imported_line_ids: &[LineId]) -> u32 {
+        let new_set: HashSet<LineId> = newly_imported_line_ids.iter().copied().collect();
 
         self.connected_components()
             .iter()

@@ -4,10 +4,9 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    MergeTopology, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
-    StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
-    MAX_SECTION_ID,
+    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, Line, LineData, LineId,
+    LoopClosure, MergeTopology, NorthReference, Project, Shot, ShotKind, StationKey, StationMerge,
+    SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE, MAX_LINE_ID,
 };
 
 use super::station_texts::StationTextTable;
@@ -47,17 +46,17 @@ impl Database {
             .with_timezone(&Utc);
 
         // Aggregate-only queries.
-        let section_count: i64 = self
+        let line_count: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
             .unwrap_or(0);
-        let t_sections = start.elapsed();
+        let t_lines = start.elapsed();
         let shot_count: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
             .unwrap_or(0);
         let t_shot_count = start.elapsed();
-        // Surveyed length, the same rule as `Section::stats`: Reference shots
+        // Surveyed length, the same rule as `Line::stats`: Reference shots
         // (kind 2) repeat passage already surveyed and are left out (#689).
         // Only an INTEGER-stored 0 or 1 counts, because the loader reads every
         // other stored value as Reference (`ShotKind::from_u8`), including a
@@ -114,7 +113,7 @@ impl Database {
         } else {
             // Positional on purpose, and not the frame rule
             // (`Project::frame_datum`, the first datum that RESOLVES): this reads
-            // GPS columns out of the file for a project-list pin, with no sections
+            // GPS columns out of the file for a project-list pin, with no lines
             // and no station refs loaded, so there is nothing here that could
             // resolve and nothing that reads LOCAL metres against it. The
             // divergence the frame rule exists to prevent - coordinates laid out
@@ -149,8 +148,8 @@ impl Database {
 
         let t_gps = start.elapsed();
 
-        // station_count = shot_count + section_count per Project::stats().
-        let station_count = (shot_count as usize) + (section_count as usize);
+        // station_count = shot_count + line_count per Project::stats().
+        let station_count = (shot_count as usize) + (line_count as usize);
 
         // Trace where the time went, in ms, so we can spot which query
         // is the bottleneck. Debug-level - fires for every recent
@@ -161,8 +160,8 @@ impl Database {
             path = ?file_path,
             shots = shot_count,
             header_ms = t_header.as_micros() as f64 / 1000.0,
-            sections_ms = (t_sections - t_header).as_micros() as f64 / 1000.0,
-            shotcount_ms = (t_shot_count - t_sections).as_micros() as f64 / 1000.0,
+            lines_ms = (t_lines - t_header).as_micros() as f64 / 1000.0,
+            shotcount_ms = (t_shot_count - t_lines).as_micros() as f64 / 1000.0,
             sumlength_ms = (t_sum_length - t_shot_count).as_micros() as f64 / 1000.0,
             gps_ms = (t_gps - t_sum_length).as_micros() as f64 / 1000.0,
             total_ms = t_gps.as_micros() as f64 / 1000.0,
@@ -190,7 +189,7 @@ impl Database {
             location,
             file_path,
             modified_at,
-            section_count: section_count as usize,
+            line_count: line_count as usize,
             total_length,
             station_count,
             gps_center,
@@ -260,9 +259,9 @@ impl Database {
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
 
-        // Load sections
-        let mut sections: Vec<Section> = Vec::new();
-        let mut next_section_id = 0u32;
+        // Load lines
+        let mut lines: Vec<Line> = Vec::new();
+        let mut next_line_id = 0u32;
 
         {
             let has_quality_column: bool = self
@@ -330,16 +329,16 @@ impl Database {
             // rows last, so the per-row check below would allocate the whole
             // table first - a hostile file with millions of rows makes the
             // refusal maximally expensive. `MAX(id)` is O(1) off the pk index,
-            // and read as i64 it also gives a section id past even u32 the
+            // and read as i64 it also gives a line id past even u32 the
             // same receipt-grade message instead of a bare type error.
             let max_id: Option<i64> =
                 self.conn
                     .query_row("SELECT MAX(id) FROM sections", [], |row| row.get(0))?;
             if let Some(max_id) = max_id {
                 anyhow::ensure!(
-                    max_id <= i64::from(MAX_SECTION_ID),
-                    "This file cannot be opened: it contains section id {max_id}, \
-                     but section ids past {MAX_SECTION_ID} cannot hold shots. \
+                    max_id <= i64::from(MAX_LINE_ID),
+                    "This file cannot be opened: it contains line id {max_id}, \
+                     but line ids past {MAX_LINE_ID} cannot hold shots. \
                      The file was written by an incompatible tool or is corrupted."
                 );
             }
@@ -349,7 +348,7 @@ impl Database {
                  {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
             ))?;
 
-            let mut section_rows = Vec::new();
+            let mut line_rows = Vec::new();
             let rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, u32>(0)?,
@@ -369,17 +368,17 @@ impl Database {
                 ))
             })?;
             for row in rows {
-                section_rows.push(row?);
+                line_rows.push(row?);
             }
 
-            // Build the empty sections first so we can address them by
+            // Build the empty lines first so we can address them by
             // ID when partitioning the bulk shot stream below.
-            let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
-            // Each section's legacy surveyor/date exactly as stored, to compare
+            let mut line_by_id: HashMap<u32, usize> = HashMap::with_capacity(line_rows.len());
+            // Each line's legacy surveyor/date exactly as stored, to compare
             // with what this build recorded writing (`shot_credits`).
             let mut stored_legacy: HashMap<u32, super::shot_credits::LegacyPair> =
-                HashMap::with_capacity(section_rows.len());
-            for section_row in section_rows {
+                HashMap::with_capacity(line_rows.len());
+            for line_row in line_rows {
                 let (
                     id,
                     name,
@@ -395,7 +394,7 @@ impl Database {
                     azimuth_correction,
                     azimuth_source,
                     azimuth_epoch_year,
-                ) = section_row;
+                ) = line_row;
                 stored_legacy.insert(id, (surveyor.clone(), date_str.clone()));
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
@@ -407,9 +406,9 @@ impl Database {
                     1.0
                 };
 
-                let section_data = SectionData {
+                let line_data = LineData {
                     name,
-                    // Carried below as the section's LEGACY credit instead: the
+                    // Carried below as the line's LEGACY credit instead: the
                     // shots are not loaded yet, so a template here would land
                     // on none of them.
                     surveyor: None,
@@ -436,39 +435,39 @@ impl Database {
                     )
                 });
 
-                // #557: refuse the whole open rather than construct a section
-                // whose id cannot encode a shot id. `Section::new` computes
+                // #557: refuse the whole open rather than construct a line
+                // whose id cannot encode a shot id. `Line::new` computes
                 // `id * FEATURE_ID_STRIDE` (debug panic, release wrap), the
-                // shot encodes saturate every shot of such a section onto
+                // shot encodes saturate every shot of such a line onto
                 // u32::MAX, and the counter rebuild below would overflow -
                 // #556 bounds what the app can MINT, this bounds what a file
                 // (pre-#556, another tool, or hostile) can smuggle in.
                 anyhow::ensure!(
-                    id <= MAX_SECTION_ID,
-                    "This file cannot be opened: it contains section id {id}, \
-                     but section ids past {MAX_SECTION_ID} cannot hold shots. \
+                    id <= MAX_LINE_ID,
+                    "This file cannot be opened: it contains line id {id}, \
+                     but line ids past {MAX_LINE_ID} cannot hold shots. \
                      The file was written by an incompatible tool or is corrupted."
                 );
-                let mut section = Section::new(id, section_data);
-                section.legacy_surveyor = surveyor;
-                section.legacy_date = date;
-                section.reverse_parity = reverse_parity;
-                section.gauge_shot_uuid = gauge_shot_uuid;
-                section.gauge_neighbour_uuid = gauge_neighbour_uuid;
-                section.azimuth_reference = azimuth_reference;
-                section_by_id.insert(id, sections.len());
+                let mut line = Line::new(id, line_data);
+                line.legacy_surveyor = surveyor;
+                line.legacy_date = date;
+                line.reverse_parity = reverse_parity;
+                line.gauge_shot_uuid = gauge_shot_uuid;
+                line.gauge_neighbour_uuid = gauge_neighbour_uuid;
+                line.azimuth_reference = azimuth_reference;
+                line_by_id.insert(id, lines.len());
                 // Cannot overflow once ids are bounded above; saturating keeps
                 // the counter rebuild total even if the bound ever moves.
-                next_section_id = next_section_id.max(id.saturating_add(1));
-                sections.push(section);
+                next_line_id = next_line_id.max(id.saturating_add(1));
+                lines.push(line);
             }
 
-            // Load ALL shots in one SELECT and partition by section_id.
-            // The legacy code prepared a per-section statement inside the
+            // Load ALL shots in one SELECT and partition by line_id.
+            // The legacy code prepared a per-line statement inside the
             // loop above, executing 14k+ separate queries on large files;
             // each query had to parse + plan + execute, so cost was
             // dominated by SQLite overhead rather than row I/O.  A single
-            // bulk SELECT cuts roughly 350 ms off a 14k-section load and
+            // bulk SELECT cuts roughly 350 ms off a 14k-line load and
             // is friendly to the query planner: it can stream rows
             // sequentially without re-preparing.
             {
@@ -479,19 +478,19 @@ impl Database {
                        FROM shots ORDER BY section_id, sequence_order",
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
-                    let section_id: u32 = row.get(0)?;
+                    let line_id: u32 = row.get(0)?;
                     let seq: i64 = row.get(1)?;
                     Ok((
-                        section_id,
+                        line_id,
                         Shot {
                             // Saturating, like `models::shot_display_position`:
-                            // the section id comes off disk, and a file naming
-                            // a section id >= u32::MAX / FEATURE_ID_STRIDE
+                            // the line id comes off disk, and a file naming
+                            // a line id >= u32::MAX / FEATURE_ID_STRIDE
                             // would panic this encode in a debug build rather
                             // than load. What the import can create is bounded
                             // upstream (#427's per-run cut cap); this is the
                             // read side refusing to trust the file.
-                            id: section_id
+                            id: line_id
                                 .saturating_mul(FEATURE_ID_STRIDE)
                                 .saturating_add(seq as u32),
                             azimuth_in: row.get(2)?,
@@ -545,7 +544,7 @@ impl Database {
 
                 let mut sanitized_shots = 0usize;
                 for row in shot_rows {
-                    let (section_id, mut shot) = row?;
+                    let (line_id, mut shot) = row?;
                     // Neutralize geometry corrupt-on-disk at the load boundary: a
                     // single non-finite (NaN/inf) value would otherwise propagate
                     // through the offset cascade and break the whole survey. The
@@ -556,11 +555,11 @@ impl Database {
                     if shot.sanitize_non_finite() {
                         sanitized_shots += 1;
                     }
-                    if let Some(&idx) = section_by_id.get(&section_id) {
-                        sections[idx].shots.push(shot);
+                    if let Some(&idx) = line_by_id.get(&line_id) {
+                        lines[idx].shots.push(shot);
                     }
-                    // (rows for unknown sections are silently dropped -
-                    // matches the legacy `WHERE section_id = ?` filter
+                    // (rows for unknown lines are silently dropped -
+                    // matches the legacy `WHERE line_id = ?` filter
                     // which never returned orphan rows in the first place.)
                 }
                 if sanitized_shots > 0 {
@@ -572,8 +571,8 @@ impl Database {
                 }
 
                 // Per-shot survey credit: a shot's own row, keyed by its
-                // section and uuid, else its section's legacy surveyor/date
-                // (`shot_credits`). A uuid repeated inside one section reads
+                // line and uuid, else its line's legacy surveyor/date
+                // (`shot_credits`). A uuid repeated inside one line reads
                 // its row once, for its first shot, as the writer wrote it.
                 // A credit table of another shape gives no rows (with a
                 // warning), and every shot falls back (#717); SQLite failing
@@ -582,27 +581,27 @@ impl Database {
                 let recorded =
                     super::shot_credits::load_recorded_legacy(&self.conn, &stored_legacy)?;
                 let mut claimed: HashSet<(u32, &str)> = HashSet::new();
-                for section in sections.iter_mut() {
-                    let section_id = section.id;
+                for line in lines.iter_mut() {
+                    let line_id = line.id;
                     // The rows hold only while the legacy pair is the one this
                     // build wrote beside them. A pair retyped by something else
                     // (a hand edit, another tool) is then the newer truth.
-                    let rows_hold = recorded.get(&section_id) == stored_legacy.get(&section_id);
-                    // A section with no shots keeps its legacy pair: nothing
-                    // can carry it (`Section::legacy_surveyor`).
-                    if section.shots.is_empty() {
+                    let rows_hold = recorded.get(&line_id) == stored_legacy.get(&line_id);
+                    // A line with no shots keeps its legacy pair: nothing
+                    // can carry it (`Line::legacy_surveyor`).
+                    if line.shots.is_empty() {
                         continue;
                     }
-                    // Computed once per section and SHARED by every shot that
+                    // Computed once per line and SHARED by every shot that
                     // falls back to it - one allocation, not one per shot.
-                    let fallback = crate::models::SharedCredit::new(section.take_legacy_template());
-                    for shot in &mut section.shots {
+                    let fallback = crate::models::SharedCredit::new(line.take_legacy_template());
+                    for shot in &mut line.shots {
                         let row = shot
                             .uuid
                             .as_deref()
                             .filter(|_| rows_hold)
-                            .and_then(|u| credit_rows.get_key_value(&(section_id, u.to_owned())))
-                            .filter(|((_, u), _)| claimed.insert((section_id, u.as_str())));
+                            .and_then(|u| credit_rows.get_key_value(&(line_id, u.to_owned())))
+                            .filter(|((_, u), _)| claimed.insert((line_id, u.as_str())));
                         match row {
                             Some((_, credit)) => shot.set_credit(credit.clone()),
                             None => shot.set_shared_credit(&fallback),
@@ -611,19 +610,19 @@ impl Database {
                     // A stored text this build would not write the same way
                     // (longer than a role keeps, a clamped name, another
                     // spelling) is written back as it is while nobody's
-                    // credit in the section changes (#719 review).
-                    if let Some((Some(raw), _)) = stored_legacy.get(&section_id) {
-                        section.remember_loaded_legacy_surveyor(raw);
+                    // credit in the line changes (#719 review).
+                    if let Some((Some(raw), _)) = stored_legacy.get(&line_id) {
+                        line.remember_loaded_legacy_surveyor(raw);
                     }
                 }
 
-                // Advance each section's next_shot_id past its loaded
+                // Advance each line's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
-                for section in sections.iter_mut() {
-                    section.next_shot_id = section
+                for line in lines.iter_mut() {
+                    line.next_shot_id = line
                         .id
                         .saturating_mul(FEATURE_ID_STRIDE)
-                        .saturating_add(section.shots.len() as u32);
+                        .saturating_add(line.shots.len() as u32);
                 }
             }
         }
@@ -676,9 +675,9 @@ impl Database {
             })?;
 
             for zd_row in zd_rows {
-                let (section_id, station_index, lat, lon, depth) = zd_row?;
+                let (line_id, station_index, lat, lon, depth) = zd_row?;
                 zero_datums.push(ZeroDatum {
-                    station_ref: StationKey::positional(section_id, station_index),
+                    station_ref: StationKey::positional(line_id, station_index),
                     gps: GpsCoordinates {
                         latitude: lat,
                         longitude: lon,
@@ -691,10 +690,10 @@ impl Database {
         }
         // GPS fixes and accuracies, in the saved list order (`datum_extras`).
         // A table that no longer matches the rows above is ignored.
-        let zero_datums = super::datum_extras::combine(&self.conn, &sections, zero_datums)?;
+        let zero_datums = super::datum_extras::combine(&self.conn, &lines, zero_datums)?;
 
-        // Load section offsets
-        let mut section_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
+        // Load line offsets
+        let mut line_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
         {
             let mut stmt = self
                 .conn
@@ -709,9 +708,9 @@ impl Database {
 
             let mut sanitized_offsets = 0usize;
             for offset_row in offset_rows {
-                let (section_id, mut offset_x, mut offset_y) = offset_row?;
-                // Sanitize non-finite (NaN/inf) section offsets at the load boundary,
-                // mirroring the per-shot sanitize above. section_offsets is the one
+                let (line_id, mut offset_x, mut offset_y) = offset_row?;
+                // Sanitize non-finite (NaN/inf) line offsets at the load boundary,
+                // mirroring the per-shot sanitize above. line_offsets is the one
                 // geometry field with no finite guard, and resolve_offsets never
                 // adjusts a component ANCHOR's own offset, so a non-finite anchor/
                 // floating offset from a corrupt or hand-edited DB would survive the
@@ -726,13 +725,13 @@ impl Database {
                     }
                     sanitized_offsets += 1;
                 }
-                section_offsets.insert(section_id, (offset_x, offset_y));
+                line_offsets.insert(line_id, (offset_x, offset_y));
             }
             if sanitized_offsets > 0 {
                 tracing::warn!(
                     sanitized_offsets,
                     purpose = "block corruption at the source",
-                    "Replaced non-finite (NaN/inf) section offset with 0.0 on load"
+                    "Replaced non-finite (NaN/inf) line offset with 0.0 on load"
                 );
             }
         }
@@ -746,8 +745,8 @@ impl Database {
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
 
-        // Load imported section hashes
-        let imported_section_hashes = self.load_imported_section_hashes()?;
+        // Load imported line hashes
+        let imported_line_hashes = self.load_imported_line_hashes()?;
 
         // Derive next_closure_id: use persisted value if available, otherwise fall back to max(existing) + 1.
         // Always ensure it's at least max(existing closures) + 1 for safety.
@@ -760,6 +759,11 @@ impl Database {
         // Load station comments and names
         let station_comments = self.load_station_texts(StationTextTable::Comments)?;
         let station_names = self.load_station_texts(StationTextTable::Names)?;
+        // Station ids and their counter (tolerant: see `station_ids`). A
+        // missing or low counter is raised above the ids on open
+        // (`Project::ensure_station_identities`).
+        let station_ids = super::station_ids::load_station_ids(&self.conn)?;
+        let next_station_id = super::station_ids::load_next_station_id(&self.conn).unwrap_or(0);
 
         // Per-project validation thresholds (#57). The DB layer has no access to
         // the global config, so legacy projects (no row) fall back to the
@@ -777,28 +781,28 @@ impl Database {
         // uuid, an Add of a copy of the same survey for one.
         let mut counter_parity_shots = self.load_project_counter_parity_shots();
         if !counter_parity_shots.is_empty() {
-            let held: HashSet<&str> = sections
+            let held: HashSet<&str> = lines
                 .iter()
                 .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
                 .collect();
             counter_parity_shots.retain(|uuid| held.contains(uuid.as_str()));
         }
 
-        // Pre-populate the section_id → index lookup so callers get
-        // O(1) get_section without needing rebuild_section_index().
-        let mut section_index_cache = HashMap::with_capacity(sections.len());
-        for (i, s) in sections.iter().enumerate() {
-            section_index_cache.insert(s.id, i);
+        // Pre-populate the line_id → index lookup so callers get
+        // O(1) get_line without needing rebuild_line_index().
+        let mut line_index_cache = HashMap::with_capacity(lines.len());
+        for (i, s) in lines.iter().enumerate() {
+            line_index_cache.insert(s.id, i);
         }
         // (The merge adjacency needs no priming: `MergeTopology` builds it the
-        // first time `get_merged_section_ids` asks.)
+        // first time `get_merged_line_ids` asks.)
         // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
         // is O(1) right after load (mirrors the two caches above).
         let mut shot_uuid_index = HashMap::new();
-        for s in &sections {
+        for s in &lines {
             for (i, shot) in s.shots.iter().enumerate() {
                 if let Some(u) = &shot.uuid {
-                    // First occurrence wins, matching `add_section` /
+                    // First occurrence wins, matching `add_line` /
                     // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
                     // plain `.insert` would be last-write-wins and silently break
                     // that invariant if a duplicate UUID ever slipped through.
@@ -806,32 +810,36 @@ impl Database {
                 }
             }
         }
-        let section_count = sections.len();
+        let line_count = lines.len();
         let mut project = Project {
             name,
             location,
             created_at,
             modified_at,
-            sections,
+            lines,
             station_merges: MergeTopology::from(station_merges),
             zero_datums,
             loop_closures,
-            section_offsets,
+            line_offsets,
             station_offsets,
             station_comments,
             station_names,
+            station_ids,
+            next_station_id,
             file_path: None,
-            next_section_id,
+            next_line_id,
             imported_file_hashes,
-            imported_section_hashes,
+            imported_line_hashes,
             next_closure_id,
             validation,
             surface_elevation,
             default_azimuth_reference,
             counter_parity_shots,
-            held_gauges: self.load_project_held_gauges(&shot_uuid_index, section_count),
+            held_gauges: self.load_project_held_gauges(&shot_uuid_index, line_count),
+            sections: Vec::new(),
+            next_section_id: 0,
             cascade_deferred: false,
-            section_index_cache,
+            line_index_cache,
             shot_uuid_index,
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
@@ -840,6 +848,8 @@ impl Database {
         // Only entries that still name a station: a dangling one (a file
         // edited by hand) anchors nothing.
         project.prune_held_gauges();
+        // Sections (#327) and the lines' memberships, normalized.
+        super::cave_sections::load_cave_sections(&self.conn, &mut project)?;
         Ok(project)
     }
 
@@ -986,9 +996,9 @@ impl Database {
         })?;
 
         for row in rows {
-            let (section_id, station_index, offset_x, offset_y, offset_z) = row?;
+            let (line_id, station_index, offset_x, offset_y, offset_z) = row?;
             offsets.insert(
-                StationKey::positional(section_id, station_index),
+                StationKey::positional(line_id, station_index),
                 (offset_x, offset_y, offset_z),
             );
         }
@@ -996,7 +1006,7 @@ impl Database {
         Ok(offsets)
     }
 
-    /// Load one positional `(section_id, station_index, text)` table into a
+    /// Load one positional `(line_id, station_index, text)` table into a
     /// `StationKey` map. The keys are transitional positional ones; the load
     /// re-anchor pass canonicalizes them.
     ///
@@ -1033,8 +1043,8 @@ impl Database {
         })?;
 
         for row in rows {
-            let (section_id, station_index, text) = row?;
-            texts.insert(StationKey::positional(section_id, station_index), text);
+            let (line_id, station_index, text) = row?;
+            texts.insert(StationKey::positional(line_id, station_index), text);
         }
 
         Ok(texts)
@@ -1169,8 +1179,8 @@ impl Database {
         Ok(hashes)
     }
 
-    /// Load imported section hashes from database
-    fn load_imported_section_hashes(&self) -> Result<Vec<String>> {
+    /// Load imported line hashes from database
+    fn load_imported_line_hashes(&self) -> Result<Vec<String>> {
         let mut hashes = Vec::new();
 
         // Check if table exists (for backwards compatibility with older files)
@@ -1249,7 +1259,7 @@ impl Database {
     /// change a signature every caller shares.
     ///
     /// `shot_id` is the in-memory id the frontend addresses shots by
-    /// (`section_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    /// (`line_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
     pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
         // `kind` was added in v13; an older file legitimately has no such column.
         if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
@@ -1270,18 +1280,18 @@ impl Database {
              ORDER BY s.section_id, s.sequence_order",
         )?;
         let rows = stmt.query_map([], |row| {
-            let section_id: SectionId = row.get(0)?;
+            let line_id: LineId = row.get(0)?;
             let sequence_order: u32 = row.get(1)?;
             Ok(UnrecognisedShotKind {
-                section_id,
+                line_id,
                 // Saturating like the loader's shot encode: this diagnostic
-                // runs its own query, so a shots row can name a section id no
-                // sections row (and no #557 open-refusal) ever vetted.
-                shot_id: section_id
+                // runs its own query, so a shots row can name a line id no
+                // lines row (and no #557 open-refusal) ever vetted.
+                shot_id: line_id
                     .saturating_mul(FEATURE_ID_STRIDE)
                     .saturating_add(sequence_order),
                 shot_number: sequence_order.saturating_add(1),
-                section_name: row.get(3)?,
+                line_name: row.get(3)?,
                 raw_value: row.get(2)?,
             })
         })?;
@@ -1332,27 +1342,24 @@ impl Database {
     /// by this write, and the frontend keeps `isDirty: false` after load, so no
     /// save is provoked.)
     ///
-    /// Rows are addressed by `(section_id, sequence_order)` - the same tuple the
+    /// Rows are addressed by `(line_id, sequence_order)` - the same tuple the
     /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
     /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
     /// while the in-memory `Shot::id` is synthesised on load as
-    /// `section_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
-    /// silently writes the wrong rows in the first section and matches nothing
+    /// `line_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
+    /// silently writes the wrong rows in the first line and matches nothing
     /// at all in the rest (the v7->v8 migration converts between the same two
     /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
     /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
     /// memory only, so it would persist against a transient identity.
-    pub fn persist_backfilled_shot_kinds(
-        &self,
-        kinds: &[(SectionId, u32, ShotKind)],
-    ) -> Result<()> {
+    pub fn persist_backfilled_shot_kinds(&self, kinds: &[(LineId, u32, ShotKind)]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare(
                 "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
             )?;
-            for (section_id, seq, kind) in kinds {
-                stmt.execute(params![i32::from(kind.as_u8()), *section_id, *seq])?;
+            for (line_id, seq, kind) in kinds {
+                stmt.execute(params![i32::from(kind.as_u8()), *line_id, *seq])?;
             }
         }
         tx.execute(
@@ -1420,15 +1427,15 @@ impl Database {
     /// survey.
     ///
     /// The file is untrusted, so the work is bounded before anything else
-    /// reads the list: entries whose section does not hold their shot (one
+    /// reads the list: entries whose line does not hold their shot (one
     /// probe of `shot_uuid_index`, the index the load just built) and
-    /// duplicates are dropped, and what is left is cut to `section_count`
+    /// duplicates are dropped, and what is left is cut to `line_count`
     /// entries (the edits keep at most one per component). The load's heal
     /// then keeps one per component (`Project::normalize_held_gauges`).
     pub fn load_project_held_gauges(
         &self,
         shot_uuid_index: &HashMap<(u32, String), u32>,
-        section_count: usize,
+        line_count: usize,
     ) -> Vec<crate::models::HeldGauge> {
         let json: Option<String> = self
             .conn
@@ -1441,7 +1448,7 @@ impl Database {
             .unwrap_or(None);
         let parsed: Vec<crate::models::HeldGauge> = json
             .map(|s| {
-                serde_json::from_str(&s).unwrap_or_else(|e| {
+                crate::models::disk_names::from_disk_str(&s).unwrap_or_else(|e| {
                     tracing::warn!(
                         error = %e,
                         "stored held_gauges is present but unparseable; reading as none"
@@ -1453,21 +1460,21 @@ impl Database {
         let mut seen = HashSet::new();
         let mut held: Vec<crate::models::HeldGauge> = parsed
             .into_iter()
-            .filter(|g| shot_uuid_index.contains_key(&(g.section_id, g.shot.clone())))
+            .filter(|g| shot_uuid_index.contains_key(&(g.line_id, g.shot.clone())))
             .filter(|g| seen.insert(g.clone()))
             .collect();
-        if held.len() > section_count {
+        if held.len() > line_count {
             tracing::warn!(
                 stored = held.len(),
-                section_count,
-                "stored held_gauges has more entries than sections; keeping the first"
+                line_count,
+                "stored held_gauges has more entries than lines; keeping the first"
             );
-            held.truncate(section_count);
+            held.truncate(line_count);
         }
         held
     }
 
-    /// Load the shots whose record orientation runs against their section's
+    /// Load the shots whose record orientation runs against their line's
     /// parity (`Project::counter_parity_shots`), kept in `project_settings`
     /// under `counter_parity_shots` like the other project-level values (no
     /// schema bump; readers that do not know the key skip it). A missing key

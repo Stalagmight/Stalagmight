@@ -15,8 +15,8 @@ use ts_rs::TS;
 pub struct ImportReceipt {
     pub source_format: String,
     pub file_name: String,
-    pub sections_found: u32,
-    pub sections_imported: u32,
+    pub lines_found: u32,
+    pub lines_imported: u32,
     pub shot_count: u32,
     pub closures_requested: u32,
     pub closures_created: u32,
@@ -25,14 +25,14 @@ pub struct ImportReceipt {
     /// Notice-level lines, distinct from `warnings`: they never change the
     /// receipt's toast-vs-dialog routing (`presentImportReceipt`,
     /// `saveFeedback.ts`), unlike a non-empty `warnings`. Currently used for
-    /// the "N sections are not connected to a zero datum" line the import
+    /// the "N lines are not connected to a zero datum" line the import
     /// dialogs add when the orphan-placement pass found nothing to suggest
     /// (#446). `#[serde(default)]` so an older cached/replayed payload
     /// without this field still deserializes instead of rejecting the whole
     /// receipt.
     #[serde(default)]
     pub info: Vec<String>,
-    /// Name of the section a zero datum was created on during this import
+    /// Name of the line a zero datum was created on during this import
     /// (F12c), or `None` if no zero datum was created. `#[serde(default)]`
     /// for the same replay/cache back-compat reason as `info`.
     #[serde(default)]
@@ -62,7 +62,7 @@ pub fn sanitize_display_text(raw: &str, max_chars: usize) -> String {
 }
 
 impl ImportReceipt {
-    /// The receipt for an import that landed NOTHING: zero sections, zero
+    /// The receipt for an import that landed NOTHING: zero lines, zero
     /// shots, no closures. Every text field is a placeholder the importer's
     /// `decorate_receipt` fills in, including the warnings that say why the
     /// file produced nothing - which is the entire reason an empty import
@@ -71,8 +71,8 @@ impl ImportReceipt {
         Self {
             source_format: String::new(),
             file_name: String::new(),
-            sections_found: 0,
-            sections_imported: 0,
+            lines_found: 0,
+            lines_imported: 0,
             shot_count: 0,
             closures_requested: 0,
             closures_created: 0,

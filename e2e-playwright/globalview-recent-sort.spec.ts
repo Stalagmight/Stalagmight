@@ -9,10 +9,10 @@ import { systemCardTestId } from './helpers/testIds';
  *   - persisted "Sort by" control (field + direction)
  *
  * Mock recent projects (from mocks/tauri-ipc.ts), newest → oldest:
- *   Cave System Alpha   /projects/cave-alpha.stalx   5 sections  now
- *   Underwater Cave Beta /projects/cave-beta.stalx   3 sections  -1 day
- *   Deep Cave Gamma     /projects/cave-gamma.stalx   8 sections  -2 days
- *   Local Survey…       /projects/local-survey.stalx 2 sections  -3 days
+ *   Cave System Alpha   /projects/cave-alpha.stalx   5 lines  now
+ *   Underwater Cave Beta /projects/cave-beta.stalx   3 lines  -1 day
+ *   Deep Cave Gamma     /projects/cave-gamma.stalx   8 lines  -2 days
+ *   Local Survey…       /projects/local-survey.stalx 2 lines  -3 days
  */
 
 const cardTestId = systemCardTestId;
@@ -135,9 +135,9 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
     expect(await cardOrder(page)).toEqual([BETA, LOCAL, GAMMA, ALPHA]);
   });
 
-  test('sorts by section count', async ({ page }) => {
-    await selectSortField(page, 'Section count');
-    // Descending by section_count: Gamma(8), Alpha(5), Beta(3), Local(2).
+  test('sorts by line count', async ({ page }) => {
+    await selectSortField(page, 'Line count');
+    // Descending by line_count: Gamma(8), Alpha(5), Beta(3), Local(2).
     expect(await cardOrder(page)).toEqual([GAMMA, ALPHA, BETA, LOCAL]);
   });
 

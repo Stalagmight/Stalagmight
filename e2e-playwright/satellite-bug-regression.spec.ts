@@ -192,7 +192,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Find first survey layer (could be survey-ghost-shots, survey-shots, etc.)
       const surveyLayerIndex = layerOrder.findIndex((id: string) =>
-        id.startsWith('survey-') || id.includes('section') || id.includes('station')
+        id.startsWith('survey-') || id.includes('line') || id.includes('station')
       );
 
       // Verify correct ordering: background < satellite < survey

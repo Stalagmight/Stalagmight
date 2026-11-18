@@ -1,8 +1,8 @@
-//! Which north a section's stored azimuths are measured against (#438).
+//! Which north a line's stored azimuths are measured against (#438).
 //!
 //! The contract this file exists to hold: **a stored azimuth is the azimuth that
 //! was measured**. No importer rotates a reading into some internal convention,
-//! and nothing writes a declination back into a shot. Instead each section
+//! and nothing writes a declination back into a shot. Instead each line
 //! declares how its readings relate to true north, and geometry adds that
 //! constant when it computes - once per shot, at compute time.
 //!
@@ -16,14 +16,14 @@
 //!   walk (coordinates, closure solve, move/split) reads through it.
 //! * [`AzimuthReference::to_measured`] - world bearing -> measured. Every path
 //!   that solves a displacement and writes an azimuth BACK onto a shot has to
-//!   use it, or the section creeps by one correction per adjustment.
+//!   use it, or the line creeps by one correction per adjustment.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::normalize_azimuth;
 
-/// What a section's stored azimuths are measured against.
+/// What a line's stored azimuths are measured against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export, export_to = "../../bindings/", rename_all = "lowercase")]
@@ -40,7 +40,7 @@ pub enum NorthReference {
 }
 
 impl NorthReference {
-    /// Stable token for the `sections.azimuth_north` column. Do not rename:
+    /// Stable token for the `lines.azimuth_north` column. Do not rename:
     /// these strings are in saved files.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -82,7 +82,7 @@ pub enum CorrectionSource {
 }
 
 impl CorrectionSource {
-    /// Stable token for the `sections.azimuth_source` column, paired with
+    /// Stable token for the `lines.azimuth_source` column, paired with
     /// [`Self::epoch_year`] for the one variant that carries data.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -114,7 +114,7 @@ impl CorrectionSource {
     }
 }
 
-/// How one section's stored azimuths relate to true north.
+/// How one line's stored azimuths relate to true north.
 ///
 /// `Copy` on purpose: geometry hoists it out of the shot loop and passes it by
 /// value into the per-shot accessor, so the whole cost of the correction is one

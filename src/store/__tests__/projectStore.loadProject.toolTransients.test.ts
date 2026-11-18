@@ -53,15 +53,15 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         location: null,
         created_at: new Date().toISOString(),
         modified_at: new Date().toISOString(),
-        sections: [],
+        lines: [],
         station_merges: [],
         zero_datums: [],
         loop_closures: [],
         file_path: '/mock/loaded.stalx',
-        next_section_id: 1,
-        section_offsets: {},
+        next_line_id: 1,
+        line_offsets: {},
         imported_file_hashes: [],
-        imported_section_hashes: [],
+        imported_line_hashes: [],
         next_closure_id: 1n,
       },
       stations: [],
@@ -75,7 +75,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
       displaySettings: {
         showStations: true,
         showShots: true,
-        showSectionNames: true,
+        showLineNames: true,
         showStationLabels: false,
         showStationNames: false,
         showShotData: false,
@@ -90,6 +90,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         showShotComments: false,
         gridSpacing: 10,
         geometryMode: 'measured',
+        hiddenSections: [],
       } satisfies DisplaySettings,
     });
 
@@ -115,7 +116,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
     useUIStore.setState({
       activeTool: 'merge',
       moveCommentSource: null,
-      mergeStationA: { section_id: 4, station_index: 2 },
+      mergeStationA: { line_id: 4, station_index: 2 },
       mergeStationB: null,
       commentTarget: null,
     });

@@ -6,11 +6,11 @@ import { DatabaseIcon } from '../common/icons';
 import { EntitySymbol } from '../common/toolIcons';
 import { syntacticLevelAtLeast, syntacticVarName } from '../../theme/syntacticPalette';
 
-const SECTIONS_VALUE = 'sections';
+const LINES_VALUE = 'lines';
 const RAW_VALUE = 'raw';
 
 /**
- * Fullscreen-toolbar view picker: the Sections-backed data table, or the raw
+ * Fullscreen-toolbar view picker: the Lines-backed data table, or the raw
  * sqlite tables of the project database. WHICH raw table is browsed is chosen
  * in the data-table sub-header next to the table-name pill; selecting "Raw
  * data" here enters raw mode with an empty selection that the sub-header
@@ -32,13 +32,13 @@ export default function TableSelectDropdown() {
 
   const options: SelectOption[] = [
     {
-      value: SECTIONS_VALUE,
+      value: LINES_VALUE,
       label: t('dataTable.tableSelect.sections'),
       ...(showIcons
         ? {
             icon: (
-              <span style={{ color: `var(${syntacticVarName('section')})` }}>
-                <EntitySymbol entity="section" size={13} />
+              <span style={{ color: `var(${syntacticVarName('line')})` }}>
+                <EntitySymbol entity="line" size={13} />
               </span>
             ),
           }
@@ -56,7 +56,7 @@ export default function TableSelectDropdown() {
 
   return (
     <Select
-      value={rawTableSelection === null ? SECTIONS_VALUE : RAW_VALUE}
+      value={rawTableSelection === null ? LINES_VALUE : RAW_VALUE}
       onChange={handleChange}
       options={options}
       className="w-48 text-sm"

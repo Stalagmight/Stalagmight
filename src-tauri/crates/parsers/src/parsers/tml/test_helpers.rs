@@ -35,7 +35,7 @@ pub fn sample_tml_shot() -> TmlShot {
         latitude: 0.0,
         longitude: 0.0,
         closure_to_id: -1,
-        section: String::new(),
+        line: String::new(),
         credit: None,
     }
 }
@@ -77,7 +77,7 @@ pub fn tml_shot_xml_depth(
     id: i64,
     from_id: i64,
     shot_type: &str,
-    section: &str,
+    line: &str,
     depth: f64,
     depth_in: f64,
 ) -> String {
@@ -87,7 +87,7 @@ pub fn tml_shot_xml_depth(
     <FromID>{from_id}</FromID>
     <ClosureToID>-1</ClosureToID>
     <Type>{shot_type}</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>{depth}</Depth>
@@ -118,7 +118,7 @@ pub fn tml_shot_xml_depth(
 pub struct TripShot<'a> {
     pub id: i64,
     pub from_id: i64,
-    pub section: &'a str,
+    pub line: &'a str,
     pub uuid: Option<&'a str>,
     pub excluded: bool,
     pub explorer: &'a str,
@@ -134,7 +134,7 @@ impl Default for TripShot<'_> {
         Self {
             id: 0,
             from_id: -1,
-            section: "A",
+            line: "A",
             uuid: None,
             excluded: false,
             explorer: "Tester",
@@ -151,7 +151,7 @@ impl TripShot<'_> {
         let Self {
             id,
             from_id,
-            section,
+            line,
             uuid,
             excluded,
             explorer,
@@ -167,7 +167,7 @@ impl TripShot<'_> {
     <FromID>{from_id}</FromID>{uuid_element}
     <ClosureToID>-1</ClosureToID>
     <Type>REAL</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>{depth}</Depth>
@@ -189,14 +189,14 @@ impl TripShot<'_> {
     }
 }
 
-pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
+pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, line: &str) -> String {
     format!(
         r#"<SurveyData>
     <ID>{id}</ID>
     <FromID>{from_id}</FromID>
     <ClosureToID>-1</ClosureToID>
     <Type>{shot_type}</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>5.0</Depth>
@@ -219,20 +219,14 @@ pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> St
 
 /// A REAL shot with explicit azimuth and length, for the #412
 /// branch-continuation and re-join tests.
-pub fn tml_shot_xml_az_len(
-    id: i64,
-    from_id: i64,
-    section: &str,
-    azimuth: f64,
-    length: f64,
-) -> String {
+pub fn tml_shot_xml_az_len(id: i64, from_id: i64, line: &str, azimuth: f64, length: f64) -> String {
     format!(
         r"<SurveyData>
     <ID>{id}</ID>
     <FromID>{from_id}</FromID>
     <ClosureToID>-1</ClosureToID>
     <Type>REAL</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>{azimuth}</Azimut>
     <Length>{length}</Length>
     <Depth>5.0</Depth>
@@ -257,7 +251,7 @@ pub fn tml_shot_xml_gps(
     id: i64,
     from_id: i64,
     shot_type: &str,
-    section: &str,
+    line: &str,
     lat: f64,
     lng: f64,
 ) -> String {
@@ -267,7 +261,7 @@ pub fn tml_shot_xml_gps(
     <FromID>{from_id}</FromID>
     <ClosureToID>-1</ClosureToID>
     <Type>{shot_type}</Type>
-    <Section>{section}</Section>
+    <Section>{line}</Section>
     <Azimut>90.0</Azimut>
     <Length>10.0</Length>
     <Depth>5.0</Depth>
@@ -288,14 +282,14 @@ pub fn tml_shot_xml_gps(
     )
 }
 
-pub fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
+pub fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, line: &str) -> String {
     format!(
         r#"<SRVD>
     <ID>{id}</ID>
     <FRID>{from_id}</FRID>
     <CID>-1</CID>
     <TY>{shot_type}</TY>
-    <SC>{section}</SC>
+    <SC>{line}</SC>
     <AZ>45.0</AZ>
     <LG>5.0</LG>
     <DP>3.0</DP>

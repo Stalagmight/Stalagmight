@@ -75,10 +75,10 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   useEffect(() => clearGrace, [clearGrace]);
 
   // Drop the transient hover state whenever the panel is (re-)pinned - by the
-  // user, or programmatically (section-focus, data-table fullscreen, keyboard /
+  // user, or programmatically (line-focus, data-table fullscreen, keyboard /
   // menu toggles all force mode='pin'). Otherwise a `hovering=true` captured
   // before the pin would survive a later return to hover mode and float the panel
-  // open with no pointer over it (e.g. exiting section-focus restores 'hover').
+  // open with no pointer over it (e.g. exiting line-focus restores 'hover').
   // Skipped while force-closed: the panel is behaving as a hover panel there, so
   // clearing `hovering` on its (still 'pin') persisted mode would snap a panel the
   // user just floated open shut again.

@@ -1,6 +1,6 @@
 /**
- * The Skip action on the zero-datum section picker (#F5): it must read as
- * secondary to the section cards, not compete with them, and it must carry a
+ * The Skip action on the zero-datum line picker (#F5): it must read as
+ * secondary to the line cards, not compete with them, and it must carry a
  * visible, accurate cost line so skipping is an informed choice rather than
  * the path of least resistance. The dialog also must not close on a
  * backdrop click (#F9) - a click meant for the map behind it would otherwise
@@ -64,7 +64,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -72,7 +72,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: 3 }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -90,7 +90,7 @@ function renderDialog() {
       onCancel={vi.fn()}
       onBack={vi.fn()}
       onSkip={vi.fn()}
-      onSelectSection={vi.fn()}
+      onSelectLine={vi.fn()}
     />,
   );
 }
@@ -109,7 +109,7 @@ describe('ZeroDatumSelectionDialog skip button', () => {
   });
 
   it('has no primary-action element anywhere in the dialog', () => {
-    // The section cards are hand-rolled <button>s that never render through
+    // The line cards are hand-rolled <button>s that never render through
     // Button.tsx, so asserting on one of them alone cannot fail - this
     // queries the whole dialog body so a regression anywhere (Skip, a card,
     // a future footer button) is caught.
@@ -123,10 +123,10 @@ describe('ZeroDatumSelectionDialog skip button', () => {
     expect(screen.getByTestId('zero-datum-selection-skip-cost')).toBeInTheDocument();
   });
 
-  it('the skip-cost copy is accurate: skipping still places sections, it just leaves no GPS anchor', () => {
+  it('the skip-cost copy is accurate: skipping still places lines, it just leaves no GPS anchor', () => {
     // `useTranslation` is mocked to echo keys, so this pins the real string
     // directly rather than through the rendered (mocked) DOM - an empty
-    // string, or the earlier draft's wrong "every section will land
+    // string, or the earlier draft's wrong "every line will land
     // unpositioned" claim (onSkip still runs the normal placement wizard),
     // fails this.
     expect(en.dialogs.zeroDatumSelection.skipCost).toContain('no real-world GPS anchor');

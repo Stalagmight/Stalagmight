@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    gps_to_local, local_to_gps, ClosureStrategy, CombineJoinEnds, CombinePick,
-    CombineSectionsOptions, DatumRole, GpsCoordinates, Project, SectionEnd, SectionId, ShotData,
-    StationRef, SurveyDirection, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    gps_to_local, local_to_gps, ClosureStrategy, CombineJoinEnds, CombineLinesOptions, CombinePick,
+    DatumRole, GpsCoordinates, LineEnd, LineId, Project, ShotData, StationRef, SurveyDirection,
+    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
 };
 
 const ORIGIN: (f64, f64) = (20.5, -87.25);
@@ -36,17 +36,18 @@ fn north_shots(count: usize, length: f64) -> Vec<ShotData> {
         .collect()
 }
 
-fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
+fn create_line(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
     state
-        .execute(Command::CreateSection {
+        .execute(Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
             shots,
+            cave_section_id: None,
         })
-        .section_id
+        .line_id
         .unwrap()
 }
 
@@ -84,14 +85,14 @@ fn assert_same_xy(a: &HashMap<StationRef, (f64, f64)>, b: &HashMap<StationRef, (
 }
 
 /// Two entrances joined by a 500 m traverse, first entrance placed at A:0.
-fn two_entrances() -> (AppState, SectionId, SectionId) {
+fn two_entrances() -> (AppState, LineId, LineId) {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "TwoEntrances".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A", north_shots(5, 50.0));
-    let b = create_section(&state, "B", north_shots(5, 50.0));
+    let a = create_line(&state, "A", north_shots(5, 50.0));
+    let b = create_line(&state, "B", north_shots(5, 50.0));
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 5),
         station_b: StationRef::new(b, 0),
@@ -151,13 +152,13 @@ fn merging_two_placed_groups_and_undo_restores_both_placements() {
         name: "TwoPieces".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A", north_shots(2, 50.0));
-    let b = create_section(&state, "B", north_shots(2, 50.0));
+    let a = create_line(&state, "A", north_shots(2, 50.0));
+    let b = create_line(&state, "B", north_shots(2, 50.0));
     set_datum(&state, StationRef::new(a, 0), origin(), None);
     set_datum(&state, StationRef::new(b, 0), gps_at(30.0, 100.0), None);
     let placed = project(&state);
     let before = raw_xy(&placed);
-    let offsets_before = placed.section_offsets.clone();
+    let offsets_before = placed.line_offsets.clone();
     assert_eq!(
         placed.datum_roles(),
         vec![Some(DatumRole::Placement), Some(DatumRole::Placement)]
@@ -185,7 +186,7 @@ fn merging_two_placed_groups_and_undo_restores_both_placements() {
     assert!(state.undo().success);
     let undone = project(&state);
     assert_same_xy(&before, &raw_xy(&undone));
-    assert_eq!(undone.section_offsets, offsets_before);
+    assert_eq!(undone.line_offsets, offsets_before);
     assert!(undone.station_merges.is_empty());
     assert_eq!(
         undone.datum_roles(),
@@ -211,7 +212,7 @@ fn a_fix_past_the_threshold_gets_one_datum_gps_gap_warning() {
         }
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         let w = &warnings[0];
-        assert_eq!(w.section_id, b);
+        assert_eq!(w.line_id, b);
         assert_eq!(w.datum_station_index, Some(5));
         assert_eq!(w.shot_index, 4, "station 5 is the end of shot 4");
         assert!(w.datum_refs.is_none());
@@ -228,7 +229,7 @@ fn a_fix_past_the_threshold_gets_one_datum_gps_gap_warning() {
 }
 
 #[test]
-fn fixes_on_stations_0_and_1_of_one_section_are_ignored_independently() {
+fn fixes_on_stations_0_and_1_of_one_line_are_ignored_independently() {
     // Both stations touch shot 0 of B; the codes keep their Ignores apart.
     let (state, _a, b) = two_entrances();
     let temp = tempfile::TempDir::new().unwrap();
@@ -326,13 +327,13 @@ fn assert_undo_redo_round_trip(state: &AppState, before: &Project) {
     let after = project(state);
     assert!(state.undo().success);
     let undone = project(state);
-    assert_eq!(undone.section_offsets, before.section_offsets);
+    assert_eq!(undone.line_offsets, before.line_offsets);
     assert_eq!(undone.zero_datums.len(), before.zero_datums.len());
     assert_eq!(undone.datum_roles(), before.datum_roles());
     assert_eq!(raw_xyz(&undone), raw_xyz(before));
     assert!(state.redo().success);
     let redone = project(state);
-    assert_eq!(redone.section_offsets, after.section_offsets);
+    assert_eq!(redone.line_offsets, after.line_offsets);
     assert_eq!(raw_xyz(&redone), raw_xyz(&after));
 }
 
@@ -352,7 +353,7 @@ fn removing_the_frame_places_the_promoted_fix_and_keeps_every_piece_on_its_gps()
             s
         })
         .collect();
-    let c = create_section(&state, "C", c_shots);
+    let c = create_line(&state, "C", c_shots);
     let c_gps = gps_at(-300.0, 120.0);
     set_datum(&state, StationRef::new(c, 0), c_gps, None);
     let before = project(&state);
@@ -400,7 +401,7 @@ fn removing_the_frame_places_the_promoted_fix_and_keeps_every_piece_on_its_gps()
     for (sr, (bx, by, bz)) in &old {
         let (nx, ny, nz) = new[sr];
         assert!((nz - bz).abs() < 1e-12, "{sr:?}: depth changed");
-        let (ex, ey) = if sr.section_id == c {
+        let (ex, ey) = if sr.line_id == c {
             (bx - 40.0, by - 500.0)
         } else {
             (*bx, by - 500.0)
@@ -412,19 +413,20 @@ fn removing_the_frame_places_the_promoted_fix_and_keeps_every_piece_on_its_gps()
 }
 
 #[test]
-fn a_batch_that_deletes_the_frame_section_settles_the_promotion_once() {
+fn a_batch_that_deletes_the_frame_line_settles_the_promotion_once() {
     // `execute_batch` settles inside its snapshot pair; a second settle in
     // `execute()`'s epilogue would place the new frame against the old one.
     let (state, a, b) = two_entrances();
     let fix_gps = gps_at(40.0, 500.0);
     set_datum(&state, StationRef::new(b, 5), fix_gps, None);
-    let c = create_section(&state, "C", north_shots(2, 20.0));
+    let c = create_line(&state, "C", north_shots(2, 20.0));
     let c_gps = gps_at(-300.0, 120.0);
     set_datum(&state, StationRef::new(c, 0), c_gps, None);
     let before = project(&state);
 
     let r = state.execute(Command::Batch {
-        commands: vec![Command::DeleteSection { section_id: a }],
+        commands: vec![Command::DeleteLine { line_id: a }],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     let p = project(&state);
@@ -443,7 +445,7 @@ fn a_batch_that_deletes_the_frame_section_settles_the_promotion_once() {
 
     assert!(state.undo().success);
     let undone = project(&state);
-    assert_eq!(undone.section_offsets, before.section_offsets);
+    assert_eq!(undone.line_offsets, before.line_offsets);
     assert_eq!(raw_xyz(&undone), raw_xyz(&before));
 }
 
@@ -454,8 +456,8 @@ fn unmerging_moves_the_piece_whose_fix_is_promoted_onto_its_gps() {
         name: "TwoPieces".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A", north_shots(2, 50.0));
-    let b = create_section(&state, "B", north_shots(2, 50.0));
+    let a = create_line(&state, "A", north_shots(2, 50.0));
+    let b = create_line(&state, "B", north_shots(2, 50.0));
     set_datum(&state, StationRef::new(a, 0), origin(), None);
     set_datum(&state, StationRef::new(b, 0), gps_at(30.0, 100.0), None);
     let r = state.execute(Command::MergeStations {
@@ -504,10 +506,10 @@ fn a_promotion_under_an_unchanged_frame_places_only_its_own_piece() {
         name: "KeptFrame".to_string(),
         location: None,
     });
-    let e = create_section(&state, "E", north_shots(1, 10.0));
+    let e = create_line(&state, "E", north_shots(1, 10.0));
     set_datum(&state, StationRef::new(e, 0), origin(), None);
-    let a = create_section(&state, "A", north_shots(5, 50.0));
-    let b = create_section(&state, "B", north_shots(5, 50.0));
+    let a = create_line(&state, "A", north_shots(5, 50.0));
+    let b = create_line(&state, "B", north_shots(5, 50.0));
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 5),
         station_b: StationRef::new(b, 0),
@@ -542,7 +544,7 @@ fn a_promotion_under_an_unchanged_frame_places_only_its_own_piece() {
     let (old, new) = (raw_xyz(&before), raw_xyz(&p));
     for (sr, (bx, by, _)) in &old {
         let (nx, ny, _) = new[sr];
-        let east = if sr.section_id == e { 0.0 } else { 40.0 };
+        let east = if sr.line_id == e { 0.0 } else { 40.0 };
         assert_near((nx, ny), (bx + east, *by), 1e-6, &format!("{sr:?}"));
     }
 
@@ -614,7 +616,7 @@ fn accuracy_survives_the_batch_command_path() {
         "type": "batch",
         "commands": [{
             "type": "set_zero_datum",
-            "station_ref": { "section_id": b, "station_index": 5 },
+            "station_ref": { "line_id": b, "station_index": 5 },
             "coordinates": {
                 "latitude": fix.latitude,
                 "longitude": fix.longitude,
@@ -658,10 +660,10 @@ fn assert_placements_on_their_gps(state: &AppState, what: &str) {
 /// Frame A:0, a fix on B:5 40 m east of the survey, and a separate piece C
 /// placed by its own GPS: the shape where a promoted fix used to leave a
 /// placement datum off its GPS (#741 D4/D5).
-fn frame_fix_and_separate_piece() -> (AppState, SectionId, SectionId, SectionId) {
+fn frame_fix_and_separate_piece() -> (AppState, LineId, LineId, LineId) {
     let (state, a, b) = two_entrances();
     set_datum(&state, StationRef::new(b, 5), gps_at(40.0, 500.0), None);
-    let c = create_section(&state, "C", north_shots(2, 20.0));
+    let c = create_line(&state, "C", north_shots(2, 20.0));
     set_datum(&state, StationRef::new(c, 0), gps_at(200.0, 0.0), None);
     assert_placements_on_their_gps(&state, "setup");
     (state, a, b, c)
@@ -677,11 +679,11 @@ fn no_placement_datum_is_left_off_its_gps_by_a_promotion() {
     assert!(r.success, "{:?}", r.error);
     assert_placements_on_their_gps(&state, "remove");
 
-    // Delete Section on the frame's section.
+    // Delete Line on the frame's line.
     let (state, a, _b, _c) = frame_fix_and_separate_piece();
-    let r = state.execute(Command::DeleteSection { section_id: a });
+    let r = state.execute(Command::DeleteLine { line_id: a });
     assert!(r.success, "{:?}", r.error);
-    assert_placements_on_their_gps(&state, "delete section");
+    assert_placements_on_their_gps(&state, "delete line");
 
     // Unmerge: the fix's piece becomes a piece of its own.
     let (state, a, b, _c) = frame_fix_and_separate_piece();
@@ -747,7 +749,7 @@ fn an_accuracy_only_edit_never_moves_a_piece() {
     {
         let mut guard = state.project.lock().unwrap();
         let p = guard.as_mut().unwrap();
-        p.set_section_offset(c, (230.0, 0.0));
+        p.set_line_offset(c, (230.0, 0.0));
     }
     let p = project(&state);
     let before = raw_xy(&p);
@@ -777,7 +779,7 @@ fn ignore_datum_row(state: &AppState, station: u32) {
         .unwrap();
     state
         .save_resolved_warning_gated(&crate::persistence::ResolvedWarning {
-            section_id: row.section_id,
+            line_id: row.line_id,
             shot_id: row.shot_id,
             warning_code: row.code.clone(),
             resolved_at: chrono::Utc::now(),
@@ -838,7 +840,7 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
         .unwrap();
     state
         .delete_resolved_warning_gated(
-            row.section_id,
+            row.line_id,
             row.shot_id,
             &row.code,
             row.shot_uuid.as_deref(),
@@ -849,8 +851,8 @@ fn an_ignored_gap_comes_back_when_the_datum_gps_changes() {
 
 /// A separately placed piece C, 300 m west and 120 m north of the first
 /// entrance's GPS.
-fn placed_piece(state: &AppState) -> (SectionId, GpsCoordinates) {
-    let c = create_section(state, "C", north_shots(2, 20.0));
+fn placed_piece(state: &AppState) -> (LineId, GpsCoordinates) {
+    let c = create_line(state, "C", north_shots(2, 20.0));
     let c_gps = gps_at(-300.0, 120.0);
     set_datum(state, StationRef::new(c, 0), c_gps, None);
     (c, c_gps)
@@ -866,10 +868,10 @@ fn deleting_the_first_shot_promotes_the_next_stations_fix_onto_its_gps() {
     set_datum(&state, StationRef::new(a, 1), fix_gps, None);
     let (c, c_gps) = placed_piece(&state);
     let before = project(&state);
-    let first = before.get_section(a).unwrap().shots[0].id;
+    let first = before.get_line(a).unwrap().shots[0].id;
 
     let r = state.execute(Command::DeleteShot {
-        section_id: a,
+        line_id: a,
         shot_id: first,
     });
     assert!(r.success, "{:?}", r.error);
@@ -943,10 +945,10 @@ fn deleting_the_first_shot_promotes_a_next_station_fix_with_the_frames_gps() {
     set_datum(&state, StationRef::new(a, 1), origin(), None);
     let (c, c_gps) = placed_piece(&state);
     let before = project(&state);
-    let first = before.get_section(a).unwrap().shots[0].id;
+    let first = before.get_line(a).unwrap().shots[0].id;
 
     let r = state.execute(Command::DeleteShot {
-        section_id: a,
+        line_id: a,
         shot_id: first,
     });
     assert!(r.success, "{:?}", r.error);
@@ -977,9 +979,9 @@ fn fix_and_twin(
     twin_acc: Option<f64>,
     twin_at: u32,
     closure_at: u32,
-) -> (AppState, SectionId, SectionId) {
+) -> (AppState, LineId, LineId) {
     let (state, a, _b) = two_entrances();
-    let x = create_section(&state, "X", north_shots(2, 20.0));
+    let x = create_line(&state, "X", north_shots(2, 20.0));
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(x, 2),
         station_b: StationRef::new(a, 2),
@@ -987,7 +989,7 @@ fn fix_and_twin(
     assert!(r.success, "{:?}", r.error);
     let twin = gps_at(30.0, 60.0);
     set_datum(&state, StationRef::new(x, 0), twin, fix_acc);
-    let y = create_section(&state, "Y", north_shots(1, 20.0));
+    let y = create_line(&state, "Y", north_shots(1, 20.0));
     set_datum(&state, StationRef::new(y, twin_at), twin, twin_acc);
     let r = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(x, closure_at),
@@ -1006,8 +1008,8 @@ fn fix_and_twin(
     (state, x, y)
 }
 
-fn combine_options(name: &str, join: CombineJoinEnds) -> CombineSectionsOptions {
-    CombineSectionsOptions {
+fn combine_options(name: &str, join: CombineJoinEnds) -> CombineLinesOptions {
+    CombineLinesOptions {
         name: name.to_string(),
         color: "#abcdef".to_string(),
         swap_lr: true,
@@ -1053,10 +1055,10 @@ fn combine_re_keying_the_twin_onto_the_fixs_key(fix_acc: Option<f64>, twin_acc: 
     let (state, x, y) = fix_and_twin(fix_acc, twin_acc, 1, 0);
     let before = project(&state);
     let join = CombineJoinEnds {
-        kept: SectionEnd::Start,
-        other: SectionEnd::Start,
+        kept: LineEnd::Start,
+        other: LineEnd::Start,
     };
-    let r = state.execute_combine_sections(x, y, combine_options("XY", join));
+    let r = state.execute_combine_lines(x, y, combine_options("XY", join));
     assert!(r.success, "{:?}", r.error);
     assert_the_fix_places_the_combined_piece(&state, &before, fix_acc, twin_acc);
 }
@@ -1071,10 +1073,10 @@ fn combine_re_keying_the_fix_onto_its_twins_key(fix_acc: Option<f64>, twin_acc: 
     let before = project(&state);
     let twin_key = before.zero_datums[2].station_ref.clone();
     let join = CombineJoinEnds {
-        kept: SectionEnd::Start,
-        other: SectionEnd::End,
+        kept: LineEnd::Start,
+        other: LineEnd::End,
     };
-    let r = state.execute_combine_sections(y, x, combine_options("YX", join));
+    let r = state.execute_combine_lines(y, x, combine_options("YX", join));
     assert!(r.success, "{:?}", r.error);
     assert_eq!(project(&state).zero_datums[1].station_ref, twin_key);
     assert_the_fix_places_the_combined_piece(&state, &before, fix_acc, twin_acc);
@@ -1137,11 +1139,11 @@ fn a_frame_gps_copied_from_a_fix_on_its_spot_moves_every_piece_once() {
         name: "FrameCopiesAFix".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A", north_shots(2, 20.0));
+    let a = create_line(&state, "A", north_shots(2, 20.0));
     set_datum(&state, StationRef::new(a, 0), origin(), None);
-    let p = create_section(&state, "P", north_shots(2, 20.0));
+    let p = create_line(&state, "P", north_shots(2, 20.0));
     set_datum(&state, StationRef::new(p, 0), origin(), None);
-    let q = create_section(&state, "Q", north_shots(2, 20.0));
+    let q = create_line(&state, "Q", north_shots(2, 20.0));
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(p, 0),
         station_b: StationRef::new(q, 0),
@@ -1190,7 +1192,7 @@ fn an_entrance_only_edit_of_the_frame_moves_nothing() {
     // C left 30 m off its GPS, as an older file can.
     {
         let mut guard = state.project.lock().unwrap();
-        guard.as_mut().unwrap().set_section_offset(c, (230.0, 0.0));
+        guard.as_mut().unwrap().set_line_offset(c, (230.0, 0.0));
     }
     let before = raw_xy(&project(&state));
     let r = state.execute(Command::SetZeroDatum {
@@ -1234,10 +1236,10 @@ fn a_batch_that_edits_a_fix_re_keys_it_and_promotes_it_still_places_it() {
         name: "BatchFix".to_string(),
         location: None,
     });
-    let e = create_section(&state, "E", north_shots(1, 20.0));
+    let e = create_line(&state, "E", north_shots(1, 20.0));
     set_datum(&state, StationRef::new(e, 0), origin(), None);
-    let a = create_section(&state, "A", north_shots(2, 50.0));
-    let b = create_section(&state, "B", north_shots(2, 50.0));
+    let a = create_line(&state, "A", north_shots(2, 50.0));
+    let b = create_line(&state, "B", north_shots(2, 50.0));
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
@@ -1264,12 +1266,13 @@ fn a_batch_that_edits_a_fix_re_keys_it_and_promotes_it_still_places_it() {
                 accuracy_m: Some(1.0),
                 entrance: None,
             },
-            Command::ReverseSection {
-                section_id: b,
+            Command::ReverseLine {
+                line_id: b,
                 swap_left_right: false,
             },
-            Command::DeleteSection { section_id: a },
+            Command::DeleteLine { line_id: a },
         ],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
 

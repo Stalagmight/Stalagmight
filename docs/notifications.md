@@ -113,16 +113,16 @@ regions). Read the comment blocks in those two files plus
   things keep the modal:
   - It carries even one warning: a warning means something was lost or needs
     a look, and #411 exists precisely so that never rides a dismissible toast.
-  - `sections_imported` is zero (#442) - nothing landing is itself the fact
+  - `lines_imported` is zero (#442) - nothing landing is itself the fact
     the user needs to see, never inferred from `shot_count` (which is summed
-    from the sections the import *attempted*, not what landed - the two only
+    from the lines the import *attempted*, not what landed - the two only
     agree while the import path is all-or-nothing).
   - `unit_conversion` is set - a length-unit conversion silently changes every
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather
     than being dropped or given a second, lesser surface.
   - `zero_datum_created` is set (F12c) - the import created a zero datum on a
-    section, and naming that section does not fit the toast's one-line budget
+    line, and naming that line does not fit the toast's one-line budget
     either, so it rides the modal for the same reason as `unit_conversion`.
 
   The toast path emits no dialog telemetry, deliberately (toasts carry no
@@ -175,7 +175,7 @@ regions). Read the comment blocks in those two files plus
 
 - Lead with what happened, then what to do: "Export failed - choose a folder with
   write access", not "An error occurred".
-- Name things the user recognizes (project, section, shot), active voice, no
+- Name things the user recognizes (project, line, shot), active voice, no
   internal jargon or error-code prefixes in the message body.
 - Sentence case, ASCII hyphens only (repo-wide rule), tone per
   [style-guide.md](style-guide.md).

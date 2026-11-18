@@ -1,5 +1,5 @@
 import { themeTokens } from '../theme/tokens';
-import type { DisplayConfig, SectionColorsConfig } from './ipc.generated';
+import type { DisplayConfig, LineColorsConfig } from './ipc.generated';
 import { defaultConfig } from './ipc/defaultConfig';
 
 export { defaultConfig };
@@ -18,7 +18,7 @@ export type {
   GeneralConfig,
   UnitsConfig,
   DisplayConfig,
-  SectionColorsConfig,
+  LineColorsConfig,
   GpsOrigin,
   StationConfig,
   ShotConfig,
@@ -78,11 +78,11 @@ export const lightDisplayDefaults: DisplayConfig = {
 };
 
 /**
- * Light-theme section color palette. Darker/more saturated colors that are
+ * Light-theme line color palette. Darker/more saturated colors that are
  * visually distinct on light backgrounds. Every entry must clear 3:1 against the
  * light canvas (`#faf7f2`); the guard in `__tests__/config.test.ts` measures it.
  */
-export const lightSectionColorDefaults: SectionColorsConfig = {
+export const lightLineColorDefaults: LineColorsConfig = {
   palette: [
     '#1a8a7d',
     '#c0392b',
@@ -133,12 +133,12 @@ export function getThemedDisplayDefaults(resolvedTheme: string): DisplayConfig {
 }
 
 /**
- * Get theme-appropriate section color defaults.
+ * Get theme-appropriate line color defaults.
  * Returns light-theme palette for light-CANVAS themes, dark palette otherwise.
  */
-export function getThemedSectionColorDefaults(resolvedTheme: string): SectionColorsConfig {
+export function getThemedLineColorDefaults(resolvedTheme: string): LineColorsConfig {
   if (LIGHT_CANVAS_THEMES.has(resolvedTheme)) {
-    return { palette: [...lightSectionColorDefaults.palette] };
+    return { palette: [...lightLineColorDefaults.palette] };
   }
-  return { palette: [...defaultConfig.section_colors.palette] };
+  return { palette: [...defaultConfig.line_colors.palette] };
 }

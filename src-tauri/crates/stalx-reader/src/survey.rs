@@ -302,7 +302,7 @@ pub struct StationPosition {
 impl From<StationRef> for StationId {
     fn from(r: StationRef) -> Self {
         Self {
-            section_id: r.section_id,
+            section_id: r.line_id,
             index: r.station_index,
         }
     }
@@ -423,7 +423,7 @@ impl Survey {
         });
 
         let mut people = PeopleCache::new();
-        let mut sections: Vec<&stalagmight_models::Section> = project.sections.iter().collect();
+        let mut sections: Vec<&stalagmight_models::Line> = project.lines.iter().collect();
         sections.sort_by_key(|s| s.id);
         Self {
             schema_version,
@@ -523,7 +523,7 @@ fn georeference(
     }
 }
 
-fn correction_source(project: &Project, section: &stalagmight_models::Section) -> CorrectionSource {
+fn correction_source(project: &Project, section: &stalagmight_models::Line) -> CorrectionSource {
     use stalagmight_models::CorrectionSource as Model;
     if section.azimuth_reference.is_none() && project.default_azimuth_reference.is_none() {
         return CorrectionSource::NotRecorded;
@@ -548,7 +548,7 @@ struct Anchors {
 impl Anchors {
     fn new(project: &Project, merges: &[StationMerge], placements: &[StationId]) -> Self {
         let mut index = HashMap::new();
-        for section in &project.sections {
+        for section in &project.lines {
             for i in 0..=section.shots.len() as u32 {
                 let next = index.len();
                 index.insert(
@@ -561,7 +561,7 @@ impl Anchors {
             }
         }
         let mut uf = UnionFind::new(index.len());
-        for section in &project.sections {
+        for section in &project.lines {
             for i in 0..section.shots.len() as u32 {
                 let at = |index_: u32| {
                     index.get(&StationId {

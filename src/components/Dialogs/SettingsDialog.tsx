@@ -28,7 +28,7 @@ import type { Config } from '../../types/config';
 import {
   defaultConfig,
   getThemedDisplayDefaults,
-  getThemedSectionColorDefaults,
+  getThemedLineColorDefaults,
 } from '../../types/config';
 import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -105,7 +105,7 @@ export function getCategoryDefaults(
     case 'display':
       return {
         display: getThemedDisplayDefaults(resolvedTheme),
-        section_colors: getThemedSectionColorDefaults(resolvedTheme),
+        line_colors: getThemedLineColorDefaults(resolvedTheme),
       };
     case 'map':
       return {
@@ -241,7 +241,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     general: { ...base.general },
     units: { ...base.units },
     display: { ...base.display },
-    section_colors: { palette: [...base.section_colors.palette] },
+    line_colors: { palette: [...base.line_colors.palette] },
     map: {
       ...base.map,
       satellite_gps_origin: { ...base.map.satellite_gps_origin },
@@ -287,8 +287,8 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   if (updates.display) {
     result.display = { ...result.display, ...updates.display };
   }
-  if (updates.section_colors) {
-    result.section_colors = { ...result.section_colors, ...updates.section_colors };
+  if (updates.line_colors) {
+    result.line_colors = { ...result.line_colors, ...updates.line_colors };
   }
   if (updates.map) {
     result.map = {

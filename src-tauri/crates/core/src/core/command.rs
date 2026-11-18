@@ -6,7 +6,7 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, CreditEdit, CreditTargets, GpsCoordinates,
-    SectionId, SectionUpdates, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
+    LineId, LineUpdates, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
     SurveyDirection,
 };
 
@@ -14,25 +14,17 @@ use crate::models::{
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommentHolder {
-    Station {
-        station_ref: StationRef,
-    },
-    Shot {
-        section_id: SectionId,
-        shot_id: ShotId,
-    },
+    Station { station_ref: StationRef },
+    Shot { line_id: LineId, shot_id: ShotId },
 }
 
 impl std::fmt::Display for CommentHolder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CommentHolder::Station { station_ref } => write!(f, "station {station_ref}"),
-            CommentHolder::Shot {
-                section_id,
-                shot_id,
-            } => {
-                let pos = shot_display_position(*shot_id, *section_id);
-                write!(f, "shot {section_id}:{pos}")
+            CommentHolder::Shot { line_id, shot_id } => {
+                let pos = shot_display_position(*shot_id, *line_id);
+                write!(f, "shot {line_id}:{pos}")
             }
         }
     }
@@ -55,8 +47,8 @@ pub enum Command {
     },
     CloseProject,
 
-    // Section commands
-    CreateSection {
+    // Line commands
+    CreateLine {
         name: Option<String>,
         surveyor: Option<String>,
         date: Option<NaiveDate>,
@@ -64,40 +56,46 @@ pub enum Command {
         #[serde(default)]
         direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
+        /// The Section (#327) the new line joins, in the same undo step - the
+        /// New Line dialog's target Section. A Section that no longer exists
+        /// refuses the command before anything changes. Absent (ungrouped) on
+        /// every entry written before it existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cave_section_id: Option<SectionId>,
     },
-    DeleteSection {
-        section_id: SectionId,
+    DeleteLine {
+        line_id: LineId,
     },
-    UpdateSectionMetadata {
-        section_id: SectionId,
-        updates: SectionUpdates,
+    UpdateLineMetadata {
+        line_id: LineId,
+        updates: LineUpdates,
     },
-    /// Reverse a section end-to-end so the far end becomes station 0, keeping
-    /// every station's world coordinate (see [`crate::models::Project::reverse_section`]).
+    /// Reverse a line end-to-end so the far end becomes station 0, keeping
+    /// every station's world coordinate (see [`crate::models::Project::reverse_line`]).
     /// `swap_left_right` also mirrors the `left`/`right` passage dimensions; it
     /// is opt-in because whether LRUD was recorded facing along travel is a
     /// survey convention we cannot infer.
-    ReverseSection {
-        section_id: SectionId,
+    ReverseLine {
+        line_id: LineId,
         #[serde(default)]
         swap_left_right: bool,
     },
 
     // Shot commands
     CreateShot {
-        section_id: SectionId,
+        line_id: LineId,
         shot: ShotData,
         after_shot_id: Option<ShotId>,
         #[serde(default)]
         before_shot_id: Option<ShotId>,
     },
     UpdateShot {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         updates: ShotUpdates,
     },
     DeleteShot {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     },
     /// Set a shot's [`ShotKind`] (#27). Replaces the old boolean
@@ -112,7 +110,7 @@ pub enum Command {
     /// upgrading does not cost the user their undo stack.
     #[serde(alias = "set_shot_virtual", alias = "set_shot_reference")]
     SetShotKind {
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         #[serde(
             default,
@@ -124,7 +122,7 @@ pub enum Command {
     },
 
     /// Edit the survey credit - surveyors, explorers, date - of a whole
-    /// section or of explicit shots. One undo step however many shots it
+    /// line or of explicit shots. One undo step however many shots it
     /// touches (`UndoData::ShotCredits`, which records each shot's credit
     /// before and after, by uuid). Metadata only: no geometry, no references.
     EditShotCredit {
@@ -175,14 +173,25 @@ pub enum Command {
         station_ref: StationRef,
         comment: Option<String>,
     },
+    /// Rename a station. The name is trimmed and must be non-empty, free of
+    /// control and invisible formatting characters, and unique within the
+    /// station's line ([`crate::models::Project::validate_station_name`]).
+    /// Metadata only: no geometry, no references. Undone by the inverse
+    /// rename. The name the station already has (after trimming) succeeds as
+    /// a no-op with no undo entry and no dirty flag (`execute()` returns
+    /// before its epilogue, as for a reverse of a shot-less line).
+    SetStationName {
+        station_ref: StationRef,
+        name: String,
+    },
 
     // Move commands
-    MoveSection {
-        section_id: SectionId,
+    MoveLine {
+        line_id: LineId,
         offset: Coordinates,
     },
     MoveSegment {
-        section_id: SectionId,
+        line_id: LineId,
         offset: Coordinates,
     },
     MoveStation {
@@ -199,27 +208,82 @@ pub enum Command {
 
     /// Forget import-dedup bookkeeping for an import that was WITHDRAWN (#394).
     ///
-    /// `execute_import_sections` records the file hash and each section's content
+    /// `execute_import_lines` records the file hash and each line's content
     /// hash so a later re-import can be recognised as a duplicate, and deleting
-    /// the sections does not touch those lists (`cleanup_section_references`
+    /// the lines does not touch those lists (`cleanup_line_references`
     /// walks merges, closures, offsets, comments and datums - nothing else). So
     /// the DMP wizard's "Cancel, remove what was imported" left the project
     /// claiming the file was already imported while none of it remained, and the
-    /// selection dialog silently DESELECTED every section on the next attempt.
+    /// selection dialog silently DESELECTED every line on the next attempt.
     ///
-    /// Batched with the deletes it belongs to, so one undo restores the sections
+    /// Batched with the deletes it belongs to, so one undo restores the lines
     /// and their tracking together - the snapshot pair covers both, since both
     /// live on `Project`.
     UntrackImport {
         /// File-level hashes to forget (`Project::imported_file_hashes`).
         file_hashes: Vec<String>,
-        /// Section content hashes to forget (`Project::imported_section_hashes`).
-        section_hashes: Vec<String>,
+        /// Line content hashes to forget (`Project::imported_line_hashes`).
+        line_hashes: Vec<String>,
+    },
+
+    // Section commands (#327): a Section is a named grouping of lines. The
+    // tags are `*_cave_section` because `create_section` and friends are the
+    // disk tags of the LINE commands (see `disk_names`), and the section id
+    // travels as `cave_section_id` for the same reason. Metadata only: no
+    // geometry, no station reference. Undo restores the recorded Sections and
+    // memberships (`UndoData::CaveSections`).
+    /// Create a Section named `name` with colour `color`, and move `line_ids`
+    /// (possibly none) into it - "New Section" from a selection is one step.
+    CreateCaveSection {
+        name: String,
+        color: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        line_ids: Vec<LineId>,
+    },
+    /// Rename and/or recolour a Section; `None` keeps the field.
+    UpdateCaveSection {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    /// Delete a Section; its lines become ungrouped. Undo puts the Section
+    /// back at its place in the list with every membership.
+    DeleteCaveSection {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
+    },
+    /// Move lines into a Section, or out of any (`None`).
+    MoveLinesToCaveSection {
+        line_ids: Vec<LineId>,
+        #[serde(rename = "cave_section_id")]
+        section_id: Option<SectionId>,
+    },
+    /// Give every line of a Section the Section's colour, as one step.
+    ApplyCaveSectionColor {
+        #[serde(rename = "cave_section_id")]
+        section_id: SectionId,
     },
 
     // Batch commands
     Batch {
         commands: Vec<Command>,
+        /// The history label of the edit the batch records, written when it
+        /// is recorded, with the names the project held then. A composite
+        /// edit (Insert Station, Combine Lines, Split Line, Delete and Split,
+        /// an import...) records placeholder sub-commands that only sketch
+        /// what it did, so it says what it was here; a batch from the frontend
+        /// (a paste, Reverse Lines) is summarized from its sub-commands
+        /// (`undo::history_batch`). A history label only: the undo and the
+        /// redo restore the entry's snapshot pair and never read it.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before it existed, which keep the old `Batch of N
+        /// commands`; an older build ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
 
     // Project merge command
@@ -283,7 +347,7 @@ pub const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
 /// edit through and the fence catches any real conflict).
 pub(crate) const EDIT_REVERIFY_DIVERGED_CODE: &str = "EDIT_REVERIFY_DIVERGED";
 
-/// One section whose station numbering an operation reversed, together with the
+/// One line whose station numbering an operation reversed, together with the
 /// shot count `N` that was IN FORCE at that reverse - the divisor the mirror
 /// `i -> N - i` needs.
 ///
@@ -292,8 +356,8 @@ pub(crate) const EDIT_REVERIFY_DIVERGED_CODE: &str = "EDIT_REVERIFY_DIVERGED";
 /// post-range count is then not the count the earlier steps mirrored against, and
 /// a consumer that divided by it would land one station out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct ReversedSection {
-    pub section_id: u32,
+pub struct ReversedLine {
+    pub line_id: u32,
     pub shot_count: u32,
 }
 
@@ -304,18 +368,18 @@ pub use crate::models::{sanitize_display_text, ImportReceipt};
 /// can push the rest of the title off the screen.
 ///
 /// `pub(crate)` so `command_import.rs` can sanitize `zero_datum_created` at the
-/// point it is born (see there): the DMP wizard's `import_sections` IPC command
+/// point it is born (see there): the DMP wizard's `import_lines` IPC command
 /// never calls `decorate_receipt` (it only overwrites `source_format`/
-/// `file_name`/`sections_found` directly), so sanitizing solely in
+/// `file_name`/`lines_found` directly), so sanitizing solely in
 /// `decorate_receipt` left that route's `zero_datum_created` - a raw
-/// `ImportSectionConfig::name`, i.e. file-controlled DMP section-label text -
+/// `ImportLineConfig::name`, i.e. file-controlled DMP line-label text -
 /// unsanitized end to end.
 pub(crate) const MAX_FILE_NAME_LEN: usize = 120;
 
 /// Fill in the importer-specific fields of the base `ImportReceipt` that
-/// `execute_import_sections` already attached (source/section counts, unit
+/// `execute_import_lines` already attached (source/line counts, unit
 /// conversion), and extend its warnings with the converter-phase warnings
-/// collected while turning the parsed file into `ImportSectionConfig`s.
+/// collected while turning the parsed file into `ImportLineConfig`s.
 ///
 /// No-op when `result` carries no receipt (a FAILED import - the empty-import
 /// path deliberately carries one, see `ImportReceipt::empty`), so a call site
@@ -327,7 +391,7 @@ pub fn decorate_receipt(
     result: &mut CommandResult,
     source_format: &str,
     path: &std::path::Path,
-    sections_found: u32,
+    lines_found: u32,
     unit_conversion: Option<String>,
     converter_warnings: Vec<String>,
 ) {
@@ -344,12 +408,12 @@ pub fn decorate_receipt(
         .file_name()
         .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
         .unwrap_or_default();
-    receipt.sections_found = sections_found;
+    receipt.lines_found = lines_found;
     receipt.unit_conversion = unit_conversion;
     // Same treatment as `file_name` above, and for the same reason: this is the
-    // IMPORTED SECTION'S name (`ImportSectionConfig::name`), which for every
+    // IMPORTED LINE'S name (`ImportLineConfig::name`), which for every
     // importer traces straight back to file content - a `.dat`/`.srv`/`.dmp`/
-    // `.tml` section or survey label - and it renders verbatim in the receipt
+    // `.tml` line or survey label - and it renders verbatim in the receipt
     // dialog (F12c). Unsanitized, a hostile file could smuggle a bidi override
     // or an unbounded string into that dialog the same way an unsanitized
     // `file_name` could.
@@ -358,7 +422,7 @@ pub fn decorate_receipt(
         .take()
         .map(|name| sanitize_display_text(&name, MAX_FILE_NAME_LEN));
     // Converter warnings go FIRST, ahead of the execute-phase ones. They are
-    // whole-file statements - an unrecognized unit, a section dropped entirely -
+    // whole-file statements - an unrecognized unit, a line dropped entirely -
     // and there is a handful of them at most, while the execute phase can emit
     // one per shot. Appending them meant `cap_warnings`' 50-entry limit dropped
     // the highest-signal warning first on exactly the noisy file that needs it.
@@ -377,22 +441,22 @@ pub struct CommandResult {
     pub success: bool,
     pub warnings: Vec<ValidationWarning>,
     pub error: Option<String>,
-    /// ID of the created section (for CreateSection command)
+    /// ID of the created line (for CreateLine command)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub section_id: Option<u32>,
-    /// IDs of created sections (for Batch commands containing CreateSection);
+    pub line_id: Option<u32>,
+    /// IDs of created lines (for Batch commands containing CreateLine);
     /// EMPTY, never absent, for every command that created none.
     ///
     /// Deliberately NOT `skip_serializing_if` (#441). ts-rs 7 can emit `field?:`
     /// only for an `Option<T>` - `optional` is rejected on any other type - so a
     /// skipped `Vec` generates as a REQUIRED `Array<number>` while the wire omits
     /// the key, and `tsc` is then structurally blind to every bare
-    /// `result.section_ids.length`. That is what crashed the zero-section import
+    /// `result.line_ids.length`. That is what crashed the zero-line import
     /// receipt in #411.
     ///
     /// Absence and empty state the same fact here, so the honest fix is to always
     /// send the array rather than teach ~17 read sites a distinction that carries
-    /// no information. The cost is one `"section_ids":[]` per command result -
+    /// no information. The cost is one `"line_ids":[]` per command result -
     /// once per user action. Contrast [`crate::models::Station::closures_with`],
     /// where the identical skip is paid PER STATION on every `get_project_state`
     /// refresh and therefore stays, with `Option<Vec<_>>` carrying the optionality
@@ -400,7 +464,7 @@ pub struct CommandResult {
     ///
     /// `default` is kept so a result serialized before this change still reads.
     #[serde(default)]
-    pub section_ids: Vec<u32>,
+    pub line_ids: Vec<u32>,
     /// ID of the created shot (for CreateShot command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shot_id: Option<u32>,
@@ -432,11 +496,11 @@ pub struct CommandResult {
     /// projects this app is built for made every delete-while-open needlessly slow.
     ///
     /// `Option<bool>`, only ever `Some(true)`, for the same wire contract as
-    /// `section_id` / `shot_id` / `saved_path` above: `skip_serializing_if` keeps
+    /// `line_id` / `shot_id` / `saved_path` above: `skip_serializing_if` keeps
     /// the key absent for every command that closed nothing, and the `Option` is
     /// what makes ts-rs emit `session_closed?: boolean` rather than a required
     /// field that would break every existing `CommandResult` literal on the
-    /// frontend (see `reversed_sections` for the same reasoning).
+    /// frontend (see `reversed_lines` for the same reasoning).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_closed: Option<bool>,
     /// Set when this save wrote a DETACHED COPY instead of saving the project:
@@ -452,40 +516,40 @@ pub struct CommandResult {
     /// and the key stays absent for every ordinary save).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unlinked_copy_path: Option<String>,
-    /// The sections whose station NUMBERING this operation reversed (station `i`
+    /// The lines whose station NUMBERING this operation reversed (station `i`
     /// became station `N - i`), each carrying the shot count `N` in force at that
-    /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo
+    /// reverse - for `ReverseLine`, for a `Batch` of them, and for an undo/redo
     /// of either (undoing a reverse re-reverses the numbering, so it reports the
-    /// same sections).
+    /// same lines).
     ///
     /// Every station keeps its world position, so this is not a geometry change
     /// the frontend can see by diffing coordinates: it exists so a positional
     /// station reference held on the frontend (a selection, a pinned plan point)
     /// can be mirrored EXACTLY rather than inferred by comparing station
-    /// positions across the operation - an inference that misses a section which
+    /// positions across the operation - an inference that misses a line which
     /// was reversed and moved in the same action.
     ///
     /// TWO SHAPES, and a consumer must not treat them alike:
     ///
-    /// * From ONE command (`ReverseSection` or a `Batch`), this is a
-    ///   PARITY-REDUCED set: [`Command::reversed_section_ids`] drops a section the
+    /// * From ONE command (`ReverseLine` or a `Batch`), this is a
+    ///   PARITY-REDUCED set: [`Command::reversed_line_ids`] drops a line the
     ///   batch reversed an even number of times, because such a batch leaves the
     ///   numbering exactly as it found it and there is nothing to mirror. At most
-    ///   one entry per section, and `shot_count` is unambiguous because a batch
-    ///   cannot change a SURVIVING section's shot count (`is_batch_allowed` admits
-    ///   no shot create/delete; the `DeleteSection` it does admit removes the whole
-    ///   section, which is then dropped from this report entirely).
+    ///   one entry per line, and `shot_count` is unambiguous because a batch
+    ///   cannot change a SURVIVING line's shot count (`is_batch_allowed` admits
+    ///   no shot create/delete; the `DeleteLine` it does admit removes the whole
+    ///   line, which is then dropped from this report entirely).
     /// * From `undo_to` / `redo_to`, this is an ORDERED PER-STEP LOG: one entry
     ///   per reversing step, in the order the steps ran, repeats intact. It is
     ///   deliberately NOT parity-reduced, because `shot_count` can differ between
-    ///   steps (a `CreateShot` undone between two reverses of one section). The
+    ///   steps (a `CreateShot` undone between two reverses of one line). The
     ///   consumer must COMPOSE the entries into a single transform and apply that
     ///   once; replaying the mirror per entry is wrong.
     ///
     /// Composition is required because the FRONTEND's mirror is not an involution: it is
     /// `i -> N - i` CLAMPED into range (`utils/reverseAftermath`), and a clamp is lossy, so
     /// replaying it per entry does not undo itself. The counts can also differ between entries
-    /// - a `CreateShot` undone between two reverses of one section changes `N` - which is
+    /// - a `CreateShot` undone between two reverses of one line changes `N` - which is
     /// exactly the case neither "cancel the repeat" nor "replay the mirror twice" gets right.
     ///
     /// The sibling `.plnx` needs none of this: its plans name a station by the shots it sits
@@ -493,16 +557,16 @@ pub struct CommandResult {
     ///
     /// `skip_serializing_if` + `default`, so the key is simply absent for every
     /// command that reversed nothing and an older frontend is unaffected - and typed
-    /// `Option` rather than `Vec` precisely so ts-rs emits it as `reversed_sections?:`
+    /// `Option` rather than `Vec` precisely so ts-rs emits it as `reversed_lines?:`
     /// instead of a required array. That absence IS the wire truth, and a required
     /// field would break every existing `CommandResult` literal on the frontend.
-    /// `section_ids` above wears the same serde attributes minus the skip, because
+    /// `line_ids` above wears the same serde attributes minus the skip, because
     /// there the array is cheap enough to always send; the pairing rule is in #441.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub reversed_sections: Option<Vec<ReversedSection>>,
+    pub reversed_lines: Option<Vec<ReversedLine>>,
     /// Backend-authoritative summary of an import command's outcome (see
     /// [`ImportReceipt`]'s doc comment for why its warnings must stay separate
-    /// from the field above). Same wire contract as `reversed_sections`:
+    /// from the field above). Same wire contract as `reversed_lines`:
     /// `skip_serializing_if` + `default` keeps the key absent for every
     /// non-import command.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -519,6 +583,10 @@ pub struct CommandResult {
     /// optional fields above (`skip_serializing_if` + `default`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub lock_release: Option<LockReleaseOutcome>,
+    /// The Section a `create_cave_section` created (#327), so the frontend
+    /// can select it. Same wire contract as the optional fields above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cave_section_id: Option<SectionId>,
 }
 
 /// What one holder-checked release of the open project's lock came to (see
@@ -589,15 +657,16 @@ impl CommandResult {
             success: true,
             warnings: Vec::new(),
             error: None,
-            section_id: None,
-            section_ids: Vec::new(),
+            line_id: None,
+            line_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
             session_closed: None,
             unlinked_copy_path: None,
-            reversed_sections: None,
+            reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            cave_section_id: None,
         }
     }
 
@@ -606,15 +675,16 @@ impl CommandResult {
             success: false,
             warnings: Vec::new(),
             error: Some(error),
-            section_id: None,
-            section_ids: Vec::new(),
+            line_id: None,
+            line_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
             session_closed: None,
             unlinked_copy_path: None,
-            reversed_sections: None,
+            reversed_lines: None,
             import_receipt: None,
             lock_release: None,
+            cave_section_id: None,
         }
     }
 
@@ -624,15 +694,22 @@ impl CommandResult {
         self
     }
 
-    /// Attach a created section ID to this result.
-    pub fn with_section_id(mut self, section_id: u32) -> Self {
-        self.section_id = Some(section_id);
+    /// Attach a created line ID to this result.
+    pub fn with_line_id(mut self, line_id: u32) -> Self {
+        self.line_id = Some(line_id);
         self
     }
 
-    /// Attach multiple section IDs to this result (for batch operations).
-    pub fn with_section_ids(mut self, section_ids: Vec<u32>) -> Self {
-        self.section_ids = section_ids;
+    /// Attach multiple line IDs to this result (for batch operations).
+    pub fn with_line_ids(mut self, line_ids: Vec<u32>) -> Self {
+        self.line_ids = line_ids;
+        self
+    }
+
+    /// Attach the id of the Section a command created.
+    #[must_use]
+    pub fn with_cave_section_id(mut self, section_id: SectionId) -> Self {
+        self.cave_section_id = Some(section_id);
         self
     }
 
@@ -670,9 +747,9 @@ impl CommandResult {
         self
     }
 
-    /// Attach the sections whose station numbering this operation reversed.
-    pub fn with_reversed_sections(mut self, sections: Vec<ReversedSection>) -> Self {
-        self.reversed_sections = Some(sections);
+    /// Attach the lines whose station numbering this operation reversed.
+    pub fn with_reversed_lines(mut self, lines: Vec<ReversedLine>) -> Self {
+        self.reversed_lines = Some(lines);
         self
     }
 
@@ -716,22 +793,29 @@ impl Command {
             | Command::OpenProject { .. }
             | Command::SaveProject { .. }
             | Command::CloseProject
-            | Command::UpdateSectionMetadata { .. }
+            | Command::UpdateLineMetadata { .. }
             | Command::SetShotKind { .. }
             // Who surveyed a shot and when moves no station.
             | Command::EditShotCredit { .. }
             | Command::SetStationComment { .. }
+            | Command::SetStationName { .. }
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
             | Command::UpdateProjectSettings
             // Import-dedup bookkeeping is a set of hashes; it moves no station.
             | Command::UntrackImport { .. }
+            // Grouping lines into Sections, and their names and colours.
+            | Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. }
             | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
-            Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
-            Command::CreateSection { .. }
-            | Command::DeleteSection { .. }
-            | Command::ReverseSection { .. }
+            Command::Batch { commands, .. } => commands.iter().any(Command::affects_geometry),
+            Command::CreateLine { .. }
+            | Command::DeleteLine { .. }
+            | Command::ReverseLine { .. }
             | Command::CreateShot { .. }
             | Command::DeleteShot { .. }
             | Command::MergeStations { .. }
@@ -741,11 +825,69 @@ impl Command {
             | Command::RemoveLoopClosure { .. }
             | Command::SetZeroDatum { .. }
             | Command::RemoveZeroDatum { .. }
-            | Command::MoveSection { .. }
+            | Command::MoveLine { .. }
             | Command::MoveSegment { .. }
             | Command::MoveStation { .. }
             | Command::MergeProjects { .. }
             | Command::AddProjectFile { .. } => true,
+        }
+    }
+
+    /// Whether this command can leave a station or a line without its
+    /// identity: create, delete, renumber or re-key stations, or store a line
+    /// name the station-identity epilogue would have to seed or de-duplicate.
+    ///
+    /// `false` is the fast path of that epilogue
+    /// (`AppState::settle_station_identities` in `execute()` and a batch's
+    /// after-snapshot): every command here leaves the stations, their keys and
+    /// the line list as they were, and the two that store a name validate it
+    /// first (`SetStationName`, a rename through `UpdateLineMetadata`), so a
+    /// settled project stays settled and the whole-project pass is skipped.
+    /// Exhaustive on purpose, like [`Self::affects_geometry`]: a new command
+    /// must be classified, and `true` is the safe answer.
+    #[must_use]
+    pub fn can_change_station_identity(&self) -> bool {
+        match self {
+            Command::UpdateLineMetadata { .. }
+            | Command::UpdateShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::EditShotCredit { .. }
+            | Command::SetStationComment { .. }
+            | Command::SetStationName { .. }
+            | Command::MoveComment { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::CreateLoopClosure { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::RemoveZeroDatum { .. }
+            | Command::MoveLine { .. }
+            | Command::MoveSegment { .. }
+            | Command::MoveStation { .. }
+            | Command::UntrackImport { .. }
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation
+            | Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. } => false,
+            Command::Batch { commands, .. } => {
+                commands.iter().any(Command::can_change_station_identity)
+            }
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::CreateLine { .. }
+            | Command::DeleteLine { .. }
+            | Command::ReverseLine { .. }
+            | Command::CreateShot { .. }
+            | Command::DeleteShot { .. }
+            | Command::MergeProjects { .. }
+            | Command::AddProjectFile { .. }
+            | Command::RepairIntegrity => true,
         }
     }
 
@@ -764,23 +906,23 @@ impl Command {
     ///
     /// Parity is associative and commutative, so reducing sub-lists and then the
     /// concatenation gives the same answer as reducing once - nested batches are
-    /// safe. Within a batch a SURVIVING section's shot count `N` cannot change
+    /// safe. Within a batch a SURVIVING line's shot count `N` cannot change
     /// (`is_batch_allowed` admits no `CreateShot`/`DeleteShot`; `merge_stations`
-    /// only records relations and `move_segment` only offsets; the `DeleteSection`
-    /// it admits takes the whole section, and `settle_reversed_sections` drops a
-    /// section that is gone), so a section reversed
+    /// only records relations and `move_segment` only offsets; the `DeleteLine`
+    /// it admits takes the whole line, and `settle_reversed_lines` drops a
+    /// line that is gone), so a line reversed
     /// twice is not renumbered AT ALL: it must be neither reported nor fixed up.
     /// Reporting it would be actively wrong, because the two fix-ups
-    /// `settle_reversed_sections` runs are applied once per list entry against one
+    /// `settle_reversed_lines` runs are applied once per list entry against one
     /// final project state, and neither is an involution there - a repeated id
     /// walks every saved `.plnx` key two stations along a numbering that never
     /// moved.
-    fn net_reversed(ids: Vec<SectionId>) -> Vec<SectionId> {
-        let mut counts: HashMap<SectionId, usize> = HashMap::new();
+    fn net_reversed(ids: Vec<LineId>) -> Vec<LineId> {
+        let mut counts: HashMap<LineId, usize> = HashMap::new();
         for id in &ids {
             *counts.entry(*id).or_insert(0) += 1;
         }
-        let mut net: Vec<SectionId> = Vec::new();
+        let mut net: Vec<LineId> = Vec::new();
         for id in ids {
             if counts.get(&id).is_some_and(|n| n % 2 == 1) && !net.contains(&id) {
                 net.push(id);
@@ -789,34 +931,40 @@ impl Command {
         net
     }
 
-    /// The sections whose station numbering this command reverses, in command
+    /// The lines whose station numbering this command reverses, in command
     /// order, `Batch` included (reversing a multi-selection is one batched user
     /// action) and PARITY-REDUCED there via [`Self::net_reversed`].
     ///
     /// Read declaratively off the command rather than inferred afterwards from
     /// moved stations: a reverse keeps every station's world position, so there
-    /// is nothing in the geometry to diff, and a section that was reversed AND
+    /// is nothing in the geometry to diff, and a line that was reversed AND
     /// moved in the same action defeats a position-based heuristic outright.
     /// Undo/redo of a snapshot pair reuses this on the stored command - undoing a
-    /// reverse re-reverses the numbering, so the same sections apply.
+    /// reverse re-reverses the numbering, so the same lines apply.
     ///
     /// The reduction belongs HERE, at the producer, and not in `undo_to`/`redo_to`:
     /// those aggregate ACROSS commands, where the shot count can differ between
     /// steps, so their per-step entries must stay intact.
-    pub fn reversed_section_ids(&self) -> Vec<SectionId> {
+    pub fn reversed_line_ids(&self) -> Vec<LineId> {
         match self {
-            Command::ReverseSection { section_id, .. } => vec![*section_id],
-            Command::Batch { commands } => Self::net_reversed(
+            Command::ReverseLine { line_id, .. } => vec![*line_id],
+            Command::Batch { commands, .. } => Self::net_reversed(
                 commands
                     .iter()
-                    .flat_map(Command::reversed_section_ids)
+                    .flat_map(Command::reversed_line_ids)
                     .collect(),
             ),
             _ => Vec::new(),
         }
     }
 
-    /// Get a human-readable description of this command
+    /// A description of this command from its fields alone, for logs and as
+    /// the fallback of the history label. It can name lines, stations, shots
+    /// and closures by their internal handles (`line 3`, `1:0`, `#7`), so
+    /// text the user reads goes through `history_names::describe` (with the
+    /// names resolved against the project; `AppState::command_label` for a
+    /// refusal) instead, which falls back here only for commands whose
+    /// description holds no such handle.
     pub fn description(&self) -> String {
         match self {
             Command::CreateProject { name, .. } => format!("Create project '{name}'"),
@@ -828,53 +976,48 @@ impl Command {
                 None => "Save project".to_string(),
             },
             Command::CloseProject => "Close project".to_string(),
-            Command::CreateSection { name, .. } => {
-                format!("Create section '{}'", name.as_deref().unwrap_or("unnamed"))
+            Command::CreateLine { name, .. } => {
+                format!("Create line \"{}\"", name.as_deref().unwrap_or("unnamed"))
             }
-            Command::DeleteSection { section_id } => {
-                format!("Delete section {section_id}")
+            Command::DeleteLine { line_id } => {
+                format!("Delete line {line_id}")
             }
-            Command::UpdateSectionMetadata { section_id, .. } => {
-                format!("Update section {section_id} metadata")
+            Command::UpdateLineMetadata { line_id, .. } => {
+                format!("Update line {line_id} metadata")
             }
-            Command::ReverseSection { section_id, .. } => {
-                format!("Reverse section {section_id}")
+            Command::ReverseLine { line_id, .. } => {
+                format!("Reverse line {line_id}")
             }
-            Command::CreateShot { section_id, .. } => {
-                format!("Create shot in section {section_id}")
+            Command::CreateShot { line_id, .. } => {
+                format!("Create shot in line {line_id}")
             }
             Command::UpdateShot {
-                section_id,
-                shot_id,
-                ..
+                line_id, shot_id, ..
             } => format!(
                 "Update shot {}:{}",
-                section_id,
-                shot_display_position(*shot_id, *section_id)
+                line_id,
+                shot_display_position(*shot_id, *line_id)
             ),
-            Command::DeleteShot {
-                section_id,
-                shot_id,
-            } => format!(
+            Command::DeleteShot { line_id, shot_id } => format!(
                 "Delete shot {}:{}",
-                section_id,
-                shot_display_position(*shot_id, *section_id)
+                line_id,
+                shot_display_position(*shot_id, *line_id)
             ),
             Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 kind,
             } => {
-                let pos = shot_display_position(*shot_id, *section_id);
+                let pos = shot_display_position(*shot_id, *line_id);
                 match kind {
-                    ShotKind::Normal => format!("Mark shot {section_id}:{pos} as permanent"),
-                    ShotKind::Jump => format!("Mark shot {section_id}:{pos} as jump"),
-                    ShotKind::Reference => format!("Mark shot {section_id}:{pos} as reference"),
+                    ShotKind::Normal => format!("Mark shot {line_id}:{pos} as permanent"),
+                    ShotKind::Jump => format!("Mark shot {line_id}:{pos} as jump"),
+                    ShotKind::Reference => format!("Mark shot {line_id}:{pos} as reference"),
                 }
             }
             Command::EditShotCredit { targets, edit } => match targets {
-                CreditTargets::Section { section_id } => {
-                    format!("{} in section {section_id}", edit.label())
+                CreditTargets::Line { line_id } => {
+                    format!("{} in line {line_id}", edit.label())
                 }
                 CreditTargets::Shots { shots } => {
                     let n = shots.len();
@@ -923,11 +1066,14 @@ impl Command {
                     format!("Remove comment from station {station_ref}")
                 }
             }
-            Command::MoveSection { section_id, .. } => {
-                format!("Move section {section_id}")
+            Command::SetStationName { station_ref, name } => {
+                format!("Rename station {station_ref} to \"{name}\"")
             }
-            Command::MoveSegment { section_id, .. } => {
-                format!("Move segment (section {section_id})")
+            Command::MoveLine { line_id, .. } => {
+                format!("Move line {line_id}")
+            }
+            Command::MoveSegment { line_id, .. } => {
+                format!("Move segment (line {line_id})")
             }
             Command::MoveStation { station_ref, .. } => {
                 format!("Move station {station_ref}")
@@ -943,9 +1089,9 @@ impl Command {
                     format!("Move comment from {source} to {target}")
                 }
             }
-            Command::Batch { commands } => {
-                format!("Batch of {} commands", commands.len())
-            }
+            Command::Batch { commands, label } => label
+                .clone()
+                .unwrap_or_else(|| format!("Batch of {} commands", commands.len())),
             Command::MergeProjects {
                 source_paths,
                 output_name,
@@ -960,8 +1106,33 @@ impl Command {
             Command::AddProjectFile { file_name, .. } => {
                 format!("Add '{file_name}' to project")
             }
-            Command::UntrackImport { section_hashes, .. } => {
-                format!("Forget {} imported sections", section_hashes.len())
+            Command::UntrackImport { line_hashes, .. } => {
+                format!("Forget {} imported lines", line_hashes.len())
+            }
+            // The entry-level label (`history_cave_section`) names the Section
+            // from the undo record; these are what a bare command can say.
+            Command::CreateCaveSection { name, .. } => {
+                format!("Create section \"{}\"", name.trim())
+            }
+            Command::UpdateCaveSection { name, color, .. } => match (name, color) {
+                (Some(name), _) => format!("Rename section to \"{}\"", name.trim()),
+                (None, Some(_)) => "Change section colour".to_string(),
+                (None, None) => "Update section".to_string(),
+            },
+            Command::DeleteCaveSection { .. } => "Delete section".to_string(),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => {
+                let lines = lines_label(line_ids.len());
+                if section_id.is_some() {
+                    format!("Move {lines} to a section")
+                } else {
+                    format!("Remove {lines} from their section")
+                }
+            }
+            Command::ApplyCaveSectionColor { .. } => {
+                "Apply section colour to its lines".to_string()
             }
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
@@ -970,12 +1141,21 @@ impl Command {
     }
 }
 
+/// `1 line`, `3 lines`: the count in a Section command's label.
+pub(crate) fn lines_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, Coordinates, GpsCoordinates, SectionUpdates, ShotData, ShotUpdates,
+        ClosureStrategy, Coordinates, GpsCoordinates, LineUpdates, ShotData, ShotUpdates,
         StationRef,
     };
     use chrono::NaiveDate;
@@ -1017,8 +1197,8 @@ mod tests {
         // that indent identifies a variant.
         let variants: Vec<&str> = src[start..start + end]
             .lines()
-            .filter_map(|line| {
-                let rest = line.strip_prefix("    ")?;
+            .filter_map(|src_line| {
+                let rest = src_line.strip_prefix("    ")?;
                 if rest.starts_with(' ') || !rest.starts_with(char::is_uppercase) {
                     return None;
                 }
@@ -1029,7 +1209,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            32,
+            38,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1062,34 +1242,35 @@ mod tests {
             (Command::SaveProject { path: None }, false),
             (Command::CloseProject, false),
             (
-                Command::CreateSection {
+                Command::CreateLine {
                     name: None,
                     surveyor: None,
                     date: None,
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
                 true,
             ),
-            (Command::DeleteSection { section_id: 1 }, true),
+            (Command::DeleteLine { line_id: 1 }, true),
             (
-                Command::UpdateSectionMetadata {
-                    section_id: 1,
-                    updates: SectionUpdates::default(),
+                Command::UpdateLineMetadata {
+                    line_id: 1,
+                    updates: LineUpdates::default(),
                 },
                 false,
             ),
             (
-                Command::ReverseSection {
-                    section_id: 1,
+                Command::ReverseLine {
+                    line_id: 1,
                     swap_left_right: false,
                 },
                 true,
             ),
             (
                 Command::CreateShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot: ShotData::default(),
                     after_shot_id: None,
                     before_shot_id: None,
@@ -1098,7 +1279,7 @@ mod tests {
             ),
             (
                 Command::UpdateShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 1,
                     updates: geometry_update,
                 },
@@ -1106,14 +1287,14 @@ mod tests {
             ),
             (
                 Command::DeleteShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 1,
                 },
                 true,
             ),
             (
                 Command::SetShotKind {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 1,
                     kind: ShotKind::Jump,
                 },
@@ -1171,15 +1352,22 @@ mod tests {
                 false,
             ),
             (
-                Command::MoveSection {
-                    section_id: 1,
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: "4a".to_string(),
+                },
+                false,
+            ),
+            (
+                Command::MoveLine {
+                    line_id: 1,
                     offset: Coordinates::default(),
                 },
                 true,
             ),
             (
                 Command::MoveSegment {
-                    section_id: 1,
+                    line_id: 1,
                     offset: Coordinates::default(),
                 },
                 true,
@@ -1206,6 +1394,7 @@ mod tests {
             (
                 Command::Batch {
                     commands: vec![Command::CloseProject],
+                    label: None,
                 },
                 false,
             ),
@@ -1224,15 +1413,40 @@ mod tests {
             (
                 Command::UntrackImport {
                     file_hashes: Vec::new(),
-                    section_hashes: Vec::new(),
+                    line_hashes: Vec::new(),
                 },
                 false,
             ),
+            (
+                Command::CreateCaveSection {
+                    name: "S".to_string(),
+                    color: "#123456".to_string(),
+                    line_ids: vec![1],
+                },
+                false,
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 0,
+                    name: None,
+                    color: None,
+                },
+                false,
+            ),
+            (Command::DeleteCaveSection { section_id: 0 }, false),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1],
+                    section_id: None,
+                },
+                false,
+            ),
+            (Command::ApplyCaveSectionColor { section_id: 0 }, false),
         ];
 
         assert_eq!(
             cases.len(),
-            30,
+            36,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {
@@ -1240,7 +1454,7 @@ mod tests {
         }
 
         let metadata_update = Command::UpdateShot {
-            section_id: 1,
+            line_id: 1,
             shot_id: 1,
             updates: ShotUpdates {
                 comment: Some(Some("metadata".to_owned())),
@@ -1249,7 +1463,8 @@ mod tests {
         };
         assert!(!metadata_update.affects_geometry());
         assert!(Command::Batch {
-            commands: vec![metadata_update, Command::DeleteSection { section_id: 1 }],
+            commands: vec![metadata_update, Command::DeleteLine { line_id: 1 }],
+            label: None,
         }
         .affects_geometry());
     }
@@ -1258,16 +1473,19 @@ mod tests {
     fn legacy_set_shot_reference_undo_entries_still_deserialize() {
         // Pre-#27 persisted undo history is JSON-tagged `set_shot_reference`
         // with an `is_reference` bool. It must still load, otherwise upgrading
-        // would silently throw away the user's undo stack.
+        // would silently throw away the user's undo stack. Read the way the
+        // undo store reads it, through the on-disk vocabulary (`disk_names`).
+        let from_disk =
+            |json: &str| -> Command { crate::models::disk_names::from_disk_str(json).unwrap() };
         let legacy =
             r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":true}"#;
-        let parsed: Command = serde_json::from_str(legacy).unwrap();
+        let parsed = from_disk(legacy);
         // q2: a legacy virtual shot reads as a Jump, and the ids survive.
         assert!(
             matches!(
                 parsed,
                 Command::SetShotKind {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 2,
                     kind: ShotKind::Jump,
                 }
@@ -1278,7 +1496,7 @@ mod tests {
         // The false case, which is what an old inverse command carried.
         let legacy_false =
             r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":false}"#;
-        let parsed: Command = serde_json::from_str(legacy_false).unwrap();
+        let parsed = from_disk(legacy_false);
         assert!(matches!(
             parsed,
             Command::SetShotKind {
@@ -1289,7 +1507,7 @@ mod tests {
 
         // And the even older `set_shot_virtual` tag.
         let ancient = r#"{"type":"set_shot_virtual","section_id":1,"shot_id":2,"is_virtual":true}"#;
-        let parsed: Command = serde_json::from_str(ancient).unwrap();
+        let parsed = from_disk(ancient);
         assert!(matches!(
             parsed,
             Command::SetShotKind {
@@ -1315,8 +1533,8 @@ mod tests {
         assert!(success.success);
         assert!(success.warnings.is_empty());
         assert!(success.error.is_none());
-        assert!(success.section_id.is_none());
-        assert!(success.section_ids.is_empty());
+        assert!(success.line_id.is_none());
+        assert!(success.line_ids.is_empty());
         assert!(success.shot_id.is_none());
         assert!(success.saved_path.is_none());
         assert!(success.unlinked_copy_path.is_none());
@@ -1341,43 +1559,43 @@ mod tests {
         assert!(with_warnings.success);
         assert_eq!(with_warnings.warnings.len(), 1);
         assert!(with_warnings.error.is_none());
-        assert!(with_warnings.section_id.is_none());
-        assert!(with_warnings.section_ids.is_empty());
+        assert!(with_warnings.line_id.is_none());
+        assert!(with_warnings.line_ids.is_empty());
         assert!(with_warnings.shot_id.is_none());
 
-        let with_section = CommandResult::success().with_section_id(7);
-        assert!(with_section.success);
-        assert_eq!(with_section.section_id, Some(7));
-        assert!(with_section.section_ids.is_empty());
-        assert!(with_section.shot_id.is_none());
+        let with_line = CommandResult::success().with_line_id(7);
+        assert!(with_line.success);
+        assert_eq!(with_line.line_id, Some(7));
+        assert!(with_line.line_ids.is_empty());
+        assert!(with_line.shot_id.is_none());
 
-        let with_section_and_warnings = CommandResult::success()
-            .with_section_id(8)
+        let with_line_and_warnings = CommandResult::success()
+            .with_line_id(8)
             .with_warnings(vec![warning.clone()]);
-        assert!(with_section_and_warnings.success);
-        assert_eq!(with_section_and_warnings.section_id, Some(8));
-        assert_eq!(with_section_and_warnings.warnings.len(), 1);
-        assert!(with_section_and_warnings.shot_id.is_none());
+        assert!(with_line_and_warnings.success);
+        assert_eq!(with_line_and_warnings.line_id, Some(8));
+        assert_eq!(with_line_and_warnings.warnings.len(), 1);
+        assert!(with_line_and_warnings.shot_id.is_none());
 
-        let with_sections = CommandResult::success().with_section_ids(vec![1, 2, 3]);
-        assert!(with_sections.success);
-        assert!(with_sections.section_id.is_none());
-        assert_eq!(with_sections.section_ids, vec![1, 2, 3]);
-        assert!(with_sections.shot_id.is_none());
+        let with_lines = CommandResult::success().with_line_ids(vec![1, 2, 3]);
+        assert!(with_lines.success);
+        assert!(with_lines.line_id.is_none());
+        assert_eq!(with_lines.line_ids, vec![1, 2, 3]);
+        assert!(with_lines.shot_id.is_none());
 
-        let with_sections_and_warnings = CommandResult::success()
-            .with_section_ids(vec![4, 5])
+        let with_lines_and_warnings = CommandResult::success()
+            .with_line_ids(vec![4, 5])
             .with_warnings(vec![warning.clone()]);
-        assert!(with_sections_and_warnings.success);
-        assert_eq!(with_sections_and_warnings.section_ids, vec![4, 5]);
-        assert_eq!(with_sections_and_warnings.warnings.len(), 1);
-        assert!(with_sections_and_warnings.shot_id.is_none());
+        assert!(with_lines_and_warnings.success);
+        assert_eq!(with_lines_and_warnings.line_ids, vec![4, 5]);
+        assert_eq!(with_lines_and_warnings.warnings.len(), 1);
+        assert!(with_lines_and_warnings.shot_id.is_none());
 
         let with_shot = CommandResult::success().with_shot_id(42);
         assert!(with_shot.success);
         assert_eq!(with_shot.shot_id, Some(42));
-        assert!(with_shot.section_id.is_none());
-        assert!(with_shot.section_ids.is_empty());
+        assert!(with_shot.line_id.is_none());
+        assert!(with_shot.line_ids.is_empty());
 
         let with_shot_and_warnings = CommandResult::success()
             .with_shot_id(99)
@@ -1390,8 +1608,8 @@ mod tests {
         assert!(!failure.success);
         assert!(failure.warnings.is_empty());
         assert_eq!(failure.error.as_deref(), Some("boom"));
-        assert!(failure.section_id.is_none());
-        assert!(failure.section_ids.is_empty());
+        assert!(failure.line_id.is_none());
+        assert!(failure.line_ids.is_empty());
         assert!(failure.shot_id.is_none());
     }
 
@@ -1400,10 +1618,10 @@ mod tests {
     /// ts-rs 7 can only emit `foo?:` for an `Option<T>` (`optional` is rejected on
     /// any other type), so `skip_serializing_if` on a `Vec` produces a REQUIRED
     /// `Array<_>` that the wire sometimes omits - and `tsc` cannot see a single
-    /// bare `result.section_ids.length` after that. This test pins BOTH halves of
+    /// bare `result.line_ids.length` after that. This test pins BOTH halves of
     /// the rule: the key is present iff the declaration lacks `?`.
     ///
-    /// Turns red if `section_ids` regains `skip_serializing_if` (key vanishes from
+    /// Turns red if `line_ids` regains `skip_serializing_if` (key vanishes from
     /// an empty result) or is retyped `Option<Vec<_>>` (declaration gains the `?`).
     #[test]
     fn omitted_fields_are_exactly_the_ones_declared_optional() {
@@ -1413,19 +1631,19 @@ mod tests {
         let empty = empty.as_object().unwrap();
 
         assert_eq!(
-            empty.get("section_ids"),
+            empty.get("line_ids"),
             Some(&serde_json::json!([])),
-            "section_ids generates as a required Array<number>, so an empty result \
+            "line_ids generates as a required Array<number>, so an empty result \
              must still carry the key (#441); got {empty:?}"
         );
 
         for absent in [
-            "section_id",
+            "line_id",
             "shot_id",
             "saved_path",
             "session_closed",
             "unlinked_copy_path",
-            "reversed_sections",
+            "reversed_lines",
             "import_receipt",
         ] {
             assert!(
@@ -1438,27 +1656,27 @@ mod tests {
         // The populated case must round-trip intact, not just be present: the
         // empty-case assertion above would still pass if the field serialized as
         // a constant `[]`.
-        let populated = CommandResult::success().with_section_ids(vec![4, 7, 9]);
+        let populated = CommandResult::success().with_line_ids(vec![4, 7, 9]);
         let json = serde_json::to_string(&populated).unwrap();
         assert!(
-            json.contains("\"section_ids\":[4,7,9]"),
-            "created section ids must reach the wire verbatim: {json}"
+            json.contains("\"line_ids\":[4,7,9]"),
+            "created line ids must reach the wire verbatim: {json}"
         );
         let back: CommandResult = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            back.section_ids,
+            back.line_ids,
             vec![4, 7, 9],
-            "section_ids must survive the round-trip"
+            "line_ids must survive the round-trip"
         );
 
         let decl = CommandResult::decl();
         assert!(
-            decl.contains("section_ids: Array<number>"),
-            "section_ids must stay a required array to match the wire above: {decl}"
+            decl.contains("line_ids: Array<number>"),
+            "line_ids must stay a required array to match the wire above: {decl}"
         );
         assert!(
-            decl.contains("reversed_sections?:"),
-            "reversed_sections is omitted from the wire, so its declaration must \
+            decl.contains("reversed_lines?:"),
+            "reversed_lines is omitted from the wire, so its declaration must \
              carry the `?`: {decl}"
         );
     }
@@ -1473,7 +1691,7 @@ mod tests {
             depth_out: 2.0,
             ..Default::default()
         };
-        let section_updates = SectionUpdates {
+        let line_updates = LineUpdates {
             name: Some(Some("Updated".to_string())),
             ..Default::default()
         };
@@ -1508,36 +1726,37 @@ mod tests {
             ),
             (Command::CloseProject, "Close project"),
             (
-                Command::CreateSection {
+                Command::CreateLine {
                     name: Some("Main".to_string()),
                     surveyor: None,
                     date: Some(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()),
                     color: "#fff".to_string(),
                     direction: Some(SurveyDirection::In),
                     shots: vec![shot_data.clone()],
+                    cave_section_id: None,
                 },
-                "Create section 'Main'",
+                "Create line \"Main\"",
             ),
-            (Command::DeleteSection { section_id: 3 }, "Delete section 3"),
+            (Command::DeleteLine { line_id: 3 }, "Delete line 3"),
             (
-                Command::UpdateSectionMetadata {
-                    section_id: 3,
-                    updates: section_updates,
+                Command::UpdateLineMetadata {
+                    line_id: 3,
+                    updates: line_updates,
                 },
-                "Update section 3 metadata",
+                "Update line 3 metadata",
             ),
             (
                 Command::CreateShot {
-                    section_id: 4,
+                    line_id: 4,
                     shot: shot_data,
                     after_shot_id: None,
                     before_shot_id: None,
                 },
-                "Create shot in section 4",
+                "Create shot in line 4",
             ),
             (
                 Command::UpdateShot {
-                    section_id: 4,
+                    line_id: 4,
                     shot_id: 2,
                     updates: shot_updates,
                 },
@@ -1545,14 +1764,14 @@ mod tests {
             ),
             (
                 Command::DeleteShot {
-                    section_id: 4,
+                    line_id: 4,
                     shot_id: 2,
                 },
                 "Delete shot 4:3",
             ),
             (
                 Command::SetShotKind {
-                    section_id: 4,
+                    line_id: 4,
                     shot_id: 2,
                     kind: ShotKind::Reference,
                 },
@@ -1560,7 +1779,7 @@ mod tests {
             ),
             (
                 Command::SetShotKind {
-                    section_id: 4,
+                    line_id: 4,
                     shot_id: 2,
                     kind: ShotKind::Jump,
                 },
@@ -1568,7 +1787,7 @@ mod tests {
             ),
             (
                 Command::SetShotKind {
-                    section_id: 4,
+                    line_id: 4,
                     shot_id: 2,
                     kind: ShotKind::Normal,
                 },
@@ -1622,18 +1841,18 @@ mod tests {
                 "Remove zero datum from 1:1",
             ),
             (
-                Command::MoveSection {
-                    section_id: 2,
+                Command::MoveLine {
+                    line_id: 2,
                     offset: Coordinates::new(1.0, 2.0, 3.0),
                 },
-                "Move section 2",
+                "Move line 2",
             ),
             (
                 Command::MoveSegment {
-                    section_id: 2,
+                    line_id: 2,
                     offset: Coordinates::new(1.0, 2.0, 3.0),
                 },
-                "Move segment (section 2)",
+                "Move segment (line 2)",
             ),
             (
                 Command::SetStationComment {
@@ -1650,6 +1869,13 @@ mod tests {
                 "Remove comment from station 1:0",
             ),
             (
+                Command::SetStationName {
+                    station_ref: station_a,
+                    name: "4a".to_string(),
+                },
+                "Rename station 1:0 to \"4a\"",
+            ),
+            (
                 Command::MoveStation {
                     station_ref: station_a,
                     offset: Coordinates::new(1.0, 0.0, 0.0),
@@ -1662,7 +1888,7 @@ mod tests {
                         station_ref: station_a,
                     },
                     target: CommentHolder::Shot {
-                        section_id: 1,
+                        line_id: 1,
                         shot_id: 0,
                     },
                     swap: false,
@@ -1684,8 +1910,16 @@ mod tests {
             (
                 Command::Batch {
                     commands: vec![Command::CloseProject],
+                    label: None,
                 },
                 "Batch of 1 commands",
+            ),
+            (
+                Command::Batch {
+                    commands: vec![Command::CloseProject],
+                    label: Some("Split line \"Main\" at 5".to_string()),
+                },
+                "Split line \"Main\" at 5",
             ),
             (
                 Command::MergeProjects {
@@ -1695,6 +1929,52 @@ mod tests {
                     archive_originals: false,
                 },
                 "Merge 2 projects into 'Merged'",
+            ),
+            (
+                Command::CreateCaveSection {
+                    name: " Upper level ".to_string(),
+                    color: "#123456".to_string(),
+                    line_ids: Vec::new(),
+                },
+                "Create section \"Upper level\"",
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 3,
+                    name: Some("Lower".to_string()),
+                    color: None,
+                },
+                "Rename section to \"Lower\"",
+            ),
+            (
+                Command::UpdateCaveSection {
+                    section_id: 3,
+                    name: None,
+                    color: Some("#000000".to_string()),
+                },
+                "Change section colour",
+            ),
+            (
+                Command::DeleteCaveSection { section_id: 3 },
+                "Delete section",
+            ),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1, 2, 3],
+                    section_id: Some(3),
+                },
+                "Move 3 lines to a section",
+            ),
+            (
+                Command::MoveLinesToCaveSection {
+                    line_ids: vec![1],
+                    section_id: None,
+                },
+                "Remove 1 line from their section",
+            ),
+            (
+                Command::ApplyCaveSectionColor { section_id: 3 },
+                "Apply section colour to its lines",
             ),
         ];
 
@@ -1707,8 +1987,8 @@ mod tests {
         ImportReceipt {
             source_format: String::new(),
             file_name: String::new(),
-            sections_found: 0,
-            sections_imported: 0,
+            lines_found: 0,
+            lines_imported: 0,
             shot_count: 0,
             closures_requested: 0,
             closures_created: 0,
@@ -1720,7 +2000,7 @@ mod tests {
     }
 
     /// `zero_datum_created` (F12c) traces to file content (an
-    /// `ImportSectionConfig::name`) exactly like `file_name` does, and renders
+    /// `ImportLineConfig::name`) exactly like `file_name` does, and renders
     /// verbatim in the receipt dialog - `decorate_receipt` must run it through
     /// the same `sanitize_display_text` guard: strip the bidi override so it
     /// cannot visually reorder the dialog line around it, and clamp to

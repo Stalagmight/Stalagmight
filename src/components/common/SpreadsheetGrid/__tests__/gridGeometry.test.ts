@@ -129,7 +129,7 @@ describe('placePaste', () => {
   });
 
   it('emits rows past the end under growRows, still clipping columns', () => {
-    // A host whose rows are provisional (the new-section dialog) grows to fit,
+    // A host whose rows are provisional (the new-line dialog) grows to fit,
     // so a block pasted into a one-row grid must not be truncated to that row.
     const clip = [['a', 'b'], ['c', 'd']];
     const { targets, clipped } = placePaste(clip, rectAt(0, 0), 1, 2, true);

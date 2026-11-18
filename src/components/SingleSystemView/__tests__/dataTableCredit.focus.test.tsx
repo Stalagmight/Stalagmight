@@ -29,7 +29,7 @@ import { useDataTableCredit } from '../useDataTableCredit';
 import { useProjectStore } from '../../../store/projectStore';
 import type { Shot } from '../../../types/project';
 
-const SECTION = 7;
+const LINE = 7;
 
 function shot(id: number, credit?: Shot['credit']): Shot {
   return {
@@ -63,7 +63,7 @@ const shotIndexAt = (rowIndex: number) => rowIndex;
  */
 function Table({ onEdit, cellIds }: { onEdit: (row: number, colKey: string, value: unknown) => void; cellIds: boolean }) {
   const { t } = useTranslation();
-  const credit = useDataTableCredit({ t, sectionId: SECTION, rows, shotIndexAt, editingBlocked: false });
+  const credit = useDataTableCredit({ t, lineId: LINE, rows, shotIndexAt, editingBlocked: false });
   return (
     <div onKeyDownCapture={credit.onKeyDownCapture}>
       {credit.editor}
@@ -72,7 +72,7 @@ function Table({ onEdit, cellIds }: { onEdit: (row: number, colKey: string, valu
         rows={rows}
         rowKey={(s) => s.id}
         {...(cellIds
-          ? { cellTestId: (s: Shot, _rowIndex: number, colKey: string) => `shot-cell-${SECTION}-${s.id}-${colKey}` }
+          ? { cellTestId: (s: Shot, _rowIndex: number, colKey: string) => `shot-cell-${LINE}-${s.id}-${colKey}` }
           : {})}
         onEdit={onEdit}
         onBatchEdit={(edits) => edits.forEach((e) => onEdit(e.row, e.colKey, e.value))}
@@ -206,7 +206,7 @@ describe('the credit cell popover and the keyboard', () => {
     expect(editor()).toBeNull();
     expect(editShotCredit).toHaveBeenCalledTimes(1);
     expect(editShotCredit).toHaveBeenCalledWith(
-      { type: 'shots', shots: [[SECTION, 11]] },
+      { type: 'shots', shots: [[LINE, 11]] },
       { set_surveyors: [{ name: 'Ann' }, { name: 'Bo' }] },
     );
     expect(document.activeElement).toBe(scroller());

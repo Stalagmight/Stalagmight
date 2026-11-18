@@ -19,7 +19,7 @@ describe('uiStore data-table fullscreen', () => {
       rawTableSelection: null,
       dataTableOpen: false,
       dataTableMode: 'pin',
-      focusedSectionId: null,
+      focusedLineId: null,
     });
   });
 
@@ -92,14 +92,14 @@ describe('uiStore data-table fullscreen', () => {
     expect(s.rawTableSelection).toBeNull();
   });
 
-  // Regression (#3): fullscreen entered WHILE section-focused must snapshot the
+  // Regression (#3): fullscreen entered WHILE line-focused must snapshot the
   // user's real pre-focus table state, not the focus-forced open+pin - otherwise a
   // hover/closed table is stranded pinned-open once both focus and fullscreen exit.
-  describe('fullscreen entered while section-focused', () => {
+  describe('fullscreen entered while line-focused', () => {
     beforeEach(() => {
-      // A full pre-focus layout so enterSectionFocus has something to snapshot.
+      // A full pre-focus layout so enterLineFocus has something to snapshot.
       useUIStore.setState({
-        focusedSectionId: null,
+        focusedLineId: null,
         sectionsPanelOpen: true,
         sectionsPanelMode: 'pin',
         detailPanelOpen: true,
@@ -113,10 +113,10 @@ describe('uiStore data-table fullscreen', () => {
     });
 
     it('exit-focus then exit-fullscreen restores the real hover/closed table (not pinned-open)', () => {
-      useUIStore.getState().enterSectionFocus(7, 300);
+      useUIStore.getState().enterLineFocus(7, 300);
       expect(useUIStore.getState().dataTableMode).toBe('pin'); // focus forces pin
       useUIStore.getState().enterDataTableFullScreen();
-      useUIStore.getState().exitSectionFocus();
+      useUIStore.getState().exitLineFocus();
       useUIStore.getState().exitDataTableFullScreen();
       const s = useUIStore.getState();
       expect(s.dataTableOpen).toBe(false);
@@ -124,7 +124,7 @@ describe('uiStore data-table fullscreen', () => {
     });
 
     it('exiting fullscreen while still focused keeps the table open+pinned (focus needs it)', () => {
-      useUIStore.getState().enterSectionFocus(7, 300);
+      useUIStore.getState().enterLineFocus(7, 300);
       useUIStore.getState().enterDataTableFullScreen();
       useUIStore.getState().exitDataTableFullScreen();
       const mid = useUIStore.getState();
@@ -132,7 +132,7 @@ describe('uiStore data-table fullscreen', () => {
       expect(mid.dataTableOpen).toBe(true);
       expect(mid.dataTableMode).toBe('pin');
       // Then leaving focus restores the user's real hover/closed preference.
-      useUIStore.getState().exitSectionFocus();
+      useUIStore.getState().exitLineFocus();
       const s = useUIStore.getState();
       expect(s.dataTableOpen).toBe(false);
       expect(s.dataTableMode).toBe('hover');

@@ -3,7 +3,7 @@
  *
  * The binary envelope is the FAST path: every real project open goes through it
  * and the JSON shape is the fallback. It used to stop at `surface_elevation`,
- * so a project whose sections carry a declination decoded to one with none -
+ * so a project whose lines carry a declination decoded to one with none -
  * nothing failed, the map was simply drawn (and exported) rotated by the
  * correction, while the JSON path showed it right.
  *
@@ -26,12 +26,12 @@ const PROJECT_DEFAULT: AzimuthReference = {
   source: 'file_declared',
 };
 
-/** One project, two sections, no shots - the reference fields are the subject. */
+/** One project, two lines, no shots - the reference fields are the subject. */
 function envelope(overrides: {
   projectDefault?: AzimuthReference;
-  sectionReference?: AzimuthReference;
+  lineReference?: AzimuthReference;
 }): BinaryEnvelope {
-  const section = (id: number, name: string, reference?: AzimuthReference) => ({
+  const line = (id: number, name: string, reference?: AzimuthReference) => ({
     id,
     name,
     color: '#ff0000',
@@ -45,7 +45,7 @@ function envelope(overrides: {
   });
 
   return {
-    version: 7,
+    version: 8,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -54,22 +54,22 @@ function envelope(overrides: {
       created_at: '2026-01-01T00:00:00Z',
       modified_at: '2026-01-01T00:00:00Z',
       file_path: null,
-      next_section_id: 3,
+      next_line_id: 3,
       next_closure_id: 1,
-      sections: [
-        section(1, 'Declared', overrides.sectionReference),
+      lines: [
+        line(1, 'Declared', overrides.lineReference),
         // Declares nothing: it INHERITS, which is what the project-level field
         // has to preserve.
-        section(2, 'Inheriting'),
+        line(2, 'Inheriting'),
       ],
       station_merges: [],
       zero_datums: [],
       loop_closures: [],
-      section_offsets: [],
+      line_offsets: [],
       station_offsets: [],
       station_comments_map: [],
       imported_file_hashes: [],
-      imported_section_hashes: [],
+      imported_line_hashes: [],
       validation: {} as never,
       surface_elevation: null,
       credit_people: [],
@@ -92,6 +92,7 @@ function envelope(overrides: {
     station_closures_with: [],
     station_comments: [],
     station_names: [],
+    stations_ids: new Uint8Array(0),
     stats: {} as never,
     warnings: [],
     display_settings: {} as never,
@@ -100,27 +101,27 @@ function envelope(overrides: {
 }
 
 describe('loadProjectBinary decodes #438 north references', () => {
-  it('carries the project default and each section reference onto the Project', () => {
+  it('carries the project default and each line reference onto the Project', () => {
     const result = buildResult(
-      envelope({ projectDefault: PROJECT_DEFAULT, sectionReference: DECLARED }),
+      envelope({ projectDefault: PROJECT_DEFAULT, lineReference: DECLARED }),
       0,
     );
 
     expect(result.project.default_azimuth_reference).toEqual(PROJECT_DEFAULT);
-    expect(result.project.sections[0]!.azimuth_reference).toEqual(DECLARED);
-    // A section that declares nothing must not be handed a value here: `null`
+    expect(result.project.lines[0]!.azimuth_reference).toEqual(DECLARED);
+    // A line that declares nothing must not be handed a value here: `null`
     // is what makes it INHERIT the project default downstream.
-    expect(result.project.sections[1]!.azimuth_reference).toBeNull();
+    expect(result.project.lines[1]!.azimuth_reference).toBeNull();
   });
 
-  it('mirrors both onto the SoA section metadata the renderer reads', () => {
+  it('mirrors both onto the SoA line metadata the renderer reads', () => {
     const result = buildResult(
-      envelope({ projectDefault: PROJECT_DEFAULT, sectionReference: DECLARED }),
+      envelope({ projectDefault: PROJECT_DEFAULT, lineReference: DECLARED }),
       0,
     );
 
-    expect(result.surveyData.sections[0]!.azimuth_reference).toEqual(DECLARED);
-    expect(result.surveyData.sections[1]!.azimuth_reference).toBeNull();
+    expect(result.surveyData.lines[0]!.azimuth_reference).toEqual(DECLARED);
+    expect(result.surveyData.lines[1]!.azimuth_reference).toBeNull();
   });
 
   it('leaves the project default ABSENT when the envelope has none', () => {
@@ -129,6 +130,6 @@ describe('loadProjectBinary decodes #438 north references', () => {
     // Absent, not null: the generated `Project` declares it optional, and a
     // project that never declared one is a different state from one that did.
     expect(result.project.default_azimuth_reference).toBeUndefined();
-    expect(result.project.sections[0]!.azimuth_reference).toBeNull();
+    expect(result.project.lines[0]!.azimuth_reference).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 # Debug Gates
 
 Stalagmight ships with a fair amount of instrumentation - phase timings on the
-load path, per-section progress markers during TML / Compass / DMP import,
+load path, per-line progress markers during TML / Compass / DMP import,
 console traces in the React store, and `debug_assert`-style cross-checks in the
 project model. Most of it is **off by default in production**: the
 `#[cfg(debug_assertions)]` (Rust) and `import.meta.env.DEV` (Vite) machinery
@@ -25,7 +25,7 @@ measurable fraction of the wall clock.
 | `error!` | always | Conditions a user should care about (corruption, save failed, FK violation). |
 | `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
 | `info!`  | always (default filter is `info,stalagmight=debug`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
-| `debug!` | on by default (the default filter enables `stalagmight=debug`); silence with `RUST_LOG=info` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
+| `debug!` | on by default (the default filter enables `stalagmight=debug`); silence with `RUST_LOG=info` | Per-operation chatter, sub-phase timings, load-loop progress, per-line import timing. |
 | `trace!` | off everywhere by default | Per-shot / per-row spam. (A handful of callers: tilemap cache hits, closure correction/metrics.) |
 
 The default release filter is set in `src-tauri/crates/telemetry/src/logging/mod.rs`. Override at
@@ -56,14 +56,14 @@ validate_foreign_keys, build_colocated_groups, depths loop, xyz walk, …).
 Enable when investigating slow project opens.
 
 **TML import loop progress** (`debug!` in
-`src-tauri/crates/core/src/core/state/command_import.rs::execute_import_sections`): per-100-section
+`src-tauri/crates/core/src/core/state/command_import.rs::execute_import_lines`): per-100-line
 batch timing - `batch_ms`, `create_ms`, `placement_ms`. Enable when debugging
 super-linear growth during a batch import.
 
 **Per-operation success acks** (`debug!` throughout the `command_*.rs` modules
-under `src-tauri/crates/core/src/core/state/`): "Section created", "Stations
+under `src-tauri/crates/core/src/core/state/`): "Line created", "Stations
 merged", "Shot updated", etc. On by default like every other `debug!` (see the
-level table) - they fire N times during a 14k-section import and don't help in
+level table) - they fire N times during a 14k-line import and don't help in
 release, so silence them with `RUST_LOG=info`.
 
 **SQLite open / save chatter** (`debug!` across
@@ -93,7 +93,7 @@ and document that fact at the call site, the way that function does.
 they never run with `cargo test` unless explicitly opted in:
 
 ```bash
-# Profile a TML import end-to-end (parse + convert + execute_import_sections)
+# Profile a TML import end-to-end (parse + convert + execute_import_lines)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
   core::state::tests::profile_tml_import_full -- --nocapture --ignored
@@ -179,10 +179,10 @@ instrumentation and the cache/tile-fetch IPC polling are only installed once,
 regardless of how many of the three are open; see `MapDevStatsPanels.tsx` for
 how they're composed.
 
-The probe used to force-materialize every lazy `section.shots` on every tick
+The probe used to force-materialize every lazy `line.shots` on every tick
 during the SoA migration - that bug is fixed; if you add a new field that's
 lazily computed, make sure you read it from `SurveyData` (typed-array slice)
-rather than from `Section.shots` (the legacy lazy getter). See the in-line
+rather than from `Line.shots` (the legacy lazy getter). See the in-line
 comment in `src/components/MemoryProbe/MemoryProbe.tsx::takeSnapshot`.
 
 ### Per-feature-flag config debug panels
@@ -265,7 +265,7 @@ build in CI; a spec that asserts a development-build-only control reads
 1. **Per-operation backend log?** Use `tracing::debug!`, not `tracing::info!`.
    `info!` is reserved for one-shot lifecycle events (project opened, schema
    migrated, integrity check passed). If you add a `tracing::info!` inside a
-   command, ask yourself how many times it will fire on a 14 k-section import.
+   command, ask yourself how many times it will fire on a 14 k-line import.
 2. **Per-operation frontend log?** Use `debugLog` from
    `src/utils/debugLog.ts`, not `console.log`. Keep `console.error` and
    `console.warn` for actual runtime anomalies.

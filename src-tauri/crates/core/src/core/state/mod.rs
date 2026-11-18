@@ -1,16 +1,18 @@
 mod app_state;
-mod command_combine_sections;
+mod command_cave_section;
+mod command_combine_lines;
 mod command_comment;
 mod command_credit;
 mod command_delete_split;
 mod command_import;
+mod command_line;
 mod command_move;
 mod command_query;
-mod command_section;
 mod command_shot;
-mod command_split_section;
+mod command_split_line;
 mod command_split_shot;
 mod command_station;
+mod command_station_name;
 mod commands;
 mod config;
 mod display_settings;
@@ -67,10 +69,23 @@ mod azimuth_reference_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod batch_label_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::unwrap_in_result,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod cave_sections_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
-mod combine_sections_tests;
+mod combine_lines_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
@@ -168,6 +183,14 @@ mod issue_738_tests;
 )]
 mod issue_756_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "on-demand vector dump: fails loudly, and says where it wrote"
+)]
+mod legacy_disk_vectors_dump_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(
@@ -194,7 +217,20 @@ mod multi_datum_steps_fuzz;
 )]
 mod multi_datum_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod name_rules_tests;
+#[cfg(test)]
 mod open_undo_bugs_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod pre_line_rename_disk_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -301,7 +337,13 @@ mod speleodb_upload_limit_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
-mod split_section_tests;
+mod split_line_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod station_identity_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

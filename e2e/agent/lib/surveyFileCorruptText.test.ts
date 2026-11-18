@@ -288,7 +288,7 @@ describe('corruptSpec on the text formats', () => {
 /**
  * A `.dmp` spec that offers the whole DMP catalog.
  *
- * Three entries are gated on the file version (`bad-section-magic` needs > 2,
+ * Three entries are gated on the file version (`bad-line-magic` needs > 2,
  * `bad-shot-start-magic` / `bad-shot-end-magic` / `buggy-eos` need 5), so the
  * full list is only visible on a v5 spec.
  */
@@ -304,7 +304,7 @@ describe('the DMP and TML catalogs are unchanged', () => {
   it('offers the DMP ids in exactly their original order', () => {
     expect(corruptionsFor(fullDmpSpec())).toEqual([
       'dmp:unsupported-version',
-      'dmp:bad-section-magic',
+      'dmp:bad-line-magic',
       'dmp:bad-shot-start-magic',
       'dmp:bad-shot-end-magic',
       'dmp:month-0',
@@ -318,8 +318,8 @@ describe('the DMP and TML catalogs are unchanged', () => {
       'dmp:bad-direction',
       'dmp:bad-shot-type',
       'dmp:truncated-mid-shot',
-      'dmp:zero-shot-section',
-      'dmp:missing-end-of-section',
+      'dmp:zero-shot-line',
+      'dmp:missing-end-of-line',
       'dmp:buggy-eos',
       'dmp:non-integer-token',
       'dmp:empty-token',

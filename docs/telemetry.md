@@ -104,9 +104,9 @@ UI-only events tracked via `trackAction`. Always include a source.
 | Category | Events | Sources |
 |----------|--------|---------|
 | Tool switches | `tool.select`, `tool.merge`, `tool.measure`, ... | `keyboard`, `toolbar` |
-| Navigation | `nav.zoom`, `nav.pan`, `nav.fit-to-bounds`, `nav.zoom-to-section`, ... | `mouse`, `touch`, `keyboard`, `dblclick` |
+| Navigation | `nav.zoom`, `nav.pan`, `nav.fit-to-bounds`, `nav.zoom-to-line`, ... | `mouse`, `touch`, `keyboard`, `dblclick` |
 | Display toggles | `toggle.showStations`, `toggle.showGrid`, ... | `display-menu` |
-| Selection | `select.station`, `select.shot`, `select.section` | `map`, `data-table`, `sections-panel`, `detail-panel` |
+| Selection | `select.station`, `select.shot`, `select.line` | `map`, `data-table`, `sections-panel`, `detail-panel` |
 | Multi-select | `select-add.station`, `select-add.shot` | `map`, `data-table` |
 | Dialogs | `dialog.import`, `dialog.settings`, ... | `unknown`, `context-menu` |
 | Panel toggles | `panel-open.sections`, `panel-close.detail`, `panel-open.data-table` | `keyboard`, `unknown` (= collapse button) |
@@ -341,12 +341,12 @@ call, but be aware of this when adding new handlers.
 
 The 50 ms `setSource` reset is too short for project open/create/import, whose
 terminal IPC (`load_project_full`, `create_project_full`, `execute_*_import`,
-`import_sections`) fires only after a file picker and/or dialog - long after the
+`import_lines`) fires only after a file picker and/or dialog - long after the
 originating click. A separate **pending project-action source** bridges that gap:
 `setProjectActionSource(name)` is called synchronously at the entry point (recent
 list/map, toolbar, hamburger, keyboard, empty-state) and `peekProjectActionSource()`
 is applied at each terminal command. It is `peek` (not consumed) so multi-command
-flows (e.g. DMP import = `create_project_full` + `import_sections`) all attribute
+flows (e.g. DMP import = `create_project_full` + `import_lines`) all attribute
 to the same entry point, and it is cleared on `setView('single')` (flow complete)
 and on file-picker cancel. Project opens - which bypass the tracked `invokeIpc` via
 the raw binary `load_project_full_binary` invoke - are explicitly counted as
@@ -374,6 +374,19 @@ entries can be added/renamed/removed freely, and there is no worker-side copy to
 keep in sync. The vocabulary exists only to power the coverage tests below, which
 guarantee every command / tool / dialog actually emits telemetry and catch typos
 before they reach the database.
+
+Because names travel verbatim, renaming an event splits its series: a query
+that spans builds has to match both names. The Section -> Line rename did this
+to every event derived from a renamed command or dialog - `command.create_section`
+became `command.create_line` (and `undo-after.create_section` /
+`undo-after.create_line` likewise), `command.import_sections` became
+`command.import_lines`, `action.dialog.split-section-here` became
+`action.dialog.split-line-here`, and so on - plus `action.select.section` ->
+`action.select.line`, `action.nav.zoom-to-section` -> `action.nav.zoom-to-line`
+and `action.toggle.showSectionNames` -> `action.toggle.showLineNames` (with
+`display-state.showSectionNames:*`, which follows the store key, now
+`display-state.showLineNames:*`). The Sections panel kept its name, so `action.panel-open.sections` and the
+`sections-panel` source did not change.
 
 ### Adding a new event name
 

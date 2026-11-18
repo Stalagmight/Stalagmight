@@ -20,13 +20,13 @@
  *
  * ## The one invariant a 'valid' DMP spec must keep
  *
- * `split_into_sections` cuts the file wherever it sees the end-of-section
+ * `split_into_lines` cuts the file wherever it sees the end-of-line
  * pattern - for v2/v3/v4 that is a `3` byte followed by 15/20/28 ZEROS. A shot
- * record full of zeros can therefore terminate a section in the middle of
+ * record full of zeros can therefore terminate a line in the middle of
  * itself. So the valid profile never draws `length` or `markerIndex` as exactly
  * zero, which bounds the longest zero run inside a record at 21 bytes (v4's
  * worst case) against a 28-byte pattern. `surveyFileSpecs.test.ts` checks the
- * consequence directly - a valid spec yields exactly as many sections as it
+ * consequence directly - a valid spec yields exactly as many lines as it
  * declares - over enough seeds that the argument is not taken on trust.
  *
  * ## What 'valid' has to mean for the five text formats
@@ -243,7 +243,7 @@ export const HOSTILE_COMMENTS: readonly string[] = [
   'x'.repeat(8 * 1024),
 ];
 
-/** Section/explorer/cave names that are not just ASCII words. */
+/** Line/explorer/cave names that are not just ASCII words. */
 const BOUNDARY_NAMES: readonly string[] = [
   '',
   ' ',
@@ -289,7 +289,7 @@ function maybeHostileLine(rng: Rng, nominal: string): string {
 // DMP
 // ---------------------------------------------------------------------------
 
-/** Standard dominates; the two cross-section types are drawn occasionally. */
+/** Standard dominates; the two cross-line types are drawn occasionally. */
 const VALID_SHOT_TYPES: readonly number[] = [2, 2, 2, 2, 2, 0, 1];
 
 function randomDmpShot(rng: Rng, profile: SpecProfile): DmpShotSpec {
@@ -324,7 +324,7 @@ function randomDmpSectionName(rng: Rng, profile: SpecProfile): DmpSectionSpec['n
   if (profile === 'malformed' && chance(rng, 0.3)) {
     // Bytes that are not valid UTF-8 on their own: `parse_section` falls back to
     // a numeric spelling rather than failing, and that fallback name then flows
-    // into the preview, the content hash and the imported section title.
+    // into the preview, the content hash and the imported line title.
     return [randInt(rng, 128, 255), randInt(rng, 128, 255), randInt(rng, 128, 255)];
   }
   const letter = (): string => DMP_NAME_ALPHABET[randInt(rng, 0, DMP_NAME_ALPHABET.length - 1)];
@@ -342,11 +342,11 @@ function randomDmpSectionName(rng: Rng, profile: SpecProfile): DmpSectionSpec['n
 export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec {
   const malformed = profile === 'malformed';
   const version = pick(rng, [5, 5, 5, 4, 4, 3, 2]);
-  const sectionCount = randInt(rng, 1, 4);
-  const sections: DmpSectionSpec[] = [];
+  const lineCount = randInt(rng, 1, 4);
+  const lines: DmpSectionSpec[] = [];
 
-  for (let index = 0; index < sectionCount; index++) {
-    const section: DmpSectionSpec = {
+  for (let index = 0; index < lineCount; index++) {
+    const line: DmpSectionSpec = {
       name: randomDmpSectionName(rng, profile),
       direction: malformed ? randInt(rng, 0, 255) : pick(rng, [0, 1]),
       year: biasedInt(rng, 20, 26, [0, 99]),
@@ -356,13 +356,13 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
       minute: biasedInt(rng, 0, 59, [0, 59]),
       shots: Array.from({ length: randInt(rng, 1, 8) }, () => randomDmpShot(rng, profile)),
     };
-    // A clone of an earlier section collides on `content_hash` while carrying
+    // A clone of an earlier line collides on `content_hash` while carrying
     // its own date, which is the shape re-import deduplication has to notice.
-    if (index > 0 && chance(rng, 0.2)) section.sameContentAs = randInt(rng, 0, index - 1);
-    sections.push(section);
+    if (index > 0 && chance(rng, 0.2)) line.sameContentAs = randInt(rng, 0, index - 1);
+    lines.push(line);
   }
 
-  const spec: DmpSpec = { version, sections };
+  const spec: DmpSpec = { version, lines };
   if (chance(rng, 0.5)) spec.signedTokens = true;
   return spec;
 }
@@ -372,7 +372,7 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
 // ---------------------------------------------------------------------------
 
 /**
- * A DMP whose sections OVERLAP each other, so `suggest_all_import_placements`
+ * A DMP whose lines OVERLAP each other, so `suggest_all_import_placements`
  * returns a non-empty pool.
  *
  * ## Why this exists
@@ -381,7 +381,7 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
  * (`models/src/placement_suggest.rs`) matches shot-for-shot inside hard cutoffs:
  * 25 degrees of azimuth, `max(3% of length, 0.4 m)` of length, 0.30 m of depth
  * per measurement point, with a 0.45 aggregate-score floor. Two independently
- * random sections clear none of that, so the pool comes back empty,
+ * random lines clear none of that, so the pool comes back empty,
  * `pickFromPool` returns false, and the wizard falls straight through
  * `wizard-no-suggestions` into `manual_placing`. Measured over a 130-cell
  * campaign: 47 steps on `wiz-suggest` against 13,781 total, ZERO clicks on an
@@ -391,8 +391,8 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
  *
  * ## The shape
  *
- * One ANCHOR section carries a MOTIF - a short run of shots - and carries it
- * TWICE, separated by filler. Every other section replays that motif with jitter
+ * One ANCHOR line carries a MOTIF - a short run of shots - and carries it
+ * TWICE, separated by filler. Every other line replays that motif with jitter
  * that stays well inside the cutoffs above:
  *
  *   anchor  [lead] MOTIF [middle] MOTIF' [tail]
@@ -404,39 +404,39 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
  * Each of those is a leaf the suggester actually tries: it builds reference
  * shots from the first `max_reference_shots` in natural order AND from the last
  * `max_reference_shots` reversed, then sweeps every start index in the target
- * both forward and reverse. The `head` section exercises the first leaf, `tail`
+ * both forward and reverse. The `head` line exercises the first leaf, `tail`
  * the second (which arrives as a `Reverse` match), and the anchor's REPEATED
- * motif is what makes the same import section match in two places - which is
+ * motif is what makes the same import line match in two places - which is
  * the only way `alternatives` is ever non-empty, since the wizard filters it to
- * suggestions sharing `importSectionIndex`.
+ * suggestions sharing `importLineIndex`.
  *
  * ## Field choices that are not arbitrary
  *
- * `direction` is pinned to 0 (In) rather than drawn: it is section metadata that
+ * `direction` is pinned to 0 (In) rather than drawn: it is line metadata that
  * the wizard's own reverse checkbox can still flip, and pinning it keeps the
- * motif's meaning stable across the four sections. Every shot is `Standard`
+ * motif's meaning stable across the four lines. Every shot is `Standard`
  * (type 2), because that is the only type the wizard counts when it sizes the
  * merge-offset list. Lengths stay in 3..9 m and depth steps under a metre, so
  * `|depth_out - depth_in| < length` always holds and the horizontal projection
  * is real. Filler and tails turn 90 degrees away and descend, so a replayed
- * section leaves the anchor's corridor instead of running back across it and
+ * line leaves the anchor's corridor instead of running back across it and
  * losing the suggestion to the crossing-clearance guard.
  *
  * The zero-run invariant in this module's header is kept the same way
  * `randomDmpShot` keeps it: `length` and `markerIndex` are never zero, and
  * depths start above zero too.
  */
-const SUGGESTIVE_SECTION_KINDS = ['head', 'tail', 'tie'] as const;
+const SUGGESTIVE_LINE_KINDS = ['head', 'tail', 'tie'] as const;
 
 /** Jitter, in the DMP's own pre-scaled integer units, per replay kind. */
 const SUGGESTIVE_JITTER: Readonly<
-  Record<(typeof SUGGESTIVE_SECTION_KINDS)[number], { heading: number; length: number; depth: number }>
+  Record<(typeof SUGGESTIVE_LINE_KINDS)[number], { heading: number; length: number; depth: number }>
 > = {
   // 1.5 deg / 6 cm / 4 cm - a near-exact replay, which scores close to 1.0.
   head: { heading: 15, length: 6, depth: 4 },
   tail: { heading: 15, length: 6, depth: 4 },
   // 3.0 deg / 14 cm / 8 cm - still inside every cutoff, but a visibly worse
-  // score, so the tie section ranks BELOW the head one instead of alongside it.
+  // score, so the tie line ranks BELOW the head one instead of alongside it.
   tie: { heading: 30, length: 14, depth: 8 },
 };
 
@@ -517,7 +517,7 @@ function motifShotSpec(rng: Rng, shot: MotifShot, jitter: { heading: number; len
 
 /**
  * Filler that leaves the anchor's corridor: 90 degrees off and descending, so a
- * replayed section's non-overlapping part does not run back across the anchor
+ * replayed line's non-overlapping part does not run back across the anchor
  * and lose the suggestion to `placement_crossing_clearance_ok`.
  */
 function turnAwayRun(rng: Rng, count: number, fromHeading: number, depth0: number): MotifShot[] {
@@ -547,7 +547,7 @@ function bridgeRun(rng: Rng, count: number, fromHeading: number, fromDepth: numb
   return out;
 }
 
-function suggestiveSection(
+function suggestiveLine(
   rng: Rng,
   name: DmpSectionSpec['name'],
   shots: readonly MotifShot[],
@@ -570,7 +570,7 @@ function suggestiveSection(
  *
  * Within one file the anchor's repeat is what produces alternatives. ACROSS
  * files nothing matched at all, and that is what kept the orphan surface dark:
- * an orphan component is a set of EXISTING sections with no datum and no
+ * an orphan component is a set of EXISTING lines with no datum and no
  * newly-imported member (`Project::suggest_orphan_placements`), so the only way
  * this fuzzer makes one is to place a segment manually in one flow and then
  * import something that MATCHES it in a later flow. With every file drawing a
@@ -578,7 +578,7 @@ function suggestiveSection(
  *
  * Four shapes, drawn per file: two files in the same episode collide often
  * enough to make the cross-file match routine, while the files stay visibly
- * different (section count, filler, jitter and every date/LRUD field still come
+ * different (line count, filler, jitter and every date/LRUD field still come
  * off the stream).
  */
 const SUGGESTIVE_MOTIF_SHAPES: readonly { heading0: number; headingStep: number; depth0: number; length0: number }[] = [
@@ -602,9 +602,9 @@ export function suggestiveDmpSpec(rng: Rng): DmpSpec {
 
   // The anchor: motif, a loop that comes back to the motif's own starting depth,
   // then the SAME motif again. The repeat is exact on purpose - it is what gives
-  // a replaying section two equally good candidate placements, which is the only
+  // a replaying line two equally good candidate placements, which is the only
   // way the wizard's alternatives list is ever non-empty (it filters to
-  // suggestions sharing `importSectionIndex`) and the only way its tie-break is
+  // suggestions sharing `importLineIndex`) and the only way its tie-break is
   // ever exercised.
   const anchorShots: MotifShot[] = [
     ...motif,
@@ -613,12 +613,12 @@ export function suggestiveDmpSpec(rng: Rng): DmpSpec {
   ];
 
   const letter = (index: number): string => `A${String.fromCharCode(65 + (index % 26))}${index % 10}`;
-  const sections: DmpSectionSpec[] = [suggestiveSection(rng, letter(0), anchorShots, zero)];
+  const lines: DmpSectionSpec[] = [suggestiveLine(rng, letter(0), anchorShots, zero)];
 
   // Two or three replays, always including `head` so the station-0 leaf is
   // always exercised; the rest are drawn so a seed does not always produce the
-  // same four-section file.
-  const kinds: (typeof SUGGESTIVE_SECTION_KINDS)[number][] = ['head'];
+  // same four-line file.
+  const kinds: (typeof SUGGESTIVE_LINE_KINDS)[number][] = ['head'];
   if (chance(rng, 0.75)) kinds.push('tail');
   if (chance(rng, 0.6)) kinds.push('tie');
 
@@ -628,10 +628,10 @@ export function suggestiveDmpSpec(rng: Rng): DmpSpec {
       kind === 'tail'
         ? [...turnAwayRun(rng, randInt(rng, 1, 2), heading0, depth0), ...motif]
         : [...motif, ...turnAwayRun(rng, randInt(rng, 1, 2), lastHeading, lastDepth)];
-    sections.push(suggestiveSection(rng, letter(sections.length), shots, jitter));
+    lines.push(suggestiveLine(rng, letter(lines.length), shots, jitter));
   }
 
-  const spec: DmpSpec = { version, sections };
+  const spec: DmpSpec = { version, lines };
   if (chance(rng, 0.5)) spec.signedTokens = true;
   return spec;
 }
@@ -689,8 +689,8 @@ export function randomTmlSpec(rng: Rng, profile: SpecProfile = 'valid'): TmlSpec
   // fuzz flow on a dialog with no content. `malformed` keeps the one-shot case,
   // where an empty import IS the thing being tested.
   const shotCount = malformed ? randInt(rng, 1, 12) : randInt(rng, 2, 12);
-  const sectionNames = Array.from({ length: randInt(rng, 1, 3) }, (_unused, index) =>
-    biasedName(rng, `Section ${index + 1}`),
+  const lineNames = Array.from({ length: randInt(rng, 1, 3) }, (_unused, index) =>
+    biasedName(rng, `Line ${index + 1}`),
   );
 
   const shots: TmlShotSpec[] = [];
@@ -702,7 +702,7 @@ export function randomTmlSpec(rng: Rng, profile: SpecProfile = 'valid'): TmlSpec
       fromId: malformed && chance(rng, 0.25) ? randInt(rng, -5, shotCount + 5) : parent,
       closureToId: !isStart && chance(rng, 0.1) ? randInt(rng, 0, index - 1) : -1,
       type: isStart ? 'START' : pick(rng, ['REAL', 'REAL', 'REAL', 'REAL', 'VIRTUAL']),
-      section: pick(rng, sectionNames),
+      line: pick(rng, lineNames),
       azimuth: biasedFloat(rng, 0, 359.9, 1, [0, 359.9, 360, -1, 1e6]),
       length: biasedFloat(rng, 0.1, 30, 2, [0, -1, 1e-9, 1e6]),
       depth: biasedFloat(rng, 0, 60, 2, [0, -1, 1e6]),
@@ -1409,7 +1409,7 @@ function gpxPoint(rng: Rng, named: boolean): GpxPointSpec {
  * nothing to offer at all.
  *
  * A one-point track segment is drawn occasionally on purpose: `shots_from_points`
- * skips a segment with fewer than 2 points while its `section_index` is STILL
+ * skips a segment with fewer than 2 points while its `line_index` is STILL
  * consumed (`gpx.rs:920-923`), so every later placement index shifts. That is a
  * documented real shape, not a corruption.
  */
@@ -1665,32 +1665,32 @@ function readCount(parsed: unknown, key: string): number {
 export function selfCheckClaim(spec: GeneratedFileSpec): SelfCheckClaim {
   switch (spec.format) {
     case 'dmp': {
-      const declared = spec.dmp.sections.length;
+      const declared = spec.dmp.lines.length;
       return {
         command: 'import_dmp',
-        what: 'section',
-        read: (parsed) => readArrayLength(parsed, 'sections'),
+        what: 'line',
+        read: (parsed) => readArrayLength(parsed, 'lines'),
         min: declared,
         max: declared,
       };
     }
     case 'tml':
     case 'tmlu':
-      // NOT the spec's section-NAME count. `parse_tml` reconstructs topology
+      // NOT the spec's line-NAME count. `parse_tml` reconstructs topology
       // from the `FromID` graph and a `TmlSection` is a connected run of shots,
-      // so one `<Section>` name can become several sections and several names
+      // so one `<Section>` name can become several lines and several names
       // can collapse into one. The only honest claim is "at least one".
       //
       // And only when there IS one to make: shot 0 is the `START`, which is a
       // station rather than a leg, so a one-shot file is a well-formed document
       // describing an empty survey and `parse_tml` correctly reports zero
-      // sections for it. Claiming 1 there would report writer drift for a file
+      // lines for it. Claiming 1 there would report writer drift for a file
       // the writer got exactly right - measured, on the second `.tml` the
       // seed-1 self-check draws.
       return {
         command: 'parse_tml',
-        what: 'section',
-        read: (parsed) => readArrayLength(parsed, 'sections'),
+        what: 'line',
+        read: (parsed) => readArrayLength(parsed, 'lines'),
         min: spec.tml.shots.some((shot) => shot.type === 'REAL') ? 1 : 0,
         max: null,
       };
@@ -1741,7 +1741,7 @@ export function selfCheckClaim(spec: GeneratedFileSpec): SelfCheckClaim {
       };
     }
     default: {
-      // Section indices are allocated waypoints first, then track segments, then
+      // Line indices are allocated waypoints first, then track segments, then
       // routes (`gpx.rs:898-985`); the dialog lists one row per waypoint, track
       // and route, which is what this counts.
       const declared =

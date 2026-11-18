@@ -22,11 +22,11 @@
  *
  * The constants below are transcribed from the parsers, not from format docs:
  * `src-tauri/src/parsers/dmp.rs` (`SECTION_MAGIC`, `SHOT_START_MAGIC`,
- * `SHOT_END_MAGIC`, `shot_size`, `end_of_section_patterns`, `parse_shot`,
+ * `SHOT_END_MAGIC`, `shot_size`, `end_of_line_patterns`, `parse_shot`,
  * `parse_section`) and `src-tauri/src/parsers/tml/` (`normalize_key_bytes` for
  * the long/short element spellings, `decode.rs::find_data_entry` for the archive
  * entry name). Where the two disagree the parser wins - see the `shot_size(3)`
- * note on `endOfSectionBytes`.
+ * note on `endOfLineBytes`.
  */
 
 import { crc32 } from './crc32';
@@ -85,13 +85,13 @@ export interface DmpShotSpec {
   truncateAfter?: number;
 }
 
-/** How a section terminates. `parse_dmp` splits the file on exactly these. */
+/** How a line terminates. `parse_dmp` splits the file on exactly these. */
 export type DmpEndOfSection = 'normal' | 'buggy' | 'none';
 
 export interface DmpSectionSpec {
   /** Three name bytes. A string is taken as its first three UTF-8 bytes, padded. */
   name: string | readonly [number, number, number];
-  /** 0 = In, 1 = Out; any other byte makes `parse_section` reject the section. */
+  /** 0 = In, 1 = Out; any other byte makes `parse_section` reject the line. */
   direction: number;
   /** Year as the file stores it: the offset from 2000, so 24 means 2024. */
   year: number;
@@ -100,20 +100,20 @@ export interface DmpSectionSpec {
   hour: number;
   minute: number;
   shots: readonly DmpShotSpec[];
-  /** Override the section magic (version > 2) to force `Invalid section magic`. */
-  sectionMagic?: readonly [number, number, number];
+  /** Override the line magic (version > 2) to force `Invalid line magic`. */
+  lineMagic?: readonly [number, number, number];
   /** Defaults to `'normal'`; `'buggy'` is the v5 variant, `'none'` omits it. */
-  endOfSection?: DmpEndOfSection;
+  endOfLine?: DmpEndOfSection;
   /**
-   * Take name, direction, shots and terminator from section `index` instead.
+   * Take name, direction, shots and terminator from line `index` instead.
    *
-   * `compute_section_hash` covers the name, the direction and every Standard
+   * `compute_line_hash` covers the name, the direction and every Standard
    * shot's measurements, and deliberately NOT the date - so a clone with its own
-   * date is the exact shape that makes two sections collide on `content_hash`
+   * date is the exact shape that makes two lines collide on `content_hash`
    * while looking different in the import preview. Cloning only the shots would
    * not produce a collision, which is why this copies the identity fields too.
    *
-   * Ignored when it does not name an earlier section (no cycles, no forward
+   * Ignored when it does not name an earlier line (no cycles, no forward
    * references - the resolution is a single left-to-right pass).
    */
   sameContentAs?: number;
@@ -138,9 +138,9 @@ export interface DmpTokenTweaks {
 }
 
 export interface DmpSpec {
-  /** Byte 0 of the file AND of every section. Any byte; only 2..5 parse. */
+  /** Byte 0 of the file AND of every line. Any byte; only 2..5 parse. */
   version: number;
-  sections: readonly DmpSectionSpec[];
+  lines: readonly DmpSectionSpec[];
   /**
    * Render each byte as the signed value a device writes (-128..127) rather than
    * 0..255. `parse_dmp` does `parse::<i32>() as u8`, so both round-trip; real
@@ -198,8 +198,8 @@ function shotBytes(version: number, shot: DmpShotSpec): number[] {
  * those two DISAGREE. `shot_size(3)` returns 21, but `parse_shot` reads
  * `type + 7*int16 + marker` = 16 bytes for anything below version 4 (LRUD, temp
  * and time are gated on `version >= 4`). The parser uses 21 only as the
- * `has_remaining` guard and as the end-of-section pattern length, and the repo's
- * own `build_v3_section_data` fixture emits 16-byte shots followed by a 21-byte
+ * `has_remaining` guard and as the end-of-line pattern length, and the repo's
+ * own `build_v3_line_data` fixture emits 16-byte shots followed by a 21-byte
  * terminator. This mirrors the fixture, i.e. the real read path.
  */
 export function dmpShotByteLength(version: number): number {
@@ -209,18 +209,18 @@ export function dmpShotByteLength(version: number): number {
 }
 
 /**
- * The end-of-section pattern `split_into_sections` scans for, per version.
+ * The end-of-line pattern `split_into_lines` scans for, per version.
  *
  * Its LENGTH is `shot_size(version)` in the parser, which is why v3's terminator
  * is 21 bytes while a v3 shot is 16: the two are independent numbers that happen
  * to coincide for v2, v4 and v5.
  */
-export function endOfSectionBytes(version: number, kind: DmpEndOfSection = 'normal'): number[] {
+export function endOfLineBytes(version: number, kind: DmpEndOfSection = 'normal'): number[] {
   if (kind === 'none') return [];
   if (version === 5) {
     const trailer = [...DMP_SHOT_END_MAGIC];
     if (kind === 'buggy') {
-      // The variant real devices emit and `end_of_section_patterns` also accepts.
+      // The variant real devices emit and `end_of_line_patterns` also accepts.
       return [...DMP_SHOT_START_MAGIC, 3, 7, 8, 7, 8, ...new Array<number>(24).fill(0), ...trailer];
     }
     return [...DMP_SHOT_START_MAGIC, 3, ...new Array<number>(28).fill(0), ...trailer];
@@ -230,35 +230,35 @@ export function endOfSectionBytes(version: number, kind: DmpEndOfSection = 'norm
   return [3, ...new Array<number>(patternLength - 1).fill(0)];
 }
 
-function sectionBytes(spec: DmpSpec, index: number): number[] {
-  const section = spec.sections[index];
-  const cloneIndex = section.sameContentAs;
+function lineBytes(spec: DmpSpec, index: number): number[] {
+  const line = spec.lines[index];
+  const cloneIndex = line.sameContentAs;
   const clone =
     cloneIndex !== undefined && cloneIndex >= 0 && cloneIndex < index
-      ? spec.sections[cloneIndex]
+      ? spec.lines[cloneIndex]
       : null;
-  const identity = clone ?? section;
+  const identity = clone ?? line;
 
   const out: number[] = [byte(spec.version)];
-  if (spec.version > 2) out.push(...(section.sectionMagic ?? DMP_SECTION_MAGIC).map(byte));
+  if (spec.version > 2) out.push(...(line.lineMagic ?? DMP_SECTION_MAGIC).map(byte));
   out.push(
-    byte(section.year),
-    byte(section.month),
-    byte(section.day),
-    byte(section.hour),
-    byte(section.minute),
+    byte(line.year),
+    byte(line.month),
+    byte(line.day),
+    byte(line.hour),
+    byte(line.minute),
   );
   out.push(...nameBytes(identity.name));
   out.push(byte(identity.direction));
   for (const shot of identity.shots) out.push(...shotBytes(spec.version, shot));
-  out.push(...endOfSectionBytes(spec.version, identity.endOfSection ?? 'normal'));
+  out.push(...endOfLineBytes(spec.version, identity.endOfLine ?? 'normal'));
   return out;
 }
 
 /** The whole file as raw bytes, before it is rendered to semicolon-separated text. */
 export function dmpFileBytes(spec: DmpSpec): number[] {
   const out: number[] = [];
-  for (let index = 0; index < spec.sections.length; index++) out.push(...sectionBytes(spec, index));
+  for (let index = 0; index < spec.lines.length; index++) out.push(...lineBytes(spec, index));
   return out;
 }
 
@@ -326,7 +326,7 @@ export interface TmlShotSpec {
   closureToId?: number | string;
   /** `REAL` / `VIRTUAL` / `START` are the ones the importer knows. */
   type: string;
-  section: string;
+  line: string;
   azimuth: number | string;
   length: number | string;
   depth: number | string;
@@ -423,7 +423,7 @@ const TML_TAGS = {
     fromId: 'FromID',
     closureToId: 'ClosureToID',
     type: 'Type',
-    section: 'Section',
+    line: 'Section',
     azimuth: 'Azimut',
     length: 'Length',
     depth: 'Depth',
@@ -448,7 +448,7 @@ const TML_TAGS = {
     fromId: 'FRID',
     closureToId: 'CID',
     type: 'TY',
-    section: 'SC',
+    line: 'SC',
     azimuth: 'AZ',
     length: 'LG',
     depth: 'DP',
@@ -477,7 +477,7 @@ export function writeTmlShotXml(shot: TmlShotSpec, dialect: 'long' | 'short' = '
     element(t.fromId, shot.fromId),
     element(t.closureToId, shot.closureToId ?? -1),
     element(t.type, shot.type),
-    element(t.section, shot.section),
+    element(t.line, shot.line),
     element(t.azimuth, shot.azimuth),
     element(t.length, shot.length),
     element(t.depth, shot.depth),

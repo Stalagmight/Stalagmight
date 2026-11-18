@@ -24,7 +24,8 @@ function pickOption(testId: string, value: string) {
 const executeBatch = vi.fn().mockResolvedValue({ success: true });
 const closeDialog = vi.fn();
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (k: string) => k }),
 }));
 
@@ -35,8 +36,10 @@ vi.mock('../../../store/uiStore', () => ({
     sel({ closeDialog, dialogData }),
 }));
 
+// Shot 2 of Main (shot_id 1) runs from station A1 to A2: names unlike the positions.
+const stations = [1, 2, 3].map((i) => ({ station_ref: { line_id: 0, station_index: i }, name: `A${i}` }));
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: (sel: (s: unknown) => unknown) => sel({ executeBatch }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ executeBatch, stations, surveyData: null }),
 }));
 
 vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
@@ -54,10 +57,10 @@ vi.mock('../../common/Button', () => ({
 import UnrecognisedShotKindDialog from '../UnrecognisedShotKindDialog';
 
 const shot = (shotId: number, raw: string) => ({
-  section_id: 0,
+  line_id: 0,
   shot_id: shotId,
   shot_number: shotId + 1,
-  section_name: 'Main',
+  line_name: 'Main',
   raw_value: raw,
 });
 
@@ -71,6 +74,13 @@ describe('UnrecognisedShotKindDialog', () => {
     dialogData.shots = [];
     const { container } = render(<UnrecognisedShotKindDialog />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('names each shot by its line and station names, not its position', () => {
+    render(<UnrecognisedShotKindDialog />);
+    expect(screen.getByText('Main: A1 \u2192 A2')).toBeInTheDocument();
+    expect(screen.getByText('Main: A2 \u2192 A3')).toBeInTheDocument();
+    expect(screen.queryByText(/#\d/)).toBeNull();
   });
 
   it('shows the raw stored value so corruption is distinguishable from a newer file', () => {
@@ -101,7 +111,7 @@ describe('UnrecognisedShotKindDialog', () => {
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(executeBatch).toHaveBeenCalledTimes(1);
     expect(executeBatch).toHaveBeenCalledWith([
-      { type: 'update_shot', section_id: 0, shot_id: 1, updates: { kind: 'Jump' } },
+      { type: 'update_shot', line_id: 0, shot_id: 1, updates: { kind: 'Jump' } },
     ]);
   });
 

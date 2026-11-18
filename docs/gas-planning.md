@@ -173,7 +173,7 @@ turnaround, populated for any strategy once something is reachable.
 **Origin** - a hint. Unset means the entrance zero datums ("Start from entrance");
 a set origin that no longer resolves falls back to them rather than blanking the
 field. A placement datum is always an entrance; a GPS fix is one when it sits on a
-section's first or last station unless the user unticks Entrance in Edit Station,
+line's first or last station unless the user unticks Entrance in Edit Station,
 and a fix mid-passage (a radiolocation point) is not one unless ticked
 (`Project::entrance_datum_refs`, #741). Penetration and the distance gradient use
 the same roots.
@@ -213,7 +213,7 @@ move the route or the budget. Capped at 500; labels at 120 characters.
 
 `route_line_length_m` is the one-way *swum* distance from origin to turnaround:
 3-D slope lengths over real shot legs only. A leg is swum when it joins adjacent
-stations within one section (`is_swim_leg`); a merge or closure tie is a
+stations within one line (`is_swim_leg`); a merge or closure tie is a
 zero-distance edge between the same physical point, and its measured-coordinate
 gap (a closure's misclosure) was never swum, so it is excluded from the length and
 the depth weighting. `route_max_depth_m` is max `z` over *all* route stations, tie
@@ -329,7 +329,7 @@ stale ref. A pin whose anchor no longer resolves is kept and flagged, never
 retargeted: a flagged way point stalls the compute client-side, the others are
 omitted from the request, and Save refuses while any flag is up. A capture never
 re-anchors a flagged slot - only a remap that resolves the original anchor (a
-survey undo) or the user re-placing the pin unlocks it. Reversing a section
+survey undo) or the user re-placing the pin unlocks it. Reversing a line
 needs no special-cased pin mirroring; the anchor round trip covers it.
 
 The two directions differ deliberately. Save **refuses** a way point or marked

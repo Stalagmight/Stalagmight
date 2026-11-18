@@ -46,8 +46,8 @@ import ImportReceiptDialog from '../ImportReceiptDialog';
 const baseReceipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
   source_format: 'Ariane',
   file_name: 'cave.tml',
-  sections_found: 3,
-  sections_imported: 3,
+  lines_found: 3,
+  lines_imported: 3,
   shot_count: 42,
   closures_requested: 0,
   closures_created: 0,
@@ -69,7 +69,7 @@ describe('ImportReceiptDialog', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows the section/shot counts', () => {
+  it('shows the line/shot counts', () => {
     dialogData.receipt = baseReceipt();
     render(<ImportReceiptDialog />);
     const summary = screen.getByTestId('import-receipt-summary').textContent ?? '';
@@ -101,7 +101,7 @@ describe('ImportReceiptDialog', () => {
     );
   });
 
-  it('shows the zero-datum-created line only when present, naming the section (F12c)', () => {
+  it('shows the zero-datum-created line only when present, naming the line (F12c)', () => {
     dialogData.receipt = baseReceipt();
     const { rerender } = render(<ImportReceiptDialog />);
     expect(screen.queryByTestId('import-receipt-zero-datum-created')).not.toBeInTheDocument();
@@ -112,15 +112,15 @@ describe('ImportReceiptDialog', () => {
   });
 
   it('renders the full info sentence in the summary, not just a short scale (#446)', () => {
-    dialogData.receipt = baseReceipt({ info: ['3 sections are not connected to a zero datum'] });
+    dialogData.receipt = baseReceipt({ info: ['3 lines are not connected to a zero datum'] });
     render(<ImportReceiptDialog />);
     expect(screen.getByTestId('import-receipt-summary').textContent).toContain(
-      '3 sections are not connected to a zero datum',
+      '3 lines are not connected to a zero datum',
     );
   });
 
-  it('does NOT derive a "not imported" warning from sections_found/sections_imported', () => {
-    dialogData.receipt = baseReceipt({ sections_found: 5, sections_imported: 3, warnings: [] });
+  it('does NOT derive a "not imported" warning from lines_found/lines_imported', () => {
+    dialogData.receipt = baseReceipt({ lines_found: 5, lines_imported: 3, warnings: [] });
     render(<ImportReceiptDialog />);
     expect(screen.queryByTestId('import-receipt-warnings')).not.toBeInTheDocument();
   });

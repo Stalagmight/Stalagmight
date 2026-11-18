@@ -15,9 +15,9 @@
  * removes the dead layer and calls `onFatal(reason)` so the app surfaces an error
  * state (a toast) rather than falling back to stock.
  *
- * Hit-testing does NOT depend on the stock layers: candidate-section discovery
- * runs against the SoA geometry index (SurveyLayer.hitCandidateSections ->
- * geometryIndex.sectionsIntersectingBox), so hiding the stock layers leaves
+ * Hit-testing does NOT depend on the stock layers: candidate-line discovery
+ * runs against the SoA geometry index (SurveyLayer.hitCandidateLines ->
+ * geometryIndex.linesIntersectingBox), so hiding the stock layers leaves
  * hover / select / station+segment move fully working. Labels, overlays, and
  * the vector-tile publish path are likewise untouched.
  */
@@ -39,16 +39,16 @@ import {
   buildCircleBuffers,
   computeLineDim,
   computeCircleDim,
-  recomputeLineSection,
+  recomputeLineShots,
   recomputeStation,
-  recomputeSectionAllReference,
+  recomputeLineAllReference,
   writeCircleDrawOrder,
   writeLineDrawOrder,
   recomputeLineColors,
   recomputeCircleColors,
   type StationRel,
   type CustomRenderExclusion,
-  type LineSectionInputs,
+  type LineShotInputs,
   type CircleStationInputs,
 } from './tessellate';
 import { makeColorResolvers } from './colorResolvers';
@@ -123,7 +123,7 @@ export interface CustomSyncParams {
   stationRadiusPx: number;
   stationStrokePx: number;
   /** Configured highlight sizes (C2), absolute CSS px. When present they drive
-   *  the shot line + station radius bump for a hovered / selected section via
+   *  the shot line + station radius bump for a hovered / selected line via
    *  ratios over the base size; absent = the historical 2x/1.5x (shot) and
    *  1.5x/1.25x (station) defaults. Independent config keys `map.shot.hover_width`
    *  / `selection_width` + `map.station.hover_radius` / `selection_radius`. */
@@ -140,10 +140,10 @@ export type { CustomRenderExclusion } from './tessellate';
 
 /**
  * Current dimming set mirroring the stock move-tool paint state (#customRender).
- * `anchoredSectionIds` dims every station + shot of those sections (move-segment,
- * SurveyLayer.setAnchoredSections); the immovable `featureId` sets dim specific
+ * `anchoredLineIds` dims every station + shot of those lines (move-segment,
+ * SurveyLayer.setAnchoredLines); the immovable `featureId` sets dim specific
  * stations / shots (move-station / move-shot, SurveyLayer.setImmovableFeatures).
- * `featureId = sectionId * FEATURE_ID_STRIDE + stationIndex | shotId`, matching
+ * `featureId = lineId * FEATURE_ID_STRIDE + stationIndex | shotId`, matching
  * the stock layers' `['get','featureId']` matching. Held on the controller so a
  * layer re-create (re-enable / re-sync) re-applies it during the next build.
  *
@@ -152,7 +152,7 @@ export type { CustomRenderExclusion } from './tessellate';
  * anchored/immovable dim (1.0) - full dim wins on overlap (see {@link dimPredicates}).
  */
 export interface CustomDimState {
-  anchoredSectionIds: ReadonlySet<number>;
+  anchoredLineIds: ReadonlySet<number>;
   immovableStationFeatureIds: ReadonlySet<number>;
   immovableShotFeatureIds: ReadonlySet<number>;
   gasDimStationFeatureIds: ReadonlySet<number>;
@@ -171,7 +171,7 @@ export interface CustomDimState {
 const EMPTY_FEATURE_SET: ReadonlySet<number> = new Set<number>();
 
 const EMPTY_DIM: CustomDimState = {
-  anchoredSectionIds: EMPTY_FEATURE_SET,
+  anchoredLineIds: EMPTY_FEATURE_SET,
   immovableStationFeatureIds: EMPTY_FEATURE_SET,
   immovableShotFeatureIds: EMPTY_FEATURE_SET,
   gasDimStationFeatureIds: EMPTY_FEATURE_SET,
@@ -189,7 +189,7 @@ export const GAS_DIM_LEVEL = 0.5;
  *  shared by the geometry `setDimming` and label `setDimming` calls SurveyLayer
  *  pushes the SAME state to. */
 export function buildCustomDimState(
-  anchoredSectionIds: ReadonlySet<number>,
+  anchoredLineIds: ReadonlySet<number>,
   immovableStationFeatureIds: ReadonlySet<number>,
   immovableShotFeatureIds: ReadonlySet<number>,
   gasReachMode: boolean,
@@ -197,7 +197,7 @@ export function buildCustomDimState(
   planIdleDim = false,
 ): CustomDimState {
   return {
-    anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+    anchoredLineIds, immovableStationFeatureIds, immovableShotFeatureIds,
     gasDimStationFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.stations) : EMPTY_FEATURE_SET,
     gasDimShotFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.shots) : EMPTY_FEATURE_SET,
     planIdleDim,
@@ -208,7 +208,7 @@ export function buildCustomDimState(
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
 /** Emphasis levels stored in the per-vertex highlight flag, mirroring the stock
- *  feature-state bumps. Hover wins over selection when a section is in both
+ *  feature-state bumps. Hover wins over selection when a line is in both
  *  (matches the stock paint case order: `hover` before `selected`). */
 const HIGHLIGHT_HOVER = 2;
 const HIGHLIGHT_SELECT = 1;
@@ -254,21 +254,21 @@ export class SurveyCustomController {
    *  per-vertex hide flag over the FULL buffers instead of omitting features (a
    *  rebuild), and re-applied on every build so a mid-drag flush stays hidden. */
   private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
-  /** The three section-emphasis sources, merged per section into a highlight
+  /** The three line-emphasis sources, merged per line into a highlight
    *  LEVEL (hover 2 > selection 1 > none 0) applied as the per-vertex highlight
    *  flag and re-applied on every build so a mid-interaction flush stays
    *  emphasized. `segmentHoverState` is the Move-Segment connected set
-   *  (setHighlight); `sectionHoverState` is single-section / panel-row hover
-   *  (setSectionHover); `sectionSelectState` is the selected section
-   *  (setSectionSelect). Hover (segment or section) both map to level 2, matching
+   *  (setHighlight); `lineHoverState` is single-line / panel-row hover
+   *  (setLineHover); `lineSelectState` is the selected line
+   *  (setLineSelect). Hover (segment or line) both map to level 2, matching
    *  the stock `hover` feature-state; selection maps to level 1 (stock
-   *  `selected`). Anchored sections are excluded from segment-hover upstream. */
+   *  `selected`). Anchored lines are excluded from segment-hover upstream. */
   private segmentHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
-  private sectionHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
-  private sectionSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
-  /** The section drawn above every rank (the selection's; see
-   *  {@link setRaisedSection}), or null. Re-applied on every build. */
-  private raisedSectionId: number | null = null;
+  private lineHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  private lineSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  /** The line drawn above every rank (the selection's; see
+   *  {@link setRaisedLine}), or null. Re-applied on every build. */
+  private raisedLineId: number | null = null;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -311,7 +311,7 @@ export class SurveyCustomController {
     const prevParams = this.lastParams;
     this.lastParams = params;
     // Fast paths (active layer + a prior snapshot to diff against): a geometry
-    // edit that left the SoA layout unchanged re-emits just the changed sections;
+    // edit that left the SoA layout unchanged re-emits just the changed lines;
     // a pure global recolor (overlay / theme / depth-mode toggle) with unchanged
     // geometry re-uploads just the two color buffers. Either beats a full rebuild.
     if (this.active && this.layer && prevParams) {
@@ -545,7 +545,7 @@ export class SurveyCustomController {
     const dims = this.hasDimming() ? this.dimPredicates(surveyData) : null;
     const hides = this.hasHide() ? this.hidePredicates(surveyData) : null;
     const highlights = this.hasHighlight() ? this.highlightPredicates(surveyData) : null;
-    const line = buildLineBuffers(
+    const lineBufs = buildLineBuffers(
       surveyData, stationRel, lookup, res.colorForShot, params.exclude,
       res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
       dims?.dimForShot, hides?.hideForShot, highlights?.highlightForShot,
@@ -557,18 +557,18 @@ export class SurveyCustomController {
 
     const raised = this.raisedFlags(surveyData, lookup, params.exclude);
     if (raised) {
-      writeLineDrawOrder(line, raised.line);
+      writeLineDrawOrder(lineBufs, raised.line);
       writeCircleDrawOrder(circle, raised.circle);
     }
 
-    const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
+    const data: CustomRenderData = { anchorX, anchorY, line: lineBufs, circle, ...this.sizeFields(params) };
 
-    const totalBytes = line.byteLength + circle.byteLength;
+    const totalBytes = lineBufs.byteLength + circle.byteLength;
     debugLog('[customRender] build', {
       ms: +(performance.now() - t0).toFixed(1),
-      shotSegments: line.segmentCount,
+      shotSegments: lineBufs.segmentCount,
       stations: circle.stationCount,
-      lineMB: +(line.byteLength / 1048576).toFixed(2),
+      lineMB: +(lineBufs.byteLength / 1048576).toFixed(2),
       circleMB: +(circle.byteLength / 1048576).toFixed(2),
       totalMB: +(totalBytes / 1048576).toFixed(2),
     });
@@ -582,11 +582,11 @@ export class SurveyCustomController {
     return data;
   }
 
-  /** True when some anchored section, immovable feature, gas-dim feature, or the
+  /** True when some anchored line, immovable feature, gas-dim feature, or the
    *  plan-idle tint is currently set. */
   private hasDimming(): boolean {
     return (
-      this.dimState.anchoredSectionIds.size > 0 ||
+      this.dimState.anchoredLineIds.size > 0 ||
       this.dimState.immovableStationFeatureIds.size > 0 ||
       this.dimState.immovableShotFeatureIds.size > 0 ||
       this.dimState.gasDimStationFeatureIds.size > 0 ||
@@ -596,24 +596,24 @@ export class SurveyCustomController {
   }
 
   /** Per-station / per-shot dim LEVEL predicates for the current {@link dimState}:
-   *  a feature dims fully (1) when its section is anchored OR its featureId is
+   *  a feature dims fully (1) when its line is anchored OR its featureId is
    *  immovable; else it dims at {@link GAS_DIM_LEVEL} (0.5) when its featureId is
    *  beyond the active gas-reach budget OR the plan-idle tint (#395 revision) is
    *  on (every feature dims) - full dim wins on overlap either way. */
   private dimPredicates(surveyData: SurveyData): {
     dimForStation: (g: number) => number;
-    dimForShot: (globalShotIdx: number, sectionId: number) => number;
+    dimForShot: (globalShotIdx: number, lineId: number) => number;
   } {
     const {
-      anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+      anchoredLineIds, immovableStationFeatureIds, immovableShotFeatureIds,
       gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
     } = this.dimState;
     return {
       dimForStation: (g: number): number => {
-        const sid = surveyData.stationSectionIds[g]!;
+        const sid = surveyData.stationLineIds[g]!;
         const fid = sid * FEATURE_ID_STRIDE + surveyData.stationIndices[g]!;
         if (
-          anchoredSectionIds.has(sid) ||
+          anchoredLineIds.has(sid) ||
           (immovableStationFeatureIds.size > 0 && immovableStationFeatureIds.has(fid))
         ) {
           return 1;
@@ -621,10 +621,10 @@ export class SurveyCustomController {
         const gasDim = gasDimStationFeatureIds.size > 0 && gasDimStationFeatureIds.has(fid);
         return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
       },
-      dimForShot: (globalShotIdx: number, sectionId: number): number => {
-        const fid = sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!;
+      dimForShot: (globalShotIdx: number, lineId: number): number => {
+        const fid = lineId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!;
         if (
-          anchoredSectionIds.has(sectionId) ||
+          anchoredLineIds.has(lineId) ||
           (immovableShotFeatureIds.size > 0 && immovableShotFeatureIds.has(fid))
         ) {
           return 1;
@@ -638,59 +638,59 @@ export class SurveyCustomController {
   /** True when a drag is hiding some feature (drag active). */
   private hasHide(): boolean {
     return (
-      (this.hideState.sectionIds?.size ?? 0) > 0 ||
+      (this.hideState.lineIds?.size ?? 0) > 0 ||
       (this.hideState.stationGlobalIndices?.size ?? 0) > 0 ||
       (this.hideState.shotGlobalIndices?.size ?? 0) > 0
     );
   }
 
   /** Per-station / per-shot hide predicates for the current {@link hideState}:
-   *  a feature hides when its section, its global station index, or its global
+   *  a feature hides when its line, its global station index, or its global
    *  shot index is in the drag-exclusion set. Mirrors the build-time exclusion
    *  skip so a marked vertex collapses exactly where an omitted one would vanish. */
   private hidePredicates(surveyData: SurveyData): {
     hideForStation: (g: number) => boolean;
-    hideForShot: (globalShotIdx: number, sectionId: number) => boolean;
+    hideForShot: (globalShotIdx: number, lineId: number) => boolean;
   } {
-    const { sectionIds, stationGlobalIndices, shotGlobalIndices } = this.hideState;
+    const { lineIds, stationGlobalIndices, shotGlobalIndices } = this.hideState;
     return {
       hideForStation: (g: number): boolean =>
         stationGlobalIndices?.has(g) === true ||
-        sectionIds?.has(surveyData.stationSectionIds[g]!) === true,
-      hideForShot: (globalShotIdx: number, sectionId: number): boolean =>
-        shotGlobalIndices?.has(globalShotIdx) === true || sectionIds?.has(sectionId) === true,
+        lineIds?.has(surveyData.stationLineIds[g]!) === true,
+      hideForShot: (globalShotIdx: number, lineId: number): boolean =>
+        shotGlobalIndices?.has(globalShotIdx) === true || lineIds?.has(lineId) === true,
     };
   }
 
-  /** True when any emphasis source has a section (hover / selection active). */
+  /** True when any emphasis source has a line (hover / selection active). */
   private hasHighlight(): boolean {
     return (
       this.segmentHoverState.size > 0 ||
-      this.sectionHoverState.size > 0 ||
-      this.sectionSelectState.size > 0
+      this.lineHoverState.size > 0 ||
+      this.lineSelectState.size > 0
     );
   }
 
-  /** Merged emphasis level for one section: hover (2) if in either hover source,
+  /** Merged emphasis level for one line: hover (2) if in either hover source,
    *  else selection (1) if selected, else none (0). Hover wins over selection,
    *  matching the stock paint case order (`hover` before `selected`). */
-  private highlightLevel(sectionId: number): number {
-    if (this.segmentHoverState.has(sectionId) || this.sectionHoverState.has(sectionId)) {
+  private highlightLevel(lineId: number): number {
+    if (this.segmentHoverState.has(lineId) || this.lineHoverState.has(lineId)) {
       return HIGHLIGHT_HOVER;
     }
-    if (this.sectionSelectState.has(sectionId)) return HIGHLIGHT_SELECT;
+    if (this.lineSelectState.has(lineId)) return HIGHLIGHT_SELECT;
     return HIGHLIGHT_NONE;
   }
 
   /**
    * The size multiplier the circle shader draws a station marker at (radius and
-   * stroke both scale by it): a hovered / selected section's markers take the
+   * stroke both scale by it): a hovered / selected line's markers take the
    * configured highlight size, which wins over the zero-datum 2x, else 1 - the
    * `sizeMul` choice in the circle vertex shader (`shaders.ts`). The station
    * pick sizes the drawn disc with it (`SurveyGeometryIndex.nearestStation`).
    */
-  stationSizeMul(sectionId: number, zeroDatum: boolean): number {
-    const level = this.highlightLevel(sectionId);
+  stationSizeMul(lineId: number, zeroDatum: boolean): number {
+    const level = this.highlightLevel(lineId);
     const d = this.lastData;
     if (level === HIGHLIGHT_HOVER && d) return d.circleHoverSizeMul;
     if (level === HIGHLIGHT_SELECT && d) return d.circleSelectSizeMul;
@@ -698,13 +698,13 @@ export class SurveyCustomController {
   }
 
   /**
-   * The width multiplier the line shader draws a section's shots at: the
-   * configured hover / selection width of a highlighted section, else 1 (the
+   * The width multiplier the line shader draws a line's shots at: the
+   * configured hover / selection width of a highlighted line, else 1 (the
    * `widthMul` choice in the line vertex shader). The shot pick sizes the drawn
    * line with it (`SurveyGeometryIndex.nearestShot`).
    */
-  shotWidthMul(sectionId: number): number {
-    const level = this.highlightLevel(sectionId);
+  shotWidthMul(lineId: number): number {
+    const level = this.highlightLevel(lineId);
     const d = this.lastData;
     if (level === HIGHLIGHT_HOVER && d) return d.lineHoverWidthMul;
     if (level === HIGHLIGHT_SELECT && d) return d.lineSelectWidthMul;
@@ -712,21 +712,21 @@ export class SurveyCustomController {
   }
 
   /** Per-station / per-shot highlight predicates resolving the merged emphasis
-   *  level for a feature's section (0 none, 1 selection, 2 hover). */
+   *  level for a feature's line (0 none, 1 selection, 2 hover). */
   private highlightPredicates(surveyData: SurveyData): {
     highlightForStation: (g: number) => number;
-    highlightForShot: (globalShotIdx: number, sectionId: number) => number;
+    highlightForShot: (globalShotIdx: number, lineId: number) => number;
   } {
     return {
       highlightForStation: (g: number): number =>
-        this.highlightLevel(surveyData.stationSectionIds[g]!),
-      highlightForShot: (_globalShotIdx: number, sectionId: number): number =>
-        this.highlightLevel(sectionId),
+        this.highlightLevel(surveyData.stationLineIds[g]!),
+      highlightForShot: (_globalShotIdx: number, lineId: number): number =>
+        this.highlightLevel(lineId),
     };
   }
 
   /**
-   * Update the anchored / immovable dim set (SurveyLayer.setAnchoredSections /
+   * Update the anchored / immovable dim set (SurveyLayer.setAnchoredLines /
    * setImmovableFeatures). Rare (fires on move-tool activation, not per frame),
    * so it takes the cheap path: recompute ONLY the two per-vertex dim arrays
    * from the cached SoA + exclusion and re-upload just those GPU buffers, no
@@ -785,54 +785,54 @@ export class SurveyCustomController {
    * the Move Segment tool) at hover level. Pass an empty array to clear (hover
    * leaves geometry / drag begins). See {@link refreshHighlight}.
    */
-  setHighlight(sectionIds: readonly number[]): void {
-    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
+  setHighlight(lineIds: readonly number[]): void {
+    this.segmentHoverState = lineIds.length > 0 ? new Set(lineIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
   /**
-   * Emphasize the single hovered / panel-row-hovered section at hover level
-   * (SurveyLayer.setHoveredSection). Empty array clears. The stock renderer used
+   * Emphasize the single hovered / panel-row-hovered line at hover level
+   * (SurveyLayer.setHoveredLine). Empty array clears. The stock renderer used
    * the same `hover` feature-state the Move-Segment set does, so both feed the
    * hover level here. See {@link refreshHighlight}.
    */
-  setSectionHover(sectionIds: readonly number[]): void {
-    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
+  setLineHover(lineIds: readonly number[]): void {
+    this.lineHoverState = lineIds.length > 0 ? new Set(lineIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
   /**
-   * Emphasize the selected section at the (smaller) selection level
-   * (SurveyLayer.setSelectedSection). Empty array clears. When a section is both
+   * Emphasize the selected line at the (smaller) selection level
+   * (SurveyLayer.setSelectedLine). Empty array clears. When a line is both
    * selected and hovered the merge yields hover level (hover wins). See
    * {@link refreshHighlight}.
    */
-  setSectionSelect(sectionIds: readonly number[]): void {
-    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
+  setLineSelect(lineIds: readonly number[]): void {
+    this.lineSelectState = lineIds.length > 0 ? new Set(lineIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
-  /** Clear every emphasis source (segment hover, section hover, selection) in one
+  /** Clear every emphasis source (segment hover, line hover, selection) in one
    *  refresh. Cheaper + clearer than three empty setters at a clear-all site. */
   clearHighlights(): void {
     this.segmentHoverState = EMPTY_FEATURE_SET;
-    this.sectionHoverState = EMPTY_FEATURE_SET;
-    this.sectionSelectState = EMPTY_FEATURE_SET;
+    this.lineHoverState = EMPTY_FEATURE_SET;
+    this.lineSelectState = EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
   /**
-   * Draw one section's lines and markers above every other section, whatever
-   * their kinds (null: none). SurveyLayer raises the selection's section - the
-   * selected section, or the section of the selected station or shot - so the
+   * Draw one line's shots and markers above every other line, whatever
+   * their kinds (null: none). SurveyLayer raises the selection's line - the
+   * selected line, or the line of the selected station or shot - so the
    * whole of it shows where it runs over the real line; the hit test gives it
-   * the click there too (`ResolveOptions.raisedSectionId`). Only the two index
+   * the click there too (`ResolveOptions.raisedLineId`). Only the two index
    * buffers change: they are rewritten and re-uploaded when an order moved.
    * State is stored regardless, so the next build reproduces it.
    */
-  setRaisedSection(sectionId: number | null): void {
-    if (this.raisedSectionId === sectionId) return;
-    this.raisedSectionId = sectionId;
+  setRaisedLine(lineId: number | null): void {
+    if (this.raisedLineId === lineId) return;
+    this.raisedLineId = lineId;
     const { layer, lastData, lastLookup, lastSurveyData } = this;
     if (!this.active || !layer || !lastData || !lastLookup || !lastSurveyData) return;
     const raised = this.raisedFlags(lastSurveyData, lastLookup, this.lastParams?.exclude);
@@ -843,18 +843,18 @@ export class SurveyCustomController {
     if (lineMoved || circleMoved) this.map.triggerRepaint();
   }
 
-  /** Per-vertex raised flags for the draw-order writers (the raised section's
+  /** Per-vertex raised flags for the draw-order writers (the raised line's
    *  shots and stations), in the buffers' layout; null when none is raised. */
   private raisedFlags(
     survey: SurveyData,
     lookup: Map<number, Map<number, number>>,
     exclude?: CustomRenderExclusion,
   ): { line: Float32Array; circle: Float32Array } | null {
-    const sid = this.raisedSectionId;
+    const sid = this.raisedLineId;
     if (sid === null) return null;
     return {
-      line: computeLineDim(survey, lookup, (_g, sectionId) => sectionId === sid, exclude),
-      circle: computeCircleDim(survey, (g) => survey.stationSectionIds[g] === sid, exclude),
+      line: computeLineDim(survey, lookup, (_g, lineId) => lineId === sid, exclude),
+      circle: computeCircleDim(survey, (g) => survey.stationLineIds[g] === sid, exclude),
     };
   }
 
@@ -886,7 +886,7 @@ export class SurveyCustomController {
   }
 
   /**
-   * Try to apply an edit incrementally (only the changed sections' vertex
+   * Try to apply an edit incrementally (only the changed lines' vertex
    * ranges) instead of a full rebuild. Returns false to fall back to build().
    * Requires an active layer with cached products; `planIncrementalUpdate` gates
    * on layout / color-global / anchor / gps stability (see incremental.ts).
@@ -894,12 +894,12 @@ export class SurveyCustomController {
   private tryIncremental(prevParams: CustomSyncParams, params: CustomSyncParams): boolean {
     const prev = this.lastSurveyData;
     const layer = this.layer;
-    const line = this.lastData?.line;
+    const lineBufs = this.lastData?.line;
     const circle = this.lastData?.circle;
     const rel = this.lastStationRel;
     const allRef = this.lastAllReference;
     const lookup = this.lastLookup;
-    if (!prev || !layer || !this.lastData || !line || !circle || !rel || !allRef || !lookup) return false;
+    if (!prev || !layer || !this.lastData || !lineBufs || !circle || !rel || !allRef || !lookup) return false;
     // A build-time exclusion (tests) compacts the buffers, breaking the g↦[4g]
     // station map the incremental path relies on; only the live (full) path is
     // eligible.
@@ -924,7 +924,7 @@ export class SurveyCustomController {
     const dims = this.hasDimming() ? this.dimPredicates(next) : null;
     const hides = this.hasHide() ? this.hidePredicates(next) : null;
     const highlights = this.hasHighlight() ? this.highlightPredicates(next) : null;
-    const lineInputs: LineSectionInputs = {
+    const lineInputs: LineShotInputs = {
       colorForShot: res.colorForShot,
       colorForShotEndpoints: res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
       dimForShot: dims?.dimForShot,
@@ -939,7 +939,7 @@ export class SurveyCustomController {
       highlightForStation: highlights?.highlightForStation,
     };
 
-    // Re-emit each dirty section's line range + its stations (all-reference
+    // Re-emit each dirty line's segment range + its stations (all-reference
     // first, since a station read depends on it), collecting station slots.
     // Both index buffers draw by rank (the real line on top), so a kind edit -
     // which moves its shots between ranks, and maybe stations - redoes the
@@ -947,14 +947,14 @@ export class SurveyCustomController {
     const circleSlots: number[] = [];
     let rankMoved = false;
     let anyKindEdited = false;
-    for (const si of plan.dirtySectionIdxs) {
-      const section = next.sections[si]!;
-      const inner = lookup.get(section.id);
-      // A station's kind mask reads only its section's shot kinds (the layout is
+    for (const si of plan.dirtyLineIdxs) {
+      const line = next.lines[si]!;
+      const inner = lookup.get(line.id);
+      // A station's kind mask reads only its line's shot kinds (the layout is
       // fixed by the plan's gate), so only a kind edit can move a rank: snapshot
       // the ranks just then, not on every position edit.
       let kindsEdited = false;
-      for (let i = section.shotOffset; i < section.shotOffset + section.shotCount; i++) {
+      for (let i = line.shotOffset; i < line.shotOffset + line.shotCount; i++) {
         if (prev.shotFlags[i] !== next.shotFlags[i]) {
           kindsEdited = true;
           break;
@@ -962,7 +962,7 @@ export class SurveyCustomController {
       }
       if (kindsEdited) anyKindEdited = true;
       const rankBefore = kindsEdited && inner ? Array.from(inner.values(), (g) => stationKindRank(allRef[g]!)) : null;
-      recomputeSectionAllReference(next, lookup, section, allRef);
+      recomputeLineAllReference(next, lookup, line, allRef);
       if (inner) {
         let k = 0;
         for (const g of inner.values()) {
@@ -971,16 +971,16 @@ export class SurveyCustomController {
           circleSlots.push(g);
         }
       }
-      recomputeLineSection(line, si, next, rel, lookup, lineInputs);
+      recomputeLineShots(lineBufs, si, next, rel, lookup, lineInputs);
     }
     const raised = anyKindEdited || rankMoved ? this.raisedFlags(next, lookup) : null;
-    if (anyKindEdited && writeLineDrawOrder(line, raised?.line)) layer.uploadLineIndices();
+    if (anyKindEdited && writeLineDrawOrder(lineBufs, raised?.line)) layer.uploadLineIndices();
     if (rankMoved && writeCircleDrawOrder(circle, raised?.circle)) layer.uploadCircleIndices();
 
-    // Sub-upload: one contiguous line range per section; coalesced station runs.
-    for (const si of plan.dirtySectionIdxs) {
-      const segStart = line.sectionRanges[si * 2]!;
-      const segCount = line.sectionRanges[si * 2 + 1]!;
+    // Sub-upload: one contiguous segment range per line; coalesced station runs.
+    for (const si of plan.dirtyLineIdxs) {
+      const segStart = lineBufs.lineRanges[si * 2]!;
+      const segCount = lineBufs.lineRanges[si * 2 + 1]!;
       layer.uploadLineVertexRange(segStart * 4, segCount * 4);
     }
     circleSlots.sort((a, b) => a - b);
@@ -1008,10 +1008,10 @@ export class SurveyCustomController {
   private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams, force = false): boolean {
     const prev = this.lastSurveyData;
     const layer = this.layer;
-    const line = this.lastData?.line;
+    const lineBufs = this.lastData?.line;
     const circle = this.lastData?.circle;
     const lookup = this.lastLookup;
-    if (!prev || !layer || !this.lastData || !line || !circle || !lookup) return false;
+    if (!prev || !layer || !this.lastData || !lineBufs || !circle || !lookup) return false;
     if (prevParams.exclude || params.exclude) return false;
     const next = params.surveyData;
     if (
@@ -1025,11 +1025,11 @@ export class SurveyCustomController {
 
     const res = makeColorResolvers(next, params.colorCtx);
     recomputeLineColors(
-      line, next, lookup, res.colorForShot,
+      lineBufs, next, lookup, res.colorForShot,
       res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
     );
     recomputeCircleColors(circle, next, res.fillForStation, res.strokeForStation);
-    layer.updateColors(line.colorFrom, line.colorTo, circle.fill, circle.stroke);
+    layer.updateColors(lineBufs.colorFrom, lineBufs.colorTo, circle.fill, circle.stroke);
 
     // Cache coherence: geometry buffers are untouched; refresh the survey ref +
     // size uniforms (a size-only change rides here with no extra upload).
@@ -1051,16 +1051,16 @@ export class SurveyCustomController {
     const params = this.lastParams;
     const data = this.lastSurveyData;
     const layer = this.layer;
-    const line = this.lastData?.line;
+    const lineBufs = this.lastData?.line;
     const circle = this.lastData?.circle;
     const lookup = this.lastLookup;
-    if (!params || params.exclude || !data || !layer || !line || !circle || !lookup) return false;
+    if (!params || params.exclude || !data || !layer || !lineBufs || !circle || !lookup) return false;
     const built = this.lastData!;
     if (this.previewOrder?.data !== built) {
       this.previewOrder = { data: built, order: segmentShotOrder(data, lookup) };
     }
-    writePreviewColors(data, this.previewOrder.order, makePreviewResolvers(data, colorCtx), line, circle.fill);
-    layer.updateColors(line.colorFrom, line.colorTo, circle.fill, circle.stroke);
+    writePreviewColors(data, this.previewOrder.order, makePreviewResolvers(data, colorCtx), lineBufs, circle.fill);
+    layer.updateColors(lineBufs.colorFrom, lineBufs.colorTo, circle.fill, circle.stroke);
     this.previewed = true;
     this.map.triggerRepaint();
     return true;

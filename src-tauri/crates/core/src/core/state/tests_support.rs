@@ -10,8 +10,12 @@ use super::AppState;
 // this crate's own tests.
 #[cfg(any(test, feature = "test-support"))]
 impl AppState {
+    /// Install `project` as the open project, with the station identities
+    /// every project the app holds has (the load path settles them): a name
+    /// and a Station ID for every station, a unique name for every line.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_project_for_tests(&self, project: Project) {
+    pub fn set_project_for_tests(&self, mut project: Project) {
+        project.ensure_station_identities();
         if let Ok(mut guard) = self.project.lock() {
             *guard = Some(project);
         }

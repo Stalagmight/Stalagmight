@@ -34,7 +34,7 @@ function hasIllegalZoom(expr: unknown, isTopLevel = true, isCameraInput = false)
 
 describe('dimmedZoomOpacity', () => {
   it('keeps zoom in the top-level MapLibre camera expression', () => {
-    const check: ExpressionSpecification = ['==', ['get', 'sectionId'], 4];
+    const check: ExpressionSpecification = ['==', ['get', 'lineId'], 4];
 
     expect(dimmedZoomOpacity(check)).toEqual([
       'interpolate', ['linear'], ['zoom'],
@@ -45,7 +45,7 @@ describe('dimmedZoomOpacity', () => {
 
   it('never nests ["zoom"] below a non-camera expression', () => {
     const check: ExpressionSpecification = [
-      'in', ['get', 'sectionId'], ['literal', [1, 2, 3]],
+      'in', ['get', 'lineId'], ['literal', [1, 2, 3]],
     ];
 
     expect(hasIllegalZoom(dimmedZoomOpacity(check))).toBe(false);

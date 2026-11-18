@@ -5,7 +5,7 @@ import { planSpeed, useGasPlanStore } from '../../store/gasPlanStore';
 import { SpreadsheetGrid, type CellEdit } from '../common/SpreadsheetGrid';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { getNumberFormatLocale } from '../../i18n/format';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { speedToDisplay } from '../../utils/formatGas';
 import { buildSegmentColumns } from './segmentsGridColumns';
 import { applySegmentEdits, SEG_COL } from './segmentsGridEdits';
@@ -20,7 +20,7 @@ import type { StationRef } from '../../types/project';
 const MAX_VISIBLE_ROWS = 12;
 
 function sameStation(a: StationRef | null, b: StationRef | null): boolean {
-  return a != null && b != null && a.section_id === b.section_id && a.station_index === b.station_index;
+  return a != null && b != null && a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 /**
@@ -48,6 +48,7 @@ function sameStation(a: StationRef | null, b: StationRef | null): boolean {
  */
 export function SegmentsTable() {
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   const { segments, waypoints, origin, endpoint, gasConfig, reachField } = useGasPlanStore(
     useShallow((s) => ({
       segments: s.segments,
@@ -75,8 +76,8 @@ export function SegmentsTable() {
   // entrance default), each way point in between, and after the last segment (the chosen
   // endpoint, or nothing when the route simply ends wherever the budget does). Segment k
   // spans boundary[k] -> boundary[k + 1]. Labeled by ROLE (Origin/WP n/Endpoint), not by
-  // station id - the id is still discoverable via a `title` tooltip (`boundaryRefs`) for
-  // whichever boundaries actually resolve to one.
+  // station - the station (`Main Line / 17`) is still discoverable via a `title` tooltip
+  // (`boundaryRefs`) for whichever boundaries actually resolve to one.
   const boundaryLabels = useMemo(
     () => [
       origin ? t('gasPanel.segments.origin') : t('gasPanel.origin.entrance'),
@@ -114,12 +115,12 @@ export function SegmentsTable() {
         boundaryLabelAt: (k) => boundaryLabels[k] ?? '',
         boundaryTitleAt: (k) => {
           const ref = boundaryRefs[k] ?? null;
-          return ref ? formatStationId(ref.section_id, ref.station_index) : undefined;
+          return ref ? identity.station(ref, true) : undefined;
         },
         parksAfter: (i) => sameStation(dropRef, boundaryRefs[i + 1] ?? null),
         onToggleScooter: (i, next) => applyEdits([{ row: i, colKey: SEG_COL.scooter, value: next }]),
       }),
-    [t, units, hasRig, inheritedSpeedDisplay, boundaryLabels, boundaryRefs, dropRef, applyEdits]
+    [t, identity, units, hasRig, inheritedSpeedDisplay, boundaryLabels, boundaryRefs, dropRef, applyEdits]
   );
 
   const labels = useGridLabels('gasPanel.segments.segmentNoun');

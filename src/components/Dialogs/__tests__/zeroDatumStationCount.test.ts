@@ -1,7 +1,7 @@
 /**
  * The dialog's station domain must match the payload's.
  *
- * `buildZeroDatumSectionConfig` drops blank new rows before serializing. The
+ * `buildZeroDatumLineConfig` drops blank new rows before serializing. The
  * dialog counted them, so inserting a blank row before the chosen zero-datum
  * station left the picker, the preview and the re-anchor one ahead of the
  * backend - and the GPS anchor was written to a different station than the one

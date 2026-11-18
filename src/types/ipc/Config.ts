@@ -9,17 +9,17 @@ import type { GasConfig } from "./GasConfig";
 import type { GeneralConfig } from "./GeneralConfig";
 import type { GlobalViewConfig } from "./GlobalViewConfig";
 import type { ImportConfig } from "./ImportConfig";
+import type { LineColorsConfig } from "./LineColorsConfig";
 import type { LoggingConfig } from "./LoggingConfig";
 import type { MapConfig } from "./MapConfig";
 import type { MapPaletteConfig } from "./MapPaletteConfig";
 import type { PanelsConfig } from "./PanelsConfig";
 import type { PeopleConfig } from "./PeopleConfig";
 import type { PlacementSuggestionConfig } from "./PlacementSuggestionConfig";
-import type { SectionColorsConfig } from "./SectionColorsConfig";
 import type { ShortcutsConfig } from "./ShortcutsConfig";
 import type { SpeleoDbConfig } from "./SpeleoDbConfig";
 import type { SyntacticHighlightingConfig } from "./SyntacticHighlightingConfig";
 import type { UnitsConfig } from "./UnitsConfig";
 import type { ValidationConfig } from "./ValidationConfig";
 
-export interface Config { general: GeneralConfig, units: UnitsConfig, display: DisplayConfig, section_colors: SectionColorsConfig, map: MapConfig, validation: ValidationConfig, closure_adjustment: ClosureAdjustmentConfig, export: ExportConfig, logging: LoggingConfig, shortcuts: ShortcutsConfig, panels: PanelsConfig, cache: CacheConfig, debug: DebugConfig, global_view: GlobalViewConfig, appearance: AppearanceConfig, import: ImportConfig, placement_suggestion: PlacementSuggestionConfig, syntactic_highlighting: SyntacticHighlightingConfig, gas: GasConfig, speleodb: SpeleoDbConfig, map_palette: MapPaletteConfig, people: PeopleConfig, }
+export interface Config { general: GeneralConfig, units: UnitsConfig, display: DisplayConfig, line_colors: LineColorsConfig, map: MapConfig, validation: ValidationConfig, closure_adjustment: ClosureAdjustmentConfig, export: ExportConfig, logging: LoggingConfig, shortcuts: ShortcutsConfig, panels: PanelsConfig, cache: CacheConfig, debug: DebugConfig, global_view: GlobalViewConfig, appearance: AppearanceConfig, import: ImportConfig, placement_suggestion: PlacementSuggestionConfig, syntactic_highlighting: SyntacticHighlightingConfig, gas: GasConfig, speleodb: SpeleoDbConfig, map_palette: MapPaletteConfig, people: PeopleConfig, }

@@ -1,7 +1,7 @@
 /**
  * #567 item 2: the suggestion phase's right column already carries the
  * connection card, confidence badge, and merge/overlap controls before the
- * section-name field and full SectionMetadataForm are added on top - too
+ * line-name field and full LineMetadataForm are added on top - too
  * much for one column when the user is mainly deciding whether the
  * suggested connection looks right. Metadata is rarely read at that moment,
  * so it starts collapsed here (suggestion phase only; the manual-placing
@@ -13,14 +13,14 @@
  */
 import { useTranslation } from 'react-i18next';
 import { Panel } from '../common/Panel';
-import { SectionMetadataForm, type SectionPeopleProps } from '../common/SectionMetadataForm';
-import type { SectionEditState } from '../../utils/batchImportHelpers';
+import { LineMetadataForm, type LinePeopleProps } from '../common/LineMetadataForm';
+import type { LineEditState } from '../../utils/batchImportHelpers';
 
 export interface SuggestionSectionSettingsProps {
-  editState: SectionEditState;
-  /** The section's Surveyors / Explorers (the host resolves the wizard defaults in). */
-  people: SectionPeopleProps;
-  onMetadataChange: (field: keyof SectionEditState, value: string | number | boolean) => void;
+  editState: LineEditState;
+  /** The line's Surveyors / Explorers (the host resolves the wizard defaults in). */
+  people: LinePeopleProps;
+  onMetadataChange: (field: keyof LineEditState, value: string | number | boolean) => void;
 }
 
 export function SuggestionSectionSettings({ editState, people, onMetadataChange }: SuggestionSectionSettingsProps) {
@@ -35,7 +35,7 @@ export function SuggestionSectionSettings({ editState, people, onMetadataChange 
       bare
     >
       <div>
-        <label className="block text-sm text-text-secondary mb-1" data-testid="section-name-label">
+        <label className="block text-sm text-text-secondary mb-1" data-testid="line-name-label">
           {t('common.labels.name')}
         </label>
         <input
@@ -44,11 +44,11 @@ export function SuggestionSectionSettings({ editState, people, onMetadataChange 
           onChange={(e) => onMetadataChange('name', e.target.value)}
           className="w-full px-3 py-2 bg-background border border-border rounded"
           placeholder={t('sectionMetadata.placeholders.name')}
-          data-testid="section-name-input"
+          data-testid="line-name-input"
         />
       </div>
       <div className="space-y-4 mt-4" data-testid="wizard-editable-rest">
-        <SectionMetadataForm
+        <LineMetadataForm
           name={editState.name}
           people={people}
           date={editState.date}

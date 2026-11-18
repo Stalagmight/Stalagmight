@@ -1,11 +1,29 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::SectionId;
+use super::LineId;
 
-/// Reference to a station using section_id:station_index format
+/// A station's project-unique, never-reused integer identity: the Station ID
+/// the user sees (the Station detail field, the Data table column, the
+/// "Station IDs" map and image-export label). Allocated from
+/// [`crate::Project::next_station_id`] in line order, station order, by
+/// [`crate::Project::ensure_station_identities`]; carried with its physical
+/// station through every structural edit by the same `StationKey` walkers that
+/// carry `station_names`. Never shown as the positional `line:index` handle,
+/// which stays an internal session address.
+pub type StationId = u32;
+
+/// Every valid Station ID is below this (2^31). A stored id at or above it
+/// (a crafted or corrupt file, a snapshot, an Add that would overflow) is
+/// invalid: the normalization re-mints it, and a counter past it is brought
+/// back ([`crate::Project::ensure_station_identities`]). The headroom above
+/// keeps `next_station_id` arithmetic far from `u32::MAX`, where saturating
+/// adds handed out one id twice.
+pub const MAX_STATION_ID: StationId = 1 << 31;
+
+/// Reference to a station using line_id:station_index format
 ///
-/// Ordered lexicographically by `(section_id, station_index)` - the field order
+/// Ordered lexicographically by `(line_id, station_index)` - the field order
 /// the derive uses. The order is load-bearing, not cosmetic: the closure solve
 /// numbers its unknowns from a SORTED sequence of station refs so the adjusted
 /// geometry is a function of the project rather than of `HashMap` iteration
@@ -17,14 +35,14 @@ use super::SectionId;
 // as ts-rs dependencies and mixed bases make the import diff unrepresentable.
 #[ts(export_to = "../../bindings/StationRef.ts")]
 pub struct StationRef {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub station_index: u32,
 }
 
 impl StationRef {
-    pub fn new(section_id: SectionId, station_index: u32) -> Self {
+    pub fn new(line_id: LineId, station_index: u32) -> Self {
         Self {
-            section_id,
+            line_id,
             station_index,
         }
     }
@@ -32,28 +50,28 @@ impl StationRef {
 
 impl std::fmt::Display for StationRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.section_id, self.station_index)
+        write!(f, "{}:{}", self.line_id, self.station_index)
     }
 }
 
-/// Position-independent identity of a station within a section.
+/// Position-independent identity of a station within a line.
 ///
-/// A station is the boundary between two shots; `SectionStart` is the boundary
+/// A station is the boundary between two shots; `LineStart` is the boundary
 /// before the first shot (station index 0) and `AfterShot(uuid)` is the boundary
 /// after the shot with that stable UUID (station index = that shot's position + 1).
 /// Unlike a positional `station_index`, this survives inserting/deleting other
-/// shots in the section, so it is the *stored* form of a station reference
+/// shots in the line, so it is the *stored* form of a station reference
 /// (see [`StationKey`]). It is resolved to a transient positional [`StationRef`]
 /// at the geometry/IPC boundary.
 // Internal identity types - NOT crossing IPC (the wire ref stays positional
 // `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StationAnchor {
-    SectionStart,
+    LineStart,
     AfterShot(String),
     /// Positional fallback: a raw station index. Used ONLY transitionally - when
     /// loading a pre-anchor (v6) file's positional refs, and for test/construction
-    /// convenience - then canonicalized to `SectionStart`/`AfterShot` by the load
+    /// convenience - then canonicalized to `LineStart`/`AfterShot` by the load
     /// re-anchor pass. The library never compares or looks up with an `Index` key
     /// against a stored (canonical) key; it builds keys via `Project::key_for_ref`
     /// and compares via `Project::resolve_key`. A stray `Index` therefore can't
@@ -61,7 +79,7 @@ pub enum StationAnchor {
     Index(u32),
 }
 
-/// Stored, position-independent station reference: a section plus a
+/// Stored, position-independent station reference: a line plus a
 /// [`StationAnchor`]. This is what cross-references (merges, closures, datums,
 /// station offsets/comments) persist and hold in memory, so an insert/delete of
 /// an unrelated shot never has to rewrite them and a reference can never silently
@@ -69,19 +87,19 @@ pub enum StationAnchor {
 /// positional [`StationRef`], obtained via `Project::resolve_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct StationKey {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub anchor: StationAnchor,
 }
 
 // Backward-compatible deserialization: accept BOTH the current
-// `{section_id, anchor}` shape AND the legacy positional `{section_id,
+// `{line_id, anchor}` shape AND the legacy positional `{line_id,
 // station_index}` shape written by pre-anchor builds. The legacy shape appears
 // in persisted data that embeds a serialized `Project` or `StationMerge`/
 // `LoopClosure`/`ZeroDatum`/offset/comment key - most importantly the
 // `undo_stack` snapshot blobs, which are NOT re-encoded through the positional
 // wire form. Without this, opening an old project after upgrading would fail to
 // deserialize every legacy undo entry and silently drop the undo history. A
-// legacy positional ref maps to a transitional `SectionStart`/`Index` anchor,
+// legacy positional ref maps to a transitional `LineStart`/`Index` anchor,
 // which the resolve layer tolerates and the load re-anchor pass canonicalizes.
 //
 // NOTE: this `Compat` shim distinguishes the two shapes by FIELD NAME, so it only
@@ -97,7 +115,7 @@ impl<'de> Deserialize<'de> for StationKey {
     {
         #[derive(Deserialize)]
         struct Compat {
-            section_id: SectionId,
+            line_id: LineId,
             #[serde(default)]
             anchor: Option<StationAnchor>,
             #[serde(default)]
@@ -107,46 +125,46 @@ impl<'de> Deserialize<'de> for StationKey {
         match (c.anchor, c.station_index) {
             // Current shape - the anchor is authoritative.
             (Some(anchor), _) => Ok(StationKey {
-                section_id: c.section_id,
+                line_id: c.line_id,
                 anchor,
             }),
             // Legacy positional shape - map index to a transitional anchor.
-            (None, Some(index)) => Ok(StationKey::positional(c.section_id, index)),
+            (None, Some(index)) => Ok(StationKey::positional(c.line_id, index)),
             (None, None) => Err(<D::Error as serde::de::Error>::missing_field("anchor")),
         }
     }
 }
 
 impl StationKey {
-    pub fn new(section_id: SectionId, anchor: StationAnchor) -> Self {
-        Self { section_id, anchor }
+    pub fn new(line_id: LineId, anchor: StationAnchor) -> Self {
+        Self { line_id, anchor }
     }
 
-    /// A positional key (index 0 → `SectionStart`, else `Index`). Transitional /
+    /// A positional key (index 0 → `LineStart`, else `Index`). Transitional /
     /// test convenience; the library canonicalizes to `AfterShot` via
     /// [`crate::Project::key_for_ref`].
-    pub fn positional(section_id: SectionId, station_index: u32) -> Self {
+    pub fn positional(line_id: LineId, station_index: u32) -> Self {
         let anchor = if station_index == 0 {
-            StationAnchor::SectionStart
+            StationAnchor::LineStart
         } else {
             StationAnchor::Index(station_index)
         };
-        Self { section_id, anchor }
+        Self { line_id, anchor }
     }
 }
 
 impl From<StationRef> for StationKey {
     fn from(r: StationRef) -> Self {
-        StationKey::positional(r.section_id, r.station_index)
+        StationKey::positional(r.line_id, r.station_index)
     }
 }
 
 impl std::fmt::Display for StationKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.anchor {
-            StationAnchor::SectionStart => write!(f, "{}:start", self.section_id),
-            StationAnchor::AfterShot(uuid) => write!(f, "{}:after({uuid})", self.section_id),
-            StationAnchor::Index(i) => write!(f, "{}:{i}", self.section_id),
+            StationAnchor::LineStart => write!(f, "{}:start", self.line_id),
+            StationAnchor::AfterShot(uuid) => write!(f, "{}:after({uuid})", self.line_id),
+            StationAnchor::Index(i) => write!(f, "{}:{i}", self.line_id),
         }
     }
 }
@@ -375,7 +393,7 @@ pub struct Station {
     /// generate as a required `Array<ClosureRef>` that the wire does not always
     /// carry, and `tsc` would be blind to every bare `station.closures_with.map`.
     ///
-    /// The skip stays (unlike `CommandResult::section_ids` in the core crate,
+    /// The skip stays (unlike `CommandResult::line_ids` in the core crate,
     /// which drops it): this one is paid PER STATION - `get_project_state`
     /// re-serializes every station as JSON on each refresh, and that payload is
     /// already ~25 MB for the 89k-station projects the binary loader exists for.
@@ -395,13 +413,16 @@ pub struct Station {
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    /// Station name (e.g. the MNemo station number from a DMP import). Not
-    /// unique - shown next to the positional id, except in the opt-in Station
-    /// names map label and image-export option, which are exclusive with the
-    /// id labels. Off the wire when absent: `get_project_state` serializes
-    /// every station.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    /// The station's project-unique Station ID ([`StationId`]).
+    #[serde(default)]
+    pub id: StationId,
+    /// The station's name, unique within its line (e.g. `"17"`, `"A3"`, or
+    /// the MNemo station number a DMP import recorded). Every station has one
+    /// once the project is normalized ([`crate::Project::ensure_station_identities`]);
+    /// empty only for a station the normalization could not key (a shot
+    /// without a uuid), which a loaded project never has.
+    #[serde(default)]
+    pub name: String,
 }
 
 impl Station {
@@ -414,7 +435,8 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
-            name: None,
+            id: 0,
+            name: String::new(),
         }
     }
 
@@ -427,7 +449,8 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
-            name: None,
+            id: 0,
+            name: String::new(),
         }
     }
 
@@ -473,7 +496,7 @@ pub struct ZeroDatum {
     /// The user's answer to "is this station a cave entrance?", or `None` for
     /// the default rule (`Project::datum_entrances`): a placement datum is
     /// always an entrance, a GPS fix is one when its station is the first or
-    /// last station of its section (#741).
+    /// last station of its line (#741).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrance: Option<bool>,
 }
@@ -624,7 +647,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn station_ref_display_formats_as_section_and_index() {
+    fn station_ref_display_formats_as_line_and_index() {
         let station = StationRef::new(2, 3);
         assert_eq!(station.to_string(), "2:3");
     }
@@ -729,7 +752,7 @@ mod tests {
         );
 
         let legacy: Station = serde_json::from_value(serde_json::json!({
-            "station_ref": { "section_id": 1, "station_index": 0 },
+            "station_ref": { "line_id": 1, "station_index": 0 },
             "coordinates": { "x": 0.0, "y": 0.0, "z": 0.0 },
             "is_zero_datum": false,
             "gps_coordinates": null,
@@ -850,7 +873,7 @@ mod tests {
 /// Frozen shots cannot have their geometry fields edited.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct FrozenShotRef {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub shot_index: u32,
 }
 

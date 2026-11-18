@@ -8,43 +8,34 @@ use crate::models::Project;
 
 #[test]
 #[ignore = "diagnostic against a real on-disk file; run with --ignored"]
-fn diagnose_naharon_section31_bridge_closure() {
+fn diagnose_naharon_line31_bridge_closure() {
     use crate::persistence::Database;
     let path =
         std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
-    project.rebuild_section_index();
+    project.rebuild_line_index();
 
     let count31 = |p: &Project| {
         let merges = p
             .station_merges
             .iter()
-            .filter(|m| m.station_a.section_id == 31 || m.station_b.section_id == 31)
+            .filter(|m| m.station_a.line_id == 31 || m.station_b.line_id == 31)
             .count();
         let closures = p
             .loop_closures
             .iter()
-            .filter(|c| c.station_a.section_id == 31 || c.station_b.section_id == 31)
+            .filter(|c| c.station_a.line_id == 31 || c.station_b.line_id == 31)
             .count();
         (merges, closures)
     };
-    eprintln!(
-        "section 31 BEFORE: merges/closures = {:?}",
-        count31(&project)
-    );
+    eprintln!("line 31 BEFORE: merges/closures = {:?}", count31(&project));
     let converted = project.convert_orphan_closures_to_merges();
     eprintln!("converted {converted} orphan closure(s)");
-    eprintln!(
-        "section 31 AFTER:  merges/closures = {:?}",
-        count31(&project)
-    );
+    eprintln!("line 31 AFTER:  merges/closures = {:?}", count31(&project));
     let (merges, closures) = count31(&project);
-    assert_eq!(
-        closures, 0,
-        "section 31's sole-bridge closure should be gone"
-    );
-    assert!(merges >= 1, "section 31 should now be attached by a merge");
+    assert_eq!(closures, 0, "line 31's sole-bridge closure should be gone");
+    assert!(merges >= 1, "line 31 should now be attached by a merge");
 }
 
 #[test]
@@ -55,7 +46,7 @@ fn diagnose_naharon_merge_alignment() {
         std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
-    project.rebuild_section_index();
+    project.rebuild_line_index();
 
     let before = project.check_merge_alignment();
     eprintln!("== misaligned merges BEFORE: {} ==", before.len());
@@ -71,6 +62,6 @@ fn diagnose_naharon_merge_alignment() {
         eprintln!("  {}", v.message);
     }
     // The cascade propagates through already-aligned merges, so realign anchors
-    // every section to the datum network and fixes the drift fully.
+    // every line to the datum network and fixes the drift fully.
     assert!(after.is_empty(), "realign must align ALL merges");
 }

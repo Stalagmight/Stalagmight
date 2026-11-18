@@ -36,7 +36,7 @@ export function fallbackAttribution(provider: string): ResolvedTileAttribution {
  * The one IN-FLIGHT request per provider, so concurrent mounts share a call.
  *
  * Deliberately not a cache. Three surfaces can display Esri imagery at once -
- * the survey map, Global View and a Section Preview - and mounting them
+ * the survey map, Global View and a Line Preview - and mounting them
  * together must not mean three round trips. But that is the whole job: the
  * entry is dropped the moment the request settles, whatever it resolved to.
  *

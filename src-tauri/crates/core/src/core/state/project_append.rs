@@ -7,23 +7,23 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::models::{
-    gps_to_local, GpsCoordinates, HeldGauge, LoopClosure, Project, SectionId, ShotUuidRemap,
-    StationKey, StationMerge, StationRef,
+    gps_to_local, GpsCoordinates, HeldGauge, LineId, LoopClosure, Project, SectionId,
+    ShotUuidRemap, StationKey, StationMerge, StationRef,
 };
 
 /// What [`append_project`] did beyond the copy itself.
 pub(super) struct AppendOutcome {
-    /// Source section id -> the id it was given in the target, one entry per
-    /// copied section.
-    pub(super) section_id_map: HashMap<SectionId, SectionId>,
-    /// The target ids in the order they were assigned (the source's section
+    /// Source line id -> the id it was given in the target, one entry per
+    /// copied line.
+    pub(super) line_id_map: HashMap<LineId, LineId>,
+    /// The target ids in the order they were assigned (the source's line
     /// order), so callers report and record them deterministically.
-    pub(super) new_section_ids: Vec<SectionId>,
+    pub(super) new_line_ids: Vec<LineId>,
     /// `(incoming, kept)` when the source's entrance elevation disagreed with
     /// the one the target already held by more than the import tolerance. The
     /// target keeps its own; the caller decides how to tell the user.
     pub(super) elevation_conflict: Option<(f64, f64)>,
-    /// (target section, SOURCE shot uuid) -> the uuid that shot holds in the
+    /// (target line, SOURCE shot uuid) -> the uuid that shot holds in the
     /// target, for the copied shots whose id changed on the way in. Anything
     /// keyed by a source uuid (the Add's carried ignores) is translated through
     /// [`Self::target_uuid`].
@@ -32,19 +32,20 @@ pub(super) struct AppendOutcome {
 
 impl AppendOutcome {
     /// The uuid the shot that held `source_uuid` in the source holds in
-    /// `target_section`.
-    pub(super) fn target_uuid(&self, target_section: SectionId, source_uuid: &str) -> String {
+    /// `target_line`.
+    pub(super) fn target_uuid(&self, target_line: LineId, source_uuid: &str) -> String {
         self.shot_uuid_map
-            .get(target_section, source_uuid)
+            .get(target_line, source_uuid)
             .unwrap_or(source_uuid)
             .to_string()
     }
 }
 
-/// Append every section of `source` to `target` with fresh ids, and carry
-/// everything that hangs off those sections: section and station offsets,
+/// Append every line of `source` to `target` with fresh ids, and carry
+/// everything that hangs off those lines: their Sections (appended, names
+/// deduped), line and station offsets,
 /// station comments, zero datums, station merges, loop closures (id 0, for the
-/// caller's `assign_closure_ids`), each section's resolved north reference and
+/// caller's `assign_closure_ids`), each line's resolved north reference and
 /// least-squares gauge (reverse parity and gauge anchors), the entrance
 /// elevation (first one wins) and the location - and place a georeferenced
 /// source at its GPS position in the target's frame (#682; [`place_by_datum`]).
@@ -53,85 +54,90 @@ impl AppendOutcome {
 /// (`StationKey::positional`); the caller canonicalizes them (merge through
 /// `redrive_offsets_after_load`, add through `reanchor_station_refs`).
 ///
-/// Only references between this source's own sections are copied - the source
-/// cannot name a target station. A reference to a section the source does not
+/// Only references between this source's own lines are copied - the source
+/// cannot name a target station. A reference to a line the source does not
 /// hold, or to a station that does not resolve, is skipped with a log line.
 ///
 /// # Errors
 ///
 /// Only when a zero datum cannot be stored. By then `target` already holds the
-/// sections copied so far: merge discards its fresh project, the add removes
+/// lines copied so far: merge discards its fresh project, the add removes
 /// what was appended. Nothing here rolls back on its own.
 pub(super) fn append_project(
     target: &mut Project,
     source: &Project,
 ) -> Result<AppendOutcome, String> {
-    let mut section_id_map: HashMap<SectionId, SectionId> = HashMap::new();
-    let mut new_section_ids: Vec<SectionId> = Vec::with_capacity(source.sections.len());
+    let mut line_id_map: HashMap<LineId, LineId> = HashMap::new();
+    let mut new_line_ids: Vec<LineId> = Vec::with_capacity(source.lines.len());
     // The target's georeference BEFORE this copy: a source datum is placed in
     // it, or, when there is none yet, becomes it.
     let frame_before = target.frame_datum().map(|d| d.gps);
+    // Station IDs: the source's own, offset past every id the target has
+    // handed out, so both keep theirs and none collides.
+    let station_id_base = target.next_station_id;
 
-    for section in &source.sections {
-        let old_section_id = section.id;
-        let new_section_id = target.next_section_id;
+    for line in &source.lines {
+        let old_line_id = line.id;
+        let new_line_id = target.next_line_id;
 
-        // Shot identity rides along in `SectionData` (`ShotData::uuid`),
-        // so `add_section` reproduces each source shot's UUID by itself.
+        // Shot identity rides along in `LineData` (`ShotData::uuid`),
+        // so `add_line` reproduces each source shot's UUID by itself.
         // Ids the target already holds - two projects that imported the same
         // Ariane file, or two copies of one project - are renamed once the
         // whole source is in (`reassign_repeated_shot_uuids` below): shot
         // UUIDs are unique across the project, and the target keeps its own.
-        target.add_section(section.to_section_data());
+        target.add_line(line.to_line_data());
 
-        // #438: `SectionData` cannot carry the north reference, so the
+        // #438: `LineData` cannot carry the north reference, so the
         // copy would land on the target's default - reverting a
-        // corrected section to identity and rendering (and exporting) it
+        // corrected line to identity and rendering (and exporting) it
         // rotated by its own declination.
         //
-        // The RESOLVED reference, from the section's OWN project: a
-        // section that inherited its source project's default has to
+        // The RESOLVED reference, from the line's OWN project: a
+        // line that inherited its source project's default has to
         // keep that value here, where the default is a different one.
         // Merging the defaults themselves would be the wrong question -
         // two projects can hold different ones legitimately, and only
-        // the per-section answer is unambiguous - so every copied
-        // section carries its own and the target's default is untouched.
-        let resolved = source.azimuth_reference_for(section);
-        if let Some(copied) = target.get_section_mut(new_section_id) {
+        // the per-line answer is unambiguous - so every copied
+        // line carries its own and the target's default is untouched.
+        let resolved = source.azimuth_reference_for(line);
+        if let Some(copied) = target.get_line_mut(new_line_id) {
             copied.azimuth_reference = Some(resolved);
-            // Nor can it carry where the section's least-squares gauge sits
-            // (#24): `Section::new` resets the reverse parity and both gauge
+            // Nor can it carry where the line's least-squares gauge sits
+            // (#24): `Line::new` resets the reverse parity and both gauge
             // anchors, which would pin a datum-less component to a different
             // station than the source's and translate its adjusted geometry.
             // The anchors are shot uuids, carried over by POSITION below, once
             // the copy's own ids are settled.
-            copied.reverse_parity = section.reverse_parity;
+            copied.reverse_parity = line.reverse_parity;
         }
 
-        section_id_map.insert(old_section_id, new_section_id);
-        new_section_ids.push(new_section_id);
+        line_id_map.insert(old_line_id, new_line_id);
+        new_line_ids.push(new_line_id);
     }
 
-    target.reassign_repeated_shot_uuids(&new_section_ids);
-    let shot_uuid_map = carry_shot_identity(target, source, &section_id_map);
+    target.reassign_repeated_shot_uuids(&new_line_ids);
+    let shot_uuid_map = carry_shot_identity(target, source, &line_id_map);
+    copy_sections(target, source, &line_id_map);
 
-    copy_offsets_and_comments(target, source, &section_id_map);
-    copy_zero_datums(target, source, &section_id_map)?;
-    copy_merges_and_closures(target, source, &section_id_map);
+    copy_offsets_and_comments(target, source, &line_id_map);
+    copy_station_ids(target, source, &line_id_map, station_id_base);
+    copy_zero_datums(target, source, &line_id_map)?;
+    copy_merges_and_closures(target, source, &line_id_map);
     // Last, so the copy is complete when its datum station is measured.
-    place_by_datum(target, &new_section_ids, frame_before);
+    place_by_datum(target, &new_line_ids, frame_before);
     let elevation_conflict = combine_surface_elevation(target, source);
     combine_location(target, source);
 
     Ok(AppendOutcome {
-        section_id_map,
-        new_section_ids,
+        line_id_map,
+        new_line_ids,
         elevation_conflict,
         shot_uuid_map,
     })
 }
 
-/// Translate the copied sections so a georeferenced source lands at its GPS
+/// Translate the copied lines so a georeferenced source lands at its GPS
 /// position: its first resolvable datum's station (the source's frame, and a
 /// placement datum in the target too: the copy's datums are appended after the
 /// target's and its merges stay inside the copy, #741) goes to that datum's local
@@ -143,16 +149,12 @@ pub(super) fn append_project(
 /// source's own layout is preserved. Nothing pre-existing moves. A source with
 /// no datum is left where it is - placing it is the orphan-placement dialog's
 /// job, not a guess made here.
-fn place_by_datum(
-    project: &mut Project,
-    new_ids: &[SectionId],
-    frame_before: Option<GpsCoordinates>,
-) {
-    let new: HashSet<SectionId> = new_ids.iter().copied().collect();
+fn place_by_datum(project: &mut Project, new_ids: &[LineId], frame_before: Option<GpsCoordinates>) {
+    let new: HashSet<LineId> = new_ids.iter().copied().collect();
     let Some((station, gps)) = project
         .zero_datums
         .iter()
-        .filter(|zd| new.contains(&zd.station_ref.section_id))
+        .filter(|zd| new.contains(&zd.station_ref.line_id))
         .find_map(|zd| project.resolve_key(&zd.station_ref).map(|sr| (sr, zd.gps)))
     else {
         return;
@@ -175,14 +177,14 @@ fn place_by_datum(
         return;
     }
     for id in new_ids {
-        project.adjust_section_offset(*id, dx, dy);
+        project.adjust_line_offset(*id, dx, dy);
     }
 }
 
 /// Map every copied shot's SOURCE uuid to the uuid it holds in the target, by
 /// position (a copy keeps shot order), keeping only the ones that differ: ids
-/// renamed because the target already held them, and in-section repeats
-/// `Section::new` re-minted. Then carry each section's gauge pair over through
+/// renamed because the target already held them, and in-line repeats
+/// `Line::new` re-minted. Then carry each line's gauge pair over through
 /// that map, so it names the same two shots in the copy as in the source.
 ///
 /// Each copy's record parity comes from the source too: its entry in the
@@ -192,26 +194,26 @@ fn place_by_datum(
 fn carry_shot_identity(
     target: &mut Project,
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
 ) -> ShotUuidRemap {
     let mut renamed = ShotUuidRemap::default();
     let mut counter_parity: Vec<(String, bool)> = Vec::new();
-    for section in &source.sections {
-        let Some(&new_section_id) = section_id_map.get(&section.id) else {
+    for line in &source.lines {
+        let Some(&new_line_id) = line_id_map.get(&line.id) else {
             continue;
         };
-        let Some(copied) = target.get_section_mut(new_section_id) else {
+        let Some(copied) = target.get_line_mut(new_line_id) else {
             continue;
         };
         let mut by_source: HashMap<&str, String> = HashMap::new();
-        for (from, to) in section.shots.iter().zip(&copied.shots) {
+        for (from, to) in line.shots.iter().zip(&copied.shots) {
             let (Some(from), Some(to)) = (from.uuid.as_deref(), to.uuid.as_deref()) else {
                 continue;
             };
             by_source.entry(from).or_insert_with(|| to.to_string());
             counter_parity.push((to.to_string(), source.counter_parity_shots.contains(from)));
-            if from != to && renamed.get(new_section_id, from).is_none() {
-                renamed.insert(new_section_id, from.to_string(), to.to_string());
+            if from != to && renamed.get(new_line_id, from).is_none() {
+                renamed.insert(new_line_id, from.to_string(), to.to_string());
             }
         }
         let carry = |anchor: &Option<String>| {
@@ -222,8 +224,8 @@ fn carry_shot_identity(
                     .unwrap_or_else(|| uuid.to_string())
             })
         };
-        copied.gauge_shot_uuid = carry(&section.gauge_shot_uuid);
-        copied.gauge_neighbour_uuid = carry(&section.gauge_neighbour_uuid);
+        copied.gauge_shot_uuid = carry(&line.gauge_shot_uuid);
+        copied.gauge_neighbour_uuid = carry(&line.gauge_neighbour_uuid);
     }
     for (uuid, counter) in counter_parity {
         if counter {
@@ -235,7 +237,7 @@ fn carry_shot_identity(
     // The source's held gauges (`Project::held_gauges`) keep its components'
     // adjustment on the same stations in the copy, through the copy's uuids.
     for held in &source.held_gauges {
-        let Some(&to) = section_id_map.get(&held.section_id) else {
+        let Some(&to) = line_id_map.get(&held.line_id) else {
             continue;
         };
         let carry = |uuid: &str| {
@@ -244,7 +246,7 @@ fn carry_shot_identity(
                 .map_or_else(|| uuid.to_string(), str::to_string)
         };
         target.held_gauges.push(HeldGauge {
-            section_id: to,
+            line_id: to,
             shot: carry(&held.shot),
             neighbour: held.neighbour.as_deref().map(carry),
             ..held.clone()
@@ -255,35 +257,53 @@ fn carry_shot_identity(
     renamed
 }
 
-/// Section offsets, station offsets and station comments, remapped.
+/// Sections (#327): every source Section is appended to the target's with a
+/// fresh id and a name made unique among the target's (`Upper level` beside
+/// the target's own `Upper level` becomes `Upper level (2)`), and every copied
+/// line keeps its membership through the remap. A Section with no copied
+/// line is appended too: it is part of the source's survey.
+fn copy_sections(target: &mut Project, source: &Project, line_id_map: &HashMap<LineId, LineId>) {
+    // One batch: names deduped and ids allocated in a single pass, where a
+    // loop of `add_section` rescans the target's Sections per copy.
+    let copied = target.append_sections(&source.sections);
+    let section_map: HashMap<SectionId, SectionId> =
+        source.sections.iter().map(|s| s.id).zip(copied).collect();
+    for line in &source.lines {
+        let (Some(&copied), Some(section)) = (line_id_map.get(&line.id), line.section_id) else {
+            continue;
+        };
+        target.set_line_section(copied, section_map.get(&section).copied());
+    }
+}
+
+/// Line offsets, station offsets and station comments, remapped.
 fn copy_offsets_and_comments(
     target: &mut Project,
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
 ) {
-    // Through `write_section_offset` so an all-zero entry a source project is
+    // Through `write_line_offset` so an all-zero entry a source project is
     // carrying (a file written before #413 finding 2 was fixed) is not copied
-    // forward and re-serialized: the map means "sections that are actually
+    // forward and re-serialized: the map means "lines that are actually
     // displaced", and (0, 0) is the same geometry as no entry at all.
-    for (old_section_id, offset) in &source.section_offsets {
-        if let Some(&new_section_id) = section_id_map.get(old_section_id) {
-            Project::write_section_offset(&mut target.section_offsets, new_section_id, *offset);
+    for (old_line_id, offset) in &source.line_offsets {
+        if let Some(&new_line_id) = line_id_map.get(old_line_id) {
+            Project::write_line_offset(&mut target.line_offsets, new_line_id, *offset);
         } else {
             tracing::warn!(
                 project = %source.name,
-                section_id = old_section_id,
-                purpose = "append section offsets",
-                "Section offset references unknown section ID; skipping"
+                line_id = old_line_id,
+                purpose = "append line offsets",
+                "Line offset references unknown line ID; skipping"
             );
         }
     }
 
     // Resolve the source key to a positional index against the source, then
-    // store as a transitional Index anchor under the new section; the caller's
+    // store as a transitional Index anchor under the new line; the caller's
     // re-anchor pass canonicalizes it once the copied shots are present.
     for (old_key, offset) in &source.station_offsets {
-        if let Some(new_key) = remap_key(source, section_id_map, old_key, "append station offsets")
-        {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station offsets") {
             target.station_offsets.insert(new_key, *offset);
         }
     }
@@ -292,54 +312,79 @@ fn copy_offsets_and_comments(
     // (Without this, every per-station comment was silently dropped on merge
     // while every sibling collection was copied.)
     for (old_key, comment) in &source.station_comments {
-        if let Some(new_key) = remap_key(source, section_id_map, old_key, "append station comments")
-        {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station comments") {
             target.station_comments.insert(new_key, comment.clone());
         }
     }
     // Station names ride the same way.
     for (old_key, name) in &source.station_names {
-        if let Some(new_key) = remap_key(source, section_id_map, old_key, "append station names") {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station names") {
             target.station_names.insert(new_key, name.clone());
         }
     }
 }
 
+/// Station IDs, remapped onto the copied lines and offset by `base` (the
+/// target's `next_station_id` before the copy); the target's counter then
+/// moves past every id the source could have handed out. Repeated line names
+/// are left to the normalization that follows every append (the incoming
+/// line is the later holder, so it gets the ` (2)`).
+fn copy_station_ids(
+    target: &mut Project,
+    source: &Project,
+    line_id_map: &HashMap<LineId, LineId>,
+    base: crate::models::StationId,
+) {
+    for (old_key, id) in &source.station_ids {
+        if let Some(new_key) = remap_key(source, line_id_map, old_key, "append station ids") {
+            target.station_ids.insert(new_key, id.saturating_add(base));
+        }
+    }
+    let span = source
+        .station_ids
+        .values()
+        .map(|id| id.saturating_add(1))
+        .max()
+        .unwrap_or(0)
+        .max(source.next_station_id);
+    target.next_station_id = target.next_station_id.max(base.saturating_add(span));
+}
+
 /// A source station key as a transitional positional key in the target, or
-/// `None` when its section was not copied (logged) or it does not resolve.
+/// `None` when its line was not copied (logged) or it does not resolve.
 fn remap_key(
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
     old_key: &StationKey,
     purpose: &'static str,
 ) -> Option<StationKey> {
-    let Some(&new_section_id) = section_id_map.get(&old_key.section_id) else {
+    let Some(&new_line_id) = line_id_map.get(&old_key.line_id) else {
         tracing::warn!(
             project = %source.name,
-            section_id = old_key.section_id,
+            line_id = old_key.line_id,
             purpose,
-            "Station reference names an unknown section ID; skipping"
+            "Station reference names an unknown line ID; skipping"
         );
         return None;
     };
     let src_sr = source.resolve_key(old_key)?;
-    Some(StationKey::positional(new_section_id, src_sr.station_index))
+    Some(StationKey::positional(new_line_id, src_sr.station_index))
 }
 
-/// Zero datums, remapped, stored WITHOUT repositioning: the section offsets
+/// Zero datums, remapped, stored WITHOUT repositioning: the line offsets
 /// were already copied, and a datum placed through `set_zero_datum` would move
-/// the section it anchors.
+/// the line it anchors.
 fn copy_zero_datums(
     target: &mut Project,
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
 ) -> Result<(), String> {
     for zd in &source.zero_datums {
-        if let Some(&new_section_id) = section_id_map.get(&zd.station_ref.section_id) {
+        if let Some(&new_line_id) = line_id_map.get(&zd.station_ref.line_id) {
             let Some(src_sr) = source.resolve_key(&zd.station_ref) else {
                 continue;
             };
-            let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
+            let new_station_ref = StationRef::new(new_line_id, src_sr.station_index);
             target
                 .store_zero_datum_without_repositioning(new_station_ref, zd.gps, zd.accuracy_m)
                 .map_err(|e| {
@@ -351,9 +396,9 @@ fn copy_zero_datums(
         } else {
             tracing::warn!(
                 project = %source.name,
-                section_id = zd.station_ref.section_id,
+                line_id = zd.station_ref.line_id,
                 purpose = "append zero datums",
-                "Zero datum references unknown section ID; skipping"
+                "Zero datum references unknown line ID; skipping"
             );
         }
     }
@@ -361,24 +406,23 @@ fn copy_zero_datums(
 }
 
 /// Both endpoints of a source merge/closure remapped, or `None` (logged when a
-/// section was not copied; silent when a station does not resolve).
+/// line was not copied; silent when a station does not resolve).
 fn remap_pair(
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
     a: &StationKey,
     b: &StationKey,
     purpose: &'static str,
 ) -> Option<(StationKey, StationKey)> {
-    let (Some(&new_a_section), Some(&new_b_section)) = (
-        section_id_map.get(&a.section_id),
-        section_id_map.get(&b.section_id),
-    ) else {
+    let (Some(&new_a_line), Some(&new_b_line)) =
+        (line_id_map.get(&a.line_id), line_id_map.get(&b.line_id))
+    else {
         tracing::warn!(
             project = %source.name,
-            station_a_section = a.section_id,
-            station_b_section = b.section_id,
+            station_a_line = a.line_id,
+            station_b_line = b.line_id,
             purpose,
-            "Station pair references unknown section ID; skipping"
+            "Station pair references unknown line ID; skipping"
         );
         return None;
     };
@@ -386,8 +430,8 @@ fn remap_pair(
         return None;
     };
     Some((
-        StationKey::positional(new_a_section, a_sr.station_index),
-        StationKey::positional(new_b_section, b_sr.station_index),
+        StationKey::positional(new_a_line, a_sr.station_index),
+        StationKey::positional(new_b_line, b_sr.station_index),
     ))
 }
 
@@ -395,12 +439,12 @@ fn remap_pair(
 fn copy_merges_and_closures(
     target: &mut Project,
     source: &Project,
-    section_id_map: &HashMap<SectionId, SectionId>,
+    line_id_map: &HashMap<LineId, LineId>,
 ) {
     for merge in &source.station_merges {
         if let Some((station_a, station_b)) = remap_pair(
             source,
-            section_id_map,
+            line_id_map,
             &merge.station_a,
             &merge.station_b,
             "append station merges",
@@ -416,7 +460,7 @@ fn copy_merges_and_closures(
     for closure in &source.loop_closures {
         if let Some((station_a, station_b)) = remap_pair(
             source,
-            section_id_map,
+            line_id_map,
             &closure.station_a,
             &closure.station_b,
             "append loop closures",

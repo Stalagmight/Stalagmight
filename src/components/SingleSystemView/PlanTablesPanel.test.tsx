@@ -50,7 +50,7 @@ beforeEach(() => {
   // The DPV tab's editor writes through to the persisted config on every commit.
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
-    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], line_ids: [] })),
   });
 });
 

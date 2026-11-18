@@ -1,6 +1,6 @@
 //! Shot UUIDs unique across the whole project (`project/uuid_unique.rs`).
 //!
-//! Every project here is synthetic. Two sections carrying the same ids is the
+//! Every project here is synthetic. Two lines carrying the same ids is the
 //! shape a file saved before project-wide uniqueness can hold: an Ariane file
 //! imported twice, or a merge of two copies of one project.
 
@@ -24,8 +24,8 @@ fn shot_with(uuid: &str, azimuth: f64) -> ShotData {
     }
 }
 
-fn copy_of_ids() -> SectionData {
-    SectionData {
+fn copy_of_ids() -> LineData {
+    LineData {
         shots: IDS
             .iter()
             .enumerate()
@@ -35,13 +35,13 @@ fn copy_of_ids() -> SectionData {
     }
 }
 
-/// Sections 0 and 1 hold the same three ids. Section 1 carries a comment on its
-/// station 2, a merge from its start onto section 0's station 2, and a gauge pair;
-/// section 0 carries a comment on its own station 2.
+/// Lines 0 and 1 hold the same three ids. Line 1 carries a comment on its
+/// station 2, a merge from its start onto line 0's station 2, and a gauge pair;
+/// line 0 carries a comment on its own station 2.
 fn two_copies() -> Project {
     let mut project = Project::new("Copies".to_string(), None);
-    project.add_section(copy_of_ids());
-    project.add_section(copy_of_ids());
+    project.add_line(copy_of_ids());
+    project.add_line(copy_of_ids());
     let on_first = project.key_for_ref(StationRef::new(0, 2)).unwrap();
     let on_second = project.key_for_ref(StationRef::new(1, 2)).unwrap();
     let second_start = project.key_for_ref(StationRef::new(1, 0)).unwrap();
@@ -56,15 +56,15 @@ fn two_copies() -> Project {
         station_b: on_first,
         merged_at: Utc::now(),
     });
-    let second = project.get_section_mut(1).unwrap();
+    let second = project.get_line_mut(1).unwrap();
     second.gauge_shot_uuid = Some(IDS[0].to_string());
     second.gauge_neighbour_uuid = Some(IDS[1].to_string());
     project
 }
 
-fn ids_of(project: &Project, section: SectionId) -> Vec<String> {
+fn ids_of(project: &Project, line: LineId) -> Vec<String> {
     project
-        .get_section(section)
+        .get_line(line)
         .unwrap()
         .shots
         .iter()
@@ -72,13 +72,13 @@ fn ids_of(project: &Project, section: SectionId) -> Vec<String> {
         .collect()
 }
 
-fn comment_at(project: &Project, section: SectionId, index: u32) -> Option<String> {
-    let key = project.key_for_ref(StationRef::new(section, index))?;
+fn comment_at(project: &Project, line: LineId, index: u32) -> Option<String> {
+    let key = project.key_for_ref(StationRef::new(line, index))?;
     project.station_comments.get(&key).cloned()
 }
 
 #[test]
-fn the_derived_id_is_pinned_v4_shaped_and_keyed_by_section_and_old_id() {
+fn the_derived_id_is_pinned_v4_shaped_and_keyed_by_line_and_old_id() {
     // Computed independently (Python `uuid.uuid5` over the same name, re-stamped
     // as a v4); a change here re-heals every file differently.
     assert_eq!(
@@ -103,7 +103,7 @@ fn stepping_skips_an_id_already_in_use() {
 }
 
 #[test]
-fn the_lowest_section_keeps_its_ids_and_the_other_is_renamed_with_its_refs() {
+fn the_lowest_line_keeps_its_ids_and_the_other_is_renamed_with_its_refs() {
     let mut project = two_copies();
     let stamp = project.modified_at;
 
@@ -119,7 +119,7 @@ fn the_lowest_section_keeps_its_ids_and_the_other_is_renamed_with_its_refs() {
     // Each comment is still on its own physical station.
     assert_eq!(comment_at(&project, 0, 2).as_deref(), Some("first"));
     assert_eq!(comment_at(&project, 1, 2).as_deref(), Some("second"));
-    // The merge still joins section 1's start to section 0's station 2.
+    // The merge still joins line 1's start to line 0's station 2.
     let merge = project.station_merges.iter().next().unwrap();
     assert_eq!(
         project.resolve_key(&merge.station_a),
@@ -130,7 +130,7 @@ fn the_lowest_section_keeps_its_ids_and_the_other_is_renamed_with_its_refs() {
         Some(StationRef::new(0, 2))
     );
     // The gauge pair follows its shots.
-    let second = project.get_section(1).unwrap();
+    let second = project.get_line(1).unwrap();
     assert_eq!(
         second.gauge_shot_uuid.as_deref(),
         Some(expected[0].as_str())
@@ -159,14 +159,14 @@ fn healing_twice_changes_nothing_the_second_time() {
 #[test]
 fn a_door_renames_only_its_newcomers_even_when_they_hold_the_lower_id() {
     let mut project = Project::new("Door".to_string(), None);
-    project.add_section(copy_of_ids());
-    project.add_section(copy_of_ids());
-    project.add_section(copy_of_ids());
+    project.add_line(copy_of_ids());
+    project.add_line(copy_of_ids());
+    project.add_line(copy_of_ids());
 
-    // Section 0 is the newcomer; 1 and 2 were already in the project, so 1 keeps
+    // Line 0 is the newcomer; 1 and 2 were already in the project, so 1 keeps
     // the ids (lowest existing holder), 0 yields, and 2 is left to the load heal.
     let remap = project.reassign_repeated_shot_uuids(&[0]);
-    assert_eq!(remap.sections(), [0].into_iter().collect());
+    assert_eq!(remap.lines(), [0].into_iter().collect());
     let expected: Vec<String> = IDS.iter().map(|id| reminted_shot_uuid(0, id)).collect();
     assert_eq!(ids_of(&project, 0), expected);
     assert_eq!(ids_of(&project, 1), IDS);
@@ -176,12 +176,12 @@ fn a_door_renames_only_its_newcomers_even_when_they_hold_the_lower_id() {
 #[test]
 fn two_newcomers_sharing_ids_keep_them_in_the_lower_one() {
     let mut project = Project::new("Door".to_string(), None);
-    project.add_section(copy_of_ids());
-    project.add_section(copy_of_ids());
+    project.add_line(copy_of_ids());
+    project.add_line(copy_of_ids());
 
     let remap = project.reassign_repeated_shot_uuids(&[1, 0]);
     assert_eq!(ids_of(&project, 0), IDS);
-    assert_eq!(remap.sections(), [1].into_iter().collect());
+    assert_eq!(remap.lines(), [1].into_iter().collect());
 }
 
 #[test]
@@ -191,8 +191,8 @@ fn the_json_rewrite_matches_the_typed_one() {
     let remap = typed.make_shot_uuids_project_unique();
 
     let mut value = serde_json::to_value(&original).unwrap();
-    let changed = remap_project_json(&mut value, &|section, old| {
-        remap.get(section, old).map(str::to_string)
+    let changed = remap_project_json(&mut value, &|line, old| {
+        remap.get(line, old).map(str::to_string)
     });
     assert!(changed);
 
@@ -208,19 +208,19 @@ fn the_json_rewrite_matches_the_typed_one() {
 #[test]
 fn the_json_rewrite_adds_no_key_and_leaves_positional_refs_alone() {
     let mut value = serde_json::json!({
-        "sections": [{ "id": 1, "shots": [{ "uuid": IDS[0] }] }],
+        "lines": [{ "id": 1, "shots": [{ "uuid": IDS[0] }] }],
         "station_comments": [
-            [{ "section_id": 1, "anchor": { "Index": 1 } }, "positional"],
-            [{ "section_id": 1, "anchor": { "AfterShot": IDS[0] } }, "anchored"],
-            [{ "section_id": 0, "anchor": { "AfterShot": IDS[0] } }, "other section"]
+            [{ "line_id": 1, "anchor": { "Index": 1 } }, "positional"],
+            [{ "line_id": 1, "anchor": { "AfterShot": IDS[0] } }, "anchored"],
+            [{ "line_id": 0, "anchor": { "AfterShot": IDS[0] } }, "other line"]
         ]
     });
     let new = reminted_shot_uuid(1, IDS[0]);
-    let changed = remap_project_json(&mut value, &|section, old| {
-        (section == 1 && old == IDS[0]).then(|| new.clone())
+    let changed = remap_project_json(&mut value, &|line, old| {
+        (line == 1 && old == IDS[0]).then(|| new.clone())
     });
     assert!(changed);
-    assert_eq!(value["sections"][0]["shots"][0]["uuid"], new.as_str());
+    assert_eq!(value["lines"][0]["shots"][0]["uuid"], new.as_str());
     assert_eq!(value["station_comments"][0][0]["anchor"]["Index"], 1);
     assert_eq!(
         value["station_comments"][1][0]["anchor"]["AfterShot"],
@@ -245,12 +245,12 @@ fn a_stored_id_matches_the_shot_it_was_renamed_to() {
 }
 
 #[test]
-fn integrity_reports_an_id_in_two_sections_and_repair_heals_it() {
+fn integrity_reports_an_id_in_two_lines_and_repair_heals_it() {
     let mut project = two_copies();
     let violations = project.check_structural_integrity();
     let across: Vec<_> = violations
         .iter()
-        .filter(|v| v.category == "duplicate_shot_uuid_across_sections")
+        .filter(|v| v.category == "duplicate_shot_uuid_across_lines")
         .collect();
     assert_eq!(across.len(), 3, "one violation per repeated id");
     assert!(across
@@ -266,33 +266,32 @@ fn integrity_reports_an_id_in_two_sections_and_repair_heals_it() {
 fn a_plan_anchor_saved_against_a_renamed_id_still_finds_its_shot() {
     let mut project = two_copies();
     project.make_shot_uuids_project_unique();
-    let second = project.get_section(1).unwrap();
+    let second = project.get_line(1).unwrap();
     let found = crate::PlanAnchor::position_of(&project, second, &Some(IDS[2].to_string()));
     assert_eq!(
         found,
         Some(2),
         "the old id resolves through the derived one"
     );
-    let first = project.get_section(0).unwrap();
+    let first = project.get_line(0).unwrap();
     let kept = crate::PlanAnchor::position_of(&project, first, &Some(IDS[2].to_string()));
     assert_eq!(
         kept,
         Some(2),
-        "the section that kept the id still finds it directly"
+        "the line that kept the id still finds it directly"
     );
 }
 
-/// Every shot's record parity (`Project::shot_record_parity`), section by
-/// section, in shot order.
+/// Every shot's record parity (`Project::shot_record_parity`), line by
+/// line, in shot order.
 fn record_parities(project: &Project) -> Vec<Vec<bool>> {
     project
-        .sections
+        .lines
         .iter()
-        .map(|section| {
-            section
-                .shots
+        .map(|line| {
+            line.shots
                 .iter()
-                .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+                .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
                 .collect()
         })
         .collect()
@@ -323,9 +322,9 @@ fn the_load_heal_keeps_every_shots_record_parity() {
 #[test]
 fn a_newcomer_renamed_off_a_shared_id_does_not_take_its_counter_parity() {
     let mut project = Project::new("Door".to_string(), None);
-    project.add_section(copy_of_ids());
+    project.add_line(copy_of_ids());
     project.counter_parity_shots.insert(IDS[1].to_string());
-    project.add_section(copy_of_ids());
+    project.add_line(copy_of_ids());
 
     project.reassign_repeated_shot_uuids(&[1]);
 

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
+use crate::models::SectionId;
 use crate::persistence::{NewerSchema, RefusedSchemaObject};
 
 // ============================================================================
@@ -408,7 +409,7 @@ impl std::error::Error for LoadError {}
 pub struct DisplaySettings {
     pub show_stations: bool,
     pub show_shots: bool,
-    pub show_section_names: bool,
+    pub show_line_names: bool,
     pub show_station_labels: bool,
     /// Station names as the station labels. The Display menu keeps it exclusive
     /// with `show_station_labels`; this reports what was stored, and the store's
@@ -433,6 +434,11 @@ pub struct DisplaySettings {
     /// project reopened through the typed load path restores the saved mode
     /// ("remember last used") instead of always defaulting to measured.
     pub geometry_mode: String,
+    /// The Sections (#327) hidden on the map, stored under the key
+    /// `hiddenSections` as a JSON array of Section ids. A view setting, not
+    /// an edit: saved through `save_display_setting`, never undone, and
+    /// machine-local (`display_settings` is not pushed to SpeleoDB).
+    pub hidden_sections: Vec<SectionId>,
 }
 
 impl Default for DisplaySettings {
@@ -441,7 +447,7 @@ impl Default for DisplaySettings {
         Self {
             show_stations: true,
             show_shots: true,
-            show_section_names: true,
+            show_line_names: true,
             show_station_labels: false,
             show_station_names: false,
             show_shot_data: false,
@@ -456,6 +462,7 @@ impl Default for DisplaySettings {
             show_shot_comments: false,
             grid_spacing: 10.0,
             geometry_mode: "measured".to_string(),
+            hidden_sections: Vec::new(),
         }
     }
 }
@@ -468,7 +475,7 @@ impl DisplaySettings {
         Self {
             show_stations: map.get("showStations").is_none_or(|s| s == "true"),
             show_shots: map.get("showShots").is_none_or(|s| s == "true"),
-            show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
+            show_line_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
             show_station_names: map.get("showStationNames").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
@@ -500,8 +507,24 @@ impl DisplaySettings {
                 .filter(|s| s.as_str() == "measured" || s.as_str() == "closureAdjusted")
                 .cloned()
                 .unwrap_or_else(|| "measured".to_string()),
+            hidden_sections: parse_hidden_sections(map.get(HIDDEN_SECTIONS_KEY)),
         }
     }
+}
+
+/// The `display_settings` key of the hidden Sections (#327).
+pub const HIDDEN_SECTIONS_KEY: &str = "hiddenSections";
+
+/// The hidden Sections as stored: a JSON array of Section ids. Anything else
+/// (absent, not JSON, not an array of ids) reads as none hidden, and a
+/// repeated id is kept once.
+fn parse_hidden_sections(stored: Option<&String>) -> Vec<SectionId> {
+    let Some(text) = stored else {
+        return Vec::new();
+    };
+    let ids: Vec<SectionId> = serde_json::from_str(text).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 // ============================================================================
@@ -520,7 +543,7 @@ pub enum LoadingPhase {
     // Project opening phases (8 total)
     OpeningDatabase,
     LoadingProjectData,
-    LoadingSections,
+    LoadingLines,
     ComputingStations,
     ComputingStatistics,
     ValidatingData,
@@ -548,7 +571,7 @@ impl LoadingPhase {
         match self {
             Self::OpeningDatabase => "Opening database...",
             Self::LoadingProjectData => "Loading survey data...",
-            Self::LoadingSections => "Loading sections...",
+            Self::LoadingLines => "Loading lines...",
             Self::ComputingStations => "Calculating station positions...",
             Self::ComputingStatistics => "Computing statistics...",
             Self::ValidatingData => "Validating data...",
@@ -563,7 +586,7 @@ impl LoadingPhase {
             Self::ExportComplete => "Export complete",
             Self::ImportParsing => "Reading survey file...",
             Self::ImportConverting => "Converting to project model...",
-            Self::ImportApplyingChanges => "Applying sections and merges...",
+            Self::ImportApplyingChanges => "Applying lines and merges...",
             Self::ImportFinalizing => "Finalizing import...",
         }
     }
@@ -576,7 +599,7 @@ impl LoadingPhase {
             // Open phases sum to 100
             Self::OpeningDatabase => 5.0,
             Self::LoadingProjectData => 20.0,
-            Self::LoadingSections => 15.0,
+            Self::LoadingLines => 15.0,
             Self::ComputingStations => 20.0,
             Self::ComputingStatistics => 15.0,
             Self::ValidatingData => 10.0,
@@ -591,7 +614,7 @@ impl LoadingPhase {
             Self::ExportGenerating => 60.0,
             Self::ExportWriting => 20.0,
             Self::ExportComplete => 10.0,
-            // Import phases sum to 100. Applying dominates because section
+            // Import phases sum to 100. Applying dominates because line
             // creation + station merges scale with N.
             Self::ImportParsing => 15.0,
             Self::ImportConverting => 20.0,
@@ -694,7 +717,7 @@ impl ProgressEmitter {
         let weights = vec![
             (LoadingPhase::OpeningDatabase, 5.0),
             (LoadingPhase::LoadingProjectData, 20.0),
-            (LoadingPhase::LoadingSections, 15.0),
+            (LoadingPhase::LoadingLines, 15.0),
             (LoadingPhase::ComputingStations, 20.0),
             (LoadingPhase::ComputingStatistics, 15.0),
             (LoadingPhase::ValidatingData, 10.0),
@@ -909,7 +932,7 @@ pub struct LoadProjectFullResult {
     pub loading_id: u64,
     /// The loaded project. Serialized in positional wire form (like
     /// `ProjectState`) so cross-references reach the frontend as
-    /// `StationRef { section_id, station_index }`, not the internal `StationKey`
+    /// `StationRef { line_id, station_index }`, not the internal `StationKey`
     /// shape derived serde would emit.
     #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
     pub project: crate::models::Project,
@@ -1044,7 +1067,7 @@ mod tests {
         assert!(defaults.show_stations); // true
         assert!(defaults.show_shots); // true
         assert!(!defaults.show_shot_comments); // false
-        assert!(defaults.show_section_names); // true
+        assert!(defaults.show_line_names); // true
         assert!(!defaults.show_station_labels); // false
         assert!(!defaults.show_station_names); // false
         assert!(!defaults.show_shot_data); // false
@@ -1066,7 +1089,7 @@ mod tests {
         assert!(settings.show_stations); // true
         assert!(settings.show_shots); // true
         assert!(!settings.show_shot_comments); // false
-        assert!(settings.show_section_names); // true
+        assert!(settings.show_line_names); // true
         assert!(!settings.show_station_labels); // false
         assert!(!settings.show_station_names); // false
         assert!(!settings.show_shot_data); // false
@@ -1121,10 +1144,7 @@ mod tests {
             settings.show_shot_comments,
             "showShotComments should be true"
         );
-        assert!(
-            !settings.show_section_names,
-            "showSectionNames should be false"
-        );
+        assert!(!settings.show_line_names, "showLineNames should be false");
         assert!(
             settings.show_station_labels,
             "showStationLabels should be true"
@@ -1175,6 +1195,29 @@ mod tests {
     }
 
     #[test]
+    fn hidden_sections_read_as_a_json_array_of_ids() {
+        assert!(DisplaySettings::default().hidden_sections.is_empty());
+        let read = |value: &str| {
+            let mut stored = HashMap::new();
+            stored.insert(HIDDEN_SECTIONS_KEY.to_string(), value.to_string());
+            DisplaySettings::from_stored(&stored).hidden_sections
+        };
+        assert_eq!(read("[3, 1, 3]"), vec![3, 1], "a repeat is kept once");
+        assert!(read("[]").is_empty());
+        assert!(read("not json").is_empty());
+        assert!(read("[\"a\"]").is_empty());
+        assert!(DisplaySettings::from_stored(&HashMap::new())
+            .hidden_sections
+            .is_empty());
+        let wire = serde_json::to_value(DisplaySettings {
+            hidden_sections: vec![2],
+            ..DisplaySettings::default()
+        })
+        .expect("display settings serialize");
+        assert_eq!(wire["hiddenSections"], serde_json::json!([2]));
+    }
+
+    #[test]
     fn test_display_settings_geometry_mode() {
         // Default (absent) and invalid values fall back to "measured".
         assert_eq!(DisplaySettings::default().geometry_mode, "measured");
@@ -1213,7 +1256,7 @@ mod tests {
         let open_phases = [
             LoadingPhase::OpeningDatabase,
             LoadingPhase::LoadingProjectData,
-            LoadingPhase::LoadingSections,
+            LoadingPhase::LoadingLines,
             LoadingPhase::ComputingStations,
             LoadingPhase::ComputingStatistics,
             LoadingPhase::ValidatingData,
@@ -1267,15 +1310,13 @@ mod tests {
 
     #[test]
     fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
-        use crate::models::{
-            Project, ProjectStats, SectionData, ShotData, StationKey, StationMerge,
-        };
+        use crate::models::{LineData, Project, ProjectStats, ShotData, StationKey, StationMerge};
 
         // A project with one resolvable station merge, stored in the internal
         // StationKey form.
         let mut project = Project::new("Wire".to_string(), None);
         let a = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![ShotData {
                     length: 1.0,
                     ..Default::default()
@@ -1284,7 +1325,7 @@ mod tests {
             })
             .id;
         let b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![ShotData {
                     length: 1.0,
                     ..Default::default()
@@ -1300,7 +1341,7 @@ mod tests {
         });
 
         let stats = ProjectStats {
-            section_count: 2,
+            line_count: 2,
             shot_count: 2,
             total_length: 2.0,
             min_depth: 0.0,
@@ -1313,8 +1354,8 @@ mod tests {
         };
 
         // The merge endpoint must serialize as positional wire form
-        // ({section_id, station_index}), NOT the internal StationKey shape
-        // ({section_id, anchor}). This is what makes the JSON load/create routes
+        // ({line_id, station_index}), NOT the internal StationKey shape
+        // ({line_id, anchor}). This is what makes the JSON load/create routes
         // match what the frontend reads (and the binary route emits).
         let assert_wire = |v: &serde_json::Value, label: &str| {
             let sa = &v["project"]["station_merges"][0]["station_a"];

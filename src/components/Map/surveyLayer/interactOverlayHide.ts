@@ -2,7 +2,7 @@
 // (#customRender delete highlight straggler).
 //
 // The hover / selection highlight (individual hovered / selected shot + station,
-// snap ring) renders from the `survey-interact` GeoJSON source. When a section is
+// snap ring) renders from the `survey-interact` GeoJSON source. When a line is
 // deleted under the custom renderer, SurveyLayer's flush prune calls
 // `refreshInteractOverlay()`, whose `setData` drops the removed feature from the
 // overlay DATA in the same frame the custom geometry vanishes. But a GeoJSON
@@ -25,10 +25,10 @@
 
 import type * as maplibregl from 'maplibre-gl';
 
-/** Section id encoded in a composite overlay id (`"<sectionId>:<...>"`), or null
- *  when the id is null or not in that shape. Shots use `"sectionId:shotId"`,
- *  stations use `"sectionId:stationIndex"` - the prefix is the section id in both. */
-function sectionOfOverlayId(id: string | null | undefined): number | null {
+/** Line id encoded in a composite overlay id (`"<lineId>:<...>"`), or null
+ *  when the id is null or not in that shape. Shots use `"lineId:shotId"`,
+ *  stations use `"lineId:stationIndex"` - the prefix is the line id in both. */
+function lineOfOverlayId(id: string | null | undefined): number | null {
   if (!id) return null;
   const colon = id.indexOf(':');
   if (colon <= 0) return null;
@@ -37,19 +37,19 @@ function sectionOfOverlayId(id: string | null | undefined): number | null {
 }
 
 /**
- * Whether any currently-highlighted overlay id belongs to a section this flush
+ * Whether any currently-highlighted overlay id belongs to a line this flush
  * removed - i.e. the interact overlay was painting a feature that just got
  * deleted, so its stale tile must be hidden until the overlay re-tiles. Pure.
  */
-export function overlayTouchesRemovedSections(
+export function overlayTouchesRemovedLines(
   highlightedIds: readonly (string | null | undefined)[],
-  removedSectionIds: readonly number[],
+  removedLineIds: readonly number[],
 ): boolean {
-  if (removedSectionIds.length === 0) return false;
-  const removed = new Set(removedSectionIds);
+  if (removedLineIds.length === 0) return false;
+  const removed = new Set(removedLineIds);
   for (const id of highlightedIds) {
-    const section = sectionOfOverlayId(id);
-    if (section !== null && removed.has(section)) return true;
+    const line = lineOfOverlayId(id);
+    if (line !== null && removed.has(line)) return true;
   }
   return false;
 }

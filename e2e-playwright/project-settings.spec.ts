@@ -3,9 +3,9 @@
  * thresholds, stored in the .stalx. Opened from the project overview.
  */
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, seedProjectWithSections, waitForMapIdle, type SectionSeed } from './helpers/app';
+import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle, type LineSeed } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main',
     direction: 'in',
@@ -20,7 +20,7 @@ test.describe('Project Settings', () => {
 
   test('edits per-project name + validation thresholds', async ({ page }) => {
     await createProject(page, 'Proj Settings');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
     // Project overview (no selection) on the Details tab carries the button.
@@ -61,7 +61,7 @@ test.describe('Project Settings', () => {
 
   test('edits the entrance elevation (#465), including clearing it back to not recorded', async ({ page }) => {
     await createProject(page, 'Proj Elevation');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
     await page.getByTestId('detail-tab-details').click();
@@ -126,7 +126,7 @@ test.describe('Project Settings', () => {
     // project-settings-cancel) was removed with collaboration mode, and nothing
     // would catch a General input that started writing through on change.
     await createProject(page, 'Proj Settings');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
 
     await page.getByTestId('detail-tab-details').click();

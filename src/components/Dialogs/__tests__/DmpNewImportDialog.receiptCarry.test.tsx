@@ -17,11 +17,11 @@ import type { DmpFile } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 
-// SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
+// LinePreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. This test exercises the receipt plumbing, not
 // anything drawn.
-vi.mock('../SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../SectionPreview')>()),
+vi.mock('../LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
@@ -53,8 +53,8 @@ import { useUIStore } from '../../../store/uiStore';
 const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
   source_format: 'MNemo DMP',
   file_name: 'dive.dmp',
-  sections_found: 2,
-  sections_imported: 1,
+  lines_found: 2,
+  lines_imported: 1,
   shot_count: 3,
   closures_requested: 0,
   closures_created: 0,
@@ -66,12 +66,12 @@ const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
 });
 
 /** The receipt banked by the early import, before the map-placement handoff. */
-const EARLY_RECEIPT = receipt({ sections_imported: 1, shot_count: 3 });
+const EARLY_RECEIPT = receipt({ lines_imported: 1, shot_count: 3 });
 /** What the backend returns for the segment the user drops on the map. */
-const SEGMENT_RECEIPT = receipt({ sections_imported: 1, shot_count: 4 });
+const SEGMENT_RECEIPT = receipt({ lines_imported: 1, shot_count: 4 });
 
 // Fully synthetic, in the real `DmpShot` shape: `shot_type: 'Standard'` and a
-// length other than 1 are what `isImportableDmpShot` keeps, and a section whose
+// length other than 1 are what `isImportableDmpShot` keeps, and a line whose
 // shots are all filtered out emits no import config at all.
 const dmpSection = (name: string) => ({
   version: 1,
@@ -100,7 +100,7 @@ const dmpSection = (name: string) => ({
   })),
 });
 
-const dmpFile = { version: 1, sections: [dmpSection('A'), dmpSection('B')] } as unknown as DmpFile;
+const dmpFile = { version: 1, lines: [dmpSection('A'), dmpSection('B')] } as unknown as DmpFile;
 
 const selectionConfig = (selected: number[]): DmpSelectionConfig => ({
   selectedIndices: new Set(selected),
@@ -108,18 +108,18 @@ const selectionConfig = (selected: number[]): DmpSelectionConfig => ({
   defaultExplorers: [],
   defaultDate: null,
   fileHash: null,
-  sectionHashes: [],
+  lineHashes: [],
 });
 
 const savedState = (overrides: Partial<SavedManualPlacingState>): SavedManualPlacingState => ({
   connections: [],
   skippedIndices: [],
   segmentQueue: [],
-  segmentAnchor: { sectionIndex: 0, stationIndex: 0 },
+  segmentAnchor: { lineIndex: 0, stationIndex: 0 },
   directPlacements: [],
   skippedSuggestions: [],
   segmentSkipCounts: [],
-  sectionEdits: [],
+  lineEdits: [],
   ...overrides,
 });
 
@@ -147,9 +147,9 @@ const renderWizard = (
     />,
   );
 
-/** The single-section case: the zero datum IS the whole import. */
+/** The single-line case: the zero datum IS the whole import. */
 const zeroDatumOnly = (): ZeroDatumConfigResult => ({
-  sectionIndex: 0,
+  lineIndex: 0,
   stationIndex: 0,
   gps: { latitude: 20, longitude: -87, depth_reference: 0 },
   metadata: {
@@ -162,15 +162,15 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
     quality: 1,
     reverse: false,
   },
-  shots: convertToEditableShots(dmpFile.sections[0]!.shots),
+  shots: convertToEditableShots(dmpFile.lines[0]!.shots),
 });
 
 describe('DMP wizard receipt carry across manual placement', () => {
   beforeEach(() => {
     invokeIpcMock.mockReset();
     invokeIpcMock.mockImplementation(async (cmd: string) => {
-      if (cmd === 'import_sections') {
-        return { success: true, section_ids: [7], import_receipt: SEGMENT_RECEIPT, warnings: [] };
+      if (cmd === 'import_lines') {
+        return { success: true, line_ids: [7], import_receipt: SEGMENT_RECEIPT, warnings: [] };
       }
       return null;
     });
@@ -181,7 +181,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
     renderWizard(
       savedState({
         segmentQueue: [[1]],
-        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        segmentAnchor: { lineIndex: 1, stationIndex: 0 },
         importedReceipts: [EARLY_RECEIPT],
       }),
       { onComplete: vi.fn(), autoStartManualPlacement: true, selected: [0, 1] },
@@ -191,7 +191,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
     // the app in placement mode.
     await waitFor(() => expect(useUIStore.getState().placementMode).not.toBeNull());
 
-    // The user drops the section on the map: this imports the segment (banking
+    // The user drops the line on the map: this imports the segment (banking
     // a second receipt) and reopens the wizard with a fresh saved state.
     await act(async () => {
       useUIStore.getState().placementMode!.onComplete!({
@@ -206,7 +206,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
     };
     // The segment really was imported on this leg (not an early return that
     // would make the receipt assertion vacuous), and the queue is drained.
-    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_sections');
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_lines');
     expect(reopened.savedManualPlacingState?.segmentQueue).toEqual([]);
     expect(reopened.savedManualPlacingState?.importedReceipts).toEqual([
       EARLY_RECEIPT,
@@ -218,14 +218,14 @@ describe('DMP wizard receipt carry across manual placement', () => {
     const onComplete = vi.fn();
 
     // The state the reopened wizard gets after the last segment landed: queue
-    // drained, the placed section already imported (so the late import has
+    // drained, the placed line already imported (so the late import has
     // nothing to send), and both receipts carried over.
     renderWizard(
       savedState({
         segmentQueue: [],
         directPlacements: [
           {
-            anchorSectionIndex: 0,
+            anchorLineIndex: 0,
             anchorStationIndex: 0,
             placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
           },
@@ -242,13 +242,13 @@ describe('DMP wizard receipt carry across manual placement', () => {
     expect(delivered).toMatchObject({
       source_format: 'MNemo DMP',
       file_name: 'dive.dmp',
-      sections_found: 2,
-      sections_imported: 2,
+      lines_found: 2,
+      lines_imported: 2,
       shot_count: 7,
     });
     // Nothing left to import, so the aggregate is exactly what was carried.
     expect(invokeIpcMock).not.toHaveBeenCalledWith(
-      'import_sections',
+      'import_lines',
       expect.anything(),
       expect.anything(),
     );
@@ -257,7 +257,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
   /**
    * The fourth completion site, the 'done' phase, was the one that passed no
    * receipt at all. It is reached with one already banked - a file whose only
-   * selected section IS the zero datum, or a selection with nothing left to
+   * selected line IS the zero datum, or a selection with nothing left to
    * suggest - so that import went silent too, without any manual placement.
    */
   it('completes with a receipt when the zero datum is the whole import', async () => {
@@ -270,10 +270,10 @@ describe('DMP wizard receipt carry across manual placement', () => {
     });
 
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_sections');
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_lines');
     expect(onComplete.mock.calls[0]![1]).toMatchObject({
       source_format: 'MNemo DMP',
-      sections_imported: SEGMENT_RECEIPT.sections_imported,
+      lines_imported: SEGMENT_RECEIPT.lines_imported,
       shot_count: SEGMENT_RECEIPT.shot_count,
     });
   });

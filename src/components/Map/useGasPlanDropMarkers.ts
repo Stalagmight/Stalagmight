@@ -73,10 +73,10 @@ export function useGasPlanDropMarkers({
     gasScooterDropMarkerRef.current = null;
     if (!map || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
     const mapInst = map;
-    const lngLatFor = (ref: { section_id: number; station_index: number }) => {
+    const lngLatFor = (ref: { line_id: number; station_index: number }) => {
       const st = activeStations.find(
         (s) =>
-          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.line_id === ref.line_id &&
           s.station_ref.station_index === ref.station_index
       );
       return st
@@ -127,7 +127,7 @@ export function useGasPlanDropMarkers({
       el.setAttribute('tabindex', '0');
       el.setAttribute('aria-label', t('gasPanel.map.dropAria', { n: i + 1 }));
       const curIndex = routeRefs.findIndex(
-        (r) => r.section_id === ref.section_id && r.station_index === ref.station_index
+        (r) => r.line_id === ref.line_id && r.station_index === ref.station_index
       );
       el.setAttribute('aria-valuemin', '0');
       el.setAttribute('aria-valuemax', String(Math.max(0, routeRefs.length - 1)));
@@ -156,7 +156,7 @@ export function useGasPlanDropMarkers({
         // a jiggle shouldn't create a redundant pin (which would show a reset button) or refetch.
         if (
           !snapped ||
-          (snapped.section_id === ref.section_id && snapped.station_index === ref.station_index)
+          (snapped.line_id === ref.line_id && snapped.station_index === ref.station_index)
         ) {
           marker.setLngLat(lngLat);
           return;
@@ -173,7 +173,7 @@ export function useGasPlanDropMarkers({
         const pending = useGasPlanStore.getState().stageDropOverrides[i];
         const pendingIdx = pending
           ? routeRefs.findIndex(
-              (r) => r.section_id === pending.section_id && r.station_index === pending.station_index
+              (r) => r.line_id === pending.line_id && r.station_index === pending.station_index
             )
           : -1;
         const from = pendingIdx >= 0 ? pendingIdx : curIndex < 0 ? 0 : curIndex;

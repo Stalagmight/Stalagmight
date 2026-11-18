@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -17,9 +17,9 @@ import {
  * "reference shots" switch.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Kind Section',
+    name: 'Kind Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -29,21 +29,21 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-/** The kind the store holds for the Nth shot of the only section. */
+/** The kind the store holds for the Nth shot of the only line. */
 async function storedKind(page: Page, shotIndex: number): Promise<string | null> {
   return page.evaluate((i) => {
     const state = (window as unknown as { __E2E_TEST__: { projectStore: { getState: () => unknown } } })
       .__E2E_TEST__.projectStore.getState() as {
-      project: { sections: Array<{ shots: Array<{ kind?: string }> }> } | null;
+      project: { lines: Array<{ shots: Array<{ kind?: string }> }> } | null;
     };
-    return state.project?.sections[0]?.shots[i]?.kind ?? null;
+    return state.project?.lines[0]?.shots[i]?.kind ?? null;
   }, shotIndex);
 }
 
 /** Seed a project and open the DataTable via its keyboard shortcut. */
 async function openDataTable(page: Page): Promise<void> {
   await createProject(page, 'Shot Kind');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await page.keyboard.press('Control+3');
@@ -163,15 +163,15 @@ test.describe('shot kind context menu (#27)', () => {
         const proj = (
           window as unknown as { __E2E_TEST__: { projectStore: { getState: () => unknown } } }
         ).__E2E_TEST__.projectStore.getState() as {
-          project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
+          project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> };
         };
-        const sec = proj.project.sections[0]!;
+        const sec = proj.project.lines[0]!;
         (
           window as unknown as {
             __E2E_TEST__: { uiStore: { getState: () => { openDialog: (t: string, p: unknown) => void } } };
           }
         ).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
-          target: { type: 'shot', sectionId: sec.id, shotId: sec.shots[0]!.id },
+          target: { type: 'shot', lineId: sec.id, shotId: sec.shots[0]!.id },
           position: { x: 300, y: 260 },
         });
       });
@@ -204,7 +204,7 @@ test.describe('jump / reference display toggles (#27)', () => {
 
   test('jumps and references toggle independently', async ({ page }) => {
     await createProject(page, 'Kind Toggles');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
 

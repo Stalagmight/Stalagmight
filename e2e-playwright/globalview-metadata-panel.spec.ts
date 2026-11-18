@@ -79,7 +79,7 @@ test.describe('GlobalView Metadata Panel', () => {
       await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Cave System Alpha');
       await expect(page.locator('[data-testid="metadata-location"]')).toContainText('Yucatan, Mexico');
       await expect(page.locator('[data-testid="metadata-file-path"]')).toHaveAttribute('data-full-path', '/projects/cave-alpha.stalx');
-      await expect(page.locator('[data-testid="metadata-sections"]')).toContainText('5');
+      await expect(page.locator('[data-testid="metadata-lines"]')).toContainText('5');
       await expect(page.locator('[data-testid="metadata-length"]')).toBeVisible();
       await expect(page.locator('[data-testid="metadata-gps"]')).toBeVisible();
     });

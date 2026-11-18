@@ -15,7 +15,7 @@ fn gps_north(north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-/// One section of six 50 m shots due north, placed by a datum on station 0.
+/// One line of six 50 m shots due north, placed by a datum on station 0.
 /// Station 3 is mid-passage.
 fn line() -> (AppState, StationRef) {
     let state = AppState::new().unwrap();
@@ -32,15 +32,16 @@ fn line() -> (AppState, StationRef) {
         })
         .collect();
     let a = state
-        .execute(Command::CreateSection {
+        .execute(Command::CreateLine {
             name: Some("A".to_string()),
             surveyor: None,
             date: None,
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
             shots,
+            cave_section_id: None,
         })
-        .section_id
+        .line_id
         .unwrap();
     set(&state, StationRef::new(a, 0), origin(), None);
     (state, StationRef::new(a, 3))

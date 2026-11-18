@@ -1102,14 +1102,14 @@ describe('ToastStack - accessibility', () => {
     // render, and it never becomes the newest in a later one either, so nothing
     // downstream ever picks it up.
     render(<ToastStack />);
-    pushBatch(['saved the section', 'a'], ['recomputed the loops', 'b']);
+    pushBatch(['saved the line', 'a'], ['recomputed the loops', 'b']);
 
     expect(toasts()).toHaveLength(2);
     const text = screen.getByRole('status').textContent ?? '';
-    expect(text).toContain('saved the section');
+    expect(text).toContain('saved the line');
     expect(text).toContain('recomputed the loops');
     // Announced in the order they happened, not newest-first.
-    expect(text.indexOf('saved the section')).toBeLessThan(text.indexOf('recomputed the loops'));
+    expect(text.indexOf('saved the line')).toBeLessThan(text.indexOf('recomputed the loops'));
   });
 
   it('keeps the two regions apart when one batch fills both', () => {

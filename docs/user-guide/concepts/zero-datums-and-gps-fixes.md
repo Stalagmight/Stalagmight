@@ -12,7 +12,7 @@ depends on its role, which Stalagmight works out for you from the order you
 set them in.
 
 - **Placement datum**: the first zero datum on a connected piece of the
-  survey (sections joined by merges). It places that piece: the station sits
+  survey (lines joined by merges). It places that piece: the station sits
   on its GPS and every other station of the piece follows from the shots.
   Pieces that are not merged to each other each have their own placement
   datum.
@@ -57,7 +57,7 @@ A zero datum marked **Entrance** is a way into the cave. Entrances are where:
   [Planning a dive](../workflows/planning-a-dive.md).
 
 A placement datum is always an entrance. A GPS fix is an entrance by default
-when it is on the first or last station of a section, and not when it is in
+when it is on the first or last station of a line, and not when it is in
 the middle of one (a radiolocation point, for example). You can change it for
 a GPS fix in the Edit Station dialog.
 
@@ -101,7 +101,7 @@ Roles follow the survey, so they can change when you edit it.
 
 - **Export to Ariane**: every zero datum, placement datum and GPS fix alike,
   is written as a START with its own GPS, also a fix that is not an entrance.
-  A fix part-way along a section gets a START of its own at its GPS, tied in
+  A fix part-way along a line gets a START of its own at its GPS, tied in
   to the fix station. Ariane holds every START exactly, whatever its
   accuracy. See [Exporting](../workflows/exporting.md).
 - **Older versions of Stalagmight** keep only the first zero datum of each

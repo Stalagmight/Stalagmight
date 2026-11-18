@@ -2,32 +2,34 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
  *
- * Stations are derived from shots, so X/Y/Depth are read-only and only the
- * comment is editable (one set_station_comment per commit - no batch). The
- * station ID pill lives in the row gutter ("1:0"); the GPS cell opens the
+ * Stations are derived from shots, so X/Y/Depth and the Station ID are
+ * read-only; the name (set_station_name, unique within the line) and the
+ * comment (set_station_comment) are editable, one command per commit - no
+ * batch. The station's name pill lives in the row gutter ("0"); never a
+ * positional `line:index` id (SPEC 4.1). The GPS cell opens the
  * Edit Station dialog: add-zero-datum mode (GPS input enabled + focused) for
  * plain stations, plain edit mode when the station already is a zero datum.
  * The eye menu and the header right-click menu show plain per-column hide
  * entries (no angle modes).
  *
  * Rows are grid-row-{rowIndex}, cells grid-cell-{rowIndex}-{colKey}; the GPS
- * cell's click target is station-gps-{sectionId}-{stationIndex}. The mock's
+ * cell's click target is station-gps-{lineId}-{stationIndex}. The mock's
  * set_station_comment stores comments that get_project_state threads back
  * into its derived station array.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Stations Test Section',
+    name: 'Stations Test Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -37,40 +39,56 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-async function getSectionId(page: Page): Promise<number> {
+async function getLineId(page: Page): Promise<number> {
   return page.evaluate(() => {
     const e2e = (window as any).__E2E_TEST__;
-    return e2e.projectStore.getState().project.sections[0].id as number;
+    return e2e.projectStore.getState().project.lines[0].id as number;
   });
 }
 
-async function getStationComment(page: Page, sectionId: number, stationIndex: number): Promise<string | null> {
+async function getStationName(page: Page, lineId: number, stationIndex: number): Promise<string | null> {
   return page.evaluate(
-    ({ sectionId, stationIndex }) => {
+    ({ lineId, stationIndex }) => {
       const e2e = (window as any).__E2E_TEST__;
       const station = e2e.projectStore
         .getState()
         .stations.find(
           (s: any) =>
-            s.station_ref.section_id === sectionId && s.station_ref.station_index === stationIndex
+            s.station_ref.line_id === lineId && s.station_ref.station_index === stationIndex
         );
-      return (station?.comment as string | undefined) ?? null;
+      return (station?.name as string | undefined) ?? null;
     },
-    { sectionId, stationIndex }
+    { lineId, stationIndex }
   );
 }
 
-async function setZeroDatum(page: Page, sectionId: number, stationIndex: number): Promise<void> {
+async function getStationComment(page: Page, lineId: number, stationIndex: number): Promise<string | null> {
+  return page.evaluate(
+    ({ lineId, stationIndex }) => {
+      const e2e = (window as any).__E2E_TEST__;
+      const station = e2e.projectStore
+        .getState()
+        .stations.find(
+          (s: any) =>
+            s.station_ref.line_id === lineId && s.station_ref.station_index === stationIndex
+        );
+      return (station?.comment as string | undefined) ?? null;
+    },
+    { lineId, stationIndex }
+  );
+}
+
+async function setZeroDatum(page: Page, lineId: number, stationIndex: number): Promise<void> {
   await page.evaluate(
-    async ({ sectionId, stationIndex }) => {
+    async ({ lineId, stationIndex }) => {
       const e2e = (window as any).__E2E_TEST__;
       await e2e.projectStore.getState().setZeroDatum(
-        { section_id: sectionId, station_index: stationIndex },
+        { line_id: lineId, station_index: stationIndex },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
         { fitToBounds: false }
       );
     },
-    { sectionId, stationIndex }
+    { lineId, stationIndex }
   );
 }
 
@@ -90,18 +108,26 @@ test.describe('Stations grid', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Stations Grid Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openStationsView(page);
   });
 
-  test('gutter shows station ID pills; X/Y/Depth are read-only', async ({ page }) => {
-    const sectionId = await getSectionId(page);
+  test('gutter shows station name pills and a read-only Station ID column; X/Y/Depth are read-only', async ({ page }) => {
+    const lineId = await getLineId(page);
 
-    // The index pill moved into the row gutter ("1:0" ... "1:3").
-    await expect(page.getByTestId('grid-gutter-0')).toHaveText(`${sectionId}:0`);
-    await expect(page.getByTestId('grid-gutter-3')).toHaveText(`${sectionId}:3`);
+    // The gutter names each station (seeded from its index: "0" ... "3").
+    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0');
+    await expect(page.getByTestId('grid-gutter-3')).toHaveText('3');
+
+    // The Station ID column shows the project-unique id (the mock derives it
+    // from the line and index) and never opens the editor.
+    await expect(page.getByTestId('grid-header-_stationId')).toBeVisible();
+    await expect(page.getByTestId('grid-cell-0-_stationId')).toHaveText(String(lineId * 100_000));
+    await expect(page.getByTestId('grid-cell-3-_stationId')).toHaveText(String(lineId * 100_000 + 3));
+    await page.getByTestId('grid-cell-1-_stationId').dblclick();
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
 
     // X/Y start hidden; the "Coordinates (m)" eye-menu entry shows the pair.
     await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
@@ -125,16 +151,17 @@ test.describe('Stations grid', () => {
     await page.keyboard.press('Escape');
   });
 
-  test('the name column shows each station name and is read-only', async ({ page }) => {
-    const sectionId = await getSectionId(page);
-    // Names as a DMP import records them (MNemo station numbers); station 2 has none.
-    await page.evaluate(async (sectionId) => {
+  test('the name column shows each station name and renames through set_station_name', async ({ page }) => {
+    const lineId = await getLineId(page);
+    // Names as a DMP import records them (MNemo station numbers); station 2
+    // keeps the name seeded from its index.
+    await page.evaluate(async (lineId) => {
       const setName = (window as any).__MOCK_SET_STATION_NAME__;
-      setName(sectionId, 0, '7');
-      setName(sectionId, 1, '8');
-      setName(sectionId, 3, '10');
+      setName(lineId, 0, '7');
+      setName(lineId, 1, '8');
+      setName(lineId, 3, '10');
       await (window as any).__E2E_TEST__.projectStore.getState().refreshProjectState();
-    }, sectionId);
+    }, lineId);
 
     // Hidden by default; the eye menu shows it.
     await expect(page.getByTestId('grid-header-name')).toHaveCount(0);
@@ -144,17 +171,42 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-header-name')).toBeVisible();
     await expect(page.getByTestId('grid-cell-0-name')).toHaveText('7');
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
-    await expect(page.getByTestId('grid-cell-2-name')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-2-name')).toHaveText('2');
     await expect(page.getByTestId('grid-cell-3-name')).toHaveText('10');
-    // The positional id stays in the gutter beside it.
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText(`${sectionId}:1`);
+    // The gutter pill shows the same name.
+    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8');
 
+    // A name another station of the line holds is refused inline: the editor
+    // stays open and nothing is sent.
     await page.getByTestId('grid-cell-1-name').dblclick();
-    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+    const editor = page.getByTestId('grid-cell-editor');
+    await expect(editor).toBeVisible();
+    await editor.fill('10');
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeVisible();
+    expect(await getStationName(page, lineId, 1)).toBe('8');
+
+    // A free name commits through set_station_name and survives the refresh.
+    await editor.fill('8b');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
+    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8b');
+    expect(await getStationName(page, lineId, 1)).toBe('8b');
+
+    // Undo gives the old name back; redo the new one.
+    await page.evaluate(async () => {
+      await (window as any).__E2E_TEST__.projectStore.getState().undo();
+    });
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
+    await page.evaluate(async () => {
+      await (window as any).__E2E_TEST__.projectStore.getState().redo();
+    });
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
   });
 
   test('comment edits commit via set_station_comment and survive the refresh', async ({ page }) => {
-    const sectionId = await getSectionId(page);
+    const lineId = await getLineId(page);
 
     await page.getByTestId('grid-cell-0-comment').dblclick();
     const editor = page.getByTestId('grid-cell-editor');
@@ -165,19 +217,19 @@ test.describe('Stations grid', () => {
 
     // The store refreshed from get_project_state and still shows the comment.
     await expect(page.getByTestId('grid-cell-0-comment')).toHaveText('Drop weight here');
-    expect(await getStationComment(page, sectionId, 0)).toBe('Drop weight here');
+    expect(await getStationComment(page, lineId, 0)).toBe('Drop weight here');
 
     // Delete clears the comment (text column → null, no red "missing" state).
     await page.getByTestId('grid-cell-0-comment').click();
     await page.keyboard.press('Delete');
     await expect(page.getByTestId('grid-cell-0-comment')).toHaveText('');
-    expect(await getStationComment(page, sectionId, 0)).toBeNull();
+    expect(await getStationComment(page, lineId, 0)).toBeNull();
   });
 
   test('GPS cell click on a plain station opens add-zero-datum mode', async ({ page }) => {
-    const sectionId = await getSectionId(page);
+    const lineId = await getLineId(page);
 
-    await page.getByTestId(`station-gps-${sectionId}-1`).click();
+    await page.getByTestId(`station-gps-${lineId}-1`).click();
     const dialog = page.getByTestId('edit-station-dialog');
     await expect(dialog).toBeVisible();
 
@@ -193,10 +245,10 @@ test.describe('Stations grid', () => {
   });
 
   test('GPS cell click on a zero-datum station opens plain edit mode', async ({ page }) => {
-    const sectionId = await getSectionId(page);
-    await setZeroDatum(page, sectionId, 0);
+    const lineId = await getLineId(page);
+    await setZeroDatum(page, lineId, 0);
 
-    await page.getByTestId(`station-gps-${sectionId}-0`).click();
+    await page.getByTestId(`station-gps-${lineId}-0`).click();
     const dialog = page.getByTestId('edit-station-dialog');
     await expect(dialog).toBeVisible();
 

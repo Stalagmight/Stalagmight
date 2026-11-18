@@ -55,11 +55,11 @@ function setupRecoveryMocks(page: Page): Promise<void> {
     overrides.restore_from_backup = 'File restored successfully from backup.';
 
     overrides.export_salvageable_data = {
-      sectionCount: 3,
+      lineCount: 3,
       shotCount: 42,
       mergeCount: 2,
-      fullProjectJson: '{"sections": []}',
-      sectionsJson: '[]',
+      fullProjectJson: '{"lines": []}',
+      linesJson: '[]',
       errors: [],
     };
 

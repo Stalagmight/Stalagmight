@@ -1,15 +1,15 @@
 /**
- * #535: `buildBatchImport`'s "N reachable section(s) were not emitted"
+ * #535: `buildBatchImport`'s "N reachable line(s) were not emitted"
  * `console.warn` fired repeatedly during a normal DMP manual-placement run.
  *
  * Manual placement calls `buildBatchImport` fresh at every incremental step
- * with the FULL accumulated connection graph. A section already imported in an
+ * with the FULL accumulated connection graph. A line already imported in an
  * earlier step (`alreadyImported`) is `continue`d before `emittedPosition` is
  * ever set for it, but it stays reachable in the graph every subsequent call -
  * so counting "reachable and not in `emittedPosition`" toward the warning
  * counted every already-successful step as a fresh gap, climbing by one on
- * every healthy incremental placement. Same shape for `emptySections`
- * (already reported via `reportEmptySections`) - a reachable section whose
+ * every healthy incremental placement. Same shape for `emptyLines`
+ * (already reported via `reportEmptyLines`) - a reachable line whose
  * every shot got deleted in the wizard produces nothing to send, which is not
  * a "gap" either.
  *
@@ -23,10 +23,10 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-// SectionPreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
+// LinePreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
 // execute. Stub it - this test exercises the batch builder, not the preview.
-vi.mock('../SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../SectionPreview')>()),
+vi.mock('../LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
@@ -34,7 +34,7 @@ vi.mock('maplibre-gl', () => ({ default: {} }));
 import { buildBatchImport } from '../DmpNewImportDialog';
 import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
-import type { SectionEditState } from '../../../utils/batchImportHelpers';
+import type { LineEditState } from '../../../utils/batchImportHelpers';
 import type { VirtualConnection } from '../../../utils/segmentContext';
 import type { EditableShot } from '../../common/ShotTableEditor';
 
@@ -90,7 +90,7 @@ function editableShot(id: number): EditableShot {
   } as unknown as EditableShot;
 }
 
-function edits(name: string, shotCount: number): SectionEditState {
+function edits(name: string, shotCount: number): LineEditState {
   return {
     name,
     surveyors: [{ name: 'S' }],
@@ -104,16 +104,16 @@ function edits(name: string, shotCount: number): SectionEditState {
 }
 
 /**
- * Section 0: anchored to the live project (the section just manually placed
- * this step). Section 1: imported in an EARLIER step (`alreadyImported`), and
- * still reachable this step via its importing-type connection to section 0 -
+ * Line 0: anchored to the live project (the line just manually placed
+ * this step). Line 1: imported in an EARLIER step (`alreadyImported`), and
+ * still reachable this step via its importing-type connection to line 0 -
  * mirrors what every subsequent `buildBatchImport` call sees once a segment
  * has been placed and moves on.
  */
 function build(alreadyImported: Map<number, number> | undefined) {
   const dmpFile: DmpFile = {
     version: 1,
-    sections: [dmpSection('Segment', 3), dmpSection('AlreadyDone', 4)],
+    lines: [dmpSection('Segment', 3), dmpSection('AlreadyDone', 4)],
   };
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
@@ -121,25 +121,25 @@ function build(alreadyImported: Map<number, number> | undefined) {
     defaultExplorers: [],
     defaultDate: null,
     fileHash: null,
-    sectionHashes: [],
+    lineHashes: [],
   };
   const connections: VirtualConnection[] = [
     {
-      importSectionIndex: 0,
+      importLineIndex: 0,
       importStationIndex: 0,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       existingStationIndex: 0,
     },
     {
-      importSectionIndex: 1,
+      importLineIndex: 1,
       importStationIndex: 0,
       targetType: 'importing',
       targetImportIndex: 0,
       targetImportStationIndex: 2,
     },
   ];
-  const sectionEdits = new Map<number, SectionEditState>([
+  const lineEdits = new Map<number, LineEditState>([
     [0, edits('Segment', 3)],
     [1, edits('AlreadyDone', 4)],
   ]);
@@ -149,7 +149,7 @@ function build(alreadyImported: Map<number, number> | undefined) {
     null,
     dmpFile,
     selectionConfig,
-    sectionEdits,
+    lineEdits,
     undefined,
     undefined,
     alreadyImported,
@@ -161,91 +161,91 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     vi.restoreAllMocks();
   });
 
-  it('does not warn when the only reachable-but-unemitted section was already imported in an earlier step', () => {
+  it('does not warn when the only reachable-but-unemitted line was already imported in an earlier step', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const alreadyImported = new Map<number, number>([[1, 555]]);
 
     const { configs } = build(alreadyImported);
 
-    // Only section 0 (the one placed THIS step) is emitted; section 1 is
+    // Only line 0 (the one placed THIS step) is emitted; line 1 is
     // reachable but already imported, and must not be re-sent.
     expect(configs).toHaveLength(1);
     expect(configs[0]?.name).toBe('Segment');
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('does not warn when the only reachable-but-unemitted section produced nothing (every shot deleted)', () => {
-    // Section 0 is anchored (reachable) but every shot was deleted in the
-    // wizard's shot table, so it emits nothing - `emptySections`, not a gap.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+  it('does not warn when the only reachable-but-unemitted line produced nothing (every shot deleted)', () => {
+    // Line 0 is anchored (reachable) but every shot was deleted in the
+    // wizard's shot table, so it emits nothing - `emptyLines`, not a gap.
+    const dmpFile: DmpFile = { version: 1, lines: [dmpSection('Segment', 3)] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyors: [{ name: 'S' }],
       defaultExplorers: [],
       defaultDate: null,
       fileHash: null,
-      sectionHashes: [],
+      lineHashes: [],
     };
     const connections: VirtualConnection[] = [
       {
-        importSectionIndex: 0,
+        importLineIndex: 0,
         importStationIndex: 0,
         targetType: 'existing',
-        existingSectionId: 99,
+        existingLineId: 99,
         existingStationIndex: 0,
       },
     ];
-    const allDeleted: SectionEditState = {
+    const allDeleted: LineEditState = {
       ...edits('Segment', 3),
       shots: [0, 1, 2].map((i) => ({ ...editableShot(i), isDeleted: true })),
     };
-    const sectionEdits = new Map<number, SectionEditState>([[0, allDeleted]]);
+    const lineEdits = new Map<number, LineEditState>([[0, allDeleted]]);
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { configs, emptySections } = buildBatchImport(
+    const { configs, emptyLines } = buildBatchImport(
       connections,
       null,
       dmpFile,
       selectionConfig,
-      sectionEdits,
+      lineEdits,
     );
 
     expect(configs).toHaveLength(0);
-    expect(emptySections).toEqual([0]);
+    expect(emptyLines).toEqual([0]);
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('still warns when a reachable section genuinely never resolves', () => {
+  it('still warns when a reachable line genuinely never resolves', () => {
     // A malformed 'existing' connection: it still anchors (and so reaches)
-    // section 0, but is missing `existingStationIndex`, so the placement
+    // line 0, but is missing `existingStationIndex`, so the placement
     // resolver can build neither a `from_existing` nor a `from_importing`
     // placement for it - a real, unexplained gap that is not `alreadyImported`,
-    // not `deferredImportSet`, and not `emptySections`.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    // not `deferredImportSet`, and not `emptyLines`.
+    const dmpFile: DmpFile = { version: 1, lines: [dmpSection('Segment', 3)] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyors: [{ name: 'S' }],
       defaultExplorers: [],
       defaultDate: null,
       fileHash: null,
-      sectionHashes: [],
+      lineHashes: [],
     };
     const connections: VirtualConnection[] = [
       {
-        importSectionIndex: 0,
+        importLineIndex: 0,
         importStationIndex: 0,
         targetType: 'existing',
-        existingSectionId: 99,
+        existingLineId: 99,
         // existingStationIndex deliberately omitted.
       },
     ];
-    const sectionEdits = new Map<number, SectionEditState>([[0, edits('Segment', 3)]]);
+    const lineEdits = new Map<number, LineEditState>([[0, edits('Segment', 3)]]);
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { configs } = buildBatchImport(connections, null, dmpFile, selectionConfig, sectionEdits);
+    const { configs } = buildBatchImport(connections, null, dmpFile, selectionConfig, lineEdits);
 
     expect(configs).toHaveLength(0);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain('reachable section(s) were not emitted');
+    expect(warn.mock.calls[0]?.[0]).toContain('reachable line(s) were not emitted');
   });
 });

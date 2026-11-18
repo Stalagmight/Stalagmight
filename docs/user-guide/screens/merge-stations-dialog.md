@@ -12,8 +12,11 @@ Confirms which two stations get merged. Opens after the second click with the
 ![Merge Stations dialog](../images/merge-dialog.png)
 
 1. **Close**: nothing merged.
-2. **Station A**: the first station clicked, and its section.
-3. **Station B**: the second station clicked, and its section.
+2. **Station A**: the first station clicked, with its line: `Main Line / 17`.
+3. **Station B**: the second station clicked, with its line.
+
+The picture shows the older form, a number such as `16:0` beside the line's
+name. Each station is now one pill with its line and name.
 4. **Cancel**: same as 1.
 5. **Merge**
 
@@ -36,12 +39,15 @@ that its zero datum becomes a GPS fix.
   the note says that the piece moves, but not how far.
 - If a loop closure joined the two stations you merge, the merge removes it and
   says so.
+- Merged stations keep their own names and
+  [Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids):
+  `Main Line / 17` and `Side / 0` stay two stations at one point.
 - **Undo** reverses a merge, and brings back a loop closure it removed.
 
 The dialog does not open when:
 
 - The two stations are already merged, or a loop closure already joins them. A
   notification says so.
-- Their sections are already connected: they are on one section, or joined
+- Their lines are already connected: they are on one line, or joined
   through other merges and loop closures. Merging would make a loop, so the
   [Create Loop Closure dialog](closure-dialog.md) opens instead.

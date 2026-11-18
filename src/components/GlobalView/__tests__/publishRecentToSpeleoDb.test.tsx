@@ -36,7 +36,7 @@ const localProject = (over: Partial<ProjectMetadata> = {}): ProjectMetadata => (
   location: null,
   file_path: '/p/local.stalx',
   modified_at: '2026-07-26T00:00:00Z',
-  section_count: 1,
+  line_count: 1,
   total_length: 10,
   station_count: 2,
   gps_center: null,

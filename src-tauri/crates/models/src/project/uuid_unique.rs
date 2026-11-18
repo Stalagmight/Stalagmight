@@ -2,23 +2,23 @@
 //!
 //! A shot's `uuid` is its persistent identity: station cross-references anchor to
 //! it (`StationAnchor::AfterShot`), the Ariane export emits it as `<UUID>`, and
-//! undo entries address shots by it. It used to be unique only within a section,
+//! undo entries address shots by it. It used to be unique only within a line,
 //! because an Ariane `<UUID>` is carried verbatim (#423) and merge / Add .stalx
 //! keep their sources' ids, so importing one file twice, or merging two projects
-//! that share an ancestor, put the same id into two sections.
+//! that share an ancestor, put the same id into two lines.
 //!
 //! It is now unique across the whole project:
 //!
-//! * the doors that bring foreign ids in (an import, `create_section_and_merge`,
+//! * the doors that bring foreign ids in (an import, `create_line_and_merge`,
 //!   merge, Add .stalx) call [`Project::reassign_repeated_shot_uuids`] for the
-//!   sections they created, so the project already holding an id keeps it;
+//!   lines they created, so the project already holding an id keeps it;
 //! * a file saved before this, which can hold repeats, is healed on load by
 //!   [`Project::make_shot_uuids_project_unique`], and the load translates the
 //!   persisted undo history through the same renames so every entry still
 //!   addresses the shot it was recorded against.
 //!
 //! The replacement id is DERIVED, not random ([`reminted_shot_uuid`]): it is a
-//! function of the section and the id it replaces. A file that is opened and
+//! function of the line and the id it replaces. A file that is opened and
 //! never saved therefore reads to the same ids every time, two independent loads
 //! of one revision agree (SpeleoDB Unwind), and a key stored against the old id
 //! elsewhere - an ignored warning, a dive-plan anchor - can still be recognised
@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{Section, SectionId, StationAnchor, StationKey};
+use crate::{Line, LineId, StationAnchor, StationKey};
 
 use super::Project;
 
@@ -35,35 +35,35 @@ use super::Project;
 pub const SHOT_UUID_REMINT_NAMESPACE: uuid::Uuid =
     uuid::Uuid::from_u128(0x3c2a_91d4_5e7b_4f06_a1c8_6d0e_9b47_2f15);
 
-/// The id a repeated shot gets in `section_id` in place of `old`.
+/// The id a repeated shot gets in `line_id` in place of `old`.
 ///
-/// A v5 hash of the section and the old id, re-stamped as a v4: the SpeleoDB
+/// A v5 hash of the line and the old id, re-stamped as a v4: the SpeleoDB
 /// sidecar keeps only v4 values (`speleodb_uuid`), and the version nibble is all
 /// that distinguishes the two. The old id is length-prefixed so no pair of
-/// (section, id) inputs can produce the same hash input.
-pub fn reminted_shot_uuid(section_id: SectionId, old: &str) -> String {
-    remint_attempt(section_id, old, 0)
+/// (line, id) inputs can produce the same hash input.
+pub fn reminted_shot_uuid(line_id: LineId, old: &str) -> String {
+    remint_attempt(line_id, old, 0)
 }
 
 /// [`reminted_shot_uuid`], stepped past any id `taken` reports as in use. The
 /// first attempt is the plain derived id; a collision with a 122-bit hash is not
 /// a practical case, so stepping exists only to keep uniqueness unconditional.
 pub fn reminted_shot_uuid_avoiding(
-    section_id: SectionId,
+    line_id: LineId,
     old: &str,
     taken: impl Fn(&str) -> bool,
 ) -> String {
     (0..u32::MAX)
-        .map(|attempt| remint_attempt(section_id, old, attempt))
+        .map(|attempt| remint_attempt(line_id, old, attempt))
         .find(|candidate| !taken(candidate))
-        .unwrap_or_else(|| remint_attempt(section_id, old, 0))
+        .unwrap_or_else(|| remint_attempt(line_id, old, 0))
 }
 
-fn remint_attempt(section_id: SectionId, old: &str, attempt: u32) -> String {
+fn remint_attempt(line_id: LineId, old: &str, attempt: u32) -> String {
     let name = if attempt == 0 {
-        format!("{section_id}:{}:{old}", old.len())
+        format!("{line_id}:{}:{old}", old.len())
     } else {
-        format!("{section_id}:{}:{old}#{attempt}", old.len())
+        format!("{line_id}:{}:{old}#{attempt}", old.len())
     };
     let hashed = uuid::Uuid::new_v5(&SHOT_UUID_REMINT_NAMESPACE, name.as_bytes());
     uuid::Builder::from_random_bytes(*hashed.as_bytes())
@@ -71,15 +71,15 @@ fn remint_attempt(section_id: SectionId, old: &str, attempt: u32) -> String {
         .to_string()
 }
 
-/// Whether an id stored against `section_id` somewhere outside the project (an
+/// Whether an id stored against `line_id` somewhere outside the project (an
 /// ignored warning, a dive-plan anchor) names the live shot whose id is `live`:
 /// either it is that id, or the shot was renamed from it by a uniqueness heal.
-pub fn stored_shot_uuid_matches(section_id: SectionId, stored: &str, live: &str) -> bool {
-    stored == live || reminted_shot_uuid(section_id, stored) == live
+pub fn stored_shot_uuid_matches(line_id: LineId, stored: &str, live: &str) -> bool {
+    stored == live || reminted_shot_uuid(line_id, stored) == live
 }
 
-/// The live id that a key stored against `stored` in `section_id` names, given
-/// `holds` (whether the section holds a shot with that id now): `stored` itself,
+/// The live id that a key stored against `stored` in `line_id` names, given
+/// `holds` (whether the line holds a shot with that id now): `stored` itself,
 /// else the derived replacement a uniqueness heal gave that shot, else `None`.
 ///
 /// THE one rule every key stored outside the project follows (ignored warnings,
@@ -88,33 +88,31 @@ pub fn stored_shot_uuid_matches(section_id: SectionId, stored: &str, live: &str)
 /// when a file holds a derived value itself, and then the key names whichever
 /// shot holds that value - a shot the same file could have named directly.
 pub fn live_shot_uuid_for_stored(
-    section_id: SectionId,
+    line_id: LineId,
     stored: &str,
     holds: impl Fn(&str) -> bool,
 ) -> Option<String> {
     if holds(stored) {
         return Some(stored.to_string());
     }
-    let renamed = reminted_shot_uuid(section_id, stored);
+    let renamed = reminted_shot_uuid(line_id, stored);
     holds(&renamed).then_some(renamed)
 }
 
-/// Renames of shot ids, keyed by the section that held the old id. A key is the
-/// (section, old id) pair because the same old id can stay in one section and be
+/// Renames of shot ids, keyed by the line that held the old id. A key is the
+/// (line, old id) pair because the same old id can stay in one line and be
 /// renamed in another.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ShotUuidRemap(BTreeMap<(SectionId, String), String>);
+pub struct ShotUuidRemap(BTreeMap<(LineId, String), String>);
 
 impl ShotUuidRemap {
-    /// The new id of `old` in `section_id`, or `None` when it was not renamed.
-    pub fn get(&self, section_id: SectionId, old: &str) -> Option<&str> {
-        self.0
-            .get(&(section_id, old.to_string()))
-            .map(String::as_str)
+    /// The new id of `old` in `line_id`, or `None` when it was not renamed.
+    pub fn get(&self, line_id: LineId, old: &str) -> Option<&str> {
+        self.0.get(&(line_id, old.to_string())).map(String::as_str)
     }
 
-    pub fn insert(&mut self, section_id: SectionId, old: String, new: String) {
-        self.0.insert((section_id, old), new);
+    pub fn insert(&mut self, line_id: LineId, old: String, new: String) {
+        self.0.insert((line_id, old), new);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -125,21 +123,21 @@ impl ShotUuidRemap {
         self.0.len()
     }
 
-    /// Every rename as `(section, old, new)`, ordered by section then old id.
-    pub fn iter(&self) -> impl Iterator<Item = (SectionId, &str, &str)> {
+    /// Every rename as `(line, old, new)`, ordered by line then old id.
+    pub fn iter(&self) -> impl Iterator<Item = (LineId, &str, &str)> {
         self.0
             .iter()
-            .map(|((section, old), new)| (*section, old.as_str(), new.as_str()))
+            .map(|((line, old), new)| (*line, old.as_str(), new.as_str()))
     }
 
-    /// The sections that had at least one id renamed.
-    pub fn sections(&self) -> BTreeSet<SectionId> {
-        self.0.keys().map(|(section, _)| *section).collect()
+    /// The lines that had at least one id renamed.
+    pub fn lines(&self) -> BTreeSet<LineId> {
+        self.0.keys().map(|(line, _)| *line).collect()
     }
 
-    /// Rewrite an id held in `section_id`. Returns whether it changed.
-    pub fn rewrite_uuid(&self, section_id: SectionId, uuid: &mut Option<String>) -> bool {
-        let Some(new) = uuid.as_deref().and_then(|old| self.get(section_id, old)) else {
+    /// Rewrite an id held in `line_id`. Returns whether it changed.
+    pub fn rewrite_uuid(&self, line_id: LineId, uuid: &mut Option<String>) -> bool {
+        let Some(new) = uuid.as_deref().and_then(|old| self.get(line_id, old)) else {
             return false;
         };
         *uuid = Some(new.to_string());
@@ -151,68 +149,68 @@ impl ShotUuidRemap {
         let StationAnchor::AfterShot(old) = &key.anchor else {
             return false;
         };
-        let Some(new) = self.get(key.section_id, old) else {
+        let Some(new) = self.get(key.line_id, old) else {
             return false;
         };
         key.anchor = StationAnchor::AfterShot(new.to_string());
         true
     }
 
-    /// Rewrite every shot id and both gauge anchors of `section`. Returns whether
+    /// Rewrite every shot id and both gauge anchors of `line`. Returns whether
     /// anything changed. The project's uuid index is NOT updated; a caller holding
-    /// the section inside a project uses [`Project::apply_shot_uuid_remap`].
-    pub fn rewrite_section(&self, section: &mut Section) -> bool {
-        let id = section.id;
+    /// the line inside a project uses [`Project::apply_shot_uuid_remap`].
+    pub fn rewrite_line(&self, line: &mut Line) -> bool {
+        let id = line.id;
         let mut changed = false;
-        for shot in &mut section.shots {
+        for shot in &mut line.shots {
             changed |= self.rewrite_uuid(id, &mut shot.uuid);
         }
-        changed |= self.rewrite_uuid(id, &mut section.gauge_shot_uuid);
-        changed |= self.rewrite_uuid(id, &mut section.gauge_neighbour_uuid);
+        changed |= self.rewrite_uuid(id, &mut line.gauge_shot_uuid);
+        changed |= self.rewrite_uuid(id, &mut line.gauge_neighbour_uuid);
         changed
     }
 }
 
 impl Project {
-    /// Rename every shot id that more than one section holds, so each id is held
-    /// by one section only. The section with the LOWEST id keeps the id; every
+    /// Rename every shot id that more than one line holds, so each id is held
+    /// by one line only. The line with the LOWEST id keeps the id; every
     /// other holder gets [`reminted_shot_uuid`] for it. Shots, gauge anchors and
-    /// every `AfterShot` station key in the renamed sections follow.
+    /// every `AfterShot` station key in the renamed lines follow.
     ///
-    /// Repeats WITHIN one section are left alone: that is
+    /// Repeats WITHIN one line are left alone: that is
     /// [`Self::ensure_unique_shot_uuids`]'s job, which runs first on load.
     ///
     /// Never calls [`Self::touch`]: the heal runs on every read of a file that
     /// needs it (load, the stalx-reader), and two reads of one file must report
     /// the same project.
     pub fn make_shot_uuids_project_unique(&mut self) -> ShotUuidRemap {
-        let mut order: Vec<usize> = (0..self.sections.len()).collect();
-        order.sort_by_key(|&i| self.sections[i].id);
+        let mut order: Vec<usize> = (0..self.lines.len()).collect();
+        order.sort_by_key(|&i| self.lines[i].id);
         let remap = self.rename_repeats_in_order(&order, HashMap::new());
         self.follow_counter_parity(&remap);
         remap
     }
 
-    /// Rename the ids of `new_sections` that another section of the project
+    /// Rename the ids of `new_lines` that another line of the project
     /// already holds (the project keeps its ids; the newcomers yield), and ids
-    /// repeated between two newcomers (the lower section id keeps it). Called by
-    /// every door that creates sections from data carrying ids: an import, Add
-    /// .stalx, merge, `create_section_and_merge`. Station keys built against the
-    /// old ids in those sections are rewritten with them.
-    pub fn reassign_repeated_shot_uuids(&mut self, new_sections: &[SectionId]) -> ShotUuidRemap {
-        let newcomers: HashSet<SectionId> = new_sections.iter().copied().collect();
-        let mut claimed: HashMap<String, SectionId> = HashMap::new();
-        for section in self.sections.iter().filter(|s| !newcomers.contains(&s.id)) {
-            for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+    /// repeated between two newcomers (the lower line id keeps it). Called by
+    /// every door that creates lines from data carrying ids: an import, Add
+    /// .stalx, merge, `create_line_and_merge`. Station keys built against the
+    /// old ids in those lines are rewritten with them.
+    pub fn reassign_repeated_shot_uuids(&mut self, new_lines: &[LineId]) -> ShotUuidRemap {
+        let newcomers: HashSet<LineId> = new_lines.iter().copied().collect();
+        let mut claimed: HashMap<String, LineId> = HashMap::new();
+        for line in self.lines.iter().filter(|s| !newcomers.contains(&s.id)) {
+            for uuid in line.shots.iter().filter_map(|s| s.uuid.as_deref()) {
                 if !uuid.is_empty() {
-                    claimed.entry(uuid.to_string()).or_insert(section.id);
+                    claimed.entry(uuid.to_string()).or_insert(line.id);
                 }
             }
         }
-        let mut order: Vec<usize> = (0..self.sections.len())
-            .filter(|&i| newcomers.contains(&self.sections[i].id))
+        let mut order: Vec<usize> = (0..self.lines.len())
+            .filter(|&i| newcomers.contains(&self.lines[i].id))
             .collect();
-        order.sort_by_key(|&i| self.sections[i].id);
+        order.sort_by_key(|&i| self.lines[i].id);
         // Not `follow_counter_parity`: the set is the project's own, and a
         // newcomer's record parity comes from the data it was built from (Add
         // .stalx carries its source's set), never from a project shot that
@@ -220,44 +218,43 @@ impl Project {
         self.rename_repeats_in_order(&order, claimed)
     }
 
-    /// Walk the sections at `order`, letting each claim its ids; an id already
-    /// claimed by a DIFFERENT section (in `pre_claimed` or earlier in the walk) is
+    /// Walk the lines at `order`, letting each claim its ids; an id already
+    /// claimed by a DIFFERENT line (in `pre_claimed` or earlier in the walk) is
     /// renamed. Then apply the renames to the whole project.
     fn rename_repeats_in_order(
         &mut self,
         order: &[usize],
-        mut claimed: HashMap<String, SectionId>,
+        mut claimed: HashMap<String, LineId>,
     ) -> ShotUuidRemap {
         // Every id in the project, for stepping past one already in use. Built
         // only once a repeat is found: the common case has none.
         let mut in_use: Option<HashSet<String>> = None;
         let mut remap = ShotUuidRemap::default();
         for &i in order {
-            let section_id = self.sections[i].id;
-            for shot in &self.sections[i].shots {
+            let line_id = self.lines[i].id;
+            for shot in &self.lines[i].shots {
                 let Some(old) = shot.uuid.as_deref().filter(|u| !u.is_empty()) else {
                     continue;
                 };
                 match claimed.get(old) {
                     None => {
-                        claimed.insert(old.to_string(), section_id);
+                        claimed.insert(old.to_string(), line_id);
                     }
-                    Some(&holder) if holder == section_id => {}
+                    Some(&holder) if holder == line_id => {}
                     Some(_) => {
-                        if remap.get(section_id, old).is_some() {
+                        if remap.get(line_id, old).is_some() {
                             continue;
                         }
                         let in_use = in_use.get_or_insert_with(|| {
-                            self.sections
+                            self.lines
                                 .iter()
                                 .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.clone()))
                                 .collect()
                         });
-                        let new =
-                            reminted_shot_uuid_avoiding(section_id, old, |c| in_use.contains(c));
+                        let new = reminted_shot_uuid_avoiding(line_id, old, |c| in_use.contains(c));
                         in_use.insert(new.clone());
-                        claimed.insert(new.clone(), section_id);
-                        remap.insert(section_id, old.to_string(), new);
+                        claimed.insert(new.clone(), line_id);
+                        remap.insert(line_id, old.to_string(), new);
                     }
                 }
             }
@@ -270,7 +267,7 @@ impl Project {
     /// (`counter_parity_shots`), so it keeps its record parity.
     ///
     /// The old id's entry STAYS. When the rename resolved a repeat, the
-    /// section that kept the old id still holds a shot with it, and the set,
+    /// line that kept the old id still holds a shot with it, and the set,
     /// keyed by id, cannot say which of the two copies the entry was written
     /// for: before the rename both read it. Keeping it on both changes no
     /// shot's record parity. When the old id is held by no one any more the
@@ -287,26 +284,26 @@ impl Project {
     }
 
     /// Apply `remap` to the live project: shot ids, gauge anchors, held gauges
-    /// and every `AfterShot` station key in a renamed section, then refresh the uuid index
-    /// of those sections. Positional (`Index`) keys need nothing: a rename does
+    /// and every `AfterShot` station key in a renamed line, then refresh the uuid index
+    /// of those lines. Positional (`Index`) keys need nothing: a rename does
     /// not move a shot. Never calls [`Self::touch`]. The counter-parity set is
     /// left to the caller ([`Self::follow_counter_parity`]).
     pub fn apply_shot_uuid_remap(&mut self, remap: &ShotUuidRemap) {
         if remap.is_empty() {
             return;
         }
-        for section in &mut self.sections {
-            remap.rewrite_section(section);
+        for line in &mut self.lines {
+            remap.rewrite_line(line);
         }
-        // A held gauge names its shots in its section, like a station key.
+        // A held gauge names its shots in its line, like a station key.
         for held in &mut self.held_gauges {
-            if let Some(new) = remap.get(held.section_id, &held.shot) {
+            if let Some(new) = remap.get(held.line_id, &held.shot) {
                 held.shot = new.to_string();
             }
             if let Some(new) = held
                 .neighbour
                 .as_deref()
-                .and_then(|n| remap.get(held.section_id, n))
+                .and_then(|n| remap.get(held.line_id, n))
             {
                 held.neighbour = Some(new.to_string());
             }
@@ -315,20 +312,20 @@ impl Project {
             remap.rewrite_key(&mut key);
             key
         });
-        for section_id in remap.sections() {
-            self.reindex_section_shot_uuids(section_id);
+        for line_id in remap.lines() {
+            self.reindex_line_shot_uuids(line_id);
         }
         tracing::info!(
             renamed = remap.len(),
-            sections = remap.sections().len(),
+            lines = remap.lines().len(),
             purpose = "keep shot UUIDs unique across the project",
-            "Renamed shot UUIDs that more than one section held"
+            "Renamed shot UUIDs that more than one line held"
         );
     }
 
-    /// Every shot id in the project with the section holding it.
-    pub fn shot_uuids_by_section(&self) -> HashMap<SectionId, HashSet<String>> {
-        self.sections
+    /// Every shot id in the project with the line holding it.
+    pub fn shot_uuids_by_line(&self) -> HashMap<LineId, HashSet<String>> {
+        self.lines
             .iter()
             .map(|s| {
                 let ids = s
@@ -347,58 +344,58 @@ impl Project {
 /// from a current one by which keys are PRESENT (`"validation":`,
 /// `"surface_elevation":`), and a typed round trip would add them.
 ///
-/// Rewrites each shot's `uuid` and both gauge anchors under `sections`, keyed by
-/// the section's `id`, and every station key - an object holding `section_id`
+/// Rewrites each shot's `uuid` and both gauge anchors under `lines`, keyed by
+/// the line's `id`, and every station key - an object holding `line_id`
 /// and an `anchor` of `{"AfterShot": id}` - anywhere in the document. Returns
 /// whether anything changed.
 pub fn remap_project_json(
     value: &mut serde_json::Value,
-    rename: &dyn Fn(SectionId, &str) -> Option<String>,
+    rename: &dyn Fn(LineId, &str) -> Option<String>,
 ) -> bool {
     let mut changed = false;
-    if let Some(sections) = value
-        .get_mut("sections")
+    if let Some(lines) = value
+        .get_mut("lines")
         .and_then(serde_json::Value::as_array_mut)
     {
-        for section in sections {
-            changed |= remap_section_json(section, rename);
+        for line in lines {
+            changed |= remap_line_json(line, rename);
         }
     }
     changed |= remap_station_keys_json(value, rename);
     changed
 }
 
-fn remap_section_json(
-    section: &mut serde_json::Value,
-    rename: &dyn Fn(SectionId, &str) -> Option<String>,
+fn remap_line_json(
+    line: &mut serde_json::Value,
+    rename: &dyn Fn(LineId, &str) -> Option<String>,
 ) -> bool {
-    let Some(section_id) = json_section_id(section.get("id")) else {
+    let Some(line_id) = json_line_id(line.get("id")) else {
         return false;
     };
     let mut changed = false;
-    if let Some(shots) = section
+    if let Some(shots) = line
         .get_mut("shots")
         .and_then(serde_json::Value::as_array_mut)
     {
         for shot in shots {
-            changed |= remap_string_field(shot, "uuid", section_id, rename);
+            changed |= remap_string_field(shot, "uuid", line_id, rename);
         }
     }
-    changed |= remap_string_field(section, "gauge_shot_uuid", section_id, rename);
-    changed |= remap_string_field(section, "gauge_neighbour_uuid", section_id, rename);
+    changed |= remap_string_field(line, "gauge_shot_uuid", line_id, rename);
+    changed |= remap_string_field(line, "gauge_neighbour_uuid", line_id, rename);
     changed
 }
 
 fn remap_string_field(
     object: &mut serde_json::Value,
     field: &str,
-    section_id: SectionId,
-    rename: &dyn Fn(SectionId, &str) -> Option<String>,
+    line_id: LineId,
+    rename: &dyn Fn(LineId, &str) -> Option<String>,
 ) -> bool {
     let Some(slot) = object.get_mut(field) else {
         return false;
     };
-    let Some(new) = slot.as_str().and_then(|old| rename(section_id, old)) else {
+    let Some(new) = slot.as_str().and_then(|old| rename(line_id, old)) else {
         return false;
     };
     *slot = serde_json::Value::String(new);
@@ -407,15 +404,15 @@ fn remap_string_field(
 
 fn remap_station_keys_json(
     value: &mut serde_json::Value,
-    rename: &dyn Fn(SectionId, &str) -> Option<String>,
+    rename: &dyn Fn(LineId, &str) -> Option<String>,
 ) -> bool {
     match value {
         serde_json::Value::Object(map) => {
             let mut changed = false;
-            let section_id = json_section_id(map.get("section_id"));
-            if let (Some(section_id), Some(anchor)) = (section_id, map.get_mut("anchor")) {
+            let line_id = json_line_id(map.get("line_id"));
+            if let (Some(line_id), Some(anchor)) = (line_id, map.get_mut("anchor")) {
                 if let Some(slot) = anchor.get_mut("AfterShot") {
-                    if let Some(new) = slot.as_str().and_then(|old| rename(section_id, old)) {
+                    if let Some(new) = slot.as_str().and_then(|old| rename(line_id, old)) {
                         *slot = serde_json::Value::String(new);
                         changed = true;
                     }
@@ -437,8 +434,8 @@ fn remap_station_keys_json(
     }
 }
 
-fn json_section_id(value: Option<&serde_json::Value>) -> Option<SectionId> {
+fn json_line_id(value: Option<&serde_json::Value>) -> Option<LineId> {
     value
         .and_then(serde_json::Value::as_u64)
-        .and_then(|id| SectionId::try_from(id).ok())
+        .and_then(|id| LineId::try_from(id).ok())
 }

@@ -1,7 +1,7 @@
 ---
 title: Planning a dive
 description: "Plan a cave dive on your survey in Plan mode: choose a start, set cylinders and a gas strategy, and see how far your gas reaches and where to turn."
-order: 11
+order: 12
 feature: planning
 ---
 

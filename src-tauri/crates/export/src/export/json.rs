@@ -24,7 +24,7 @@ pub fn export_json(project: &Project, path: &Path) -> Result<()> {
 #[derive(Debug, Serialize)]
 pub struct JsonExport {
     pub project: JsonProjectMeta,
-    pub sections: Vec<JsonSection>,
+    pub lines: Vec<JsonLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,11 +34,12 @@ pub struct JsonProjectMeta {
     pub exported_at: String,
 }
 
-/// A section. Its survey credit is the aggregate of its shots' (each shot
+/// A line. Its survey credit is the aggregate of its shots' (each shot
 /// carries its own): people by NAME only - emails never leave in an export.
 #[derive(Debug, Serialize)]
-pub struct JsonSection {
-    pub id: u32,
+pub struct JsonLine {
+    /// The line's name - its identity in the export (line names are unique);
+    /// the internal line id is not written.
     pub name: Option<String>,
     /// The distinct surveyor names joined with `", "` - the legacy field.
     pub surveyor: Option<String>,
@@ -52,12 +53,24 @@ pub struct JsonSection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date_last: Option<String>,
     pub color: String,
+    /// The name of the Section (named group of lines) the line belongs to;
+    /// absent for a line in no section.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub shots: Vec<JsonShot>,
 }
 
+/// A shot, identified the way the user reads it: `from` -> `to` by station
+/// name, with the two stations' Station IDs; the internal shot id is not
+/// written.
 #[derive(Debug, Serialize)]
 pub struct JsonShot {
-    pub id: u32,
+    pub from: String,
+    pub to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_id: Option<u32>,
     pub length: f64,
     pub azimuth_in: f64,
     pub azimuth_out: f64,
@@ -91,11 +104,10 @@ impl JsonExport {
                 location: project.location.clone(),
                 exported_at: Utc::now().to_rfc3339(),
             },
-            sections: project
-                .sections
+            lines: project
+                .lines
                 .iter()
-                .map(|s| JsonSection {
-                    id: s.id,
+                .map(|s| JsonLine {
                     name: s.name.clone(),
                     surveyor: s.surveyor_names(),
                     date: s.first_survey_date().map(|d| d.to_string()),
@@ -107,37 +119,50 @@ impl JsonExport {
                         .filter(|last| Some(*last) != s.first_survey_date())
                         .map(|d| d.to_string()),
                     color: s.color.clone(),
-                    shots: s
-                        .shots
-                        .iter()
-                        .map(|shot| JsonShot {
-                            id: shot.id,
-                            length: shot.length,
-                            azimuth_in: shot.azimuth_in,
-                            azimuth_out: shot.azimuth_out,
-                            depth_in: shot.depth_in,
-                            depth_out: shot.depth_out,
-                            lrud: if shot.left.is_some()
-                                || shot.right.is_some()
-                                || shot.up.is_some()
-                                || shot.down.is_some()
-                            {
-                                Some([
-                                    shot.left.unwrap_or(0.0),
-                                    shot.right.unwrap_or(0.0),
-                                    shot.up.unwrap_or(0.0),
-                                    shot.down.unwrap_or(0.0),
-                                ])
-                            } else {
-                                None
-                            },
-                            kind: shot.kind,
-                            comment: shot.comment.clone(),
-                            surveyors: names(&shot.credit().surveyors),
-                            explorers: names(&shot.credit().explorers),
-                            date: shot.credit().date.map(|d| d.to_string()),
-                        })
-                        .collect(),
+                    section: s
+                        .section_id
+                        .and_then(|id| project.section(id))
+                        .map(|section| section.name.clone()),
+                    shots: {
+                        let stations = super::csv::station_columns(project, s.id);
+                        let name =
+                            |i: usize| stations.get(i).map(|st| st.0.clone()).unwrap_or_default();
+                        let id = |i: usize| stations.get(i).and_then(|st| st.1.parse().ok());
+                        s.shots
+                            .iter()
+                            .enumerate()
+                            .map(|(index, shot)| JsonShot {
+                                from: name(index),
+                                to: name(index + 1),
+                                from_id: id(index),
+                                to_id: id(index + 1),
+                                length: shot.length,
+                                azimuth_in: shot.azimuth_in,
+                                azimuth_out: shot.azimuth_out,
+                                depth_in: shot.depth_in,
+                                depth_out: shot.depth_out,
+                                lrud: if shot.left.is_some()
+                                    || shot.right.is_some()
+                                    || shot.up.is_some()
+                                    || shot.down.is_some()
+                                {
+                                    Some([
+                                        shot.left.unwrap_or(0.0),
+                                        shot.right.unwrap_or(0.0),
+                                        shot.up.unwrap_or(0.0),
+                                        shot.down.unwrap_or(0.0),
+                                    ])
+                                } else {
+                                    None
+                                },
+                                kind: shot.kind,
+                                comment: shot.comment.clone(),
+                                surveyors: names(&shot.credit().surveyors),
+                                explorers: names(&shot.credit().explorers),
+                                date: shot.credit().date.map(|d| d.to_string()),
+                            })
+                            .collect()
+                    },
                 })
                 .collect(),
         }
@@ -148,13 +173,13 @@ impl JsonExport {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{LineData, ShotData};
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_export_json() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             surveyor: Some("Tester".to_string()),
             date: None,
@@ -182,14 +207,42 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Test");
-        assert_eq!(parsed["sections"][0]["name"], "Main");
-        assert_eq!(parsed["sections"][0]["surveyor"], "Tester");
-        assert_eq!(parsed["sections"][0]["surveyors"][0], "Tester");
-        assert_eq!(parsed["sections"][0]["shots"][0]["surveyors"][0], "Tester");
+        assert_eq!(parsed["lines"][0]["name"], "Main");
+        assert_eq!(parsed["lines"][0]["surveyor"], "Tester");
+        assert_eq!(parsed["lines"][0]["surveyors"][0], "Tester");
+        assert_eq!(parsed["lines"][0]["shots"][0]["surveyors"][0], "Tester");
     }
 
     #[test]
-    fn credit_is_per_shot_with_section_aggregates_and_never_emails() {
+    fn a_line_in_a_section_carries_the_section_name() {
+        let mut project = Project::new("Test".to_string(), None);
+        let data = |name: &str| LineData {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                length: 10.0,
+                ..Default::default()
+            }],
+        };
+        let grouped = project.add_line(data("Main")).id;
+        project.add_line(data("Side"));
+        let upper = project.add_section("Upper series".to_string(), "#ff6b6b".to_string());
+        project.get_line_mut(grouped).unwrap().section_id = Some(upper);
+
+        let file = NamedTempFile::new().unwrap();
+        export_json(&project, file.path()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(parsed["lines"][0]["section"], "Upper series");
+        assert!(parsed["lines"][1].get("section").is_none());
+    }
+
+    #[test]
+    fn credit_is_per_shot_with_line_aggregates_and_never_emails() {
         use crate::models::{Person, SurveyCredit};
         let mut project = Project::new("Credit".to_string(), None);
         let shot = |credit: SurveyCredit| ShotData {
@@ -199,7 +252,7 @@ mod tests {
         };
         let ann = Person::new("Ann", Some("ann@example.org")).unwrap();
         let bo = Person::named("Bo").unwrap();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![
                 shot(SurveyCredit {
                     surveyors: vec![ann],
@@ -223,15 +276,15 @@ mod tests {
             "no email leaves: {contents}"
         );
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let section = &parsed["sections"][0];
-        assert_eq!(section["surveyors"], serde_json::json!(["Ann", "Bo"]));
-        assert_eq!(section["explorers"], serde_json::json!(["Bo"]));
-        assert_eq!(section["surveyor"], "Ann, Bo");
-        assert_eq!(section["date"], "2024-05-02");
-        assert_eq!(section["date_last"], "2024-05-09");
-        assert_eq!(section["shots"][0]["surveyors"], serde_json::json!(["Ann"]));
-        assert_eq!(section["shots"][1]["date"], "2024-05-09");
-        let bare = section["shots"][2].as_object().unwrap();
+        let line = &parsed["lines"][0];
+        assert_eq!(line["surveyors"], serde_json::json!(["Ann", "Bo"]));
+        assert_eq!(line["explorers"], serde_json::json!(["Bo"]));
+        assert_eq!(line["surveyor"], "Ann, Bo");
+        assert_eq!(line["date"], "2024-05-02");
+        assert_eq!(line["date_last"], "2024-05-09");
+        assert_eq!(line["shots"][0]["surveyors"], serde_json::json!(["Ann"]));
+        assert_eq!(line["shots"][1]["date"], "2024-05-09");
+        let bare = line["shots"][2].as_object().unwrap();
         assert!(!bare.contains_key("surveyors") && !bare.contains_key("date"));
     }
 
@@ -245,13 +298,13 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "Empty");
-        assert!(parsed["sections"].as_array().unwrap().is_empty());
+        assert!(parsed["lines"].as_array().unwrap().is_empty());
     }
 
     #[test]
     fn test_export_json_unicode_names() {
         let mut project = Project::new("日本語テスト".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Grotte de l'Ours".to_string()),
             surveyor: Some("Ñoño".to_string()),
             date: None,
@@ -276,13 +329,13 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(parsed["project"]["name"], "日本語テスト");
-        assert_eq!(parsed["sections"][0]["name"], "Grotte de l'Ours");
+        assert_eq!(parsed["lines"][0]["name"], "Grotte de l'Ours");
     }
 
     #[test]
     fn test_export_json_reference_shots_and_optional_fields() {
         let mut project = Project::new("Reference".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: None,
             surveyor: None,
             date: None,
@@ -306,7 +359,39 @@ mod tests {
 
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        let shot = &parsed["sections"][0]["shots"][0];
+        let shot = &parsed["lines"][0]["shots"][0];
         assert_eq!(shot["kind"], "Reference");
+    }
+
+    /// A shot is written as `from` -> `to` by station name, with the two
+    /// Station IDs; no internal line or shot id leaves.
+    #[test]
+    fn shots_carry_station_names_and_ids_not_internal_ids() {
+        let mut project = Project::new("Ids".to_string(), None);
+        let line = project
+            .add_line(LineData {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData::default(), ShotData::default()],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_station_identities();
+        project
+            .set_station_name(crate::models::StationRef::new(line, 1), "sump")
+            .unwrap();
+
+        let value = serde_json::to_value(JsonExport::from_project(&project)).unwrap();
+        let line = &value["lines"][0];
+        assert!(line.get("id").is_none(), "{line}");
+        let shots = line["shots"].as_array().unwrap();
+        assert_eq!(shots[0]["from"], "0");
+        assert_eq!(shots[0]["to"], "sump");
+        assert_eq!(shots[0]["from_id"], 0);
+        assert_eq!(shots[0]["to_id"], 1);
+        assert_eq!(shots[1]["from"], "sump");
+        assert_eq!(shots[1]["to"], "2");
+        assert_eq!(shots[1]["to_id"], 2);
+        assert!(shots[0].get("id").is_none(), "{}", shots[0]);
     }
 }

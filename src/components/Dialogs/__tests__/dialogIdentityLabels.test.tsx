@@ -1,0 +1,160 @@
+/**
+ * The small station/shot dialogs name what they act on by its names (SPEC 4.2):
+ * a station `Main Line / 17`, a shot `Main Line: 4 → 5`, a line by its name -
+ * never the positional `line:index` handle, a shot id or `Line <id>`.
+ *
+ * The station names differ from their indices on purpose (station i of Main
+ * Line is `M<i>`, of Side is `S<i>`), so a label built from the handles can
+ * never pass for one built from the names.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+
+vi.mock('../../../utils/ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/ipc')>()),
+  // The delete preview never resolves: these tests read only the static text.
+  invokeIpc: vi.fn(() => new Promise(() => {})),
+}));
+
+import '../../../i18n';
+import { useProjectStore } from '../../../store/projectStore';
+import { useUIStore } from '../../../store/uiStore';
+import DrawShotDialog from '../DrawShotDialog';
+import EditShotDialog from '../EditShotDialog';
+import RemoveClosureDialog from '../RemoveClosureDialog';
+import UnmergeStationsDialog from '../UnmergeStationsDialog';
+import DeleteShotChoiceDialog from '../DeleteShotChoiceDialog';
+import SwapCommentsDialog from '../SwapCommentsDialog';
+import ReverseLineDialog from '../ReverseLineDialog';
+import BulkDeleteDialog from '../BulkDeleteDialog';
+
+const MAIN = 3;
+const SIDE = 8;
+const shot = (id: number) => ({
+  id,
+  azimuth_in: 0,
+  azimuth_out: 180,
+  length: 5,
+  depth_in: 0,
+  depth_out: 0,
+  pitch_in: null,
+  pitch_out: null,
+  left: null,
+  right: null,
+  up: null,
+  down: null,
+  comment: null,
+  kind: 'Normal',
+  marker_index: null,
+  temperature: null,
+});
+
+const station = (lineId: number, index: number, prefix: string) => ({
+  station_ref: { line_id: lineId, station_index: index },
+  name: `${prefix}${index}`,
+  coordinates: { x: 0, y: 0, z: 0 },
+  merged_with: [],
+  closures_with: [],
+});
+
+beforeEach(() => {
+  useProjectStore.setState({
+    project: {
+      lines: [
+        { id: MAIN, name: 'Main Line', shots: [shot(30), shot(31), shot(32)] },
+        { id: SIDE, name: 'Side', shots: [shot(80), shot(81)] },
+      ],
+      station_merges: [],
+    },
+    surveyData: null,
+    stations: [
+      ...[0, 1, 2, 3].map((i) => station(MAIN, i, 'M')),
+      ...[0, 1, 2].map((i) => station(SIDE, i, 'S')),
+    ],
+    isShotFrozen: () => false,
+  } as never);
+});
+
+const open = (dialogData: Record<string, unknown>) =>
+  useUIStore.setState({ dialogData } as never);
+
+/** No positional `3:1` handle, `Line 3` id fallback or `#2` shot number. */
+const expectNoHandles = () => expect(document.body.textContent).not.toMatch(/\b\d+:\d+\b|Line \d|Shot ID/);
+
+describe('dialog identity labels', () => {
+  it('Draw Shot names the station it starts from', () => {
+    open({ fromStation: { line_id: MAIN, station_index: 2 }, appendMode: true });
+    render(<DrawShotDialog />);
+    expect(screen.getAllByText(/Main Line \/ M2/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Add Shot After Station M2');
+    expectNoHandles();
+  });
+
+  it('Edit Shot names the shot by its line and stations', () => {
+    open({ lineId: MAIN, shotId: 31 });
+    render(<EditShotDialog />);
+    expect(screen.getByTestId('edit-shot-identity')).toHaveTextContent('Main Line: M1 → M2');
+    expectNoHandles();
+  });
+
+  it('Remove Closure names the station at the far end of each closure', () => {
+    open({
+      anchorStation: { line_id: MAIN, station_index: 1 },
+      closures: [{ closureId: 4n, stationRef: { line_id: SIDE, station_index: 2 } }],
+    });
+    render(<RemoveClosureDialog />);
+    expect(screen.getByText('Side / S2')).toBeInTheDocument();
+    expectNoHandles();
+  });
+
+  it('Unmerge names each merged station by line and name', () => {
+    open({
+      stationRef: { line_id: MAIN, station_index: 0 },
+      mergedStations: [{ line_id: SIDE, station_index: 1 }],
+    });
+    render(<UnmergeStationsDialog />);
+    expect(screen.getByText('Side / S1')).toBeInTheDocument();
+    expectNoHandles();
+  });
+
+  it('Delete Shot names the shot it deletes', () => {
+    open({ lineId: MAIN, shotId: 31, lineName: 'Main Line' });
+    render(<DeleteShotChoiceDialog />);
+    expect(document.body.textContent).toContain('Shot Main Line: M1 → M2 is in the middle of the line.');
+    expectNoHandles();
+  });
+
+  it('Bulk Delete names the range by its station names', () => {
+    open({
+      lineId: MAIN,
+      startShotId: 30,
+      endShotId: 31,
+      shotCount: 2,
+      kind: 'interior',
+      lineName: 'Main Line',
+      startStationIndex: 0,
+      endStationIndex: 2,
+    });
+    render(<BulkDeleteDialog />);
+    expect(document.body.textContent).toContain('Delete 2 shots (stations M0 to M2 in Main Line).');
+    expectNoHandles();
+  });
+
+  it('Move comment names the station and the shot that hold the comments', () => {
+    open({
+      source: { type: 'station', stationRef: { line_id: SIDE, station_index: 1 }, comment: 'Tight' },
+      target: { type: 'shot', lineId: MAIN, shotId: 32, comment: 'Silt' },
+    });
+    render(<SwapCommentsDialog />);
+    expect(document.body.textContent).toContain('Comment being moved, from station Side / S1:');
+    expect(document.body.textContent).toContain('The shot Main Line: M2 → M3 already has a comment:');
+    expectNoHandles();
+  });
+
+  it('Reverse names the line and where it will run, by station names', () => {
+    open({ lineIds: [SIDE] });
+    render(<ReverseLineDialog />);
+    expect(screen.getByTestId('reverse-line-list')).toHaveTextContent('Side (will run from S2 to S0)');
+    expectNoHandles();
+  });
+});

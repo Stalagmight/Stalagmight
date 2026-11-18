@@ -15,7 +15,7 @@
  * AND every row after it in the survey with no warning at all; a `FORMAT:`
  * missing its trailing space silently reinterprets the whole survey as feet and
  * degrees; a Walls vector line with fewer than two tokens is skipped in silence;
- * a GPX `<trkseg>` with one point is dropped while still consuming a section
+ * a GPX `<trkseg>` with one point is dropped while still consuming a line
  * index. Those are exactly the entries worth having - a corruption that produces
  * a clean error dialog only tests the error dialog, while a corruption that
  * produces a plausible-looking import with half the data missing tests whether
@@ -795,7 +795,7 @@ function gpxPointCount(spec: GpxSpec): number {
 
 /**
  * Change the Nth point of the document, counting waypoints, then trackpoints,
- * then routepoints - the same order `gpx.rs:898-985` allocates section indices
+ * then routepoints - the same order `gpx.rs:898-985` allocates line indices
  * in, so an id that says "point 4" means the same point on both sides.
  */
 function withNthPoint(spec: GpxSpec, target: number, change: Partial<GpxPointSpec>): GpxSpec {
@@ -899,7 +899,7 @@ const GPX_CORRUPTIONS: readonly Corruption<GpxSpec>[] = [
     },
   },
   {
-    // A segment with fewer than 2 points is skipped while its `section_index` is
+    // A segment with fewer than 2 points is skipped while its `line_index` is
     // STILL consumed (`gpx.rs:920-923`, test `gpx.rs:1418-1432`), so every later
     // placement index shifts by one and the dialog's list stops lining up with
     // what actually imported. Appended rather than edited, so the corruption

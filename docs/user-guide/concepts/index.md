@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: "The survey terms behind Stalagmight: sections, shots, stations, merging, loop closures and zero datums, and how errors differ from warnings."
+description: "The survey terms behind Stalagmight: lines, shots, stations, merging, loop closures and zero datums, and how errors differ from warnings."
 order: 3
 ---
 
@@ -8,6 +8,6 @@ order: 3
 
 The survey terms Stalagmight uses.
 
-- [Sections, shots and stations](sections-shots-stations.md)
+- [Lines, shots and stations](sections-shots-stations.md)
 - [Errors and warnings](errors-and-warnings.md)
 - [Zero datums and GPS fixes](zero-datums-and-gps-fixes.md)

@@ -16,14 +16,14 @@ It is not built, run, or tested in CI.
 | File | Symbol | What it does |
 |------|--------|--------------|
 | `src/hooks/useLongPress.ts` | `useLongPress`, `armCompatEventSuppressor` | Long-press detection for React surfaces; no-op unless `pointerType === 'touch'`. Swallows the compatibility tap the lift synthesizes |
-| `src/components/SingleSystemView/SectionsPanel.tsx` | `handleLongPress` / `longPressHandlers` | Long-press a section row -> section context menu. The only `useLongPress` consumer in the tree |
+| `src/components/SingleSystemView/SectionsPanel.tsx` | `handleLongPress` / `longPressHandlers` | Long-press a line row -> line context menu. The only `useLongPress` consumer in the tree |
 | `src/hooks/useTouchContextMenu.ts` | `useTouchContextMenu` | Container-level touch path into a right-click-only context menu: on fire it dispatches a synthetic `contextmenu` on whatever the finger landed on |
 | `src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx` | the `useTouchContextMenu(scrollRef)` call (`:1911`) | Long-press a grid cell, gutter or header -> the grid's own context menu |
 | `src/utils/longPressTouch.ts` | `attachLongPressTouch` | The raw-element long-press machine (500 ms hold, 10 px cancel, swallowed lift), shared by both map layers and the grid |
 | `src/components/Map/SurveyLayer.tsx` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call) | Long-press the global canvas -> system context menu |
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker `touch*` listeners, inline in the marker builder; the handler block at `:376-381` | Long-press a project marker -> marker context menu (its own copy - see Long press). The handler block disables `dragRotate`, `touchPitch` and, since #338, the rotation half of the pinch (`:381`) |
-| `src/components/Dialogs/SectionPreview.tsx` | the handler block at `:281-286` | The third MapLibre surface: same `dragRotate` / `touchPitch` / `disableRotation` set as the other two |
+| `src/components/Dialogs/LinePreview.tsx` | the handler block at `:296-301` | The third MapLibre surface: same `dragRotate` / `touchPitch` / `disableRotation` set as the other two |
 | `src/utils/mapGestures.ts` | `mapGestureMode` | The one predicate deciding which gestures the map keeps for itself |
 | `src/components/Map/MapCanvas.tsx` | the `mapGestureMode` call site, feeding the `dragPan` effect and the container's `touchAction` | Consumes that predicate |
 | `src/components/SingleSystemView/useResizeHandle.ts` | `useResizeHandle` | Pointer-capture drag for every resize handle |
@@ -124,7 +124,8 @@ hold longer than the window would outlive a fire-time arming and leak its tap.
 And the suppression point the Pointer Events spec blesses - `preventDefault()`
 on `pointerdown` - is deliberately not used, because it would kill the
 compatibility `mousedown` of every ordinary tap, and `SectionsPanel`'s
-tap-to-select rides on exactly that (`SectionsPanel.tsx:766`). The
+tap-to-select rides on exactly that (`handleLineClick`, the line row's
+`onMouseDown` in `SectionsPanel.tsx`). The
 `preventDefault()` on `pointerup` stays as belt-and-braces for engines that
 honour it. `src/hooks/__tests__/useLongPress.test.tsx` pins all of this in jsdom.
 
@@ -219,8 +220,8 @@ map construction (`MapCanvas.tsx:1789-1796`), and so is the rotation half of the
 pinch: `touchZoomRotate.disableRotation()` (`MapCanvas.tsx:1794`) leaves a
 two-finger twist zooming only. The other two MapLibre surfaces get the same
 treatment minus the box zoom - the global view (`GlobalViewMap.tsx:376-381`, the
-`disableRotation()` at `:381`) and the section preview dialog
-(`SectionPreview.tsx:281-286`, at `:286`). Both were missing that line until
+`disableRotation()` at `:381`) and the line preview dialog
+(`LinePreview.tsx:296-301`, at `:301`). Both were missing that line until
 #338, so a twist on either used to leave the plan sitting at an angle. The survey is a top-down plan,
 so a bearing means nothing here, and a non-zero one would drop the `axisAligned`
 fast path in the hit-test/geometry index (`SurveyLayer.cameraSnapshot`, ~:1315)
@@ -229,7 +230,7 @@ with no way to reset it from the touch UI.
 **Custom WebGL renderer.** Touch needs nothing renderer-specific. The survey is
 drawn by the custom WebGL layer, and the stock bulk layers were deleted rather
 than hidden, so hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
-geometry index (`SurveyLayer.hitCandidateSections`, `resolveStationAt` /
+geometry index (`SurveyLayer.hitCandidateLines`, `resolveStationAt` /
 `resolveShotAt`, documented at `SurveyLayer.tsx:1263`). Long-press hit-testing
 calls the same `handleContextMenu` as right-click, so it inherits that path for
 free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
@@ -255,7 +256,7 @@ it:
 
 Numeric fields carry `inputMode="decimal"` so tablets raise a numeric soft
 keyboard. Applied across `EditShotDialog`, `InsertStationDialog`,
-`DrawShotDialog`, `SectionMetadataForm` and the other shot/geometry entry
+`DrawShotDialog`, `LineMetadataForm` and the other shot/geometry entry
 dialogs (the `SpreadsheetGrid`-based shot editor sets no `inputMode`); grep
 `inputMode="decimal"` for the full set. `HelpTooltip` toggles on `onClick`
 (`HelpTooltip.tsx:211`) rather than hover-only, so its text is reachable by tap.
@@ -280,7 +281,7 @@ dialogs (the `SpreadsheetGrid`-based shot editor sets no `inputMode`); grep
   might have carried one is retired (#549). Outside those two specs, every claim on this
   page about *behavior on a device* is untested; the claims about code are what
   was read from source.
-- **Two surfaces outside the maps have a long press.** `SectionsPanel`'s section
+- **Two surfaces outside the maps have a long press.** `SectionsPanel`'s line
   rows (`useLongPress`) and the shot grid's context menu (`useTouchContextMenu`).
   This page used to also document `ShotTableEditor`'s row long-press and the
   `e.currentTarget`-vs-`e.target` bug that stopped it firing (filed as #338);

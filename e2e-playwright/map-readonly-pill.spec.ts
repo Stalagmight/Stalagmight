@@ -11,12 +11,12 @@
  * Parallel-safe: all state is per-page (mocked IPC + `window.__E2E_TEST__` stores).
  */
 import { test, expect, type Locator, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, seedProjectWithSections, waitForMapIdle } from './helpers/app';
+import { setupMockedPage, createProject, seedProjectWithLines, waitForMapIdle } from './helpers/app';
 import { MAP_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
 
 type Stores = {
   __E2E_TEST__: {
-    projectStore: { getState: () => { project: { sections: Array<{ id: number }>; loop_closures: unknown[] } | null }; setState: (s: unknown) => void };
+    projectStore: { getState: () => { project: { lines: Array<{ id: number }>; loop_closures: unknown[] } | null }; setState: (s: unknown) => void };
     uiStore: { getState: () => { geometryMode: string; setGeometryMode: (m: string, source?: string) => void; setAppMode: (m: string) => void } };
   };
 };
@@ -26,9 +26,9 @@ async function enterClosureView(page: Page): Promise<void> {
   await page.evaluate(() => {
     const { projectStore, uiStore } = (window as unknown as Stores).__E2E_TEST__;
     const project = projectStore.getState().project!;
-    const secId = project.sections[0]!.id;
+    const secId = project.lines[0]!.id;
     projectStore.setState({ project: { ...project, loop_closures: [...project.loop_closures, {
-      id: 1, station_a: { section_id: secId, station_index: 0 }, station_b: { section_id: secId, station_index: 2 },
+      id: 1, station_a: { line_id: secId, station_index: 0 }, station_b: { line_id: secId, station_index: 2 },
       path_length: 22, misclosure_distance: 0.3, error_percentage: 1.4, horizontal_misclosure: 0.25,
       vertical_misclosure: 0.15, strategy: 'Batch', is_aligned: false,
     }] } });
@@ -77,7 +77,7 @@ test.describe('Closures Computed View pill', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Synthetic closure pill');
-    await seedProjectWithSections(page, [{
+    await seedProjectWithLines(page, [{
       name: 'Synthetic loop', direction: 'in',
       shots: [
         { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },
@@ -165,21 +165,21 @@ async function clearSpeleoPill(page: Page): Promise<void> {
 }
 
 type Rect = { left: number; right: number; top: number; bottom: number };
-/** Where a pill's glyph, the first line of its words, the words and its action are drawn. */
-async function pillLayout(pill: Locator): Promise<{ glyph: Rect; firstLine: Rect; words: Rect; lines: number; action: Rect | null }> {
+/** Where a pill's glyph, the first text row of its words, the words and its action are drawn. */
+async function pillLayout(pill: Locator): Promise<{ glyph: Rect; firstRow: Rect; words: Rect; rowCount: number; action: Rect | null }> {
   return pill.evaluate((el) => {
     const rect = (r: DOMRect) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
     const id = el.dataset.testid!;
     const words = el.querySelector<HTMLElement>(`[data-testid="${id}-body"] > span`)!;
     const range = document.createRange();
     range.selectNodeContents(words);
-    const lineRects = [...range.getClientRects()].filter((r) => r.width > 0);
+    const rowRects = [...range.getClientRects()].filter((r) => r.width > 0);
     const action = el.querySelector('button');
     return {
       glyph: rect(el.querySelector(`[data-testid="${id}-glyph"]`)!.getBoundingClientRect()),
-      firstLine: rect(lineRects[0]!),
+      firstRow: rect(rowRects[0]!),
       words: rect(words.getBoundingClientRect()),
-      lines: new Set(lineRects.map((r) => Math.round(r.top))).size,
+      rowCount: new Set(rowRects.map((r) => Math.round(r.top))).size,
       action: action ? rect(action.getBoundingClientRect()) : null,
     };
   });
@@ -195,8 +195,8 @@ const overlapsVertically = (a: Rect, b: Rect) => a.top < b.bottom - 0.5 && b.top
 async function expectPillLayout(pill: Locator, action: 'beside' | 'under'): Promise<void> {
   const l = await pillLayout(pill);
   const at = JSON.stringify(l);
-  expect(overlapsVertically(l.glyph, l.firstLine), `glyph on the first line: ${at}`).toBe(true);
-  expect(Math.abs((l.glyph.top + l.glyph.bottom) / 2 - (l.firstLine.top + l.firstLine.bottom) / 2), at).toBeLessThanOrEqual(3);
+  expect(overlapsVertically(l.glyph, l.firstRow), `glyph on the first text row: ${at}`).toBe(true);
+  expect(Math.abs((l.glyph.top + l.glyph.bottom) / 2 - (l.firstRow.top + l.firstRow.bottom) / 2), at).toBeLessThanOrEqual(3);
   expect(l.glyph.right, at).toBeLessThanOrEqual(l.words.left);
   if (!l.action) return;
   if (action === 'beside') {
@@ -225,7 +225,7 @@ test.describe('read-only pill layout', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Synthetic pill layout');
-    await seedProjectWithSections(page, [{
+    await seedProjectWithLines(page, [{
       name: 'Synthetic loop', direction: 'in',
       shots: [
         { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },
@@ -239,7 +239,7 @@ test.describe('read-only pill layout', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await forEachPill(page, async (pill, action, name) => {
       await expectPillLayout(pill, 'beside');
-      expect((await pillLayout(pill)).lines, name).toBe(1);
+      expect((await pillLayout(pill)).rowCount, name).toBe(1);
       await expectClearOfZoomControl(page, pill, action);
     });
   });
@@ -270,7 +270,7 @@ test.describe('read-only pill layout at 150% UI zoom', () => {
   test('the action stays beside the words and clear of the zoom control', async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Synthetic pill zoom');
-    await seedProjectWithSections(page, [{
+    await seedProjectWithLines(page, [{
       name: 'Synthetic loop', direction: 'in',
       shots: [
         { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },

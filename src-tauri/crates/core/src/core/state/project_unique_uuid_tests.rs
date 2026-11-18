@@ -2,7 +2,7 @@
 //! opens with every id held once, and its whole undo/redo history still walks.
 //!
 //! The legacy state is built the way an older build held it: the slot gets a
-//! project whose sections repeat each other's ids, and real commands then record
+//! project whose lines repeat each other's ids, and real commands then record
 //! a history against those ids (the integrity guard lets edits through on a
 //! project that was already critical). Saving writes both; reopening through
 //! the load path heals the project and translates the history. Every survey here
@@ -19,7 +19,7 @@ use super::AppState;
 use crate::core::events::EventSink;
 use crate::core::Command;
 use crate::models::{
-    reminted_shot_uuid, ClosureStrategy, Project, SectionData, SectionId, ShotData, ShotUpdates,
+    reminted_shot_uuid, ClosureStrategy, LineData, LineId, Project, ShotData, ShotUpdates,
     StationKey, StationRef,
 };
 use crate::persistence::{Database, ResolvedWarning};
@@ -43,8 +43,8 @@ const X: [&str; 4] = [
 ];
 
 /// Shot 1 is 0.2 m, so every copy raises the ignorable SHORT_SHOT on it.
-fn copy() -> SectionData {
-    SectionData {
+fn copy() -> LineData {
+    LineData {
         name: Some("Copy".to_string()),
         color: "#4ecdc4".to_string(),
         shots: X
@@ -67,7 +67,7 @@ fn copy() -> SectionData {
 fn three_copies() -> Project {
     let mut project = Project::new("Legacy".to_string(), None);
     for _ in 0..3 {
-        project.add_section(copy());
+        project.add_line(copy());
     }
     project
 }
@@ -96,13 +96,13 @@ fn run(state: &AppState, command: Command) {
 }
 
 /// A history touching the copies: every kind of entry a live edit records
-/// about a shot, a station or a section, plus one entry left on the redo stack.
+/// about a shot, a station or a line, plus one entry left on the redo stack.
 fn record_history(state: &AppState) {
     let in_one = |position: u32| crate::models::FEATURE_ID_STRIDE + position;
     run(
         state,
         Command::UpdateShot {
-            section_id: 1,
+            line_id: 1,
             shot_id: in_one(2),
             updates: ShotUpdates {
                 comment: Some(Some("edited on the copy".to_string())),
@@ -113,7 +113,7 @@ fn record_history(state: &AppState) {
     run(
         state,
         Command::CreateShot {
-            section_id: 1,
+            line_id: 1,
             shot: ShotData {
                 azimuth_in: 200.0,
                 azimuth_out: 200.0,
@@ -151,11 +151,11 @@ fn record_history(state: &AppState) {
     run(
         state,
         Command::DeleteShot {
-            section_id: 2,
+            line_id: 2,
             shot_id: 2 * crate::models::FEATURE_ID_STRIDE + 3,
         },
     );
-    run(state, Command::DeleteSection { section_id: 2 });
+    run(state, Command::DeleteLine { line_id: 2 });
     assert!(state.undo().success, "leave the delete on the redo stack");
 }
 
@@ -165,31 +165,27 @@ fn record_history(state: &AppState) {
 fn survey_state(state: &AppState) -> String {
     let raw = state.capture_project_snapshot().unwrap();
     let mut project: Project = serde_json::from_str(&raw).unwrap();
-    project.rebuild_section_index();
+    project.rebuild_line_index();
     project.rebuild_shot_uuid_index();
     let resolved = project.clone();
     project.map_station_refs(|key| {
         let at = resolved
             .resolve_key(&key)
             .unwrap_or_else(|| panic!("dangling station key {key:?}"));
-        StationKey::positional(at.section_id, at.station_index)
+        StationKey::positional(at.line_id, at.station_index)
     });
-    for section in &mut project.sections {
+    for line in &mut project.lines {
         let position = |uuid: &Option<String>| {
-            uuid.as_ref().and_then(|u| {
-                section
-                    .shots
-                    .iter()
-                    .position(|s| s.uuid.as_ref() == Some(u))
-            })
+            uuid.as_ref()
+                .and_then(|u| line.shots.iter().position(|s| s.uuid.as_ref() == Some(u)))
         };
         let gauge = (
-            position(&section.gauge_shot_uuid),
-            position(&section.gauge_neighbour_uuid),
+            position(&line.gauge_shot_uuid),
+            position(&line.gauge_neighbour_uuid),
         );
-        section.gauge_shot_uuid = gauge.0.map(|p| p.to_string());
-        section.gauge_neighbour_uuid = gauge.1.map(|p| p.to_string());
-        for shot in &mut section.shots {
+        line.gauge_shot_uuid = gauge.0.map(|p| p.to_string());
+        line.gauge_neighbour_uuid = gauge.1.map(|p| p.to_string());
+        for shot in &mut line.shots {
             shot.uuid = None;
         }
     }
@@ -201,8 +197,8 @@ fn survey_state(state: &AppState) -> String {
 fn assert_ids_unique(state: &AppState, at: &str) {
     let project = state.get_project_state().unwrap();
     let mut seen = std::collections::HashSet::new();
-    for section in &project.sections {
-        for uuid in section.shots.iter().filter_map(|s| s.uuid.as_deref()) {
+    for line in &project.lines {
+        for uuid in line.shots.iter().filter_map(|s| s.uuid.as_deref()) {
             assert!(
                 seen.insert(uuid.to_string()),
                 "{at}: shot UUID {uuid} held twice"
@@ -242,11 +238,11 @@ fn stack_lengths(state: &AppState) -> (usize, usize) {
     (state.get_undo_stack().len(), state.get_redo_stack().len())
 }
 
-fn section_ids(state: &AppState, section: SectionId) -> Vec<String> {
+fn line_ids(state: &AppState, line: LineId) -> Vec<String> {
     state
         .get_project_state()
         .unwrap()
-        .get_section(section)
+        .get_line(line)
         .unwrap()
         .shots
         .iter()
@@ -254,14 +250,14 @@ fn section_ids(state: &AppState, section: SectionId) -> Vec<String> {
         .collect()
 }
 
-fn short_shot_resolved(state: &AppState, section: SectionId) -> bool {
+fn short_shot_resolved(state: &AppState, line: LineId) -> bool {
     let project = state.get_project_state().unwrap();
-    let shot = project.get_section(section).unwrap().shots[1].id;
+    let shot = project.get_line(line).unwrap().shots[1].id;
     state
         .compute_project_warnings(&project, None)
         .iter()
-        .find(|w| w.section_id == section && w.shot_id == shot && w.code == "SHORT_SHOT")
-        .unwrap_or_else(|| panic!("section {section} must raise SHORT_SHOT"))
+        .find(|w| w.line_id == line && w.shot_id == shot && w.code == "SHORT_SHOT")
+        .unwrap_or_else(|| panic!("line {line} must raise SHORT_SHOT"))
         .is_resolved
 }
 
@@ -298,7 +294,7 @@ fn legacy_history_walks_whole(how: Reopen) {
     record_history(&state);
     state
         .save_resolved_warning(&ResolvedWarning {
-            section_id: 1,
+            line_id: 1,
             shot_id: crate::models::FEATURE_ID_STRIDE + 1,
             warning_code: "SHORT_SHOT".to_string(),
             resolved_at: Utc::now(),
@@ -312,18 +308,18 @@ fn legacy_history_walks_whole(how: Reopen) {
     );
 
     // Saved BEFORE the walk is recorded, so the states include what any save
-    // does regardless of this change (it captures a gauge pair per section).
+    // does regardless of this change (it captures a gauge pair per line).
     assert!(state.execute(Command::SaveProject { path: None }).success);
     let legacy_states = walk(&state, &|_, _| {});
     let legacy_lengths = stack_lengths(&state);
     assert!(state.execute(Command::SaveProject { path: None }).success);
     assert!(state.execute(Command::CloseProject).success);
 
-    // Reopen: section 0 keeps the file's ids, section 1 gets the derived ones.
+    // Reopen: line 0 keeps the file's ids, line 1 gets the derived ones.
     reopen(&state, &path, how);
-    assert_eq!(section_ids(&state, 0)[..2], X[..2]);
+    assert_eq!(line_ids(&state, 0)[..2], X[..2]);
     assert_eq!(
-        section_ids(&state, 1)[0],
+        line_ids(&state, 1)[0],
         reminted_shot_uuid(1, X[0]),
         "the copy's repeats are renamed"
     );
@@ -351,8 +347,8 @@ fn legacy_history_walks_whole(how: Reopen) {
         );
     }
 
-    // The deleted section comes back from the redo stack under its own ids.
-    assert!(state.redo().success, "redo the section delete");
+    // The deleted line comes back from the redo stack under its own ids.
+    assert!(state.redo().success, "redo the line delete");
     assert!(state.undo().success, "and undo it again");
     assert_ids_unique(&state, "after the redo stack round trip");
 }
@@ -364,7 +360,7 @@ fn reopening_without_saving_derives_the_same_ids_and_a_save_persists_them() {
     record_history(&state);
     state
         .save_resolved_warning(&ResolvedWarning {
-            section_id: 1,
+            line_id: 1,
             shot_id: crate::models::FEATURE_ID_STRIDE + 1,
             warning_code: "SHORT_SHOT".to_string(),
             resolved_at: Utc::now(),
@@ -378,7 +374,7 @@ fn reopening_without_saving_derives_the_same_ids_and_a_save_persists_them() {
     let opened = |state: &AppState| -> (Vec<Vec<String>>, Vec<String>) {
         let project = state.get_project_state().unwrap();
         let ids = project
-            .sections
+            .lines
             .iter()
             .map(|s| s.shots.iter().filter_map(|x| x.uuid.clone()).collect())
             .collect();
@@ -423,7 +419,7 @@ fn unignoring_a_renamed_shot_clears_the_row_stored_against_its_old_id() {
     let (state, path) = legacy_session(dir.path());
     state
         .save_resolved_warning(&ResolvedWarning {
-            section_id: 1,
+            line_id: 1,
             shot_id: crate::models::FEATURE_ID_STRIDE + 1,
             warning_code: "SHORT_SHOT".to_string(),
             resolved_at: Utc::now(),
@@ -457,7 +453,7 @@ fn create_and_merge_renames_a_client_id_the_project_already_holds() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("one.stalx");
     let mut project = Project::new("One".to_string(), None);
-    project.add_section(copy());
+    project.add_line(copy());
     Database::open(&path)
         .unwrap()
         .save_project(&project)
@@ -477,12 +473,12 @@ fn create_and_merge_renames_a_client_id_the_project_already_holds() {
         ClosureStrategy::Move,
     );
     assert!(result.success, "{:?}", result.error);
-    let new_section = result.section_id.unwrap();
-    assert_eq!(section_ids(&state, 0), X);
+    let new_line = result.line_id.unwrap();
+    assert_eq!(line_ids(&state, 0), X);
     assert_eq!(
-        section_ids(&state, new_section),
+        line_ids(&state, new_line),
         X.iter()
-            .map(|id| reminted_shot_uuid(new_section, id))
+            .map(|id| reminted_shot_uuid(new_line, id))
             .collect::<Vec<_>>()
     );
     assert_ids_unique(&state, "after create-and-merge");
@@ -494,10 +490,10 @@ fn create_and_merge_renames_a_client_id_the_project_already_holds() {
 }
 
 #[test]
-fn undoing_a_repair_of_a_cross_section_repeat_restores_it_exactly() {
+fn undoing_a_repair_of_a_cross_line_repeat_restores_it_exactly() {
     let dir = TempDir::new().unwrap();
     let (state, _path) = legacy_session(dir.path());
-    let before = section_ids(&state, 1);
+    let before = line_ids(&state, 1);
     assert_eq!(before, X);
 
     // `legacy_session` swapped the unhealed project in after a load that set
@@ -514,7 +510,7 @@ fn undoing_a_repair_of_a_cross_section_repeat_restores_it_exactly() {
     // Undo puts the recorded state back verbatim, repeats included; the next
     // load heals them with the same rule.
     assert!(state.undo().success);
-    assert_eq!(section_ids(&state, 1), before);
+    assert_eq!(line_ids(&state, 1), before);
     assert!(state.redo().success);
     assert_ids_unique(&state, "after redoing the repair");
 }

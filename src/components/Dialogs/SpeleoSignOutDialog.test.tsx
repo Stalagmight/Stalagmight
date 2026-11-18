@@ -18,7 +18,7 @@ import { useSpeleoSignOut, type SignOutProject, type SignOutSurvey } from '../..
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 
 const ME = 'diver@example.com';
-const ok = { success: true, warnings: [], error: null, section_ids: [] };
+const ok = { success: true, warnings: [], error: null, line_ids: [] };
 const summary = (id: string): SpeleoProjectSummary => ({
   id, name: `Cave ${id}`, permission: 'READ_AND_WRITE', lock_holder: ME, type_tag: 'stalx', latest_commit_sha: null,
 });

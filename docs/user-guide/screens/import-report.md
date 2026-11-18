@@ -12,12 +12,12 @@ did not come in as it was.
 ![Import report](../images/import-receipt.png)
 
 1. **Close**
-2. Sections, shots and loops imported, and how many sections are not connected
+2. Lines, shots and loops imported, and how many lines are not connected
    to a [zero datum](../concepts/zero-datums-and-gps-fixes.md) when some are
    not.
 3. Where the zero datum was set. When the import set several, one per
-   GPS-tagged entrance, the line names the first and adds how many more.
-4. Warnings. Here two sections had no shots left and were not imported.
+   GPS-tagged entrance, the report names the first and adds how many more.
+4. Warnings. Here two lines had no shots left and were not imported.
 5. **Continue to map**
 
 ## Details
@@ -29,6 +29,6 @@ did not come in as it was.
 - Everything listed has already happened. Closing the report changes nothing.
 - An Ariane file exported by Stalagmight writes each GPS fix as an extra
   entrance. Importing it back does not restore the fixes: the report lists them
-  as sections with no shots and loop closures that were skipped.
+  as lines with no shots and loop closures that were skipped.
 - Problems in the survey data itself are in the
   [Warnings panel](warnings-panel.md).

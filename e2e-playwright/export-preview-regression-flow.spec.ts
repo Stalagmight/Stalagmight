@@ -2,7 +2,7 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
 } from './helpers/app';
 
 test.describe('Export Preview Regression Flow', () => {
@@ -10,7 +10,7 @@ test.describe('Export Preview Regression Flow', () => {
     await setupMockedPage(page);
     await createProject(page, 'Export Regression Scenario');
 
-    await seedProjectWithSections(page, [
+    await seedProjectWithLines(page, [
       {
         name: 'Mainline',
         shots: [

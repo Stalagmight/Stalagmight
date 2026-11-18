@@ -62,7 +62,10 @@ state, no errors, blank layer. That failure has already been paid for once.
 ## From store state to GPU
 
 `SurveyLayer.flushUpdate` picks the active geometry (measured or
-closure-adjusted, via `store/geometrySelectors.selectActiveSurveyData`), rebuilds
+closure-adjusted, via `store/geometrySelectors.selectActiveSurveyData`) without
+the lines of hidden Sections (`store/sectionVisibility.selectMapSurveyData`: a
+compacted copy, cached per source, the source itself when nothing is hidden, so
+geometry, labels, picking and closures all leave those lines out), rebuilds
 the hit index, and calls `syncCustomRender`, which assembles a
 `DisplayColorContext` and syncs the geometry and label controllers. All of it is
 synchronous - no worker, no tile cut - which is why an edit repaints in the same
@@ -70,10 +73,10 @@ frame. `SurveyCustomController.sync` then picks one of three tiers, cheapest
 first:
 
 1. **Incremental** (`incremental.ts::planIncrementalUpdate`): the SoA layout is
-   unchanged (same section sequence, same shot ids per slot, same station
+   unchanged (same line sequence, same shot ids per slot, same station
    mapping), color globals are unchanged, and the anchor and GPS origin held, so
-   only the dirty sections' vertex ranges are re-emitted and `bufferSubData`'d.
-   Bails if more than half the sections are dirty.
+   only the dirty lines' vertex ranges are re-emitted and `bufferSubData`'d.
+   Bails if more than half the lines are dirty.
 2. **Color-only** (`planColorOnlyUpdate`): geometry byte-stable but the color
    globals changed - overlay enter/exit, theme swap, depth or severity toggle.
    Recomputes the four color arrays through the same resolvers, re-uploads only
@@ -85,11 +88,11 @@ compaction breaks the global-station-index to vertex-slot mapping they rely on.
 Beside them, three side channels rewrite only a per-vertex **flag** array and
 re-upload it, never touching positions or colors:
 
-- `setDimming` - anchored sections and immovable features during move tools.
+- `setDimming` - anchored lines and immovable features during move tools.
 - `setDragHide` - the moving features during a drag; they stay in the buffers
   and the shader collapses the marked vertices to a clipped point.
-- `setHighlight` / `setSectionHover` / `setSectionSelect` - three setters over one
-  array, merged into one emphasis level per section (hover beats selection) that
+- `setHighlight` / `setLineHover` / `setLineSelect` - three setters over one
+  array, merged into one emphasis level per line (hover beats selection) that
   the shader turns into a width or radius bump.
 
 Show/hide toggles never rebuild: shots and stations skip their draw call
@@ -110,7 +113,7 @@ would have made in a paint expression happen at build time in
 `colorResolvers.ts::makeColorResolvers`. Precedence: an active **analytical
 overlay** (distance gradient, gas reach) owns the shot color and station fill
 outright; otherwise the **move-comment tint** if that tool is active; otherwise
-`surveyLayer/displayColor.ts` - Survey Issues score, then depth ramp, then section color.
+`surveyLayer/displayColor.ts` - Survey Issues score, then depth ramp, then line color.
 The depth ramp and the distance overlay take the user's palette + Levels range
 when one is set (`ColorScaleInput`; see [color-palettes.md](color-palettes.md),
 which also covers the LUT-backed live preview).
@@ -174,9 +177,9 @@ finer-tier label cannot evict a coarser one.
 
 **Real line first.** Labels of virtual geometry never take a real-line label's
 spot. `labelVirtualRank` puts every label in one of three ranks from the flags it
-already carries: real (a Normal shot's labels, or a station / section a Normal
+already carries: real (a Normal shot's labels, or a station / line a Normal
 shot touches), jump, then reference (shot labels by their own kind, stations and
-section names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the better kind
+line names by the `ALL_JUMP` / `ALL_REFERENCE` pair - the better kind
 touching them; a pure function of the flags, so a hide toggle never reorders
 labels). The ladder runs once per rank, best first. A later rank leaves free
 every slot an earlier rank's winner holds, including one it only takes further
@@ -186,22 +189,22 @@ therefore reveal exactly as they would with no virtual labels, and jump labels
 as they would with no reference labels; tier, kind and ordinal still order
 labels within a rank. A label that loses its spot on a reveal-only rerun
 (re-showing jumps, say) uploads an unreachable reveal and stays hidden, as a
-fresh build would leave it. Below the 13.5 label band only section names are
-built, yet a jump / reference section's name must not show there only to lose
+fresh build would leave it. Below the 13.5 label band only line names are
+built, yet a jump / reference line's name must not show there only to lose
 its spot, and vanish, once the station and shot labels around it are built: the
-section-only build gathers the shown expensive kinds near each such name and
+line-only build gathers the shown expensive kinds near each such name and
 passes them to the reveal pass as `reserved` slots, held from their decimation
 floor.
 
 The **Errors labels** (`SHOT_ERROR`, `CLOSURE_ERROR`) carry a severity score
-(`descriptor.score`). They rank right after section names and, among
+(`descriptor.score`). They rank right after line names and, among
 themselves, worst first; they are not ordinal-decimated. An Errors label that
 is admitted but does not fit reserves its box for the rest of that ladder step,
 so neither a weaker error nor a station / shot label takes the place of a
 stronger error at that zoom; the randomized property test in
 `labelReveal.test.ts` pins that a weaker overlapping error is not visible while
 a stronger one is hidden. This all happens within a virtual rank: a jump
-shot's error label never takes a real-line label's spot. Section names keep their place (placed from
+shot's error label never takes a real-line label's spot. Line names keep their place (placed from
 z10). The text comes from `errorLabelText.ts` (one label per shot, all parts or
 none, ASCII signs); the shot label sits above the shot midpoint so Shot data
 (below) can show with it, and the closure label at the midpoint of the closure's
@@ -223,19 +226,19 @@ IDs and names is a rebuild, because the text lives in the glyph quads.
 ## Hit-testing
 
 MapLibre returns nothing from a custom layer, so `queryRenderedFeatures` is not
-available for survey geometry at all. `SurveyLayer.hitCandidateSections` replaces
+available for survey geometry at all. `SurveyLayer.hitCandidateLines` replaces
 it:
 
 1. pad the probe point or box by the type's hit reach (`surveyLayer/hitProbe.ts`;
    shot and station reaches differ, and the padding preserves the historical
    tolerance exactly);
-2. ask `surveyLayer/geometryIndex.ts::sectionsIntersectingBox` for sections
+2. ask `surveyLayer/geometryIndex.ts::linesIntersectingBox` for lines
    whose projected world-space AABB overlaps that box - a deliberate superset;
 3. trim to the exact pick with the index's `nearestStation` / `nearestShot`
    (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
    endpoints rather than tile-clipped geometry.
 
-**The real line on top.** A jump or reference section tied in at a real station
+**The real line on top.** A jump or reference line tied in at a real station
 puts several markers on one spot, and a reference tie surveyed along the real
 line runs over it. Each kind draws in one call with no depth test, so the index
 buffers draw by rank - reference first, then jump, then real
@@ -250,20 +253,20 @@ go to the better rank, and a cursor on the drawn disc or line of a better-ranked
 feature picks it over a nearer, worse-ranked one it covers. The drawn size is the
 shader's: `ResolveOptions.stationDiscPx` (radius + stroke) times `stationSizeMul`
 (`controller.stationSizeMul`: the hover or selection size of a highlighted
-section, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
+line, else 2x for a zero datum), and `shotHalfWidthPx` times `shotWidthMul`
 (`controller.shotWidthMul`). The visible edge of a worse-ranked feature still
 picks it, and features of one rank keep the plain nearest pick. The ranks are
 the label declutter's (`labelVirtualRank`).
 
-**The selection on top.** The selected section, or the section of the selected
-station or shot (`raisedSection.raisedSectionOf`), draws above every rank: the
+**The selection on top.** The selected line, or the line of the selected
+station or shot (`raisedLine.raisedLineOf`), draws above every rank: the
 writers take a per-vertex raised flag (built with `computeLineDim` /
 `computeCircleDim`) and draw those quads after all others, in the same kind
 order among themselves.
-`SurveyLayer.updateVisualState` pushes it to `controller.setRaisedSection`, which
+`SurveyLayer.updateVisualState` pushes it to `controller.setRaisedLine`, which
 rewrites and re-uploads only the index buffers whose order moved; every build
-and the incremental reorder keep it. The picks rank the raised section above
-real line (`ResolveOptions.raisedSectionId`: its kinds' ranks shifted by 3), so
+and the incremental reorder keep it. The picks rank the raised line above
+real line (`ResolveOptions.raisedLineId`: its kinds' ranks shifted by 3), so
 where it overlaps the main line the click goes to it, as drawn, in every tool
 that picks through `resolveStationAt` / `resolveShotAt` (merge and measure snaps
 too); to reach a real-line station it covers, clear the selection first (Escape,
@@ -277,7 +280,7 @@ only the candidate prefilter. The index's multi-hit box resolver went away with
 box select (#409), so there is no "everything inside this rectangle" query left.
 
 The index caches its projected AABBs against a camera snapshot
-(`SurveyLayer.cameraSnapshot`), so a static hover reprojects the sections once per
+(`SurveyLayer.cameraSnapshot`), so a static hover reprojects the lines once per
 camera, not once per probe. That snapshot key keeps the map center at full
 precision on purpose: quantizing it let features near the tolerance boundary drop
 out of hover until the camera moved far enough. Candidate discovery is gated by
@@ -387,7 +390,7 @@ map:
 |---|---|---|
 | Survey map | `SingleSystemView.tsx` (beside `OfflineIndicator`, not inside `MapCanvas`) | `showSatellite` |
 | Global View | `GlobalViewMap.tsx` | always - imagery is its base layer |
-| Section Preview | `SectionPreview.tsx`, `variant="compact"` | the section has a GPS origin |
+| Line Preview | `LinePreview.tsx`, `variant="compact"` | the line has a GPS origin |
 
 On the survey map it is a bottom-flush bar butted against the left edge of the
 Data dock's tab, so the two read as one continuous strip and neither obstructs the
@@ -401,7 +404,7 @@ portalled to Main with its own left/right offsets, so `tabInset` is not relative
 the map column; and the tab's width changes when the panel opens (label to pin +
 close icons) and again under webview text-zoom. A static offset left a 9px gap.
 
-It collapses automatically below a 540px host width, and always in the Section
+It collapses automatically below a 540px host width, and always in the Line
 Preview. That threshold is a budget for everything on the bottom edge (names + tab
 inset + ScaleControl) - undershooting it slides the names under the scale bar,
 which is the obstruction the terms forbid.
@@ -410,7 +413,7 @@ Collapsed, it reads `by <first source> (i)` rather than a bare `i`, so the chip 
 still an attribution on its own; `primarySourceName` reads that name out of the
 live string (falling back to the bare `i` if none parses, rather than inventing
 one). The rest of the list is one hover, click or focus away, in a panel portalled
-through `common/Tooltip.tsx` - which is what keeps it clear of the Section
+through `common/Tooltip.tsx` - which is what keeps it clear of the Line
 Preview's `overflow-hidden`.
 
 Colours come from the app's theme tokens (`bg-panel-90 text-text-secondary`), the
@@ -467,12 +470,13 @@ the Zustand write.
 | Wrong color in one mode only | `colorResolvers.ts` precedence, then `displayColor.ts`; for a one-byte overlay drift, `overlayColor.ts` (floor vs round) |
 | Hover / selection emphasis stuck or missing | `controller.refreshHighlight` and the highlight flag in `tessellate.ts` |
 | Originals still visible under a drag preview | `controller.setDragHide` and `CustomRenderExclusion` |
-| Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.sectionsIntersectingBox`, then the camera snapshot key |
+| A line missing from the map, or a hidden Section still drawn | `store/sectionVisibility.ts` (hidden Sections minus the selected lines) and `utils/surveyDataLineFilter.ts` |
+| Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.linesIntersectingBox`, then the camera snapshot key |
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
 | A jump / reference label shows where a real-line one should | `labelVirtualRank` and the per-rank passes in `labelReveal.ts`, then the flags `labelTessellate.ts` stamps |
 | A jump / reference marker or line drawn over, or clicked instead of, the real one at the same spot | `writeCircleDrawOrder` / `writeLineDrawOrder` in `tessellate.ts` (and their calls in `controller.tryIncremental`), then `geometryIndex.nearestStation` / `nearestShot` |
-| A selected section still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedSectionOf` -> `controller.setRaisedSection`, then `ResolveOptions.raisedSectionId` for the click |
+| A selected line still drawn under the real line, or stays on top after deselecting | `SurveyLayer.updateVisualState` -> `raisedLineOf` -> `controller.setRaisedLine`, then `ResolveOptions.raisedLineId` for the click |
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Survey Issues color or an Errors label value looks wrong | `shotQuality.ts` (the metrics, parity-tested against the Rust validator), `issueScale.ts` (levels, combine), `issueScore.ts` (floors, ignores), `errorLabelText.ts` |
 | Survey Issues on / off when it should not be | `displaySelectors.selectEffectiveColorMode` and `store/warningsVisit.ts` (the Warnings-tab visit) |

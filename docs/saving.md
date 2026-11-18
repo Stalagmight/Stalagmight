@@ -69,6 +69,83 @@ migration path is provided for them.** Migrations exist for the shapes that ship
 a pre-release file that a bump cannot read is expected to be re-imported from its
 source survey, not repaired.
 
+## Persisted names: lines are `sections` on disk
+
+The code calls a continuous run of shots a **Line** (`Line`, `LineId`,
+`Project.lines`, `Project.line_offsets`); it was called a Section until the
+rename. The rename stops at the file boundary, so a file this build writes
+reads the same in an older build and in SpeleoDB's reader:
+
+- **SQL.** The `.stalx` tables and columns keep their names: `sections`,
+  `section_id`, `section_offsets`, `imported_section_hashes`,
+  `station_merges.station_a_section` / `station_b_section`, the
+  `credit_sections` side table, and so on. SpeleoDB's Python `stalagmight_lib`
+  pins schema v18 with explicit column lists, so renaming any of them would be a
+  schema change. The reader and writer map these rows onto the `Line` types.
+- **Persisted JSON.** Serde names derived from Rust identifiers would have
+  changed with the rename, so the JSON the file holds crosses the boundary
+  through `models::disk_names` (`src-tauri/crates/models/src/disk_names.rs`):
+  `to_disk` / `to_disk_string` on write, `from_disk` / `from_disk_str` on read.
+  They rename the listed object keys (`line_id` <-> `section_id`, `lines` <->
+  `sections`, `line_offsets` <-> `section_offsets`, `CreatedLineSnapshot` <->
+  `CreatedSectionSnapshot`, ...) and enum tags (`create_line` <->
+  `create_section`, `LineStart` <-> `SectionStart`, ...) and nothing else, never
+  a user value, including inside the JSON documents nested as strings. The
+  shapes that go through it: the undo/redo rows (`command_json`,
+  `undo_data_json` and the whole-project snapshots and `values_json` they carry;
+  `core/undo/persistence.rs`), the `held_gauges` project setting
+  (`persistence/sqlite/read.rs` / `write.rs`) and the dive-plan sidecar snapshot
+  (`core/state/dive_plan.rs`).
+- **Display settings.** The Line names toggle is `showLineNames` in the store,
+  but its `display_settings` row keeps the key `showSectionNames`
+  (`src/store/displaySettingKeys.ts`; the backend reads and writes the row under
+  that name in `core/loading.rs` and `core/state/project_create.rs`).
+
+A new persisted field or enum tag whose name contains `line`/`Line` needs its
+disk name added to `disk_names`, and a new concept must not reuse a disk name
+(`sections`, `section_id`, ...) as its own key; `debug_assert!`s in the
+translation check both. The Section concept (a grouping of lines, #327, see
+[Sections](#sections-groupings-of-lines)) was born after the rename, so it is
+`cave_sections`, `next_cave_section_id` and `cave_section_id` in every JSON
+shape, its commands are tagged `*_cave_section`, and its two names that
+contain `line` (`line_ids`, `move_lines_to_cave_section`) map to themselves. `core/state/pre_line_rename_disk_tests.rs` replays undo
+rows, `held_gauges` and a dive-plan snapshot captured on the commit before the
+rename (`core/undo/testdata/pre_line_rename_rows.json`): each must parse and
+serialize back to the same JSON.
+
+## Station names and Station IDs
+
+Every station has a name (unique within its line) and a project-unique
+Station ID ([SPEC 4.2](SPEC.md#42-station-identification)). Both are stored
+positionally, keyed `(section_id, station_index)` like `station_comments`, in
+side tables that carry no schema bump (SpeleoDB's reader accepts exactly v18
+and ignores tables it does not know):
+
+- `station_names (section_id, station_index, name)` - written for every
+  station (`persistence/sqlite/station_texts.rs`);
+- `station_ids (section_id, station_index, station_id)`, primary key
+  `(section_id, station_index)`, plain DDL (`persistence/sqlite/station_ids.rs`);
+- the `project_settings` row `next_station_id`, the allocation counter.
+
+The read is tolerant: a missing table or key reads as none, a `station_ids` of
+another shape gives none (with a warning), an unreadable row is skipped and
+counted. Whatever is missing is re-minted on open by
+`Project::ensure_station_identities`, which allocates in line order then station
+order - so a file an older build rewrote without the table (an older build saves
+by writing a fresh file, which drops tables it does not know) opens with the same
+ids every time, and the names survive (older builds since #676 keep
+`station_names`). SQLite failing for a reason of its own still fails the open.
+A v18 file from before the tables takes the version fast path, so `save_project`
+creates them inside its transaction. `station_ids_tests.rs` pins the round trip,
+the degradations, and that no table the outside reader reads changes beyond the
+`next_station_id` key it never asks for.
+
+The whole-project undo snapshots carry `station_ids` and `next_station_id` in
+the project serde (sorted pairs, `serde(default)`), so a snapshot restore puts
+the counter back with the ids it allocated. A snapshot recorded before the ids
+existed adopts the live project's ids for the stations it shares
+(`core/state/project_io.rs` `adopt_station_identities`).
+
 ## Per-shot survey credit
 
 Surveyors, explorers and the survey date are stored per shot, in two side
@@ -76,19 +153,21 @@ tables that carry no schema bump (SpeleoDB's reader accepts exactly v18 and
 ignores tables it does not know): `credit_people (id, name, email)` and
 `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
 `(section_id, shot_uuid)`, the people columns
-comma-joined `credit_people` ids. The legacy `sections.surveyor` and
-`sections.date` are still written, as the section aggregate: the earliest shot
+comma-joined `credit_people` ids (`section_id` is the SQL name of the line
+id, see [Persisted names](#persisted-names-lines-are-sections-on-disk)). The
+legacy `sections.surveyor` and `sections.date` columns are still written, as
+the line aggregate: the earliest shot
 date, and the distinct surveyor names joined with `", "` (`"; "` for exactly
 two one-word names, which the free-text `Last, First` rule would otherwise
-read as one person) - or, when anyone explored the section, the Ariane
+read as one person) - or, when anyone explored the line, the Ariane
 `"explorers / surveyors"` form, both halves name lists joined with `", "`
 (`"Ida Ice /"` when nobody surveyed, which survives the trim an older build's
-Edit Section does on save), with a `" / "` inside a name written `" - "`. A
+Edit Section dialog does on save), with a `" / "` inside a name written `" - "`. A
 `,` or `;` inside one name cannot come back as one person after an older
 build's save; this build's per-shot rows keep it exact. A stored text
 this build would not write the same way (a list longer than a role keeps, a
 name past the length clamp, another spelling) is written back verbatim while
-nobody's credit in the section has changed since the file was opened. A shot
+nobody's credit in the line has changed since the file was opened. A shot
 WITHOUT a row reads its credit from those two columns through the legacy
 splitter, which is the migration for older files; the writer therefore writes
 a row only where that fallback would read back something else.
@@ -96,8 +175,8 @@ a row only where that fallback would read back something else.
 A released build (0.5.3 and older) saves by writing a fresh file and renaming
 it over the project, so it drops the three credit tables: after such a save
 every shot reads the legacy columns. That is why the surveyor column carries
-both roles (#718): each section still lists its explorers and surveyors. What
-collapses: per-shot differences, later dates and emails go to the section
+both roles (#718): each line still lists its explorers and surveyors. What
+collapses: per-shot differences, later dates and emails go to the line
 aggregate; same-named people become one name; names come back as the legacy
 text spells them (a `/` next to a space as `-`, a name with `,` or `;` as
 several people, a placeholder-only name such as `?` or `unknown` as nobody);
@@ -106,13 +185,44 @@ TML export and re-import collapses identical halves (`"Jo Diver / Jo Diver"`
 becomes the surveyor `Jo Diver` alone). Older Ariane imports stored only the
 two-halves form, and only with two distinct, non-empty halves. A third table, `credit_sections (section_id, surveyor, date)`,
 records the legacy pair this build wrote; when the tables survive next to a
-pair retyped in place (a hand edit, another tool), a section whose pair no
+pair retyped in place (a hand edit, another tool), a line whose pair no
 longer matches the record ignores its rows (the retyped text wins). A credit
 table of another shape gives no rows, with a warning, never a failed open; SQLite
 failing for a reason of its own (busy, I/O, corrupt) still fails the open, so a
 save cannot then drop the rows for good (#717). All three
 tables are project data and ride in SpeleoDB pushes. See
 `persistence/sqlite/shot_credits.rs`.
+
+## Sections (groupings of lines)
+
+Sections - named, coloured groupings of lines (#327) - live in two side tables
+with no schema bump, like `station_names` (SpeleoDB's Python reader accepts
+exactly v18 and reads only its seven tables, by explicit column lists):
+
+- `cave_sections (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT
+  NULL, position INTEGER NOT NULL)`: one row per Section, `position` its place
+  in the Sections panel;
+- `cave_section_lines (line_id INTEGER PRIMARY KEY REFERENCES sections(id) ON
+  DELETE CASCADE, cave_section_id INTEGER NOT NULL REFERENCES cave_sections(id)
+  ON DELETE CASCADE)`: one row per grouped line (`sections` is the lines table).
+
+Plain DDL only (`schema_guard` refuses CHECKs other than `id = 1`, partial or
+expression indexes, `DEFAULT (expr)`, views and triggers). Every save drops and
+recreates both inside its transaction, after the lines, so a v18 file opened
+through the fast path gets them on its first save. The id counter is not
+stored: a load derives it from the highest id, like `next_line_id`. Reading
+tolerates the tables missing (a file older than them, a read-only open) and
+being of another shape (no Sections, with a warning, never a failed open);
+SQLite failing for a reason of its own still fails the open. A row that cannot
+be read, or names a line or Section the file does not hold, is skipped (the
+open's foreign-key check already refuses such a file); repeated names are made
+unique on read. See `persistence/sqlite/cave_sections.rs`.
+
+An older build drops both tables on its next save (it writes a fresh file), so
+the lines come back ungrouped. Both tables are project data and ride in
+SpeleoDB pushes. Which Sections are hidden on the map is a view setting, the
+`hiddenSections` row of `display_settings` (a JSON array of Section ids), which
+is machine-local and stripped from pushes like every display setting.
 
 ## Zero datum fixes
 
@@ -129,7 +239,7 @@ its place in the list. `in_zero_datums` says whether its GPS is the
 `zero_datums` row at that station (a placement datum) or the row's own (a fix);
 `accuracy_m` is NULL for the default; `shot_uuid` is the uuid of the shot
 ending at the station (NULL for station 0), and `start_shot_uuid`, for station
-0 only, the uuid of the section's first shot, the one starting there. The rows are written only when the project has a fix or a
+0 only, the uuid of the line's first shot, the one starting there. The rows are written only when the project has a fix or a
 stored accuracy, so a file without them reads from `zero_datums` alone, which
 is the migration for every older file.
 
@@ -145,9 +255,9 @@ So the table is used only while its placement rows name exactly the
 `zero_datums` stations; otherwise it is ignored as a whole, with a warning, and
 the project loads as that older build saw it. A row whose `shot_uuid` no longer
 matches its station is skipped, and so is a station 0 row whose
-`start_shot_uuid` is no longer the section's first shot (a writer reversed the
-section in place, or put a shot before its start). A station 0 row without
-`start_shot_uuid` (written before the column existed) is checked by its section
+`start_shot_uuid` is no longer the line's first shot (a writer reversed the
+line in place, or put a shot before its start). A station 0 row without
+`start_shot_uuid` (written before the column existed) is checked by its line
 alone. Corrupt rows are skipped and counted, an
 unusable accuracy reads as the default, and a table of another shape or with
 more rows than the file has stations is ignored: never a failed open. SQLite
@@ -185,11 +295,12 @@ Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo sta
 
 ### `section_offsets` rows are never all-zero
 
-The `section_offsets` table records sections that are **actually displaced**. A
+The `section_offsets` table (the on-disk name of `Project.line_offsets`) records
+lines that are **actually displaced**. A
 value within `Project::OFFSET_DUST_M` (a micrometre) of the origin is not a
 position and is never written - the invariant is stated on
-`Project::write_section_offset` and explained in
-[Undo/Redo](undo-redo.md#a-dust-zero-section_offsets-entry-is-unrepresentable-413-finding-27).
+`Project::write_line_offset` and explained in
+[Undo/Redo](undo-redo.md#a-dust-zero-line_offsets-entry-is-unrepresentable-413-finding-27).
 The save writes the in-memory map as it stands, so the rule holds on disk because
 it holds in memory.
 
@@ -197,7 +308,7 @@ A file written by a build that predates the invariant can still carry such a row
 It is dropped at the load boundary (`Project::redrive_offsets_after_load`), so the
 project opens without it and the **next save omits it** - a one-time settle, after
 which the file is stable. Nothing observable changes: every consumer reads the map
-through `Project::section_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+through `Project::line_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
 an absent row and an all-zero one are the same geometry.
 
 This does not disturb the file-format fixpoint property the format gate checks: the
@@ -335,7 +446,9 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 ### Details
 
 - Only the last N entries are persisted (configurable via `general.undo_persist_limit`, default 20) - EXCEPT for a Full-mode SpeleoDB project, which persists its whole history since the last commit under a byte budget instead (#303)
-- Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`
+- Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`, in
+  the pre-rename vocabulary (`section_id`, `create_section`, ...; see
+  [Persisted names](#persisted-names-lines-are-sections-on-disk))
 - Serialization uses gzip compression
 - A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
 - On project open, persisted stacks are restored from the database

@@ -24,7 +24,7 @@
  * adding a control the generators can reach is a TypeScript edit with a unit
  * test behind it rather than a change to an injected string literal. An entry
  * ending in `*` is a PREFIX PATTERN: the digest expands it against the live DOM,
- * which is how dynamic ids (`section-checkbox-7`, `shot-editor-cell-3-length`)
+ * which is how dynamic ids (`line-checkbox-7`, `shot-editor-cell-3-length`)
  * become concrete targets a generator can draw from.
  *
  * ## Classification
@@ -123,7 +123,7 @@ export type ScreenId =
 
 /** What the receipt dialog is showing, read before it is dismissed. */
 export interface ReceiptDigest {
-  /** `import-receipt-summary` text - "N sections - M shots [- K loops]". */
+  /** `import-receipt-summary` text - "N lines - M shots [- K loops]". */
   summary: string;
   /** Warnings rendered in the always-visible list. */
   shown: number;
@@ -149,7 +149,7 @@ export interface ImportScreenDigest {
   /**
    * `project.file_path`, or null with no project open (or one never saved).
    *
-   * THE INVARIANT: every input F3 compares - `sections`, `shots` and this - is
+   * THE INVARIANT: every input F3 compares - `lines`, `shots` and this - is
    * read from ONE `get_project_state` payload. Anything added to that set has to
    * come from the same payload, and this field has now been the counterexample
    * twice, which is why it is written down here rather than left to be inferred.
@@ -202,8 +202,8 @@ export interface ImportScreenDigest {
   inv: string[];
   /** `get_undo_stack().length`, or -1 with no project open. */
   undo: number;
-  /** Section / shot counts, or -1 with no project open. */
-  sections: number;
+  /** Line / shot counts, or -1 with no project open. */
+  lines: number;
   shots: number;
   /** Non-null only while the receipt dialog is up. */
   receipt: ReceiptDigest | null;
@@ -524,7 +524,7 @@ export async function computeImportScreenDigest(
   // ---- project state ------------------------------------------------------
   let inv: string[] = [];
   let undo = -1;
-  let sections = -1;
+  let lines = -1;
   let shots = -1;
   let projectFile = null;
   if (hasProject) {
@@ -532,7 +532,7 @@ export async function computeImportScreenDigest(
       ?.core;
     if (!core || typeof core.invoke !== 'function') throw new Error('window.__TAURI__.core.invoke unavailable');
     const state = (await core.invoke('get_project_state')) as
-      | { project?: { sections?: { shots?: unknown[] }[]; file_path?: string | null } }
+      | { project?: { lines?: { shots?: unknown[] }[]; file_path?: string | null } }
       | null;
     if (state) {
       const oracle = (globalThis as unknown as { __FUZZ_ORACLE__?: { invariants?: (s: unknown) => string[] } })
@@ -544,8 +544,8 @@ export async function computeImportScreenDigest(
       // ONE SNAPSHOT. `file_path` comes off the same `state.project` the counts
       // are computed from, not off the store - see the field's own doc.
       projectFile = state.project && state.project.file_path ? state.project.file_path : null;
-      const list = state.project && Array.isArray(state.project.sections) ? state.project.sections : [];
-      sections = list.length;
+      const list = state.project && Array.isArray(state.project.lines) ? state.project.lines : [];
+      lines = list.length;
       shots = 0;
       for (let i = 0; i < list.length; i++) {
         const own = list[i] && Array.isArray(list[i].shots) ? (list[i].shots as unknown[]).length : 0;
@@ -575,7 +575,7 @@ export async function computeImportScreenDigest(
     boundary: !!one('error-boundary-fallback'),
     inv,
     undo,
-    sections,
+    lines,
     shots,
     receipt,
     dirty: byPrefix('dirty-dialog-').length > 0,

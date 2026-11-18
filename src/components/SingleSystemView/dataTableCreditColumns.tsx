@@ -64,7 +64,7 @@ export function parseDateCell(raw: string): string | null | undefined {
 export interface CreditColumnContext {
   t: TFunction;
   geometryReadOnly: boolean;
-  /** Grid row -> index into the section's shots; null for a draft row. */
+  /** Grid row -> index into the line's shots; null for a draft row. */
   shotIndexAt: (gridRowIndex: number) => number | null;
   /** Labels that tell same-named people apart (`disambiguationLabels`), by person key. */
   labels: ReadonlyMap<string, string>;

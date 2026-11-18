@@ -4,15 +4,15 @@ import {
   createProject,
   getMapCenter,
   seedNavigationTools,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Passage',
     direction: 'in',
@@ -31,14 +31,14 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 /**
- * Helper to create a project with sections for map tools testing.
- * Returns when the project is loaded with sections containing shots.
+ * Helper to create a project with lines for map tools testing.
+ * Returns when the project is loaded with lines containing shots.
  *
  * Uses store seeding to avoid dialog overlays during tests.
  */
-async function createProjectWithSections(page: Page): Promise<void> {
+async function createProjectWithLines(page: Page): Promise<void> {
   await createProject(page, 'Map Tools Test Project');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
@@ -53,7 +53,7 @@ test.describe('Map Tools', () => {
   });
 
   test('toolbar center holds the workspace carousel; filename stays out of it (#51, #38)', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
     // The center now holds the Survey/Plan/Export carousel (#38). The active tool moved
     // to the highlighted toolbar button (asserted in the shortcut test below), and the
     // filename is not in the toolbar center.
@@ -73,7 +73,7 @@ test.describe('Map Tools', () => {
 
   test('should switch between tools with keyboard shortcuts @smoke', async ({ page }) => {
     // Create a project to access the SingleSystemView with tools
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     // Verify canvas is visible (we're in SingleSystemView)
     const canvas = page.getByTestId('map-canvas');
@@ -110,8 +110,8 @@ test.describe('Map Tools', () => {
   });
 
   test('should select stations with select tool @smoke', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // Verify canvas is visible
     const canvas = page.getByTestId('map-canvas');
@@ -168,8 +168,8 @@ test.describe('Map Tools', () => {
   // with no `p` press first - which is the whole point of hiding the pan tool.
   // Middle-drag still pans too, and still leaves the active tool alone.
   test('should pan map with a plain drag under select, or the middle mouse button', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // Verify canvas is visible
     const canvas = page.getByTestId('map-canvas');
@@ -226,8 +226,8 @@ test.describe('Map Tools', () => {
   });
 
   test('should measure distance with measure tool', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // Verify canvas is visible
     const canvas = page.getByTestId('map-canvas');
@@ -269,8 +269,8 @@ test.describe('Map Tools', () => {
   });
 
   test('should fit view to all data with Ctrl+0 @smoke', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // Verify canvas is visible
     const canvas = page.getByTestId('map-canvas');
@@ -311,21 +311,21 @@ test.describe('Map Tools', () => {
   });
 
   test('should delete selected items with Delete key', async ({ page }) => {
-    // Create a project with sections
-    await createProjectWithSections(page);
+    // Create a project with lines
+    await createProjectWithLines(page);
 
     // Verify canvas is visible
     const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
-    // First, select something - let's select a section from the sections panel
-    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Side Tunnel' });
-    if (await sectionRow.isVisible()) {
-      await sectionRow.click();
+    // First, select something - let's select a line from the sections panel
+    const lineRow = page.locator('[data-testid^="line-row-"]').filter({ hasText: 'Side Tunnel' });
+    if (await lineRow.isVisible()) {
+      await lineRow.click();
       await waitForMapIdle(page);
 
-      // Verify section is selected (has highlight)
-      await expect(sectionRow).toHaveClass(/bg-accent/);
+      // Verify line is selected (has highlight)
+      await expect(lineRow).toHaveClass(/bg-accent/);
 
       // Press Delete key to trigger deletion
       await page.keyboard.press('Delete');
@@ -399,7 +399,7 @@ test.describe('Zoom Tool Click Behavior', () => {
   });
 
   test('should zoom in on left click and zoom out on right click', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
@@ -456,7 +456,7 @@ test.describe('Zoom Tool Click Behavior', () => {
   });
 
   test('should not select stations when zoom tool is active', async ({ page }) => {
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
 
     const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();

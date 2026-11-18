@@ -2,12 +2,12 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForMapIdle,
   waitForActiveTool,
   getDragGhostState,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -37,11 +37,11 @@ import {
  * prior E2E for move-tool dragging.
  *
  * Gap reads use `toPass` (not one-shot `evaluate`): the segment preview layer is
- * created after an async `getConnectedSectionIds` IPC, so a one-shot read can race
+ * created after an async `getConnectedLineIds` IPC, so a one-shot read can race
  * its creation on a slow CI runner.
  */
 
-const SECTION_SEEDS: SectionSeed[] = [
+const LINE_SEEDS: LineSeed[] = [
   {
     name: 'Mover',
     direction: 'in',
@@ -63,14 +63,14 @@ const SECTION_SEEDS: SectionSeed[] = [
  * pollGeometry.
  */
 async function readDrawnGeometry(page: Page): Promise<{
-  stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
-  shots: Array<{ sectionId: number; shotId: number; from: [number, number]; to: [number, number] }>;
+  stations: Array<{ lineId: number; stationIndex: number; lngLat: [number, number] }>;
+  shots: Array<{ lineId: number; shotId: number; from: [number, number]; to: [number, number] }>;
 }> {
   return page.evaluate(() => {
     const w = window as unknown as {
       __stalagmight_geometry__?: () => {
-        stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
-        shots: Array<{ sectionId: number; shotId: number; from: [number, number]; to: [number, number] }>;
+        stations: Array<{ lineId: number; stationIndex: number; lngLat: [number, number] }>;
+        shots: Array<{ lineId: number; shotId: number; from: [number, number]; to: [number, number] }>;
       } | null;
     };
     return w.__stalagmight_geometry__?.() ?? { stations: [], shots: [] };
@@ -90,7 +90,7 @@ async function readShotSegments(page: Page): Promise<Array<[[number, number], [n
 /**
  * Poll a read-only geometry fetch until it yields >= `min` items, and return the
  * captured items. The geometry hook returns nothing until the map exists and the
- * seeded sections have been indexed, so a single one-shot read can race the seed.
+ * seeded lines have been indexed, so a single one-shot read can race the seed.
  * Capturing the items on the successful poll iteration (rather than re-reading
  * afterward) makes the subsequent center/project independent of the live state.
  */
@@ -231,7 +231,7 @@ async function zoomInAndPan(page: Page) {
   await waitForMapIdle(page);
 }
 
-/** Two well-separated stations of the section, centered to fit both at `zoom`. */
+/** Two well-separated stations of the line, centered to fit both at `zoom`. */
 async function firstAndLastStation(page: Page, zoom: number) {
   // Capture the station coords on a successful poll, then take the farthest-apart
   // pair as origin/target - two well-separated stations, independent of coordinate
@@ -333,7 +333,7 @@ test('move_segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   await setupMockedPage(page);
   await createProject(page, 'Station Grab Move Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
   await activateTool(page, 'v', 'move_segment');
 
@@ -364,7 +364,7 @@ test('move_segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom 
   await setupMockedPage(page);
   await createProject(page, 'Shot Grab Move Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
   await activateTool(page, 'v', 'move_segment');
 
@@ -398,7 +398,7 @@ test('move_station grabbed off-center snaps + tracks across a mid-drag zoom (#79
   await setupMockedPage(page);
   await createProject(page, 'Station Move Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
   await activateTool(page, 't', 'move_station');
 
@@ -429,7 +429,7 @@ test('a press-drag while CARRYING pans the map and keeps the ghost (#409)', asyn
   await setupMockedPage(page);
   await createProject(page, 'Carry Pan Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
   await activateTool(page, 't', 'move_station');
 
@@ -488,7 +488,7 @@ test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', as
   await setupMockedPage(page);
   await createProject(page, 'Station Snap Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
   await activateTool(page, 't', 'move_station');
 
@@ -522,7 +522,7 @@ test('move-tool hint banner names the phase: pick up -> drop -> gone (#409)', as
   await setupMockedPage(page);
   await createProject(page, 'Move Hint Banner Test');
   await waitForMapReady(page);
-  await seedProjectWithSections(page, SECTION_SEEDS);
+  await seedProjectWithLines(page, LINE_SEEDS);
   await waitForMapIdle(page);
 
   const hint = page.getByTestId('move-tool-hint');

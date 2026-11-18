@@ -3,23 +3,24 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 
 function stationRefKey(ref: StationRef): string {
-  return `${ref.section_id}:${ref.station_index}`;
+  return `${ref.line_id}:${ref.station_index}`;
 }
 
 function sameStationRef(a: StationRef, b: StationRef): boolean {
-  return a.section_id === b.section_id && a.station_index === b.station_index;
+  return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 export default function UnmergeStationsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;
@@ -56,16 +57,9 @@ export default function UnmergeStationsDialog() {
     mergedStations.find((ref) => stationRefKey(ref) === selectedKey) ?? null
   ), [mergedStations, selectedKey]);
 
-  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
-    return (
-      <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
-      </span>
-    );
-  };
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => (
+    <EntityBlob entity="station">{labels.station(ref, true)}</EntityBlob>
+  );
 
   const isDirectMerge = (a: StationRef, b: StationRef): boolean => {
     return project?.station_merges.some((merge) => {
@@ -134,7 +128,7 @@ export default function UnmergeStationsDialog() {
                   value={key}
                   checked={selectedKey === key}
                   onChange={() => setSelectedKey(key)}
-                  data-testid={`unmerge-station-option-${ref.section_id}-${ref.station_index}`}
+                  data-testid={`unmerge-station-option-${ref.line_id}-${ref.station_index}`}
                 />
                 <span>{getStationDisplayLabel(ref)}</span>
               </label>

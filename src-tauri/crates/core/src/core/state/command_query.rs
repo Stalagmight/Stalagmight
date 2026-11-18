@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::models::{ConnectivityResult, GpsCoordinates, SectionId, StationRef, ZeroDatumPreview};
+use crate::models::{ConnectivityResult, GpsCoordinates, LineId, StationRef, ZeroDatumPreview};
 
 impl AppState {
     /// What setting a zero datum with `coordinates` on `station_ref` would do
@@ -52,15 +52,15 @@ impl AppState {
         }
 
         // Always compute connectivity (via merges and closures) for the `connected` field
-        let connected_a = project.get_connected_section_ids(station_a.section_id);
-        let connected = connected_a.contains(&station_b.section_id);
+        let connected_a = project.get_connected_line_ids(station_a.line_id);
+        let connected = connected_a.contains(&station_b.line_id);
         let preview = if connected {
             Some(project.compute_closure_metrics(station_a, station_b)?)
         } else {
             None
         };
 
-        // Two placed sections MAY merge (#741): the group whose placement datum
+        // Two placed lines MAY merge (#741): the group whose placement datum
         // is later in the list moves to meet the merge, and that datum becomes a
         // GPS fix. So zero datums no longer decide `can_merge`; only a loop does.
         let (can_merge, reason) = if connected {
@@ -81,7 +81,7 @@ impl AppState {
         } else {
             project
                 .closure_spans_one_shot(station_a, station_b)
-                .map(crate::models::closure_across_one_shot_refusal)
+                .map(|shot| project.closure_across_one_shot_message(shot))
         };
 
         // Two placed pieces (#741): which one the merge moves, and how far.
@@ -101,27 +101,24 @@ impl AppState {
         })
     }
 
-    /// Get all section IDs connected through merges and aligned closures (rigid groups).
-    pub fn get_rigid_connected_section_ids(
-        &self,
-        section_id: SectionId,
-    ) -> Result<Vec<SectionId>, String> {
+    /// Get all line IDs connected through merges and aligned closures (rigid groups).
+    pub fn get_rigid_connected_line_ids(&self, line_id: LineId) -> Result<Vec<LineId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
             .command_lock
             .lock()
             .map_err(|_| "Failed to acquire command lock".to_string())?;
         self.with_project(|project| {
-            // Validate section exists
-            if !project.sections.iter().any(|s| s.id == section_id) {
-                return Err(format!("Section {section_id} not found"));
+            // Validate line exists
+            if !project.lines.iter().any(|s| s.id == line_id) {
+                return Err(crate::models::LINE_GONE.to_string());
             }
 
-            // Filter to existing sections (stale merges/closures may reference deleted sections)
-            let existing: std::collections::HashSet<SectionId> =
-                project.sections.iter().map(|s| s.id).collect();
-            let connected = project.get_rigid_connected_section_ids(section_id);
-            let mut result: Vec<SectionId> = connected
+            // Filter to existing lines (stale merges/closures may reference deleted lines)
+            let existing: std::collections::HashSet<LineId> =
+                project.lines.iter().map(|s| s.id).collect();
+            let connected = project.get_rigid_connected_line_ids(line_id);
+            let mut result: Vec<LineId> = connected
                 .into_iter()
                 .filter(|id| existing.contains(id))
                 .collect();
@@ -130,13 +127,13 @@ impl AppState {
         })
     }
 
-    /// Get shot-line geometry for all sections in the segment containing the given section.
-    /// Coordinates are relative to the given section's station 0.
+    /// Get shot-line geometry for all lines in the segment containing the given line.
+    /// Coordinates are relative to the given line's station 0.
     pub fn get_segment_geometry(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
     ) -> Result<crate::models::SegmentGeometry, String> {
-        use crate::models::{SegmentGeometry, SegmentSectionGeometry};
+        use crate::models::{SegmentGeometry, SegmentLineGeometry};
 
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
@@ -151,16 +148,16 @@ impl AppState {
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
 
-        // Validate section exists
-        if !project.sections.iter().any(|s| s.id == section_id) {
-            return Err(format!("Section {section_id} not found"));
+        // Validate line exists
+        if !project.lines.iter().any(|s| s.id == line_id) {
+            return Err(crate::models::LINE_GONE.to_string());
         }
 
-        // Get all connected section IDs
-        let existing: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        let connected = project.get_connected_section_ids(section_id);
-        let connected: std::collections::HashSet<SectionId> = connected
+        // Get all connected line IDs
+        let existing: std::collections::HashSet<LineId> =
+            project.lines.iter().map(|s| s.id).collect();
+        let connected = project.get_connected_line_ids(line_id);
+        let connected: std::collections::HashSet<LineId> = connected
             .into_iter()
             .filter(|id| existing.contains(id))
             .collect();
@@ -168,34 +165,32 @@ impl AppState {
         // Compute all station coordinates
         let all_stations = project.compute_station_coordinates();
 
-        // Find anchor: station 0 of the given section
+        // Find anchor: station 0 of the given line
         let anchor = all_stations
             .iter()
-            .find(|s| s.station_ref.section_id == section_id && s.station_ref.station_index == 0)
+            .find(|s| s.station_ref.line_id == line_id && s.station_ref.station_index == 0)
             .map(|s| (s.coordinates.x, s.coordinates.y))
             .unwrap_or((0.0, 0.0));
 
-        // Group stations by section
-        let mut section_stations: std::collections::HashMap<
-            SectionId,
-            Vec<&crate::models::Station>,
-        > = std::collections::HashMap::new();
+        // Group stations by line
+        let mut line_stations: std::collections::HashMap<LineId, Vec<&crate::models::Station>> =
+            std::collections::HashMap::new();
         for station in &all_stations {
-            if connected.contains(&station.station_ref.section_id) {
-                section_stations
-                    .entry(station.station_ref.section_id)
+            if connected.contains(&station.station_ref.line_id) {
+                line_stations
+                    .entry(station.station_ref.line_id)
                     .or_default()
                     .push(station);
             }
         }
 
-        // Build geometry for each section
-        let mut sections = Vec::new();
+        // Build geometry for each line
+        let mut lines = Vec::new();
         for &sid in &connected {
-            let Some(section) = project.sections.iter().find(|s| s.id == sid) else {
+            let Some(line) = project.lines.iter().find(|s| s.id == sid) else {
                 continue;
             };
-            let Some(stations) = section_stations.get(&sid) else {
+            let Some(stations) = line_stations.get(&sid) else {
                 continue;
             };
 
@@ -214,35 +209,35 @@ impl AppState {
                 ]);
             }
 
-            sections.push(SegmentSectionGeometry {
-                section_id: sid,
-                color: section.color.clone(),
+            lines.push(SegmentLineGeometry {
+                line_id: sid,
+                color: line.color.clone(),
                 shot_lines,
             });
         }
 
-        Ok(SegmentGeometry { sections })
+        Ok(SegmentGeometry { lines })
     }
 
-    /// Get all section IDs anchored by a zero datum.
-    /// A zero datum anchors every section reachable through merges AND aligned closures,
+    /// Get all line IDs anchored by a zero datum.
+    /// A zero datum anchors every line reachable through merges AND aligned closures,
     /// since unaligned closures are not rigidly constrained yet.
-    pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
+    pub fn get_anchored_line_ids(&self) -> Result<Vec<LineId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
             .command_lock
             .lock()
             .map_err(|_| "Failed to acquire command lock".to_string())?;
         self.with_project(|project| {
-            // Filter to existing sections (stale merges/closures may reference deleted sections)
-            let existing: std::collections::HashSet<SectionId> =
-                project.sections.iter().map(|s| s.id).collect();
+            // Filter to existing lines (stale merges/closures may reference deleted lines)
+            let existing: std::collections::HashSet<LineId> =
+                project.lines.iter().map(|s| s.id).collect();
             let mut anchored = std::collections::HashSet::new();
             for zd in &project.zero_datums {
-                let connected = project.get_rigid_connected_section_ids(zd.station_ref.section_id);
+                let connected = project.get_rigid_connected_line_ids(zd.station_ref.line_id);
                 anchored.extend(connected.into_iter().filter(|id| existing.contains(id)));
             }
-            let mut result: Vec<SectionId> = anchored.into_iter().collect();
+            let mut result: Vec<LineId> = anchored.into_iter().collect();
             result.sort_unstable();
             Ok(result)
         })

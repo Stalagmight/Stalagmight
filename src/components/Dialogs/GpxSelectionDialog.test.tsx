@@ -28,14 +28,14 @@ const SAVE_WARNING: ValidationWarning = {
   severity: 'warning',
 };
 
-// A real waypoints-only GPX import lands one section per waypoint and zero
+// A real waypoints-only GPX import lands one line per waypoint and zero
 // shots (parsers/gpx.rs) - it is NOT the #442 zero-count case (that needs
-// sections_imported: 0, which this shape never produces).
+// lines_imported: 0, which this shape never produces).
 const RECEIPT: ImportReceipt = {
   source_format: 'GPX',
   file_name: 'waypoints.gpx',
-  sections_found: 1,
-  sections_imported: 1,
+  lines_found: 1,
+  lines_imported: 1,
   shot_count: 0,
   closures_requested: 0,
   closures_created: 0,
@@ -46,13 +46,13 @@ const RECEIPT: ImportReceipt = {
 };
 
 // Synthetic: nothing landed at all. Not a shape a waypoints-only GPX import
-// produces on its own (that always yields >=1 section per waypoint) - this
+// produces on its own (that always yields >=1 line per waypoint) - this
 // stands in for whatever upstream path can report a fully empty receipt,
 // exercising the #442 guard in isolation from the waypoints-only fixture.
 const EMPTY_RECEIPT: ImportReceipt = {
   ...RECEIPT,
-  sections_found: 0,
-  sections_imported: 0,
+  lines_found: 0,
+  lines_imported: 0,
 };
 
 const waypointsOnlyGpx: GpxFile = {
@@ -63,7 +63,7 @@ const waypointsOnlyGpx: GpxFile = {
 };
 
 const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids: [], import_receipt } as CommandResult);
+  ({ success: true, error: null, warnings, line_ids: [], import_receipt } as CommandResult);
 
 let executeGpxImport: ReturnType<typeof vi.fn>;
 let calculateFileHash: ReturnType<typeof vi.fn>;

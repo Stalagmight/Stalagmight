@@ -49,13 +49,13 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     expect(useUIStore.getState().appMode).toBe('survey');
   });
 
-  it('setColorMode("section") while in Plan returns to Survey (no overlay selected)', () => {
-    // 'section' = no color overlay; Plan still owns the layer paint, so picking it must
+  it('setColorMode("line") while in Plan returns to Survey (no overlay selected)', () => {
+    // 'line' = no color overlay; Plan still owns the layer paint, so picking it must
     // leave Plan. Guards the setColorMode early-return path (colorModeOf is already
-    // 'section' in Plan, so the exit must run BEFORE the no-op check).
+    // 'line' in Plan, so the exit must run BEFORE the no-op check).
     useUIStore.getState().setAppMode('plan');
     expect(useUIStore.getState().appMode).toBe('plan');
-    useUIStore.getState().setColorMode('section');
+    useUIStore.getState().setColorMode('line');
     expect(useUIStore.getState().appMode).toBe('survey');
   });
 
@@ -64,13 +64,13 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     // same value, but on exit the saved survey value must come back (here: closureAdjusted).
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
     useUIStore.getState().setAppMode('plan');
-    useGasPlanStore.getState().setOrigin({ section_id: 2, station_index: 1 });
+    useGasPlanStore.getState().setOrigin({ line_id: 2, station_index: 1 });
     useUIStore.getState().setAppMode('survey');
     expect(useUIStore.getState().appMode).toBe('survey');
     expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
     // The gas plan PERSISTS across mode switches now (#244); it is emptied only on a project
     // load (applyDisplaySettings), not on leaving Plan. (Was previously reset here.)
-    expect(useGasPlanStore.getState().origin).toEqual({ section_id: 2, station_index: 1 });
+    expect(useGasPlanStore.getState().origin).toEqual({ line_id: 2, station_index: 1 });
   });
 
   it('exitGasPlan returns to Survey from Plan and from Export', () => {
@@ -116,7 +116,7 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     // gas store itself, or the safety ack (and inputs) leak into B's Plan session.
     useUIStore.getState().setAppMode('plan');
     useGasPlanStore.getState().setPushyAck(true);
-    useGasPlanStore.getState().setOrigin({ section_id: 9, station_index: 3 });
+    useGasPlanStore.getState().setOrigin({ line_id: 9, station_index: 3 });
     useUIStore.getState().applyDisplaySettings({ geometryMode: 'measured' } as never);
     expect(useGasPlanStore.getState().pushyAck).toBe(false);
     expect(useGasPlanStore.getState().origin).toBeNull();

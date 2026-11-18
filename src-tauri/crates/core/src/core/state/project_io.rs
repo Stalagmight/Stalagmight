@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
-use crate::models::{Project, SectionId};
+use crate::models::{LineId, Project, StationRef};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
@@ -200,7 +200,7 @@ fn apply_save_heals(project: &mut Project) {
     // SpeleoDB renders byte-stable across re-exports, so it has to be
     // settled BEFORE the SQLite write rather than minted per-consumer.
     project.ensure_shot_uuids();
-    // Re-mint any within-section duplicate shot UUID before refs are resolved
+    // Re-mint any within-line duplicate shot UUID before refs are resolved
     // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
     // the FIRST matching shot, so a ref anchored on a later duplicate would be
     // written to the wrong station - duplicate_shot_uuid is a Critical violation
@@ -213,50 +213,50 @@ fn apply_save_heals(project: &mut Project) {
     // ref, so unlike those it is safe to auto-heal on save rather than block.)
     project.ensure_unique_shot_uuids();
 
-    // Capture the least-squares gauge pair for any section that lacks one (#24), now that
-    // every shot is guaranteed a UUID. Recording the station the section is ALREADY using
+    // Capture the least-squares gauge pair for any line that lacks one (#24), now that
+    // every shot is guaranteed a UUID. Recording the station the line is ALREADY using
     // means capturing never moves anybody's coordinates; from here on the gauge is named by
     // a pair of shots rather than re-derived from an index that a later append can shift.
     project.capture_missing_gauge_anchors();
 
-    // Drop section_offsets for sections that no longer exist. An orphan entry
-    // (a section removed via a path that bypassed cleanup) is dead data, and the
-    // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing
+    // Drop line_offsets for lines that no longer exist. An orphan entry
+    // (a line removed via a path that bypassed cleanup) is dead data, and the
+    // SQLite line_offsets row carries a FOREIGN KEY to lines(id) - writing
     // it aborts the ENTIRE save with a generic FK error rather than routing the
     // user to Repair. Lossless (matches repair_structural_integrity), so heal on
-    // save. (orphan_section_offset is Critical but the save gate only sees
-    // station cross-refs, not section_offsets.)
-    let existing_sections: std::collections::HashSet<SectionId> =
-        project.sections.iter().map(|s| s.id).collect();
+    // save. (orphan_line_offset is Critical but the save gate only sees
+    // station cross-refs, not line_offsets.)
+    let existing_lines: std::collections::HashSet<LineId> =
+        project.lines.iter().map(|s| s.id).collect();
     project
-        .section_offsets
-        .retain(|sid, _| existing_sections.contains(sid));
+        .line_offsets
+        .retain(|sid, _| existing_lines.contains(sid));
 
-    // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
-    // the load-boundary guard and the shot sanitize below. section_offsets has no
+    // Sanitize non-finite (NaN/inf) line offsets before persisting, mirroring
+    // the load-boundary guard and the shot sanitize below. line_offsets has no
     // other finite guard, and a non-finite offset would either be coerced to NULL
     // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
     // world coordinate for that component on the next load.
     //
-    // Through `write_section_offset`, not by rewriting the tuple in place: a
+    // Through `write_line_offset`, not by rewriting the tuple in place: a
     // fully-sanitized offset is (0, 0), which means "not displaced", and this
     // map spells that as an ABSENT key. Writing the zero row instead persisted
     // an inert entry the same project reached by any other route would not have
-    // - the exact shape `write_section_offset` exists to prevent (#413 finding
+    // - the exact shape `write_line_offset` exists to prevent (#413 finding
     // 2) - and the row then had to be loaded, cascaded over and re-saved.
-    let non_finite: Vec<SectionId> = project
-        .section_offsets
+    let non_finite: Vec<LineId> = project
+        .line_offsets
         .iter()
         .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
         .map(|(id, _)| *id)
         .collect();
     for id in non_finite {
-        let offset = project.section_offset(id);
+        let offset = project.line_offset(id);
         let finite = (
             if offset.0.is_finite() { offset.0 } else { 0.0 },
             if offset.1.is_finite() { offset.1 } else { 0.0 },
         );
-        Project::write_section_offset(&mut project.section_offsets, id, finite);
+        Project::write_line_offset(&mut project.line_offsets, id, finite);
     }
 
     // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
@@ -267,17 +267,17 @@ fn apply_save_heals(project: &mut Project) {
     // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
     // so blocking the save would strand the user; neutralizing matches the load
     // round-trip - the value was already unusable.)
-    for section in &mut project.sections {
-        for shot in &mut section.shots {
+    for line in &mut project.lines {
+        for shot in &mut line.shots {
             shot.sanitize_non_finite();
         }
     }
 }
 
-/// The gauge pairs a recorded snapshot holds, by section id (sections with a
+/// The gauge pairs a recorded snapshot holds, by line id (lines with a
 /// pair only): what the EDIT on the other side of a snapshot pair wrote, as
 /// opposed to a pair a save captured after the entry was recorded.
-pub(crate) type RecordedGauges = std::collections::HashMap<SectionId, (String, Option<String>)>;
+pub(crate) type RecordedGauges = std::collections::HashMap<LineId, (String, Option<String>)>;
 
 /// Read just the gauge pairs out of a project snapshot. serde skips every
 /// other field, so this costs one scan of the text, not a project. `None` when
@@ -285,7 +285,7 @@ pub(crate) type RecordedGauges = std::collections::HashMap<SectionId, (String, O
 pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
     #[derive(serde::Deserialize)]
     struct GaugeOf {
-        id: SectionId,
+        id: LineId,
         #[serde(default)]
         gauge_shot_uuid: Option<String>,
         #[serde(default)]
@@ -294,12 +294,12 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
     #[derive(serde::Deserialize)]
     struct Gauges {
         #[serde(default)]
-        sections: Vec<GaugeOf>,
+        lines: Vec<GaugeOf>,
     }
     let gauges: Gauges = serde_json::from_str(snapshot).ok()?;
     Some(
         gauges
-            .sections
+            .lines
             .into_iter()
             .filter_map(|s| Some((s.id, (s.gauge_shot_uuid?, s.gauge_neighbour_uuid))))
             .collect(),
@@ -320,17 +320,17 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///
 /// * `ensure_shot_uuids` - RE-APPLIED. Pure fill-in: it only touches a shot with
 ///   no uuid, and it cannot alter one that has it. (A no-op in practice today -
-///   `Section::new` mints, and the load path mints - which is exactly why it is
+///   `Line::new` mints, and the load path mints - which is exactly why it is
 ///   safe to keep as a guarantee.)
 /// * `capture_missing_gauge_anchors` - RE-APPLIED AS A CARRY-FORWARD, not as a
 ///   fresh capture. The anchors `live` holds are copied onto any restored
-///   section that has none AND CAN RESOLVE THEM, so the pair a save recorded
+///   line that has none AND CAN RESOLVE THEM, so the pair a save recorded
 ///   survives the undo. It is deliberately NOT the unconditional capture:
 ///   minting anchors for a project that has never been saved would have a
 ///   restore invent state no save authorised, and the restored project would
 ///   then differ from the state it is supposed to be restoring. Neither
 ///   direction can OVERWRITE an anchor - both the app's capture and this
-///   carry-forward skip a section that already has one - so the pair a section
+///   carry-forward skip a line that already has one - so the pair a line
 ///   is pinned to never moves.
 ///
 /// # The half of finding 11 this does NOT cover, and what does
@@ -345,10 +345,10 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///   it the heal would simply be reverted.
 /// * THE REFRESH covers the half being LEFT BEHIND, by re-recording it from the
 ///   live project. That is what makes the reverse move exact - and it is the only
-///   thing that can, because this carry-forward is a LIVE-SECTION LOOKUP and a
-///   snapshot pair whose halves disagree about whether a section EXISTS (a
-///   `Batch` holding a `CreateSection`, `execute_delete_shot_range_split`'s
-///   re-created tail) has no live counterpart at the moment the section comes
+///   thing that can, because this carry-forward is a LIVE-LINE LOOKUP and a
+///   snapshot pair whose halves disagree about whether a line EXISTS (a
+///   `Batch` holding a `CreateLine`, `execute_delete_shot_range_split`'s
+///   re-created tail) has no live counterpart at the moment the line comes
 ///   back (#413, finding 11's re-creation residue).
 ///
 /// Neither subsumes the other, and this one is also on the path of every
@@ -360,9 +360,9 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///   Repair has to restore them exactly (`restore_snapshot_into` says the same
 ///   thing about its legacy-canonicalization block, and
 ///   `undo_of_duplicate_uuid_repair_restores_the_duplicates` pins it).
-/// * the orphan `section_offsets` retain - NOT re-applied. It DROPS state rather
+/// * the orphan `line_offsets` retain - NOT re-applied. It DROPS state rather
 ///   than filling it in, and an orphan key is inert until the next save: every
-///   consumer looks offsets up by an id in `sections`, and the save runs its own
+///   consumer looks offsets up by an id in `lines`, and the save runs its own
 ///   retain before the FK-bearing write. Restoring it faithfully keeps undo an
 ///   exact inverse.
 /// * the non-finite sanitize - NOT re-applied. It is destructive, which is why
@@ -372,7 +372,7 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///
 /// `edited`: for a step through a snapshot pair, the gauge pairs the half
 /// being LEFT BEHIND held when it was recorded. A live pair equal to one of
-/// them is the edit's own (a combine that pins its kept section's gauge on the
+/// them is the edit's own (a combine that pins its kept line's gauge on the
 /// station it was on), not a save's capture, so it is not carried across: the
 /// restored half did not have it, and the step is an exact inverse.
 pub(super) fn reapply_heals_after_restore(
@@ -384,15 +384,16 @@ pub(super) fn reapply_heals_after_restore(
     let Some(live) = live else {
         return;
     };
-    for section in &mut restored.sections {
-        if section.gauge_shot_uuid.is_some() {
+    // The Section id counter only goes up within a timeline: a Section the
+    // restored state predates keeps its id retired, so `hiddenSections` (a
+    // view setting, keyed by id) never names a different Section later.
+    restored.next_section_id = restored.next_section_id.max(live.next_section_id);
+    adopt_station_identities(restored, live);
+    for line in &mut restored.lines {
+        if line.gauge_shot_uuid.is_some() {
             continue;
         }
-        let Some(healed) = live
-            .sections
-            .iter()
-            .find(|candidate| candidate.id == section.id)
-        else {
+        let Some(healed) = live.lines.iter().find(|candidate| candidate.id == line.id) else {
             continue;
         };
         let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
@@ -400,7 +401,7 @@ pub(super) fn reapply_heals_after_restore(
         };
         let edits_own =
             edited
-                .and_then(|pairs| pairs.get(&section.id))
+                .and_then(|pairs| pairs.get(&line.id))
                 .is_some_and(|(shot, neighbour)| {
                     shot == gauge_shot
                         && neighbour.as_deref() == healed.gauge_neighbour_uuid.as_deref()
@@ -408,7 +409,7 @@ pub(super) fn reapply_heals_after_restore(
         if edits_own {
             continue;
         }
-        // Matched by id, but the pair names shots BY UUID - and the section this
+        // Matched by id, but the pair names shots BY UUID - and the line this
         // is being copied onto is a DIFFERENT state of that id, which need not
         // hold them. `DeleteShot` records a snapshot pair; save while the undo
         // has the deleted shot back, and the pair a save captures names a shot
@@ -417,26 +418,103 @@ pub(super) fn reapply_heals_after_restore(
         // A pair that does not resolve is not a weaker pin, it is no pin at all,
         // and it is worse than none: `Project::gauge_index` silently falls back
         // to the index rule, and `capture_missing_gauge_anchors` skips every
-        // section whose `gauge_shot_uuid.is_some()` - so the section stays on the
+        // line whose `gauge_shot_uuid.is_some()` - so the line stays on the
         // fallback, and the gauge walks onto a new far station the next time the
-        // section is extended, which is the whole defect the pair exists to
+        // line is extended, which is the whole defect the pair exists to
         // prevent (#24). Leaving the anchors as the snapshot had them (unset) is
-        // what lets the next save capture a pair the section can actually
+        // what lets the next save capture a pair the line can actually
         // resolve.
-        let holds = |uuid: &str| {
-            section
-                .shots
-                .iter()
-                .any(|s| s.uuid.as_deref() == Some(uuid))
-        };
-        // The neighbour is legitimately absent for a single-shot section, so
+        let holds = |uuid: &str| line.shots.iter().any(|s| s.uuid.as_deref() == Some(uuid));
+        // The neighbour is legitimately absent for a single-shot line, so
         // "unset" passes and only a RECORDED one has to resolve.
         if !holds(gauge_shot) || !healed.gauge_neighbour_uuid.as_deref().is_none_or(holds) {
             continue;
         }
-        section.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
-        section.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
+        line.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
+        line.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
     }
+}
+
+/// A station told apart from every other by the shots on either side of it,
+/// as an unordered pair (`None` is the line's start or end), so it names the
+/// same physical station whichever way its line runs: a Reverse swaps the
+/// sides, not the pair. Shot uuids are project-unique, so the pair names the
+/// station across lines too (a split half); only a shot-less line's one
+/// station, `(None, None)`, needs its line to tell it apart.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StationSides {
+    line: Option<LineId>,
+    sides: (Option<String>, Option<String>),
+}
+
+/// Every station of `project` by [`StationSides`], with its position; a pair
+/// that names more than one station (a repeated or missing shot uuid) is
+/// dropped, since it cannot say which one it means.
+fn stations_by_sides(project: &Project) -> std::collections::HashMap<StationSides, StationRef> {
+    let mut out = std::collections::HashMap::new();
+    let mut ambiguous = std::collections::HashSet::new();
+    for line in &project.lines {
+        let uuid = |i: usize| line.shots.get(i).and_then(|s| s.uuid.clone());
+        for index in 0..=line.shots.len() {
+            let before = index.checked_sub(1).and_then(uuid);
+            let after = uuid(index);
+            let both_ends = before.is_none() && after.is_none();
+            let sides = if before <= after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let key = StationSides {
+                line: both_ends.then_some(line.id),
+                sides,
+            };
+            let at = StationRef::new(line.id, u32::try_from(index).unwrap_or(u32::MAX));
+            if out.insert(key.clone(), at).is_some() {
+                ambiguous.insert(key);
+            }
+        }
+    }
+    for key in ambiguous {
+        out.remove(&key);
+    }
+    out
+}
+
+/// A snapshot recorded by a build that predates Station IDs carries none (and
+/// may lack names the live project has seeded since). Give every station the
+/// restored state shares with the live one the live station's id and, when
+/// the snapshot has none, its name, and keep the counter above both; the
+/// station-identity epilogue mints and seeds the rest. A current snapshot
+/// carries its own ids and is left exactly as recorded.
+///
+/// "Shares" means the same PHYSICAL station: the same shots on either side
+/// ([`StationSides`]), not the same stored key. Across a Reverse or a
+/// first-shot delete one key (`LineStart`, `AfterShot(u)`) names a different
+/// station in the two states, and adopting by key put ids and names on the
+/// wrong stations; a station whose sides changed (the new first station after
+/// a first-shot delete) is left for the epilogue instead.
+fn adopt_station_identities(restored: &mut Project, live: &Project) {
+    if !restored.station_ids.is_empty() || live.station_ids.is_empty() {
+        return;
+    }
+    let live_stations = stations_by_sides(live);
+    for (sides, at) in stations_by_sides(restored) {
+        let Some(live_at) = live_stations.get(&sides) else {
+            continue;
+        };
+        let Some(key) = restored.key_for_ref(at) else {
+            continue;
+        };
+        if let Some(id) = live.station_id_at(*live_at) {
+            restored.station_ids.insert(key.clone(), id);
+        }
+        if restored.station_name_at(at).is_none() {
+            if let Some(name) = live.station_name_at(*live_at) {
+                restored.station_names.insert(key, name.to_string());
+            }
+        }
+    }
+    restored.next_station_id = restored.next_station_id.max(live.next_station_id);
 }
 
 impl AppState {
@@ -478,7 +556,7 @@ impl AppState {
         // endpoint anchors on was deleted) BEFORE the heals below mutate the live
         // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
         // non-finite sanitize) do NOT affect this predicate - it depends only on
-        // section existence and anchor resolution - so checking first is equivalent
+        // line existence and anchor resolution - so checking first is equivalent
         // for the block decision but guarantees a REFUSED save leaves the open project
         // byte-for-byte unchanged (the non-finite sanitize rewrites shot values to
         // finite defaults with no undo entry, so mutating on a refused save would
@@ -650,41 +728,41 @@ impl AppState {
                 None => Ok(Vec::new()),
             }
         }
-        // ...plus the ignores an "Add .stalx" carried in for sections this file
+        // ...plus the ignores an "Add .stalx" carried in for lines this file
         // has never held (#674): THIS save is the first that can write them.
-        // They ride the same remap and section filter as every other row.
+        // They ride the same remap and line filter as every other row.
         .map(|mut rows| {
             rows.extend(self.pending_ignores());
             rows
         });
         let resolved_warnings: Vec<_> = match carried_ignores {
             Ok(rows) => {
-                // Drop rows whose section no longer exists. resolved_warnings has
-                // a FOREIGN KEY on section_id and the carry-over re-inserts in a
-                // single transaction - one orphaned row (e.g. a section deleted
-                // after a warning on it was ignored; delete_section is in-memory
+                // Drop rows whose line no longer exists. resolved_warnings has
+                // a FOREIGN KEY on line_id and the carry-over re-inserts in a
+                // single transaction - one orphaned row (e.g. a line deleted
+                // after a warning on it was ignored; delete_line is in-memory
                 // only and never prunes this table) would abort the whole
                 // transaction and silently drop EVERY still-valid ignore.
-                let section_ids: std::collections::HashSet<_> =
-                    project.sections.iter().map(|s| s.id).collect();
-                // Re-derive each UUID-keyed row's stored (section_id, shot_id)
+                let line_ids: std::collections::HashSet<_> =
+                    project.lines.iter().map(|s| s.id).collect();
+                // Re-derive each UUID-keyed row's stored (line_id, shot_id)
                 // from the live shot's CURRENT position so two distinct live
-                // shots never share a (section_id, shot_id) in the fresh save
+                // shots never share a (line_id, shot_id) in the fresh save
                 // file (issue #57). save_project writes shot_id =
-                // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
+                // line_id*FEATURE_ID_STRIDE + sequence_order, so we derive
                 // the same value from the in-memory project; load regenerates
                 // ids with this identical formula. Without this, a renumber that
                 // lands a different shot on a stale UUID-keyed row's old position
-                // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
+                // would let INSERT OR REPLACE (against UNIQUE(line_id, shot_id,
                 // warning_code)) silently delete the older shot's still-valid
                 // ignore.
-                // Key by (section_id, uuid), not uuid alone: shot UUIDs are unique
+                // Key by (line_id, uuid), not uuid alone: shot UUIDs are unique
                 // across the live project, but a STORED row may name an id that
-                // two sections held before the load renamed one copy, and only
-                // its section says which shot it meant (issue #57 / Codex).
-                let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> =
+                // two lines held before the load renamed one copy, and only
+                // its line says which shot it meant (issue #57 / Codex).
+                let live_positions: std::collections::HashMap<(LineId, &str), (LineId, u32)> =
                     project
-                        .sections
+                        .lines
                         .iter()
                         .flat_map(|s| {
                             s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
@@ -700,7 +778,7 @@ impl AppState {
                             })
                         })
                         .collect();
-                // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
+                // Index live shots by their CURRENT (line_id, shot_id) → (uuid,
                 // saved position). A position-keyed (NULL-uuid) row written before
                 // its shot's UUID was persisted (resolve_warning on a pre-v6 or
                 // not-yet-saved shot) is upgraded here: THIS save persists every
@@ -708,35 +786,34 @@ impl AppState {
                 // AND its now-persisted UUID. Without this, its stale in-memory
                 // shot_id could point at a different shot (or none) after an
                 // insert/delete on the next load (issue #57 / Codex).
-                let live_by_id: std::collections::HashMap<
-                    (SectionId, u32),
-                    (&str, (SectionId, u32)),
-                > = project
-                    .sections
-                    .iter()
-                    .flat_map(|s| {
-                        s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                            sh.uuid.as_deref().map(|u| {
-                                (
-                                    (s.id, sh.id),
+                let live_by_id: std::collections::HashMap<(LineId, u32), (&str, (LineId, u32))> =
+                    project
+                        .lines
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
                                     (
-                                        u,
+                                        (s.id, sh.id),
                                         (
-                                            s.id,
-                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
+                                            u,
+                                            (
+                                                s.id,
+                                                s.id * crate::models::FEATURE_ID_STRIDE
+                                                    + seq as u32,
+                                            ),
                                         ),
-                                    ),
-                                )
+                                    )
+                                })
                             })
                         })
-                    })
-                    .collect();
+                        .collect();
                 let homes = super::warnings::ShotHomes::of(project);
                 // Remap each UUID-keyed row to its shot's live position; DROP a
                 // UUID-keyed row whose shot was deleted (UUID no longer live) - it
                 // can never match a live shot by UUID on reload, so it is dead.
                 // Keeping it with its stale id would let it collide (under
-                // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
+                // UNIQUE(line_id, shot_id, warning_code) + INSERT OR REPLACE)
                 // with a live shot that a renumber moved onto that position, and
                 // REPLACE could drop either row depending on insert order - i.e.
                 // silently lose the live shot's still-valid ignore. Dropping dead
@@ -747,33 +824,33 @@ impl AppState {
                     .filter_map(|mut r| {
                         match r.shot_uuid.as_deref() {
                             Some(uuid) => {
-                                // Look up by (section_id, uuid). A row stored against
-                                // an id the load renamed (a cross-section repeat in a
+                                // Look up by (line_id, uuid). A row stored against
+                                // an id the load renamed (a cross-line repeat in a
                                 // file saved before shot UUIDs were project-wide
                                 // unique) names its shot through the derived id, and
                                 // is re-keyed to it here: this save persists it.
                                 let live = crate::models::live_shot_uuid_for_stored(
-                                    r.section_id,
+                                    r.line_id,
                                     uuid,
-                                    |id| live_positions.contains_key(&(r.section_id, id)),
+                                    |id| live_positions.contains_key(&(r.line_id, id)),
                                 );
                                 // A shot a split or combine moved to another
-                                // section keeps its uuid: re-key the row to its
-                                // new section rather than drop it.
+                                // line keeps its uuid: re-key the row to its
+                                // new line rather than drop it.
                                 let (home, live_uuid) = match live {
-                                    Some(live) => (r.section_id, live),
-                                    None => (homes.moved_to(r.section_id, uuid)?, uuid.to_string()),
+                                    Some(live) => (r.line_id, live),
+                                    None => (homes.moved_to(r.line_id, uuid)?, uuid.to_string()),
                                 };
                                 let &(sec, shot) =
                                     live_positions.get(&(home, live_uuid.as_str()))?;
                                 r.shot_uuid = Some(live_uuid);
-                                r.section_id = sec;
+                                r.line_id = sec;
                                 r.shot_id = shot;
                                 Some(r)
                             }
                             None => {
                                 // Upgrade a position-keyed row to its shot's saved
-                                // position + now-persisted UUID when its (section_id,
+                                // position + now-persisted UUID when its (line_id,
                                 // shot_id) still maps to a live shot. A row that maps
                                 // to NO live shot is DEAD (its shot was deleted) - DROP
                                 // it: carrying it forward would let the load-time
@@ -781,17 +858,17 @@ impl AppState {
                                 // occupies that saved position, suppressing an
                                 // unrelated shot's warning (issue #57 / Codex).
                                 let &(uuid, (sec, shot)) =
-                                    live_by_id.get(&(r.section_id, r.shot_id))?;
+                                    live_by_id.get(&(r.line_id, r.shot_id))?;
                                 r.shot_uuid = Some(uuid.to_string());
-                                r.section_id = sec;
+                                r.line_id = sec;
                                 r.shot_id = shot;
                                 Some(r)
                             }
                         }
                     })
-                    // Then drop any (legacy) row whose section no longer exists so
-                    // the FK on section_id holds for every carried-over row.
-                    .filter(|r| section_ids.contains(&r.section_id))
+                    // Then drop any (legacy) row whose line no longer exists so
+                    // the FK on line_id holds for every carried-over row.
+                    .filter(|r| line_ids.contains(&r.line_id))
                     .collect()
             }
             // [#517] REFUSE the save. This snapshot is not a nicety the save

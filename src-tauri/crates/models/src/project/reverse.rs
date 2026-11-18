@@ -1,6 +1,6 @@
-//! Reversing a section end-to-end (issue #24).
+//! Reversing a line end-to-end (issue #24).
 //!
-//! The operation flips which physical end of a section is station 0 **without
+//! The operation flips which physical end of a line is station 0 **without
 //! moving the cave**: after a reverse every station keeps the exact world
 //! coordinate it had before, and only the numbering direction changes.
 //!
@@ -26,29 +26,27 @@
 //! One degenerate case needs care: when the two readings are exactly 180
 //! degrees apart the circular mean is undefined, and reciprocate-and-swap maps
 //! the pair to itself - the shot would keep its old bearing while the rest of
-//! the section turned around, moving the cave.  Such a pair is swapped instead,
+//! the line turned around, moving the cave.  Such a pair is swapped instead,
 //! which preserves both recorded values and flips the arbitrary tie-break that
 //! [`average_azimuth`](crate::Shot::average_azimuth) resolves it with.
 //!
 //! Two things outside the shot vec also move:
 //!
-//! * **The section anchor.** `section_offsets` positions station 0, which is
-//!   now the opposite physical end, so the offset gains the section's old
-//!   total displacement or the whole section teleports.
+//! * **The line anchor.** `line_offsets` positions station 0, which is
+//!   now the opposite physical end, so the offset gains the line's old
+//!   total displacement or the whole line teleports.
 //! * **External station refs.** Merges, loop closures, zero datums, station
 //!   offsets and station comments are stored as anchor-based
 //!   [`StationKey`](crate::StationKey)s.
 //!   They still *resolve* after a reverse (UUIDs travel with their records),
 //!   but to a different physical station - a zero datum on station 0 would end
-//!   up pinning the far end.  Each key in the reversed section is remapped to
+//!   up pinning the far end.  Each key in the reversed line is remapped to
 //!   its mirrored station so every relationship stays where the surveyor put
 //!   it.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{
-    normalize_azimuth, AzimuthReference, SectionId, Shot, ShotData, StationKey, StationRef,
-};
+use crate::{normalize_azimuth, AzimuthReference, LineId, Shot, ShotData, StationKey, StationRef};
 
 use super::Project;
 
@@ -62,7 +60,7 @@ fn reciprocal(azimuth: f64) -> f64 {
 ///
 /// `reciprocal` is an involution, so for such a pair `reciprocal(azimuth_out) ==
 /// azimuth_in` and vice versa - the transform below would be a no-op and the
-/// shot would keep pointing the original way while the rest of the section
+/// shot would keep pointing the original way while the rest of the line
 /// turned around.
 ///
 /// The comparison is deliberately exact. A pair that misses antipodal by even
@@ -79,15 +77,15 @@ fn readings_are_antipodal(azimuth_in: f64, azimuth_out: f64) -> bool {
 /// Total local displacement of a run of shots: the local coordinate of the last
 /// station, since station 0 sits at the local origin by definition.
 ///
-/// This is what a reverse has to add to `section_offsets` to keep the cave
+/// This is what a reverse has to add to `line_offsets` to keep the cave
 /// still - station 0 becomes the far end, so the anchor moves by the span the
-/// section used to cover. Shared by the in-app reverse and the import-time
+/// line used to cover. Shared by the in-app reverse and the import-time
 /// toggle so the two placements can never disagree.
 ///
-/// `reference` is the section's north reference (#438): the displacement has to
+/// `reference` is the line's north reference (#438): the displacement has to
 /// be measured in the same rotated frame the coordinate walk uses, or a reverse
-/// of a section carrying a declination compensates by a vector that is off by
-/// exactly that rotation - and the section slides.
+/// of a line carrying a declination compensates by a vector that is off by
+/// exactly that rotation - and the line slides.
 pub fn shot_run_displacement(shots: &[ShotData], reference: AzimuthReference) -> (f64, f64) {
     let (mut dx, mut dy) = (0.0_f64, 0.0_f64);
     for shot in shots {
@@ -101,9 +99,9 @@ pub fn shot_run_displacement(shots: &[ShotData], reference: AzimuthReference) ->
 
 /// Re-associate one shot's readings with the opposite direction of travel.
 ///
-/// Reverses the whole vec of shots as well, so the caller gets a section that
+/// Reverses the whole vec of shots as well, so the caller gets a line that
 /// is fully reversed.  This is THE reverse transform: both the in-app action
-/// ([`Project::reverse_section`]) and the import-time toggle route through it,
+/// ([`Project::reverse_line`]) and the import-time toggle route through it,
 /// so the two can never drift apart.
 ///
 /// Order-independent per shot, so it is safe to apply before or after the vec
@@ -134,7 +132,7 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
         // `average_azimuth_of` still wrapped with Rust's truncated `%`: the two
         // disagreed for a pair whose difference falls outside `(-540, 540]`, the
         // degenerate-pair guard missed, and reciprocate-and-swap left the bearing
-        // UNCHANGED while the rest of the section turned around. Out-of-range
+        // UNCHANGED while the rest of the line turned around. Out-of-range
         // readings are reachable: `validation.rs` flags an azimuth outside
         // `[0, 360)` as `INVALID_AZIMUTH`, which is `WarningSeverity::Error` and
         // so cannot be ignored - but it is a report, not a gate, and nothing
@@ -181,7 +179,7 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
 /// equal silently drop one entry - a station comment or offset lost with no
 /// error.  Two stored keys can name one station: a legacy
 /// `StationAnchor::Index(i)` beside the canonical `AfterShot`, or two shots
-/// sharing a UUID (`ensure_section_shot_uuids` mints, it does not dedupe).
+/// sharing a UUID (`ensure_line_shot_uuids` mints, it does not dedupe).
 /// `key_for_ref` only ever emits canonical anchors, so both mirror onto the same
 /// new key.
 ///
@@ -189,9 +187,9 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
 /// colliding group keeps its OLD key, and that old key can itself be a third
 /// key's mirror target, so the clash just moves - and which member survives is
 /// `HashMap` iteration order, making the drop appear about half the time.  A
-/// three-shot example: `Index(0)` and `SectionStart` both name station 0 and both
+/// three-shot example: `Index(0)` and `LineStart` both name station 0 and both
 /// mirror to `AfterShot(uuid_2)`, while `AfterShot(uuid_2)` mirrors back to
-/// `SectionStart`; freeze `SectionStart` and it now collides with that third key.
+/// `LineStart`; freeze `LineStart` and it now collides with that third key.
 /// So this walks the FULL image - remapped and left-alone keys alike - and
 /// freezes every member of every clash, repeating until nothing clashes.  It
 /// terminates because `frozen` only grows and the all-frozen mapping is the
@@ -232,26 +230,26 @@ pub(super) fn frozen_remaps(
 }
 
 impl Project {
-    /// Reverse `section_id` end-to-end, preserving every station's world
+    /// Reverse `line_id` end-to-end, preserving every station's world
     /// coordinate.  `swap_lr` also mirrors the `left`/`right` passage
     /// dimensions (the user is now facing the other way); it is opt-in because
     /// whether LRUD was recorded facing along travel is a survey convention we
     /// cannot infer.
     ///
-    /// Returns `false` if the section does not exist.  A section with no shots
+    /// Returns `false` if the line does not exist.  A line with no shots
     /// is a single station and reverses to itself.
     ///
     /// Involutive up to floating point: every step is a swap, a negation or the
-    /// 180-degree turn, so `reverse_section(id, s)` twice restores the original
-    /// section - but `(az + 180) % 360` is only *bit*-exact when both the shifted
+    /// 180-degree turn, so `reverse_line(id, s)` twice restores the original
+    /// line - but `(az + 180) % 360` is only *bit*-exact when both the shifted
     /// value and the wrap are representable (e.g. `17.5 -> 197.5 -> 17.5`; `0.1`
     /// comes back a couple of ulps out).  Undo therefore snapshots rather than
     /// re-running the transform - see `AppState::generate_undo_data`.
-    pub fn reverse_section(&mut self, section_id: SectionId, swap_lr: bool) -> bool {
-        let Some(section) = self.get_section(section_id) else {
+    pub fn reverse_line(&mut self, line_id: LineId, swap_lr: bool) -> bool {
+        let Some(line) = self.get_line(line_id) else {
             return false;
         };
-        let shot_count = section.shots.len();
+        let shot_count = line.shots.len();
         if shot_count == 0 {
             return true;
         }
@@ -262,13 +260,13 @@ impl Project {
         // write pass below would silently keep the pre-reverse key - parking a
         // merge, datum or comment on the wrong physical end.  Mint the missing
         // ones up front instead; load already does this, so this is belt-and-
-        // braces for any path that didn't.  Section-scoped: only this section's
-        // anchors are rebuilt below, and a multi-section reverse runs one
-        // `ReverseSection` per section.
-        self.ensure_section_shot_uuids(section_id);
+        // braces for any path that didn't.  Line-scoped: only this line's
+        // anchors are rebuilt below, and a multi-line reverse runs one
+        // `ReverseLine` per line.
+        self.ensure_line_shot_uuids(line_id);
 
         // ---- Read pass, before anything moves -------------------------------
-        // Station `i` of this section becomes station `shot_count - i`.  Resolve
+        // Station `i` of this line becomes station `shot_count - i`.  Resolve
         // every stored key now, while the old order is still in place; the write
         // pass below rebuilds them from the mirrored indices.
         //
@@ -281,7 +279,7 @@ impl Project {
         let mirrored: HashMap<StationKey, u32> = {
             let mut out: HashMap<StationKey, u32> = HashMap::new();
             self.for_each_station_ref(|_label, key| {
-                if key.section_id != section_id || out.contains_key(&key) {
+                if key.line_id != line_id || out.contains_key(&key) {
                     return;
                 }
                 if let Some(sr) = self.resolve_key(&key) {
@@ -291,12 +289,12 @@ impl Project {
             out
         };
         // The universe the write pass below has to stay injective over: every
-        // stored key of this section, whether or not it turns out to be
+        // stored key of this line, whether or not it turns out to be
         // re-keyable.  A key that drops out of `rebuilt` keeps its old value and
         // can still be collided with, so the collision check needs it too.
         let stored_keys: HashSet<StationKey> = mirrored.keys().cloned().collect();
 
-        let Some(section) = self.get_section(section_id) else {
+        let Some(line) = self.get_line(line_id) else {
             return false;
         };
 
@@ -305,17 +303,17 @@ impl Project {
         // anchors keyed on it (undo/redo `AfterShot`, `shot_uuid_index`) follow
         // the shot to its mirrored position rather than pointing at whatever
         // record inherited its old id.
-        let ids: Vec<_> = section.shots.iter().map(|s| s.id).collect();
-        let uuids: Vec<_> = section.shots.iter().map(|s| s.uuid.clone()).collect();
-        let mut data: Vec<ShotData> = section.shots.iter().map(Shot::to_shot_data).collect();
+        let ids: Vec<_> = line.shots.iter().map(|s| s.id).collect();
+        let uuids: Vec<_> = line.shots.iter().map(|s| s.uuid.clone()).collect();
+        let mut data: Vec<ShotData> = line.shots.iter().map(Shot::to_shot_data).collect();
 
         // Measured on the PRE-reverse order, so it is the offset the anchor has
         // to gain below once station 0 becomes the far end.
-        let (dx, dy) = shot_run_displacement(&data, self.azimuth_reference_for(section));
+        let (dx, dy) = shot_run_displacement(&data, self.azimuth_reference_for(line));
 
         // ---- Mutate the shots ----------------------------------------------
         reverse_shots(&mut data, swap_lr);
-        let Some(section) = self.get_section_mut(section_id) else {
+        let Some(line) = self.get_line_mut(line_id) else {
             return false;
         };
 
@@ -329,8 +327,8 @@ impl Project {
         // as a cross-check rather than deleted, because "the uuid vector is one
         // step out of sync with the shots" is precisely the bug this loop exists
         // to avoid, and a `debug_assert` turns a future regression into a loud
-        // failure instead of every station anchor in the section moving quietly.
-        section.shots = data
+        // failure instead of every station anchor in the line moving quietly.
+        line.shots = data
             .into_iter()
             .zip(uuids.into_iter().rev())
             .zip(ids)
@@ -343,42 +341,42 @@ impl Project {
             })
             .collect();
 
-        // Every shot in this section moved, so every cached `(section_id, uuid) ->
+        // Every shot in this line moved, so every cached `(line_id, uuid) ->
         // index` entry for it is stale.  A stale entry is only a slow path (
         // `resolve_key` re-checks and rescans), but the reverse invalidated all of
-        // them at once - re-index the one section rather than leave every later
+        // them at once - re-index the one line rather than leave every later
         // merge/closure/datum/comment lookup on the O(shots) fallback.
-        self.reindex_section_shot_uuids(section_id);
+        self.reindex_line_shot_uuids(line_id);
 
-        // ---- Keep the section where it was ----------------------------------
+        // ---- Keep the line where it was ----------------------------------
         // Station 0 is now the far end, so the anchor moves by the displacement
-        // the section used to span.
+        // the line used to span.
         //
         // Finiteness first: `NaN != 0.0` is TRUE, so a bare `!= 0.0` would admit
-        // a non-finite displacement straight into `section_offsets`, which has no
+        // a non-finite displacement straight into `line_offsets`, which has no
         // other finite guard - `save_project` rewrites a non-finite offset to 0.0,
-        // teleporting the section to the origin (the exact opposite of what this
+        // teleporting the line to the origin (the exact opposite of what this
         // compensation is for). A finite `length` near 1e200 is enough:
         // `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)`
         // is NaN, while `ShotData::all_finite` still passes. `move_segment` and
         // `move_station` reject non-finite offsets for the same reason.
         if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-            self.adjust_section_offset(section_id, dx, dy);
+            self.adjust_line_offset(line_id, dx, dy);
         }
 
         // ---- Write pass: mirror the external refs ---------------------------
         let rebuilt: HashMap<StationKey, StationKey> = mirrored
             .into_iter()
             .filter_map(|(old, index)| {
-                let next = self.key_for_ref(StationRef::new(section_id, index));
-                // `ensure_section_shot_uuids` above guarantees every `AfterShot`
+                let next = self.key_for_ref(StationRef::new(line_id, index));
+                // `ensure_line_shot_uuids` above guarantees every `AfterShot`
                 // anchor can be built, so a ref we mirrored must be re-keyable.
                 // If that ever stops holding, the key is left untouched below -
                 // and it now names the OPPOSITE physical station - so trip loudly
                 // in dev rather than silently misplacing the relationship.
                 debug_assert!(
                     next.is_some(),
-                    "reverse_section: station ref in section {section_id} mirrored \
+                    "reverse_line: station ref in line {line_id} mirrored \
                      to station {index} but could not be re-keyed - it would \
                      silently stay on its pre-reverse station"
                 );
@@ -391,7 +389,7 @@ impl Project {
         // would turn a recovered case into a dev-only crash.
         if !frozen.is_empty() {
             tracing::warn!(
-                section_id,
+                line_id,
                 count = frozen.len(),
                 "reverse: station refs collided on the mirrored key; left on their \
                  pre-reverse station to avoid dropping one"
@@ -405,10 +403,10 @@ impl Project {
         });
 
         // Flip the orientation marker (#24). Recorded HERE, at the mutation, so no caller can
-        // reverse a section without it: the least-squares gauge reads it to stay on the same
+        // reverse a line without it: the least-squares gauge reads it to stay on the same
         // physical station instead of jumping to the far end of the component.
-        if let Some(section) = self.get_section_mut(section_id) {
-            section.reverse_parity = !section.reverse_parity;
+        if let Some(line) = self.get_line_mut(line_id) {
+            line.reverse_parity = !line.reverse_parity;
         }
 
         self.touch();
@@ -426,7 +424,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::config::ClosureAdjustmentConfig;
-    use crate::{ClosureStrategy, LoopClosure, SectionData, ShotData, Station, StationMerge};
+    use crate::{ClosureStrategy, LineData, LoopClosure, ShotData, Station, StationMerge};
     use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
@@ -440,9 +438,9 @@ mod tests {
         }
     }
 
-    fn project_with_shots(shots: Vec<ShotData>) -> (Project, SectionId) {
+    fn project_with_shots(shots: Vec<ShotData>) -> (Project, LineId) {
         let mut project = Project::new("t".to_string(), None);
-        let section = project.add_section(SectionData {
+        let line = project.add_line(LineData {
             name: None,
             surveyor: None,
             date: None,
@@ -451,23 +449,23 @@ mod tests {
             quality: 1.0,
             shots,
         });
-        let id = section.id;
+        let id = line.id;
         project.ensure_shot_uuids();
         (project, id)
     }
 
-    /// World coordinates of every station in `section_id`, in station order.
+    /// World coordinates of every station in `line_id`, in station order.
     ///
     /// Deliberately routed through the production walk rather than a local copy
     /// of `offset + sum(horizontal * sin/cos(average_azimuth))`: these tests exist
     /// to catch the reverse and the coordinate pipeline disagreeing, and a private
     /// re-implementation would keep passing if both drifted the same way.
-    fn world_coords(project: &Project, section_id: SectionId) -> Vec<(f64, f64)> {
-        let station_count = project.get_section(section_id).unwrap().shots.len() + 1;
+    fn world_coords(project: &Project, line_id: LineId) -> Vec<(f64, f64)> {
+        let station_count = project.get_line(line_id).unwrap().shots.len() + 1;
         (0..station_count)
             .map(|i| {
                 project
-                    .compute_station_raw_xy(StationRef::new(section_id, i as u32))
+                    .compute_station_raw_xy(StationRef::new(line_id, i as u32))
                     .unwrap()
             })
             .collect()
@@ -492,7 +490,7 @@ mod tests {
         ]);
 
         let before = world_coords(&project, id);
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
         let after = world_coords(&project, id);
 
         // Same physical stations, walked from the other end.
@@ -514,12 +512,12 @@ mod tests {
             shot(359.0, 5.0, 2.0, 2.0),
             shot(210.25, 7.5, 2.0, 1.0),
         ]);
-        let original = project.get_section(id).unwrap().clone();
+        let original = project.get_line(id).unwrap().clone();
 
-        assert!(project.reverse_section(id, true));
-        assert!(project.reverse_section(id, true));
+        assert!(project.reverse_line(id, true));
+        assert!(project.reverse_line(id, true));
 
-        let round_tripped = project.get_section(id).unwrap();
+        let round_tripped = project.get_line(id).unwrap();
         assert_eq!(round_tripped.shots.len(), original.shots.len());
         for (a, b) in round_tripped.shots.iter().zip(&original.shots) {
             assert_eq!(a.id, b.id);
@@ -544,10 +542,10 @@ mod tests {
     fn reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp() {
         let (mut project, id) = project_with_shots(vec![shot(0.1, 10.0, 0.0, 0.0)]);
 
-        assert!(project.reverse_section(id, false));
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let azimuth = project.get_section(id).unwrap().shots[0].azimuth_in;
+        let azimuth = project.get_line(id).unwrap().shots[0].azimuth_in;
         assert!(
             (azimuth - 0.1).abs() < 1e-9,
             "round trip drifted more than a rounding error: {azimuth}"
@@ -563,13 +561,13 @@ mod tests {
     #[test]
     fn reverse_swaps_azimuth_reciprocally_not_positionally() {
         // The regression this guards: swapping azimuth_in/out alone leaves
-        // average_azimuth untouched, so the section would keep its old bearings.
+        // average_azimuth untouched, so the line would keep its old bearings.
         let (mut project, id) = project_with_shots(vec![shot(90.0, 10.0, 0.0, 0.0)]);
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
+        let before = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
+        let after = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
         assert!(
             (after - 270.0).abs() < 1e-9,
             "expected reciprocal bearing 270, got {after}"
@@ -584,9 +582,9 @@ mod tests {
         data.pitch_out = Some(-10.0);
         let (mut project, id) = project_with_shots(vec![data]);
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let s = &project.get_section(id).unwrap().shots[0];
+        let s = &project.get_line(id).unwrap().shots[0];
         assert_eq!(s.depth_in, 4.0);
         assert_eq!(s.depth_out, 1.0);
         assert_eq!(s.pitch_in, Some(10.0));
@@ -602,14 +600,14 @@ mod tests {
         data.down = Some(3.0);
 
         let (mut project, id) = project_with_shots(vec![data.clone()]);
-        assert!(project.reverse_section(id, false));
-        let kept = &project.get_section(id).unwrap().shots[0];
+        assert!(project.reverse_line(id, false));
+        let kept = &project.get_line(id).unwrap().shots[0];
         assert_eq!(kept.left, Some(1.0));
         assert_eq!(kept.right, Some(4.0));
 
         let (mut project, id) = project_with_shots(vec![data]);
-        assert!(project.reverse_section(id, true));
-        let swapped = &project.get_section(id).unwrap().shots[0];
+        assert!(project.reverse_line(id, true));
+        let swapped = &project.get_line(id).unwrap().shots[0];
         assert_eq!(swapped.left, Some(4.0));
         assert_eq!(swapped.right, Some(1.0));
         // Up/down are absolute and never mirror.
@@ -625,24 +623,24 @@ mod tests {
             shot(0.0, 3.0, 0.0, 0.0),
         ]);
         let ids: Vec<_> = project
-            .get_section(id)
+            .get_line(id)
             .unwrap()
             .shots
             .iter()
             .map(|s| s.id)
             .collect();
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let section = project.get_section(id).unwrap();
+        let line = project.get_line(id).unwrap();
         // Ids stay ascending by position, records moved under them.
         assert_eq!(
-            section.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            line.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
             ids,
             "shot ids should stay attached to positions"
         );
         // The 3m shot was last and is now first.
-        assert_eq!(section.shots[0].length, 3.0);
+        assert_eq!(line.shots[0].length, 3.0);
     }
 
     #[test]
@@ -661,7 +659,7 @@ mod tests {
             .insert(middle, "at the bend".to_string());
 
         let world_before = world_coords(&project, id);
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
         let world_after = world_coords(&project, id);
 
         // Station i became station N - i, and nothing physically moved.
@@ -695,19 +693,19 @@ mod tests {
         data.azimuth_out = 210.0;
         let (mut project, id) = project_with_shots(vec![data]);
 
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
+        let before = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
         let world_before = world_coords(&project, id);
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
+        let after = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
         assert!(
             (after - reciprocal(before)).abs() < 1e-9,
             "bearing did not turn around: {before} -> {after}"
         );
 
         // Both readings are still on the record, just the other way round.
-        let s = &project.get_section(id).unwrap().shots[0];
+        let s = &project.get_line(id).unwrap().shots[0];
         assert_eq!(s.azimuth_in, 210.0);
         assert_eq!(s.azimuth_out, 30.0);
 
@@ -724,10 +722,10 @@ mod tests {
         data.azimuth_out = 210.0;
         let (mut project, id) = project_with_shots(vec![data]);
 
-        assert!(project.reverse_section(id, false));
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let s = &project.get_section(id).unwrap().shots[0];
+        let s = &project.get_line(id).unwrap().shots[0];
         assert_eq!(s.azimuth_in, 30.0);
         assert_eq!(s.azimuth_out, 210.0);
     }
@@ -773,9 +771,9 @@ mod tests {
         data.azimuth_out = 209.5;
         let (mut project, id) = project_with_shots(vec![data]);
 
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
-        assert!(project.reverse_section(id, false));
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
+        let before = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
+        assert!(project.reverse_line(id, false));
+        let after = project.get_line(id).unwrap().shots[0].average_azimuth_measured();
 
         assert!(
             (after - reciprocal(before)).abs() < 1e-9,
@@ -783,7 +781,7 @@ mod tests {
         );
     }
 
-    /// Pre-v6 sections can carry `uuid: None` shots.  Without minting uuids
+    /// Pre-v6 lines can carry `uuid: None` shots.  Without minting uuids
     /// first, the mirrored station has no `AfterShot` anchor, `key_for_ref`
     /// returns None and the write pass keeps the pre-reverse key - leaving the
     /// comment on the opposite physical end.
@@ -797,11 +795,11 @@ mod tests {
         project
             .station_comments
             .insert(start, "at the entrance".to_string());
-        for shot in &mut project.get_section_mut(id).unwrap().shots {
+        for shot in &mut project.get_line_mut(id).unwrap().shots {
             shot.uuid = None;
         }
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
         // Station 0 became station 2, and the comment went with it.
         let at = |index: u32| {
@@ -824,7 +822,7 @@ mod tests {
         let (mut project, id) = project_with_shots(vec![shot(0.0, 10.0, 0.0, 0.0)]);
         let before = project.modified_at;
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
         assert!(
             project.modified_at > before,
@@ -833,37 +831,34 @@ mod tests {
         );
     }
 
-    /// A missing section and an empty section both leave the project alone, so
-    /// neither may stamp `modified_at` - an empty section reverses to itself.
+    /// A missing line and an empty line both leave the project alone, so
+    /// neither may stamp `modified_at` - an empty line reverses to itself.
     #[test]
     fn reverse_of_a_noop_does_not_mark_the_project_modified() {
         let (mut project, id) = project_with_shots(vec![]);
         let before = project.modified_at;
 
-        assert!(project.reverse_section(id, false));
-        assert!(!project.reverse_section(9999, false));
+        assert!(project.reverse_line(id, false));
+        assert!(!project.reverse_line(9999, false));
 
         assert_eq!(project.modified_at, before);
     }
 
-    /// The reverse permutes every shot index in the section, so every cached
-    /// `(section_id, uuid) -> index` entry is wrong afterwards. Stale entries are
+    /// The reverse permutes every shot index in the line, so every cached
+    /// `(line_id, uuid) -> index` entry is wrong afterwards. Stale entries are
     /// only a slow path (`resolve_key` rescans), so this asserts the cache itself
     /// rather than a behaviour change.
     #[test]
-    fn reverse_refreshes_the_sections_shot_uuid_index() {
+    fn reverse_refreshes_the_lines_shot_uuid_index() {
         let (mut project, id) = project_with_shots(vec![
             shot(0.0, 1.0, 0.0, 0.0),
             shot(0.0, 2.0, 0.0, 0.0),
             shot(0.0, 3.0, 0.0, 0.0),
         ]);
         project.rebuild_shot_uuid_index();
-        let first_uuid = project.get_section(id).unwrap().shots[0]
-            .uuid
-            .clone()
-            .unwrap();
+        let first_uuid = project.get_line(id).unwrap().shots[0].uuid.clone().unwrap();
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
         // The record that was at index 0 is now last.
         assert_eq!(
@@ -872,15 +867,15 @@ mod tests {
             "the uuid index must follow the record to its mirrored position"
         );
         // And the cache still agrees with the cold scan for every shot.
-        for (i, shot) in project.get_section(id).unwrap().shots.iter().enumerate() {
+        for (i, shot) in project.get_line(id).unwrap().shots.iter().enumerate() {
             let uuid = shot.uuid.clone().unwrap();
             assert_eq!(project.shot_uuid_index.get(&(id, uuid)), Some(&(i as u32)));
         }
     }
 
-    /// `section_offsets` has no finite guard of its own, and `save_project`
+    /// `line_offsets` has no finite guard of its own, and `save_project`
     /// rewrites a non-finite offset to 0.0 - so admitting one here teleports the
-    /// section to the origin on the next save, the exact opposite of what the
+    /// line to the origin on the next save, the exact opposite of what the
     /// compensation exists for. A finite `length` is enough to produce it:
     /// `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)` is
     /// NaN, while `ShotData::all_finite` still passes.
@@ -895,12 +890,12 @@ mod tests {
              displacement, or the test proves nothing"
         );
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
-        let (ox, oy) = project.section_offset(id);
+        let (ox, oy) = project.line_offset(id);
         assert!(
             ox.is_finite() && oy.is_finite(),
-            "reverse wrote a non-finite section offset: ({ox}, {oy})"
+            "reverse wrote a non-finite line offset: ({ox}, {oy})"
         );
     }
 
@@ -921,7 +916,7 @@ mod tests {
         let (mut project, id) = project_with_shots(vec![data]);
 
         let world_before = world_coords(&project, id);
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
         let mut reversed = world_coords(&project, id);
         reversed.reverse();
@@ -940,7 +935,7 @@ mod tests {
             project_with_shots(vec![shot(0.0, 10.0, 0.0, 0.0), shot(90.0, 10.0, 0.0, 0.0)]);
         let canonical = project.key_for_ref(StationRef::new(id, 0)).unwrap();
         let legacy = StationKey {
-            section_id: id,
+            line_id: id,
             anchor: StationAnchor::Index(0),
         };
         assert_ne!(canonical, legacy, "precondition: two distinct keys");
@@ -951,7 +946,7 @@ mod tests {
         project.station_comments.insert(canonical, "a".to_string());
         project.station_comments.insert(legacy, "b".to_string());
 
-        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_line(id, false));
 
         assert_eq!(
             project.station_comments.len(),
@@ -962,11 +957,11 @@ mod tests {
 
     /// The three-key counterexample the two-key case above cannot reach.
     ///
-    /// `Index(0)` and `SectionStart` both name station 0 and both mirror onto
+    /// `Index(0)` and `LineStart` both name station 0 and both mirror onto
     /// `AfterShot(uuid_2)` (station 3); that third key mirrors back onto
-    /// `SectionStart`. Freezing only the *repeat* of a mirrored key leaves the
+    /// `LineStart`. Freezing only the *repeat* of a mirrored key leaves the
     /// survivor of the pair on its old key - and if the survivor is
-    /// `SectionStart`, the third key now remaps straight onto it and
+    /// `LineStart`, the third key now remaps straight onto it and
     /// `map_station_refs`' `collect()` drops one comment. Which member survives
     /// is `HashMap` iteration order, so the drop appeared about half the time;
     /// looping over fresh maps turns that into a certainty for the old guard
@@ -984,7 +979,7 @@ mod tests {
             let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
             let far_end = project.key_for_ref(StationRef::new(id, 3)).unwrap();
             let legacy = StationKey {
-                section_id: id,
+                line_id: id,
                 anchor: StationAnchor::Index(0),
             };
             assert_eq!(
@@ -996,7 +991,7 @@ mod tests {
             project.station_comments.insert(legacy, "b".to_string());
             project.station_comments.insert(far_end, "c".to_string());
 
-            assert!(project.reverse_section(id, false));
+            assert!(project.reverse_line(id, false));
 
             assert_eq!(
                 project.station_comments.len(),
@@ -1006,12 +1001,12 @@ mod tests {
         }
     }
 
-    /// `Project::shot_displacement` writes the persisted `section_offsets`
+    /// `Project::shot_displacement` writes the persisted `line_offsets`
     /// compensation on insert/prepend/delete, so it has to agree with the walk
     /// that actually places the stations. It used to inline its own `%` copy of
     /// the mean; once `average_azimuth_of` moved to `rem_euclid` the two
     /// disagreed by 180 degrees for readings more than 540 apart (here: 120 vs
-    /// 300), and an insert or delete moved the section by twice the shot vector
+    /// 300), and an insert or delete moved the line by twice the shot vector
     /// and saved it. Out-of-range readings are reachable - validation only warns.
     #[test]
     fn shot_displacement_agrees_with_the_coordinate_walk_for_out_of_range_readings() {
@@ -1036,22 +1031,22 @@ mod tests {
     }
 
     /// A datum-less component whose loop closure is eligible for the
-    /// least-squares solve: two sections merged end to end and tied back with a
+    /// least-squares solve: two lines merged end to end and tied back with a
     /// closure that has a real misclosure. `plan_adjustment_anchors` has to
     /// invent a gauge anchor for exactly this shape.
     ///
-    /// Returns the project plus both section ids; `a` is the lower id, so it is
+    /// Returns the project plus both line ids; `a` is the lower id, so it is
     /// the one the default anchor is picked from.
-    fn project_with_eligible_closure() -> (Project, SectionId, SectionId) {
+    fn project_with_eligible_closure() -> (Project, LineId, LineId) {
         let mut project = Project::new("closure".to_string(), None);
         let a = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(0.0, 10.0, 0.0, 0.0), shot(0.0, 10.0, 0.0, 0.0)],
                 ..Default::default()
             })
             .id;
         let b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 // 0.5m long, so the loop does not quite close.
                 shots: vec![shot(180.0, 20.5, 0.0, 0.0)],
                 ..Default::default()
@@ -1085,19 +1080,19 @@ mod tests {
     ///
     /// It did not. A component with an eligible closure and no zero datum has its
     /// otherwise-free translation pinned by `default_anchor_for_component`, which
-    /// picked the lex-min `(section_id, station_index)`. A reverse renumbers
+    /// picked the lex-min `(line_id, station_index)`. A reverse renumbers
     /// station `i` to `N - i`, so `(a, 0)` became the OTHER physical end and the
     /// entire adjusted component slid by the adjustment residual between the two
-    /// ends of the section.
+    /// ends of the line.
     #[test]
     fn reverse_preserves_adjusted_coordinates_of_a_datum_less_component() {
         let (project, a, b) = project_with_eligible_closure();
         let config = ClosureAdjustmentConfig::default();
-        let shots_a = project.get_section(a).unwrap().shots.len() as u32;
+        let shots_a = project.get_line(a).unwrap().shots.len() as u32;
 
         let before = project.clone().into_adjusted_station_coordinates(&config);
         let mut project = project;
-        assert!(project.reverse_section(a, false));
+        assert!(project.reverse_line(a, false));
         let after = project.into_adjusted_station_coordinates(&config);
 
         let at = |stations: &[Station], sr: StationRef| {
@@ -1116,7 +1111,7 @@ mod tests {
             "precondition: the closure should have been adjusted"
         );
 
-        // Section `a`'s station `i` is now station `shots_a - i`; `b` is untouched.
+        // Line `a`'s station `i` is now station `shots_a - i`; `b` is untouched.
         for i in 0..=shots_a {
             let p = at(&before, StationRef::new(a, i));
             let q = at(&after, StationRef::new(a, shots_a - i));
@@ -1136,15 +1131,15 @@ mod tests {
     }
 
     #[test]
-    fn reverse_of_empty_section_is_a_noop() {
+    fn reverse_of_empty_line_is_a_noop() {
         let (mut project, id) = project_with_shots(vec![]);
-        assert!(project.reverse_section(id, false));
-        assert!(project.get_section(id).unwrap().shots.is_empty());
+        assert!(project.reverse_line(id, false));
+        assert!(project.get_line(id).unwrap().shots.is_empty());
     }
 
     #[test]
-    fn reverse_of_missing_section_fails() {
+    fn reverse_of_missing_line_fails() {
         let (mut project, _) = project_with_shots(vec![]);
-        assert!(!project.reverse_section(9999, false));
+        assert!(!project.reverse_line(9999, false));
     }
 }

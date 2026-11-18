@@ -9,8 +9,8 @@
 // tiler clips the real moved shape (no background wedges at large offsets).
 //
 // The text attached to moving features (station / shot labels, comments,
-// section names) is NOT previewed - it is hidden from the stock label / comment
-// / section-name layers for the drag duration (composed filters in SurveyLayer)
+// line names) is NOT previewed - it is hidden from the stock label / comment
+// / line-name layers for the drag duration (composed filters in SurveyLayer)
 // and restored on commit-settle / Escape. Previewing it as well read as clutter.
 
 import type * as maplibregl from 'maplibre-gl';

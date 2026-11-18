@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undef
 const displaySettings: DisplaySettings = {
   showStations: true,
   showShots: true,
-  showSectionNames: true,
+  showLineNames: true,
   showStationLabels: false,
   showStationNames: false,
   showShotData: false,
@@ -47,6 +47,7 @@ const displaySettings: DisplaySettings = {
   showShotComments: false,
   gridSpacing: 10,
   geometryMode: 'measured',
+  hiddenSections: [],
 };
 
 /** Resolves the load with the backend's `is_remote` verdict for this project. */
@@ -59,15 +60,15 @@ const mockLoad = (isRemote: boolean) =>
       location: null,
       created_at: new Date().toISOString(),
       modified_at: new Date().toISOString(),
-      sections: [],
+      lines: [],
       station_merges: [],
       zero_datums: [],
       loop_closures: [],
       file_path: '/mock/loaded.stalx',
-      next_section_id: 1,
-      section_offsets: {},
+      next_line_id: 1,
+      line_offsets: {},
       imported_file_hashes: [],
-      imported_section_hashes: [],
+      imported_line_hashes: [],
       next_closure_id: 1n,
     },
     stations: [],

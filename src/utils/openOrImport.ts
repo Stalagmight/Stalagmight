@@ -157,7 +157,7 @@ const IMPORT_FLOW_DIALOGS = new Set([
  * `set({ placementMode: null })` - so it is false again the moment placement
  * ends, whether the user placed the segment or cancelled back to the wizard.
  *
- * It reads slightly wider than "import": the paste-sections dialog uses
+ * It reads slightly wider than "import": the paste-lines dialog uses
  * placement too. That is the right side to err on - the rest of the app already
  * treats placement as modal-equivalent (the toolbar disables, SingleSystemView
  * dims and drops pointer events, useKeyboardShortcuts allowlists a handful of
@@ -270,7 +270,7 @@ export async function routeOpenedFile(
     // branch below re-declares its own context once it commits to a flow.
     ui.setImportContext(null);
 
-    // Importing into an open project adds sections (a mutation) - but only DMP
+    // Importing into an open project adds lines (a mutation) - but only DMP
     // does that; every other importable format instead CLOSES the current
     // project and imports as a new one (openImportAsNewProject below), which
     // doesn't mutate it and carries its own guards via handleCloseProject. So

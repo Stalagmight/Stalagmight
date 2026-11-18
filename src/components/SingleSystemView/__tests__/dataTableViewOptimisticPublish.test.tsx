@@ -18,7 +18,7 @@
  *
  * Rendered at the full-component tier (real DataTable, real projectStore, mocked
  * `invokeIpc`) because what is under test is the store write the debounced save
- * performs, and DataTable owns the view state that triggers it. `sections={[]}`
+ * performs, and DataTable owns the view state that triggers it. `lines={[]}`
  * keeps SpreadsheetGrid out of the render; the column-visibility checkbox stands
  * in for the resize/angle-mode edits that share the same debounced effect.
  */
@@ -101,7 +101,7 @@ function toggleColumn(key: string) {
 
 describe('data-table view save vs cached adjusted geometry (#357 item 4)', () => {
   it('publishes the panels optimistically without discarding the adjusted geometry', async () => {
-    render(<DataTable sections={[]} />);
+    render(<DataTable lines={[]} />);
 
     toggleColumn('comment');
     await act(async () => {
@@ -117,7 +117,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     expect(useProjectStore.getState().config?.panels.data_table_shot_hidden_columns).toEqual([
       'comment',
       'explorers',
-      'section_id',
+      'line_id',
       'shot_id',
       'survey_date',
       'surveyors',
@@ -138,7 +138,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
   });
 
   it('leaves the adjusted geometry alone on the unmount flush too', async () => {
-    const { unmount } = render(<DataTable sections={[]} />);
+    const { unmount } = render(<DataTable lines={[]} />);
 
     // Close the table inside the 500ms window so the unmount flush - not the
     // timer - is what fires the save and the publish alongside it.

@@ -1,7 +1,7 @@
 /**
  * Shared scenario helpers. Fixture-path resolution, project seeding, a cheap
- * deterministic state signature, and a valid minimal SectionData factory (shapes
- * verified against src/types/ipc/{SectionData,ShotData}.ts).
+ * deterministic state signature, and a valid minimal LineData factory (shapes
+ * verified against src/types/ipc/{LineData,ShotData}.ts).
  */
 import type { ScenarioContext } from './framework';
 export { DEFAULT_FIXTURE } from '../lib/fixtures';
@@ -87,7 +87,7 @@ export async function loadFixtureWithoutUndoHistory(
  * Any scenario that compares project state across time needs this. `save_project`
  * MUTATES the live project with no undo entry - `ensure_shot_uuids`,
  * `ensure_unique_shot_uuids`, `capture_missing_gauge_anchors`, orphan
- * `section_offsets` retain and non-finite sanitize (`core/state/project_io.rs`) -
+ * `line_offsets` retain and non-finite sanitize (`core/state/project_io.rs`) -
  * so a 30 s auto-save timer firing mid-run silently changes state that no command
  * accounts for. Returns true when auto-save is definitely off (including the case
  * where config has not loaded yet, which `useAutoSave` already treats as off).
@@ -104,8 +104,8 @@ export async function disableAutoSave(ctx: ScenarioContext): Promise<boolean> {
   `);
 }
 
-/** A valid minimal section (two standard shots), unique per index. */
-export function makeSection(i: number): Record<string, unknown> {
+/** A valid minimal line (two standard shots), unique per index. */
+export function makeLine(i: number): Record<string, unknown> {
   const shot = (az: number, len: number, dIn: number, dOut: number) => ({
     azimuth_in: az,
     azimuth_out: az,
@@ -139,8 +139,8 @@ export async function stateSignature(ctx: ScenarioContext): Promise<string> {
   return ctx.eval<string>(`
     const p = window.__E2E_TEST__.projectStore.getState().project;
     if (!p) return 'null';
-    const sections = (p.sections || []).map(s => (s.name || '') + '#' + (s.shots ? s.shots.length : 0));
-    return JSON.stringify({ sections, merges: (p.station_merges || []).length });
+    const lines = (p.lines || []).map(s => (s.name || '') + '#' + (s.shots ? s.shots.length : 0));
+    return JSON.stringify({ lines, merges: (p.station_merges || []).length });
   `);
 }
 

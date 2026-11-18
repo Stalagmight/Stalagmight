@@ -9,10 +9,10 @@ import { systemCardTestId } from './helpers/testIds';
  * merge button visibility, context menu options, and batch actions.
  *
  * Mock recent projects (from tauri-ipc.ts):
- *   Alpha:  /projects/cave-alpha.stalx  (5 sections, 1250.5m)
- *   Beta:   /projects/cave-beta.stalx   (3 sections, 820.0m)
- *   Gamma:  /projects/cave-gamma.stalx  (8 sections, 2100.3m)
- *   Local:  /projects/local-survey.stalx (2 sections, 350.0m)
+ *   Alpha:  /projects/cave-alpha.stalx  (5 lines, 1250.5m)
+ *   Beta:   /projects/cave-beta.stalx   (3 lines, 820.0m)
+ *   Gamma:  /projects/cave-gamma.stalx  (8 lines, 2100.3m)
+ *   Local:  /projects/local-survey.stalx (2 lines, 350.0m)
  */
 
 const ALPHA = '/projects/cave-alpha.stalx';

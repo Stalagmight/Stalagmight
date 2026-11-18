@@ -3,7 +3,7 @@
  * and every one of them fails SILENTLY on a framing mistake: Compass `many0`
  * stops at the first bad row and returns what it has, Walls skips a vector line
  * with fewer than two tokens without a warning, GPX drops a `<trkseg>` with one
- * point while still burning its section index. A writer bug therefore shows up
+ * point while still burning its line index. A writer bug therefore shows up
  * as "the import preview says 0 surveys" hours later, inside the app, with no
  * error to grep for.
  *
@@ -1071,7 +1071,7 @@ describe('writeGpxXml framing', () => {
     expect(writeGpxXml(gpx({ rootAttrs: '' }))).toContain('<gpx>');
     expect(writeGpxXml(gpx({ omitClosingRoot: true }))).not.toContain('</gpx>');
     expect(writeGpxXml(gpx({ trailing: '<<garbage' })).endsWith('<<garbage')).toBe(true);
-    // A one-point segment imports nothing but still burns a section index.
+    // A one-point segment imports nothing but still burns a line index.
     const thin = writeGpxXml(gpx({ waypoints: [], routes: [], tracks: [{ segments: [[{ lat: 1, lon: 2 }], []] }] }));
     expect(scanXmlElements(thin).filter((element) => element.tag === 'trkseg')).toHaveLength(2);
     expect(scanXmlElements(thin).filter((element) => element.tag === 'trkpt')).toHaveLength(1);

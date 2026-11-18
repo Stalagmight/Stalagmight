@@ -61,7 +61,7 @@ export interface CustomRenderData {
   circleStrokePx: number;
   aaPx: number;
   /** Configured highlight size multipliers (C2): shot line width bump for a
-   *  hovered / selected section and station radius bump likewise, resolved from
+   *  hovered / selected line and station radius bump likewise, resolved from
    *  the independent `map.shot.hover_width` / `selection_width` +
    *  `map.station.hover_radius` / `selection_radius` config (or the historical
    *  2x/1.5x, 1.5x/1.25x defaults). Fed to the shaders' `u_*_mul` uniforms. */

@@ -15,21 +15,21 @@ which fixed a DMP import that skipped the conversion.
 
 | Source | In-file convention | Where it is normalised |
 |---|---|---|
-| MNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
+| MNemo DMP | +up (device: `-90` = straight down) | `parse_line` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
 | Walls `.srv` | +up | `walls/srv.rs`, negates `inc_up` into `pitch_in`/`pitch_out` |
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
 | Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |
 
-DMP normalises inside `parse_section`, not at the `ShotData` conversion, because
-`DmpShot::to_shot_data` is not on the import path. Real DMP import returns the
+DMP normalises inside `parse_line` (which parses one mNemo section), not at the
+`ShotData` conversion, because `DmpShot::to_shot_data` is not on the import path. Real DMP import returns the
 parsed `DmpFile` to the frontend (`import_dmp`), and the import dialog builds
-`ShotData` in TypeScript and sends it to `import_sections`. Normalising at the
+`ShotData` in TypeScript and sends it to `import_lines`. Normalising at the
 parser is what keeps the preview table, the overlap merge against existing
 project shots, and `to_shot_data` in one frame; a conversion that lived only in
 `to_shot_data` would never run.
 
-The flip is applied after `compute_section_hash`, which therefore still hashes
-the device's own bytes, so re-import deduplication keeps recognising sections
+The flip is applied after `compute_line_hash`, which therefore still hashes
+the device's own bytes, so re-import deduplication keeps recognising lines
 imported by an older build.
 
 `pitch_out` is a foresight in the same sense as `pitch_in`, not a reversed
@@ -78,31 +78,31 @@ data, so the counter-example that would settle the question is now reachable.
 ## Migrating old projects
 
 Schema v12 normalises pre-#296 files, which mix conventions: DMP-sourced shots
-are +up, Walls/Compass-sourced shots already +down. No shot or section records
+are +up, Walls/Compass-sourced shots already +down. No shot or line records
 its importer, so `migrate_pitch_to_down_convention` infers it from geometry.
 
-The verdict is **per section, never per shot**. A single shot is often
+The verdict is **per line, never per shot**. A single shot is often
 ambiguous: near-horizontal and very short shots carry almost no signal (1 cm
 depth resolution swamps the implied angle), and on real data individual shots do
-score better in the wrong direction. A section is decisive because the
+score better in the wrong direction. A line is decisive because the
 convention is a property of the file it was imported from.
 
-Per-section also protects real data: a shot whose inclination genuinely
+Per-line also protects real data: a shot whose inclination genuinely
 contradicts its depths cannot flip itself into agreement. It inherits the
-section verdict and stays flagged, which is the entire point of the
+line verdict and stays flagged, which is the entire point of the
 `INCLINATION_DEPTH_MISMATCH` check.
 
-A section is only touched when the evidence is lopsided, and it is votes that
+A line is only touched when the evidence is lopsided, and it is votes that
 are counted, never summed errors: each usable shot casts one vote - to flip
 when its flipped error is less than half its as-is error, to keep when its
 as-is error is less than half its flipped error, and it abstains when neither
-holds. A section flips only when at least 3 shots vote to flip and the flip
-votes are more than twice the keep votes. That margin lets a real DMP section
+holds. A line flips only when at least 3 shots vote to flip and the flip
+votes are more than twice the keep votes. That margin lets a real DMP line
 carry one blunder without being held hostage by it, while an already-correct
-section can never be flipped by an outlier.
+line can never be flipped by an outlier.
 Anything in between is left alone rather than guessed at. Out-of-range legs
 (steeper than vertical) do not vote: validation skips the cross-check for them,
-so a single blunder should not drag a section's verdict. Sections that had
+so a single blunder should not drag a line's verdict. Lines that had
 signal but were not decisive are named in a `warn!` on open, because the v12
 stamp means they are never re-examined.
 
@@ -110,7 +110,7 @@ stamp means they are never re-examined.
 
 The migration rewrites the `shots` table. Two other stores keep pitch, or a
 verdict derived from it, and neither is versioned, so a stale copy would
-outlive the migration with no second pass to catch it. When at least one section
+outlive the migration with no second pass to catch it. When at least one line
 is flipped, `invalidate_pre_pitch_flip_state` drops both:
 
 - **Persisted undo/redo.** Payloads carry absolute pitch and whole-project
@@ -118,7 +118,8 @@ is flipped, `invalidate_pre_pitch_flip_state` drops both:
   into a file already stamped v12. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v11
   file keeps its stacks by default.
 - **Dismissed inclination warnings.** `resolved_warnings` is keyed by
-  `(section_id, shot_id, warning_code)` with no value component, so a mismatch
+  `(section_id, shot_id, warning_code)` (`section_id` is the line id's SQL name)
+with no value component, so a mismatch
   dismissed under the old convention would keep suppressing the check.
 
 A project where nothing was flipped keeps its undo history.

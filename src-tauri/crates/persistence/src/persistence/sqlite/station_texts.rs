@@ -1,7 +1,7 @@
 //! The two per-station free-text tables, `station_comments` and
 //! `station_names`.
 //!
-//! Both have the same positional shape - `(section_id, station_index, <text>)`
+//! Both have the same positional shape - `(line_id, station_index, <text>)`
 //! with that pair as the primary key - and the same lifecycle: written from a
 //! `StationKey` map by resolving each key against the current shots (orphans
 //! skipped), read back as transitional positional keys that the load re-anchor
@@ -14,7 +14,7 @@
 //! of the same name). Verified at pytool_stalagmight_lib @ 23049eabca21
 //! (2026-11-09), `stalagmight_lib/parser.py`: `_read` refuses any
 //! `PRAGMA user_version != 18` and `_read_project` any `project.schema_version`
-//! other than 18, and it reads only `project`, `sections`, `shots`,
+//! other than 18, and it reads only `project`, `lines`, `shots`,
 //! `station_comments`, `project_settings`, `zero_datums` and `station_merges`,
 //! each by an explicit column list. A new table is invisible to it; a bump would
 //! lock it out. (The in-repo `stalx-reader` is not the constraint: its supported

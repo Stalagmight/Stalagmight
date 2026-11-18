@@ -6,8 +6,9 @@ order: 3
 
 # Survey view
 
-The main window of an open project: the map, with **Sections** on the left,
-**Details** on the right and **Data** at the bottom.
+The main window of an open project: the map, with **Sections** (the list of
+lines, grouped into sections) on the left, **Details** on the right and **Data**
+at the bottom.
 
 ![Survey view](../images/survey-view.png)
 
@@ -24,7 +25,7 @@ The main window of an open project: the map, with **Sections** on the left,
 **Tools**
 
 6. **Select** (`S`)
-7. **Merge** (`M`): merge two stations to connect sections. See
+7. **Merge** (`M`): merge two stations to connect lines. See
    [Merging stations](../workflows/merging-stations.md).
 8. **Comment** (`C`): comment on a station or shot. See
    [Adding comments](../workflows/adding-comments.md).
@@ -35,16 +36,23 @@ The main window of an open project: the map, with **Sections** on the left,
 
 **Panels and map**
 
-12. **Add section**: enter a new section by hand in the
-    [Import / Create Section dialog](create-section-dialog.md).
+12. **Add line**: enter a new line by hand in the
+    [Import / Create Line dialog](create-section-dialog.md).
 13. **Import data**: same as 2.
 14. Pin or hide the left panel.
 15. **Fit to view**: zoom to the whole survey (`F`).
 16. Zoom in / out (`=` or `+` / `-`).
 17. Pin or hide the **Details** panel.
-18. **Data**: tables of sections and raw shot data.
+18. **Data**: tables of lines and raw shot data.
 19. **Details**: project statistics or the selected item. **Warnings**: problems
     found in the data, see the [Warnings panel](warnings-panel.md).
+
+The **Sections** panel also has **New Section**, left of **Add line** (not in
+the picture). Once the project has a section, the panel lists each section
+(color, name, number of lines and length, an eye to hide it on the map) with its
+lines under it, then the **Ungrouped** lines. Drag lines onto a section, or
+right-click one for **Move to Section**. See
+[Grouping lines into sections](../workflows/grouping-lines-into-sections.md).
 
 The left panel now has two tabs, **Sections** and **SpeleoDB**, where the
 picture shows only the **Sections** heading. **SpeleoDB** shows a SpeleoDB
@@ -75,6 +83,18 @@ SpeleoDB project**.
 
 - The small arrow on 8 and 9 picks a variant: **Move comment** (`Shift+C`), or
   **Move segment** / **Move shot** / **Move station**.
+- **Details** for a station shows its **Name**, its **Station ID** and its
+  **Line**; **Edit** at the bottom opens the
+  [Edit Station dialog](edit-station-dialog.md). A shot is shown by its two
+  stations, `4 → 5`. See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
+- **Data** has a **Shots** and a **Stations** view of the selected line.
+  Each row starts with the shot (`4 → 5`) or the station name; double-click it
+  to find it on the map. The **Stations** view has a **Station ID** column,
+  and a **Name** column, hidden at first, where you can rename a station: show
+  it with **Choose visible columns** (the eye icon). The **Line** and **Shot**
+  columns of the **Shots** view, also hidden at first, show the line's name
+  and `from → to`.
 - Hover over **Undo** or **Redo** to list recent steps; click one to undo or
   redo back to it.
 - The map pans when you drag it and zooms with the scroll wheel, whatever the
@@ -84,7 +104,7 @@ SpeleoDB project**.
   the editing tools and **Import** are disabled.
 - An unpinned panel slides out when you hover its edge. `Ctrl+1`, `Ctrl+2` and
   `Ctrl+3` show or hide the left panel, **Details** and **Data**.
-- Status bar: number of sections and shots, total length, save state.
+- Status bar: number of lines and shots, total length, save state.
 - A project without data opens the map on the default location from Settings.
 - Satellite imagery by Esri.
 - Shortcuts can be changed in Settings. On macOS, use `Cmd` for `Ctrl`.

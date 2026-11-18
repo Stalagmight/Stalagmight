@@ -48,7 +48,7 @@ test.describe('Window Close Protection', () => {
    * Wait until the DMP import workflow settles into a state the driver loop can
    * act on - an actionable wizard sub-step or the map placement overlay - or
    * until it finishes (the wizard closes). Returning on completion is what keeps
-   * finishSingleSectionImport from hanging when the last section lands while the
+   * finishSingleLineImport from hanging when the last line lands while the
    * loop is between point-in-time checks: the previous implementation waited only
    * for the wizard/placement overlay, which never reappear once import is done.
    */
@@ -69,14 +69,14 @@ test.describe('Window Close Protection', () => {
       .not.toBe('pending');
   }
 
-  async function finishSingleSectionImport(page: Page): Promise<void> {
+  async function finishSingleLineImport(page: Page): Promise<void> {
     const wizard = page.getByTestId('dmp-new-import-dialog');
     for (let attempt = 0; attempt < 15; attempt += 1) {
       // Wait for an actionable state (or completion) before inspecting the UI,
       // so the point-in-time checks below act on a settled workflow.
       await settleImportStep(page);
 
-      // In map placement mode: drop the section near the map centre.
+      // In map placement mode: drop the line near the map centre.
       if (await page.getByTestId('placement-mode-indicator').isVisible()) {
         const mapCanvas = page.getByTestId('map-canvas');
         const bounds = await mapCanvas.boundingBox();
@@ -150,25 +150,25 @@ test.describe('Window Close Protection', () => {
     await createProject(page, 'Import Complete Test');
     await openDmpSelectionDialog(page);
 
-    // Select only one section
+    // Select only one line
     const dialog = page.getByTestId('dmp-selection-dialog');
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
 
     await proceedToDmpSectionConfig(page);
-    await finishSingleSectionImport(page);
+    await finishSingleLineImport(page);
 
-    // User should be back at SingleSystemView with the imported section
+    // User should be back at SingleSystemView with the imported line
     await expect(page.getByTestId('single-system-view')).toBeVisible();
     await expect
       .poll(async () => {
         return page.evaluate(() => {
           const e2e = (window as unknown as {
             __E2E_TEST__?: {
-              projectStore?: { getState: () => { project?: { sections?: unknown[] } | null } };
+              projectStore?: { getState: () => { project?: { lines?: unknown[] } | null } };
             };
           }).__E2E_TEST__;
-          return e2e?.projectStore?.getState().project?.sections?.length ?? 0;
+          return e2e?.projectStore?.getState().project?.lines?.length ?? 0;
         });
       })
       .toBeGreaterThan(0);
@@ -240,9 +240,9 @@ test.describe('Window Close Protection', () => {
     await openDmpSelectionDialog(page);
     const dialog = page.getByTestId('dmp-selection-dialog');
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
     await proceedToDmpSectionConfig(page);
-    await finishSingleSectionImport(page);
+    await finishSingleLineImport(page);
 
     // Should complete successfully
     await expect(page.getByTestId('single-system-view')).toBeVisible();
@@ -251,10 +251,10 @@ test.describe('Window Close Protection', () => {
         return page.evaluate(() => {
           const e2e = (window as unknown as {
             __E2E_TEST__?: {
-              projectStore?: { getState: () => { project?: { sections?: unknown[] } | null } };
+              projectStore?: { getState: () => { project?: { lines?: unknown[] } | null } };
             };
           }).__E2E_TEST__;
-          return e2e?.projectStore?.getState().project?.sections?.length ?? 0;
+          return e2e?.projectStore?.getState().project?.lines?.length ?? 0;
         });
       })
       .toBeGreaterThan(0);

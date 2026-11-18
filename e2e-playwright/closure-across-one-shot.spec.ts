@@ -15,16 +15,16 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 const REFUSAL =
   'This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Synthetic loop',
     direction: 'in',
@@ -39,26 +39,26 @@ const sectionSeeds: SectionSeed[] = [
 
 // Every page.evaluate body runs in the browser, so each reaches the stores
 // through `window.__E2E_TEST__` itself (a Node-side helper is not in scope there).
-async function sectionId(page: Page): Promise<number> {
-  return page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id as number);
+async function lineId(page: Page): Promise<number> {
+  return page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.lines[0].id as number);
 }
 
 test.describe('Loop closures across one shot (#737)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Across one shot');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
     await waitForNoDialogs(page);
   });
 
   test('the closure dialog shows the refusal and offers no Create', async ({ page }) => {
-    const secId = await sectionId(page);
+    const secId = await lineId(page);
     await page.evaluate(
       ({ secId, refusal }) => {
         (window as any).__E2E_TEST__.uiStore.getState().openDialog('closure', {
-          stationA: { section_id: secId, station_index: 1 },
-          stationB: { section_id: secId, station_index: 2 },
+          stationA: { line_id: secId, station_index: 1 },
+          stationB: { line_id: secId, station_index: 2 },
           preview: {
             path_length: 10,
             misclosure_distance: 10,
@@ -88,22 +88,22 @@ test.describe('Loop closures across one shot (#737)', () => {
   });
 
   test('the computed view says what it left out, and Show warnings opens the tab', async ({ page }) => {
-    const secId = await sectionId(page);
+    const secId = await lineId(page);
     await page.evaluate((secId) => {
       (window as any).__MOCK_ADJUSTMENT_REPORT__ = {
         skipped_closures: [
           {
             closure_id: 2,
-            station_a: { section_id: secId, station_index: 1 },
-            station_b: { section_id: secId, station_index: 2 },
-            shot_section_id: secId,
+            station_a: { line_id: secId, station_index: 1 },
+            station_b: { line_id: secId, station_index: 2 },
+            shot_line_id: secId,
             shot_index: 1,
           },
         ],
         failures: [
           {
-            anchor: { section_id: secId, station_index: 0 },
-            section_ids: [secId],
+            anchor: { line_id: secId, station_index: 0 },
+            line_ids: [secId],
             reason: 'loop closures tie two zero datums to the same point.',
           },
         ],
@@ -111,7 +111,7 @@ test.describe('Loop closures across one shot (#737)', () => {
       const { projectStore, uiStore } = (window as any).__E2E_TEST__;
       const project = projectStore.getState().project;
       const closure = (id: number, a: number, b: number) => ({
-        id, station_a: { section_id: secId, station_index: a }, station_b: { section_id: secId, station_index: b },
+        id, station_a: { line_id: secId, station_index: a }, station_b: { line_id: secId, station_index: b },
         path_length: 20, misclosure_distance: 0.3, error_percentage: 1.5, horizontal_misclosure: 0.3,
         vertical_misclosure: 0, strategy: 'Batch', is_aligned: false,
       });
@@ -152,7 +152,7 @@ test.describe('Loop closures across one shot (#737)', () => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_range_shift = {
         success: true,
-        section_ids: [],
+        line_ids: [],
         warnings: [{ code: 'CLOSURE_REMOVED_ACROSS_ONE_SHOT', message, severity: 'warning' }],
       };
       (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
@@ -160,10 +160,10 @@ test.describe('Loop closures across one shot (#737)', () => {
 
     const result = await page.evaluate(async () => {
       const { projectStore } = (window as any).__E2E_TEST__;
-      const section = projectStore.getState().project.sections[0];
+      const line = projectStore.getState().project.lines[0];
       return projectStore
         .getState()
-        .deleteShotRangeShift(section.id, section.shots[1].id, section.shots[2].id) as Promise<{ success: boolean }>;
+        .deleteShotRangeShift(line.id, line.shots[1].id, line.shots[2].id) as Promise<{ success: boolean }>;
     });
     expect(result.success).toBe(true);
     const toast = page.getByTestId('toast').filter({ hasText: message });

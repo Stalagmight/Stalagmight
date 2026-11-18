@@ -21,7 +21,7 @@ import { emptySurveyData } from '../../../types/survey-data';
 
 const ISSUES = 'display-toggle-showIssueSeverity';
 const ERRORS = 'display-toggle-showShotErrors';
-const SECTION = 'display-color-section';
+const LINE = 'display-color-section';
 const NOTE = 'display-warnings-visit-note';
 
 async function openMenu() {
@@ -74,7 +74,7 @@ describe('DisplayMenu during a Warnings-tab visit', () => {
   it('shows Survey Issues and Errors on, marked automatic, with the note', async () => {
     await openMenu();
     expect(pressed(ISSUES)).toBe('true');
-    expect(pressed(SECTION)).toBe('false');
+    expect(pressed(LINE)).toBe('false');
     expect(auto(ISSUES)).toBe('true');
     expect(pressed(ERRORS)).toBe('true');
     expect(auto(ERRORS)).toBe('true');
@@ -84,8 +84,8 @@ describe('DisplayMenu during a Warnings-tab visit', () => {
 
   it('a pick during the visit moves the pill, drops the auto mark and saves nothing', async () => {
     await openMenu();
-    await userEvent.click(screen.getByTestId(SECTION));
-    expect(pressed(SECTION)).toBe('true');
+    await userEvent.click(screen.getByTestId(LINE));
+    expect(pressed(LINE)).toBe('true');
     expect(pressed(ISSUES)).toBe('false');
     expect(auto(ISSUES)).toBeNull();
     await userEvent.click(screen.getByTestId(ERRORS));
@@ -99,7 +99,7 @@ describe('DisplayMenu during a Warnings-tab visit', () => {
   it('with the setting off the menu shows the saved settings', async () => {
     useUIStore.setState({ warningsAutoDisplay: false });
     await openMenu();
-    expect(pressed(SECTION)).toBe('true');
+    expect(pressed(LINE)).toBe('true');
     expect(pressed(ERRORS)).toBe('false');
     expect(screen.queryByTestId(NOTE)).toBeNull();
   });

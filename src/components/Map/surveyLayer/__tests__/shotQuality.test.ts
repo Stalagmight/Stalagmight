@@ -150,10 +150,10 @@ describe('computeShotQualityMetrics', () => {
 
   it('is shared by the Raw Data and Closures Computed views (same shot columns)', () => {
     const data = buildSurveyData({
-      sections: [{ id: 1, shotIds: [101] }],
+      lines: [{ id: 1, shotIds: [101] }],
       stations: [
-        { sectionId: 1, stationIndex: 0 },
-        { sectionId: 1, stationIndex: 1 },
+        { lineId: 1, stationIndex: 0 },
+        { lineId: 1, stationIndex: 1 },
       ],
     });
     const adjusted = surveyDataWithAdjustedStations(data, []);

@@ -307,7 +307,7 @@ describe('depth gradient legibility', () => {
    * dark canvas); they are out of scope here only because they declare no ramp.
    *
    * `> 0.5` relative luminance is the same rule `isLightCanvasTheme`
-   * (src/utils/colors.ts) applies to pick a section palette, and the rule
+   * (src/utils/colors.ts) applies to pick a line palette, and the rule
    * `LIGHT_CANVAS_THEMES` in src/types/config.ts is pinned against. Recomputed
    * from this file's own helpers rather than imported, so this stays an
    * independent check instead of re-asserting the module's own definition.
@@ -516,7 +516,7 @@ describe('depth gradient legibility', () => {
  * of any of these three tokens is checked the same way the depth ramp is.
  */
 describe('contrast audit (#357)', () => {
-  // Finding 1: --cc-text-secondary on --cc-panel. Drives the vertical "Sections"
+  // Finding 1: --cc-text-secondary on --cc-panel. Drives the vertical "Lines"
   // tab label (11px text, needs 4.5:1) and the pin/close icons (needs 3:1) in
   // PanelOpenerTab.tsx - one shared box, one shared token. 4.5:1 is the binding
   // threshold since it's stricter than the icon floor.

@@ -7,7 +7,7 @@
 **Website: [stalagmight.com](https://stalagmight.com)** ·
 **[Releases](https://github.com/Stalagmight/Stalagmight/releases)**
 
-![A surveyed underwater cave in Stalagmight: depth-coloured survey lines on the map, the section list, the data table, and project statistics](docs/screenshot.png)
+![A surveyed underwater cave in Stalagmight: depth-coloured survey lines on the map, the Sections panel, the data table, and project statistics](docs/screenshot.png)
 
 Stalagmight is an intuitive, modern, open underwater cave survey application.
 It takes other surveys, hand surveys, or `.dmp` files from an MNemo device
@@ -46,7 +46,7 @@ replacement for, cave survey training.
 - **Map** - survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
   and hover/selection highlighting.
-- **Edit** - move stations / segments / shots, merge stations, adjust sections,
+- **Edit** - move stations / segments / shots, merge stations, adjust lines,
   edit comments and LRUD, bulk-delete shots - all with hybrid undo/redo.
 - **Loop closure** - least-squares loop adjustment to distribute survey error.
 - **Plan** - a dive/gas planning mode: gas-weighted reachability over the survey

@@ -38,12 +38,12 @@ const projectMeta = (name: string): ProjectMetadata =>
   ({
     name,
     file_path: `/tmp/${name}.stalx`,
-    section_count: 1,
+    line_count: 1,
     total_length: 10,
   } as ProjectMetadata);
 
 const ok = (warnings: ValidationWarning[]): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids: [] } as CommandResult);
+  ({ success: true, error: null, warnings, line_ids: [] } as CommandResult);
 
 let mergeProjects: ReturnType<typeof vi.fn>;
 let showToast: ReturnType<typeof vi.fn>;

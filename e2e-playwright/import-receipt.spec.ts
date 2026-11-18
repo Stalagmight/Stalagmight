@@ -35,8 +35,8 @@ test.describe('Import receipt dialog', () => {
         receipt: {
           source_format: 'Compass',
           file_name: 'cave.dat',
-          sections_found: 6,
-          sections_imported: 5,
+          lines_found: 6,
+          lines_imported: 5,
           shot_count: 42,
           closures_requested: 2,
           closures_created: 1,
@@ -61,8 +61,8 @@ test.describe('Import receipt dialog', () => {
       'Lengths converted from feet to meters',
     );
 
-    // 2 real warnings, no frontend-derived "not imported" note (sections_found >
-    // sections_imported is not a warning - the wizards let users deliberately
+    // 2 real warnings, no frontend-derived "not imported" note (lines_found >
+    // lines_imported is not a warning - the wizards let users deliberately
     // deselect surveys) = 2 visible, none hidden yet.
     await expect(page.getByTestId('import-receipt-warnings')).toBeVisible();
     await expect(page.getByTestId('import-receipt-details')).toBeHidden();
@@ -75,8 +75,8 @@ test.describe('Import receipt dialog', () => {
         receipt: {
           source_format: 'Compass',
           file_name: 'cave.dat',
-          sections_found: 6,
-          sections_imported: 4,
+          lines_found: 6,
+          lines_imported: 4,
           shot_count: 42,
           closures_requested: 0,
           closures_created: 0,
@@ -85,7 +85,7 @@ test.describe('Import receipt dialog', () => {
             'Survey A had 2 unresolved stations',
             'Survey B date is missing',
             'Survey C was empty',
-            'Survey D had a zero-shot section',
+            'Survey D had a zero-shot line',
           ],
           info: [],
         },

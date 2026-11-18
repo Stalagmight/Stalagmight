@@ -8,7 +8,7 @@ use rusqlite::types::ValueRef;
 use tempfile::TempDir;
 
 use super::*;
-use crate::models::{Person, SectionData, SectionId, ShotData, SurveyCredit};
+use crate::models::{LineData, LineId, Person, ShotData, SurveyCredit};
 
 fn shot(length: f64) -> ShotData {
     ShotData {
@@ -35,15 +35,15 @@ fn day(d: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(2023, 8, d)
 }
 
-fn section_with(project: &mut Project, credits: Vec<SurveyCredit>) -> SectionId {
+fn line_with(project: &mut Project, credits: Vec<SurveyCredit>) -> LineId {
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: credits.iter().map(|_| shot(3.0)).collect(),
             ..Default::default()
         })
         .id;
-    let section = project.get_section_mut(id).unwrap();
-    for (shot, c) in section.shots.iter_mut().zip(credits) {
+    let line = project.get_line_mut(id).unwrap();
+    for (shot, c) in line.shots.iter_mut().zip(credits) {
         shot.set_credit(c);
     }
     id
@@ -65,9 +65,9 @@ fn reload(path: &Path) -> Project {
         .unwrap()
 }
 
-fn credits_of(project: &Project, id: SectionId) -> Vec<SurveyCredit> {
+fn credits_of(project: &Project, id: LineId) -> Vec<SurveyCredit> {
     project
-        .get_section(id)
+        .get_line(id)
         .unwrap()
         .shots
         .iter()
@@ -86,8 +86,8 @@ fn sql(path: &Path, statements: &str) {
     conn.execute_batch(statements).unwrap();
 }
 
-/// A section's stored `sections.surveyor`.
-fn legacy_surveyor(db: &Database, id: SectionId) -> Option<String> {
+/// A line's stored `sections.surveyor`.
+fn legacy_surveyor(db: &Database, id: LineId) -> Option<String> {
     db.conn
         .query_row("SELECT surveyor FROM sections WHERE id = ?1", [id], |r| {
             r.get(0)
@@ -105,15 +105,15 @@ fn kept_with_email() -> SurveyCredit {
 }
 
 /// A project exercising every shape: emails, explorers, dates, an explicit
-/// empty credit among credited shots, a section that agrees with its legacy
-/// columns, and an uncredited section.
-fn rich_project() -> (Project, [SectionId; 3]) {
+/// empty credit among credited shots, a line that agrees with its legacy
+/// columns, and an uncredited line.
+fn rich_project() -> (Project, [LineId; 3]) {
     let mut project = Project::new("Credit".to_string(), None);
     let mut with_email = credit(&["Ann"], &["Ex One", "Ex Two"], day(2));
     with_email
         .surveyors
         .push(person("Bo", Some("bo@example.org")));
-    let mixed = section_with(
+    let mixed = line_with(
         &mut project,
         vec![
             with_email,
@@ -122,11 +122,11 @@ fn rich_project() -> (Project, [SectionId; 3]) {
             credit(&["Ann"], &[], None),
         ],
     );
-    let uniform = section_with(
+    let uniform = line_with(
         &mut project,
         vec![credit(&["Cy"], &[], day(5)), credit(&["Cy"], &[], day(5))],
     );
-    let bare = section_with(&mut project, vec![SurveyCredit::default()]);
+    let bare = line_with(&mut project, vec![SurveyCredit::default()]);
     project.ensure_shot_uuids();
     (project, [mixed, uniform, bare])
 }
@@ -141,7 +141,7 @@ fn credit_round_trips_exactly() {
         assert_eq!(
             credits_of(&loaded, id),
             credits_of(&project, id),
-            "section {id}"
+            "line {id}"
         );
     }
     // And a second save of what was loaded is the same file content.
@@ -158,15 +158,15 @@ fn rows_are_written_only_where_the_legacy_fallback_would_differ() {
     let (project, _) = rich_project();
     let path = save(&dir, "rows.stalx", &project);
     let db = Database::open_readonly(&path).unwrap();
-    // The mixed section needs all four rows (its legacy columns cannot say
-    // "explorers", an email, or "no credit"); the uniform section matches its
-    // own columns; the bare section has no credit to fall back from.
+    // The mixed line needs all four rows (its legacy columns cannot say
+    // "explorers", an email, or "no credit"); the uniform line matches its
+    // own columns; the bare line has no credit to fall back from.
     assert_eq!(count(&db, "shot_credits"), 4);
     // Ann, Bo <email>, Ex One, Ex Two, Doe, John: each person once.
     assert_eq!(count(&db, "credit_people"), 5);
 
     let mut bare = Project::new("Bare".to_string(), None);
-    section_with(&mut bare, vec![SurveyCredit::default(); 3]);
+    line_with(&mut bare, vec![SurveyCredit::default(); 3]);
     let path = save(&dir, "bare.stalx", &bare);
     let db = Database::open_readonly(&path).unwrap();
     assert_eq!(count(&db, "shot_credits"), 0);
@@ -174,12 +174,12 @@ fn rows_are_written_only_where_the_legacy_fallback_would_differ() {
 }
 
 #[test]
-fn the_legacy_columns_carry_the_section_aggregate() {
+fn the_legacy_columns_carry_the_line_aggregate() {
     let dir = TempDir::new().unwrap();
     let (project, ids) = rich_project();
     let path = save(&dir, "legacy.stalx", &project);
     let db = Database::open_readonly(&path).unwrap();
-    let row = |id: SectionId| -> (Option<String>, Option<String>) {
+    let row = |id: LineId| -> (Option<String>, Option<String>) {
         db.conn
             .query_row(
                 "SELECT surveyor, date FROM sections WHERE id = ?1",
@@ -188,7 +188,7 @@ fn the_legacy_columns_carry_the_section_aggregate() {
             )
             .unwrap()
     };
-    // The mixed section has explorers: the Ariane "explorers / surveyors"
+    // The mixed line has explorers: the Ariane "explorers / surveyors"
     // form, so an older build's save keeps both roles (#718).
     assert_eq!(
         row(ids[0]),
@@ -226,7 +226,7 @@ fn same_named_people_are_one_name_in_the_legacy_column_and_both_on_reopen() {
         explorers: Vec::new(),
         date: day(3),
     };
-    let id = section_with(&mut project, vec![both.clone(), only_one.clone()]);
+    let id = line_with(&mut project, vec![both.clone(), only_one.clone()]);
     let path = save(&dir, "jo.stalx", &project);
 
     let db = Database::open_readonly(&path).unwrap();
@@ -245,26 +245,26 @@ fn same_named_people_are_one_name_in_the_legacy_column_and_both_on_reopen() {
     assert_eq!(credits_of(&reload(&path), id), vec![both, only_one]);
 }
 
-/// One section per legacy-text case (#718): surveyors only, explorers only,
+/// One line per legacy-text case (#718): surveyors only, explorers only,
 /// both roles with mixed per-shot credit, nobody, names holding `/`, and
 /// same-named people in both roles.
-fn roles_project() -> (Project, [SectionId; 6]) {
+fn roles_project() -> (Project, [LineId; 6]) {
     let mut project = Project::new("Roles".to_string(), None);
-    let surveyors_only = section_with(
+    let surveyors_only = line_with(
         &mut project,
         vec![
             credit(&["Sue Diver", "Tom Tank"], &[], day(1)),
             credit(&["Tom Tank"], &[], day(2)),
         ],
     );
-    let explorers_only = section_with(
+    let explorers_only = line_with(
         &mut project,
         vec![
             credit(&[], &["Ida Ice"], day(2)),
             credit(&[], &["Ida Ice", "Ex Plorer"], None),
         ],
     );
-    let mixed = section_with(
+    let mixed = line_with(
         &mut project,
         vec![
             credit(&["Sue Diver"], &["Ex Plorer"], day(4)),
@@ -273,15 +273,15 @@ fn roles_project() -> (Project, [SectionId; 6]) {
             SurveyCredit::default(),
         ],
     );
-    let nobody = section_with(&mut project, vec![SurveyCredit::default(); 2]);
-    let slashes = section_with(
+    let nobody = line_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let slashes = line_with(
         &mut project,
         vec![
             credit(&["Smith / Jones", "Lee /"], &["North / South"], day(5)),
             credit(&["/ Kim", "A/B"], &[], day(5)),
         ],
     );
-    let same_named = section_with(
+    let same_named = line_with(
         &mut project,
         vec![SurveyCredit {
             surveyors: vec![person("Jo Diver", Some("jo@caves.example"))],
@@ -306,9 +306,9 @@ fn roles_project() -> (Project, [SectionId; 6]) {
     )
 }
 
-/// A section's explorer and surveyor names, as its summary lists them.
-fn role_names(project: &Project, id: SectionId) -> (Vec<String>, Vec<String>) {
-    let summary = project.get_section(id).unwrap().credit_summary();
+/// A line's explorer and surveyor names, as its summary lists them.
+fn role_names(project: &Project, id: LineId) -> (Vec<String>, Vec<String>) {
+    let summary = project.get_line(id).unwrap().credit_summary();
     let names = |people: Vec<Person>| people.into_iter().map(|p| p.name).collect();
     (
         names(summary.explorer_people()),
@@ -343,13 +343,13 @@ fn the_legacy_surveyor_column_per_case() {
     // The surveyors-only text is exactly what the writer wrote before #718.
     let before = crate::models::join_distinct_names(
         &project
-            .get_section(ids[0])
+            .get_line(ids[0])
             .unwrap()
             .credit_summary()
             .surveyor_people(),
     );
     assert_eq!(texts[0], before);
-    // `credit_sections` records the new text, so an untouched section is not
+    // `credit_lines` records the new text, so an untouched line is not
     // mistaken for a pair retyped elsewhere: its rows apply on reopen.
     let mut stmt = db
         .conn
@@ -374,7 +374,7 @@ fn every_legacy_text_case_round_trips_exactly_with_rows_only_where_needed() {
         assert_eq!(
             credits_of(&loaded, id),
             credits_of(&project, id),
-            "section {id}"
+            "line {id}"
         );
     }
     let twice = reload(&save(&dir, "twice.stalx", &loaded));
@@ -382,7 +382,7 @@ fn every_legacy_text_case_round_trips_exactly_with_rows_only_where_needed() {
         assert_eq!(credits_of(&twice, id), credits_of(&project, id));
     }
     let db = Database::open_readonly(&path).unwrap();
-    let rows_of = |id: SectionId| -> i64 {
+    let rows_of = |id: LineId| -> i64 {
         db.conn
             .query_row(
                 "SELECT count(*) FROM shot_credits WHERE section_id = ?1",
@@ -400,22 +400,22 @@ fn every_legacy_text_case_round_trips_exactly_with_rows_only_where_needed() {
 
 /// #718: what a save in a released build (0.5.3 and older) leaves - a fresh
 /// file with only the tables it knows, so the three credit tables are gone -
-/// and the same after that build's Edit Section saved too, which trims the
-/// surveyor text (`surveyor.trim() || null`). Every section still lists who
+/// and the same after that build's Edit Line saved too, which trims the
+/// surveyor text (`surveyor.trim() || null`). Every line still lists who
 /// explored and who surveyed it. What collapses is expected and pinned here:
-/// every shot of a section now reads the section aggregate (earliest date),
+/// every shot of a line now reads the line aggregate (earliest date),
 /// names keep their legacy spelling (`" - "` for a `" / "`), and same-named
 /// people with different emails become one name.
 #[test]
-fn an_older_builds_save_keeps_each_sections_roles() {
+fn an_older_builds_save_keeps_each_lines_roles() {
     const DROP: &str =
         "DROP TABLE shot_credits; DROP TABLE credit_people; DROP TABLE credit_sections;";
-    const EDIT_SECTION_TRIM: &str = "UPDATE sections SET surveyor = NULLIF(trim(surveyor), '');";
+    const EDIT_LINE_TRIM: &str = "UPDATE sections SET surveyor = NULLIF(trim(surveyor), '');";
     let (project, ids) = roles_project();
     let [surveyors_only, explorers_only, mixed, nobody, slashes, same_named] = ids;
     for (older_save, trimmed) in [
         (DROP.to_string(), false),
-        (format!("{DROP} {EDIT_SECTION_TRIM}"), true),
+        (format!("{DROP} {EDIT_LINE_TRIM}"), true),
     ] {
         let dir = TempDir::new().unwrap();
         let path = save(&dir, "older.stalx", &project);
@@ -426,7 +426,7 @@ fn an_older_builds_save_keeps_each_sections_roles() {
             assert_eq!(
                 role_names(&older, id),
                 role_names(&project, id),
-                "section {id} keeps its explorers and surveyors (trimmed: {trimmed})"
+                "line {id} keeps its explorers and surveyors (trimmed: {trimmed})"
             );
         }
         assert_eq!(
@@ -443,13 +443,13 @@ fn an_older_builds_save_keeps_each_sections_roles() {
             (vec!["Jo Diver".to_string()], vec!["Jo Diver".to_string()])
         );
 
-        // Per shot: the section aggregate on every shot.
-        let every_shot = |id: SectionId, expected: SurveyCredit| {
+        // Per shot: the line aggregate on every shot.
+        let every_shot = |id: LineId, expected: SurveyCredit| {
             let shots = credits_of(&older, id);
             assert_eq!(
                 shots,
                 vec![expected; shots.len()],
-                "section {id} (trimmed: {trimmed})"
+                "line {id} (trimmed: {trimmed})"
             );
         };
         every_shot(
@@ -488,7 +488,7 @@ fn an_older_builds_save_keeps_each_sections_roles() {
 fn a_placeholder_only_name_is_lost_on_an_older_save_but_kept_here() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Placeholder".to_string(), None);
-    let id = section_with(
+    let id = line_with(
         &mut project,
         vec![credit(&["?", "Ann Lee"], &["unknown"], day(1))],
     );
@@ -513,8 +513,8 @@ fn a_placeholder_only_name_is_lost_on_an_older_save_but_kept_here() {
 fn two_one_word_surveyors_survive_an_older_builds_save_as_two_people() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Pair".to_string(), None);
-    let alone = section_with(&mut project, vec![credit(&["Ann", "Bo"], &[], day(1))]);
-    let with_explorers = section_with(
+    let alone = line_with(&mut project, vec![credit(&["Ann", "Bo"], &[], day(1))]);
+    let with_explorers = line_with(
         &mut project,
         vec![credit(&["Ann", "Bo"], &["ds", "kb"], day(2))],
     );
@@ -554,7 +554,7 @@ fn two_one_word_surveyors_survive_an_older_builds_save_as_two_people() {
 fn legacy_free_text_and_the_ariane_form_split_by_their_own_rule() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Rules".to_string(), None);
-    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let id = line_with(&mut project, vec![SurveyCredit::default(); 2]);
     let path = save(&dir, "rules.stalx", &project);
     for (text, expected) in [
         ("Doe, John", credit(&["Doe, John"], &[], None)),
@@ -573,13 +573,13 @@ fn legacy_free_text_and_the_ariane_form_split_by_their_own_rule() {
 }
 
 /// #718: the explorers-only text this build wrote before it became trim-proof
-/// (`"x / "`), trimmed by an older build's Edit Section to `"x /"`, still reads
+/// (`"x / "`), trimmed by an older build's Edit Line to `"x /"`, still reads
 /// as explorers - not as one surveyor named `"x /"`.
 #[test]
 fn a_trimmed_explorers_only_text_still_names_explorers() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Trimmed".to_string(), None);
-    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let id = line_with(&mut project, vec![SurveyCredit::default(); 2]);
     let path = save(&dir, "trimmed.stalx", &project);
     for text in ["Ida Ice, Ex Plorer / ", "Ida Ice, Ex Plorer /"] {
         sql(
@@ -599,9 +599,9 @@ fn a_trimmed_explorers_only_text_still_names_explorers() {
 fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Old".to_string(), None);
-    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let id = line_with(&mut project, vec![SurveyCredit::default(); 2]);
     let path = save(&dir, "old.stalx", &project);
-    // What a build before per-shot credit wrote: section text, no tables.
+    // What a build before per-shot credit wrote: line text, no tables.
     sql(
         &path,
         &format!(
@@ -623,22 +623,22 @@ fn an_old_file_without_the_tables_splits_the_legacy_surveyor() {
 }
 
 /// Something that edits the legacy columns in place (a hand edit, another
-/// tool) keeps the credit tables and the shot uuids but retypes the section's
+/// tool) keeps the credit tables and the shot uuids but retypes the line's
 /// surveyor/date. The retyped text is the newer truth: every shot of the
-/// section shows it, rows or not. (A released build does not get here: its
-/// save drops the tables, see `an_older_builds_save_keeps_each_sections_roles`.)
+/// line shows it, rows or not. (A released build does not get here: its
+/// save drops the tables, see `an_older_builds_save_keeps_each_lines_roles`.)
 #[test]
 fn a_retyped_legacy_surveyor_wins_over_the_rows() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Mixed".to_string(), None);
-    let id = section_with(
+    let id = line_with(
         &mut project,
         vec![
             credit(&["Kept"], &["Ex"], day(1)),
             credit(&["Other Person"], &[], day(2)),
         ],
     );
-    let untouched = section_with(&mut project, vec![credit(&["Stays"], &["Too"], day(3))]);
+    let untouched = line_with(&mut project, vec![credit(&["Stays"], &["Too"], day(3))]);
     project.ensure_shot_uuids();
     let path = save(&dir, "older.stalx", &project);
     sql(
@@ -656,7 +656,7 @@ fn a_retyped_legacy_surveyor_wins_over_the_rows() {
     assert_eq!(
         credits_of(&loaded, untouched),
         vec![credit(&["Stays"], &["Too"], day(3))],
-        "a section whose pair is untouched keeps its rows"
+        "a line whose pair is untouched keeps its rows"
     );
 
     // A retyped date alone counts too.
@@ -673,12 +673,12 @@ fn a_retyped_legacy_surveyor_wins_over_the_rows() {
 }
 
 /// Rows with no record of the pair they were written beside (the record table
-/// lost, or a row for a section it never named) do not apply.
+/// lost, or a row for a line it never named) do not apply.
 #[test]
 fn rows_without_a_recorded_pair_do_not_apply() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Unrecorded".to_string(), None);
-    let id = section_with(&mut project, vec![kept_with_email()]);
+    let id = line_with(&mut project, vec![kept_with_email()]);
     let path = save(&dir, "unrecorded.stalx", &project);
     sql(&path, "DROP TABLE credit_sections;");
     // The row (it alone carries the email) does not apply; the pair does.
@@ -695,13 +695,10 @@ fn rows_without_a_recorded_pair_do_not_apply() {
 fn shots_added_without_rows_fall_back_while_rows_hold() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Added".to_string(), None);
-    let id = section_with(&mut project, vec![kept_with_email(), kept_with_email()]);
+    let id = line_with(&mut project, vec![kept_with_email(), kept_with_email()]);
     project.ensure_shot_uuids();
     let path = save(&dir, "added.stalx", &project);
-    let second = project.get_section(id).unwrap().shots[1]
-        .uuid
-        .clone()
-        .unwrap();
+    let second = project.get_line(id).unwrap().shots[1].uuid.clone().unwrap();
     sql(
         &path,
         &format!(
@@ -725,10 +722,10 @@ fn shots_added_without_rows_fall_back_while_rows_hold() {
 fn unreadable_and_dangling_rows_are_skipped_whole_not_fatal() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Bad".to_string(), None);
-    let id = section_with(&mut project, vec![credit(&["A"], &[], day(1)); 10]);
+    let id = line_with(&mut project, vec![credit(&["A"], &[], day(1)); 10]);
     project.ensure_shot_uuids();
     let uuids: Vec<String> = project
-        .get_section(id)
+        .get_line(id)
         .unwrap()
         .shots
         .iter()
@@ -782,16 +779,16 @@ fn unreadable_and_dangling_rows_are_skipped_whole_not_fatal() {
 }
 
 /// A file saved before shot uuids were project-unique can hold one uuid in
-/// several sections. Rows are keyed by (section, uuid), so each of those shots
+/// several lines. Rows are keyed by (line, uuid), so each of those shots
 /// keeps its own credit across a save and reopen.
 #[test]
-fn a_uuid_repeated_across_sections_keeps_each_sections_credit() {
+fn a_uuid_repeated_across_lines_keeps_each_lines_credit() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Repeat".to_string(), None);
-    let a = section_with(&mut project, vec![credit(&["First"], &["E1"], None)]);
-    let b = section_with(&mut project, vec![credit(&["Second"], &["E2"], None)]);
-    project.get_section_mut(a).unwrap().shots[0].uuid = Some("same".to_string());
-    project.get_section_mut(b).unwrap().shots[0].uuid = Some("same".to_string());
+    let a = line_with(&mut project, vec![credit(&["First"], &["E1"], None)]);
+    let b = line_with(&mut project, vec![credit(&["Second"], &["E2"], None)]);
+    project.get_line_mut(a).unwrap().shots[0].uuid = Some("same".to_string());
+    project.get_line_mut(b).unwrap().shots[0].uuid = Some("same".to_string());
     let path = save(&dir, "repeat.stalx", &project);
     let loaded = reload(&path);
     assert_eq!(
@@ -811,7 +808,7 @@ fn a_uuid_repeated_across_sections_keeps_each_sections_credit() {
 fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Shape".to_string(), None);
-    let id = section_with(&mut project, vec![kept_with_email()]);
+    let id = line_with(&mut project, vec![kept_with_email()]);
     let path = save(&dir, "shape.stalx", &project);
     sql(
         &path,
@@ -825,18 +822,18 @@ fn a_credit_table_of_another_shape_is_ignored_then_replaced() {
         vec![credit(&["Kept"], &["Ex"], day(1))]
     );
     let mut fixed = loaded;
-    fixed.get_section_mut(id).unwrap().shots[0].set_credit(kept_with_email());
+    fixed.get_line_mut(id).unwrap().shots[0].set_credit(kept_with_email());
     let resaved = reload(&save(&dir, "resaved.stalx", &fixed));
     assert_eq!(credits_of(&resaved, id), vec![kept_with_email()]);
 }
 
-/// A saved section of two shots that both need a row (their credits differ
-/// from the section aggregate), and the credit every shot reads when the
-/// rows cannot be used: the section's legacy columns, "Ann Lee, Bo Ray" and
+/// A saved line of two shots that both need a row (their credits differ
+/// from the line aggregate), and the credit every shot reads when the
+/// rows cannot be used: the line's legacy columns, "Ann Lee, Bo Ray" and
 /// day 1.
-fn rows_needed(dir: &TempDir, name: &str) -> (std::path::PathBuf, SectionId, SurveyCredit) {
+fn rows_needed(dir: &TempDir, name: &str) -> (std::path::PathBuf, LineId, SurveyCredit) {
     let mut project = Project::new("Rows".to_string(), None);
-    let id = section_with(
+    let id = line_with(
         &mut project,
         vec![
             credit(&["Ann Lee"], &[], day(1)),
@@ -853,7 +850,7 @@ fn rows_needed(dir: &TempDir, name: &str) -> (std::path::PathBuf, SectionId, Sur
 
 /// #717: a `credit_people` without one of the columns the reader selects (a
 /// hand repair, another tool, a future change) next to valid `shot_credits`
-/// rows. The project opens, and every shot reads its section's legacy credit:
+/// rows. The project opens, and every shot reads its line's legacy credit:
 /// rows whose people cannot be read are not used at all.
 #[test]
 fn a_credit_people_without_its_email_column_falls_back_to_the_legacy_credit() {
@@ -1118,8 +1115,8 @@ fn warnings_during(run: impl FnOnce()) -> Vec<String> {
     use std::sync::{Arc, Mutex};
 
     struct Capture(Arc<Mutex<Vec<String>>>);
-    struct Line(String);
-    impl tracing::field::Visit for Line {
+    struct EventFields(String);
+    impl tracing::field::Visit for EventFields {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
             let _ = write!(self.0, "{}={value:?} ", field.name());
         }
@@ -1135,24 +1132,24 @@ fn warnings_during(run: impl FnOnce()) -> Vec<String> {
         fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
         fn event(&self, event: &tracing::Event<'_>) {
             if *event.metadata().level() == tracing::Level::WARN {
-                let mut line = Line(String::new());
-                event.record(&mut line);
-                self.0.lock().unwrap().push(line.0);
+                let mut fields = EventFields(String::new());
+                event.record(&mut fields);
+                self.0.lock().unwrap().push(fields.0);
             }
         }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    let lines = Arc::new(Mutex::new(Vec::new()));
+    let warn_lines = Arc::new(Mutex::new(Vec::new()));
     // With a single dispatcher registered, tracing works out a callsite's
     // interest from whichever thread hits it first - another test's, with no
     // subscriber - and caches "never". A second one, kept alive throughout,
     // makes it ask every registered dispatcher, this one included.
     let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-    tracing::subscriber::with_default(Capture(Arc::clone(&lines)), run);
-    let lines = lines.lock().unwrap().clone();
-    lines
+    tracing::subscriber::with_default(Capture(Arc::clone(&warn_lines)), run);
+    let warn_lines = warn_lines.lock().unwrap().clone();
+    warn_lines
 }
 
 /// The credit read's warnings carry the table, the step, SQLite's extended
@@ -1255,8 +1252,8 @@ fn a_trigger_named_like_a_credit_table_does_not_hide_it() {
 /// #717: values of the wrong type inside readable tables are skipped, never
 /// fatal, and only where they are: a row whose key or value cannot be read
 /// is no row (its shot falls back, the other shot keeps its own row); a
-/// record whose pair cannot be read records nothing (its section's rows do
-/// not apply, the other section's still do); a person who cannot be read
+/// record whose pair cannot be read records nothing (its line's rows do
+/// not apply, the other line's still do); a person who cannot be read
 /// makes the rows naming them unreadable (those shots fall back).
 #[test]
 fn credit_values_of_the_wrong_type_are_skipped_not_fatal() {
@@ -1308,14 +1305,14 @@ fn credit_values_of_the_wrong_type_are_skipped_not_fatal() {
         vec![fallback.clone(), fallback]
     );
 
-    // Two sections with rows; one section's record unreadable.
+    // Two lines with rows; one line's record unreadable.
     let mut project = Project::new("Records".to_string(), None);
-    let a = section_with(&mut project, own.to_vec());
+    let a = line_with(&mut project, own.to_vec());
     let b_own = vec![
         credit(&["Cy Press"], &[], day(3)),
         credit(&["Di Vers"], &[], day(4)),
     ];
-    let b = section_with(&mut project, b_own.clone());
+    let b = line_with(&mut project, b_own.clone());
     project.ensure_shot_uuids();
     let path = save(&dir, "records.stalx", &project);
     sql(
@@ -1361,9 +1358,9 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
 /// reader accepts exactly v18 and reads these seven tables by explicit column
 /// lists. The same project saved with and without per-shot credit must give
 /// identical rows in every one of them, except `sections.surveyor` and
-/// `sections.date` - which hold the aggregate, as one plain TEXT value and one
+/// `lines.date` - which hold the aggregate, as one plain TEXT value and one
 /// ISO date. The surveyor text is pinned: the surveyors, or the Ariane
-/// `"explorers / surveyors"` form when the section has explorers (#718).
+/// `"explorers / surveyors"` form when the line has explorers (#718).
 #[test]
 fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pair() {
     const READ_BY_STALAGMIGHT_LIB: [&str; 7] = [
@@ -1382,8 +1379,8 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
     let dir = TempDir::new().unwrap();
     let (credited, ids) = rich_project();
     let mut plain = credited.clone();
-    for section in &mut plain.sections {
-        for shot in &mut section.shots {
+    for line in &mut plain.lines {
+        for shot in &mut line.shots {
             shot.set_credit(SurveyCredit::default());
         }
     }
@@ -1413,7 +1410,7 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
             "{table} must not change when shots gain survey credit"
         );
     }
-    // The pair: one string (or NULL) and one ISO date (or NULL) per section.
+    // The pair: one string (or NULL) and one ISO date (or NULL) per line.
     let pairs: Vec<(Option<String>, Option<String>)> = {
         let mut stmt = with
             .conn
@@ -1455,7 +1452,7 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
         if let Some(date) = date {
             assert!(
                 NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok(),
-                "sections.date must be ONE ISO date, got {date:?}"
+                "lines.date must be ONE ISO date, got {date:?}"
             );
         }
     }
@@ -1474,13 +1471,13 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
 
 /// A `sections.surveyor` holding a hundred thousand names (a crafted file:
 /// nothing but the file size bounds the column) loads promptly, gives each
-/// role at most `MAX_PEOPLE_PER_ROLE` people, and the section's shots SHARE the
+/// role at most `MAX_PEOPLE_PER_ROLE` people, and the line's shots SHARE the
 /// one fallback credit instead of a copy each.
 #[test]
 fn a_huge_legacy_surveyor_loads_bounded_and_shared() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Huge".to_string(), None);
-    let id = section_with(&mut project, vec![SurveyCredit::default(); 2_000]);
+    let id = line_with(&mut project, vec![SurveyCredit::default(); 2_000]);
     let path = save(&dir, "huge.stalx", &project);
     let names: String = (0..100_000)
         .map(|i| format!("Person {i}"))
@@ -1501,12 +1498,12 @@ fn a_huge_legacy_surveyor_loads_bounded_and_shared() {
         "took {:?}",
         started.elapsed()
     );
-    let section = loaded.get_section(id).unwrap();
-    let first = section.shots[0].credit();
+    let line = loaded.get_line(id).unwrap();
+    let first = line.shots[0].credit();
     assert_eq!(first.surveyors.len(), crate::models::MAX_PEOPLE_PER_ROLE);
     assert_eq!(first.explorers.len(), crate::models::MAX_PEOPLE_PER_ROLE);
-    let shared = section.shots[0].credit.as_ref().unwrap();
-    assert!(section.shots.iter().all(|s| s
+    let shared = line.shots[0].credit.as_ref().unwrap();
+    assert!(line.shots.iter().all(|s| s
         .credit
         .as_ref()
         .is_some_and(|c| std::sync::Arc::ptr_eq(c, shared))));
@@ -1515,16 +1512,16 @@ fn a_huge_legacy_surveyor_loads_bounded_and_shared() {
 /// #719 review: a legacy text this build would not write the same way - a
 /// name longer than a stored person may be, more names than a role keeps,
 /// another spelling - is written back VERBATIM by a save that changed nobody's
-/// credit in the section, save after save, so older builds and SpeleoDB keep
+/// credit in the line, save after save, so older builds and SpeleoDB keep
 /// what they wrote. The shots hold the clamped people, and a reopen shows
-/// exactly what was shown before. Once a credit in the section changes, the
-/// section's own text is written.
+/// exactly what was shown before. Once a credit in the line changes, the
+/// line's own text is written.
 #[test]
 fn a_long_legacy_text_is_written_back_until_a_credit_changes() {
     use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Long".to_string(), None);
-    let id = section_with(&mut project, vec![SurveyCredit::default(); 2]);
+    let id = line_with(&mut project, vec![SurveyCredit::default(); 2]);
     let path = save(&dir, "long.stalx", &project);
     let column = |path: &Path| legacy_surveyor(&Database::open_readonly(path).unwrap(), id);
     let long = "n".repeat(MAX_PERSON_TEXT_CHARS + 30);
@@ -1569,13 +1566,13 @@ fn a_long_legacy_text_is_written_back_until_a_credit_changes() {
     let name = &credits_of(&reload(&path), id)[0].surveyors[0].name;
     assert_eq!(name.chars().count(), MAX_PERSON_TEXT_CHARS);
 
-    // A credit changed in the section: its own text is written.
+    // A credit changed in the line: its own text is written.
     sql(
         &path,
         &format!("UPDATE sections SET surveyor = 'Ann Lee;Bo Ray' WHERE id = {id};"),
     );
     let mut edited = reload(&path);
-    edited.get_section_mut(id).unwrap().shots[0].set_credit(credit(&["Cy Press"], &[], None));
+    edited.get_line_mut(id).unwrap().shots[0].set_credit(credit(&["Cy Press"], &[], None));
     let saved = save(&dir, "edited.stalx", &edited);
     assert_eq!(column(&saved).as_deref(), Some("Cy Press, Ann Lee, Bo Ray"));
     assert_eq!(credits_of(&reload(&saved), id), credits_of(&edited, id));
@@ -1596,13 +1593,13 @@ fn a_push_snapshot_keeps_the_credit_tables() {
     }
 }
 
-/// A section with no shots has no shot to carry its legacy surveyor/date: it
+/// A line with no shots has no shot to carry its legacy surveyor/date: it
 /// keeps them, and writes them back, save after save.
 #[test]
-fn a_shotless_section_keeps_its_legacy_pair_across_saves() {
+fn a_shotless_line_keeps_its_legacy_pair_across_saves() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Empty".to_string(), None);
-    let id = section_with(&mut project, Vec::new());
+    let id = line_with(&mut project, Vec::new());
     let path = save(&dir, "empty.stalx", &project);
     sql(
         &path,
@@ -1611,9 +1608,9 @@ fn a_shotless_section_keeps_its_legacy_pair_across_saves() {
         ),
     );
     let once = reload(&path);
-    let section = once.get_section(id).unwrap();
-    assert_eq!(section.legacy_surveyor.as_deref(), Some("Empty Guy"));
-    assert_eq!(section.legacy_date, NaiveDate::from_ymd_opt(2020, 1, 2));
+    let line = once.get_line(id).unwrap();
+    assert_eq!(line.legacy_surveyor.as_deref(), Some("Empty Guy"));
+    assert_eq!(line.legacy_date, NaiveDate::from_ymd_opt(2020, 1, 2));
 
     let again_path = save(&dir, "again.stalx", &once);
     let db = Database::open_readonly(&again_path).unwrap();
@@ -1634,7 +1631,7 @@ fn a_shotless_section_keeps_its_legacy_pair_across_saves() {
     );
     let twice = reload(&again_path);
     assert_eq!(
-        twice.get_section(id).unwrap().legacy_surveyor.as_deref(),
+        twice.get_line(id).unwrap().legacy_surveyor.as_deref(),
         Some("Empty Guy")
     );
 }

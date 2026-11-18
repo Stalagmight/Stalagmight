@@ -3,4 +3,4 @@ import type { Coordinates } from "./Coordinates";
 import type { GpsCoordinates } from "./GpsCoordinates";
 import type { StationRef } from "./StationRef";
 
-export type ImportPlacement = { "type": "origin" } | { "type": "zero_datum", coordinates: GpsCoordinates, station_index: number, } | { "type": "from_existing", import_station: number, existing_station: StationRef, } | { "type": "from_importing", import_station: number, target_section_index: number, target_station_index: number, } | { "type": "manual", align_station_index: number, offset: Coordinates | null, } | { "type": "manual_snap", align_station_index: number, snapped_to_station: StationRef, };
+export type ImportPlacement = { "type": "origin" } | { "type": "zero_datum", coordinates: GpsCoordinates, station_index: number, } | { "type": "from_existing", import_station: number, existing_station: StationRef, } | { "type": "from_importing", import_station: number, target_line_index: number, target_station_index: number, } | { "type": "manual", align_station_index: number, offset: Coordinates | null, } | { "type": "manual_snap", align_station_index: number, snapped_to_station: StationRef, };

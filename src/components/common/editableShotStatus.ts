@@ -7,7 +7,7 @@
  * as empty" would eventually disagree and either block a Save that should pass
  * or write a NaN.
  *
- * Mirrors the new-section dialog's rule (`isDraftComplete` /
+ * Mirrors the new-line dialog's rule (`isDraftComplete` /
  * `draftMissing`): a shot needs a positive length, both depths, and at least one
  * azimuth; inclination, LRUD and comment stay optional.
  */
@@ -52,7 +52,7 @@ export function isBlankNewShot(shot: EditableShot): boolean {
  * The azimuth mark goes on whichever azimuth column is actually SHOWING. The
  * average is the default, but the eye menu can swap it for the in/out legs, and
  * marking a hidden column paints a red cell nobody can see while Save refuses to
- * proceed - the same dead end the new-section dialog solves by revealing.
+ * proceed - the same dead end the new-line dialog solves by revealing.
  */
 export function missingRequiredCells(
   shot: EditableShot,

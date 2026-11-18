@@ -7,6 +7,7 @@ use crate::models::FEATURE_ID_STRIDE;
 
 use super::datum_extras::CREATE_DATUM_EXTRAS;
 use super::shot_credits::CREATE_CREDIT_TABLES;
+use super::station_ids::CREATE_STATION_IDS;
 use super::station_texts::CREATE_STATION_NAMES;
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
@@ -62,7 +63,7 @@ impl Database {
             [],
         )?;
 
-        // Add direction column to sections table if it doesn't exist (added for direction field)
+        // Add direction column to lines table if it doesn't exist (added for direction field)
         // Check if column exists first
         let has_direction_column: bool = self
             .conn
@@ -79,10 +80,10 @@ impl Database {
                 "ALTER TABLE sections ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'",
                 [],
             )?;
-            tracing::info!("Added direction column to sections table");
+            tracing::info!("Added direction column to lines table");
         }
 
-        // Add the gauge pair to sections if absent (#24). Nullable: NULL means "not captured
+        // Add the gauge pair to lines if absent (#24). Nullable: NULL means "not captured
         // yet", which falls back to the legacy index rule, so an existing file keeps exactly
         // the gauge station it already had until its first save records the pair.
         for column in ["gauge_shot_uuid", "gauge_neighbour_uuid"] {
@@ -102,11 +103,11 @@ impl Database {
                     &format!("ALTER TABLE sections ADD COLUMN {column} TEXT"),
                     [],
                 )?;
-                tracing::info!(column, "Added gauge column to sections table");
+                tracing::info!(column, "Added gauge column to lines table");
             }
         }
 
-        // Add the north-reference quartet to sections if absent (#438, v17 -> v18).
+        // Add the north-reference quartet to lines if absent (#438, v17 -> v18).
         // All four nullable and NULL by default: that is "no reference recorded",
         // which resolves to a 0 correction, so an existing file computes exactly
         // the geometry it did before the columns existed.
@@ -132,11 +133,11 @@ impl Database {
                     &format!("ALTER TABLE sections ADD COLUMN {column} {decl}"),
                     [],
                 )?;
-                tracing::info!(column, "Added azimuth-reference column to sections table");
+                tracing::info!(column, "Added azimuth-reference column to lines table");
             }
         }
 
-        // Add reverse_parity to sections if absent (#24). Flips on every section reverse; the
+        // Add reverse_parity to lines if absent (#24). Flips on every line reverse; the
         // least-squares gauge reads it to keep pinning the same physical station. Default 0 is
         // exactly right for an existing file - it means "station 0", which is where the gauge
         // already is, so upgrading moves nobody's coordinates.
@@ -155,10 +156,10 @@ impl Database {
                 "ALTER TABLE sections ADD COLUMN reverse_parity INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
-            tracing::info!("Added reverse_parity column to sections table");
+            tracing::info!("Added reverse_parity column to lines table");
         }
 
-        // Add quality column to sections table if it doesn't exist (added for weighted adjustments)
+        // Add quality column to lines table if it doesn't exist (added for weighted adjustments)
         let has_quality_column: bool = self
             .conn
             .query_row(
@@ -174,7 +175,7 @@ impl Database {
                 "ALTER TABLE sections ADD COLUMN quality REAL NOT NULL DEFAULT 1.0",
                 [],
             )?;
-            tracing::info!("Added quality column to sections table");
+            tracing::info!("Added quality column to lines table");
         }
 
         // Ensure station_offsets table exists (added for individual station moves)
@@ -216,7 +217,7 @@ impl Database {
             [],
         )?;
 
-        // Ensure imported_section_hashes table exists (section-level duplicate detection)
+        // Ensure imported_line_hashes table exists (line-level duplicate detection)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS imported_section_hashes (
                 id INTEGER PRIMARY KEY,
@@ -343,6 +344,8 @@ impl Database {
         // through the fast path never gets here, so the read path tolerates the
         // table's absence instead of relying on this.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Station IDs: the same, see `station_ids`.
+        self.conn.execute(CREATE_STATION_IDS, [])?;
 
         // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
         // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
@@ -491,7 +494,7 @@ impl Database {
         // Add shot_uuid column to resolved_warnings (schema v7→v8: key "Ignore"
         // suppression by the shot's stable UUID, issue #57). Pre-v8 rows keep
         // shot_uuid NULL and continue to match by the legacy
-        // (section_id, shot_id) key; they are backfilled lazily on the next
+        // (line_id, shot_id) key; they are backfilled lazily on the next
         // resolve of the same shot. A single idempotent ALTER, like the shots
         // uuid column above.
         let has_resolved_warnings_uuid_column: bool = self
@@ -510,7 +513,7 @@ impl Database {
             )?;
             // Backfill the UUID for existing rows so suppressions survive the
             // migration. The legacy key stored `shot_id`, which on load is
-            // `section_id * FEATURE_ID_STRIDE + sequence_order`, so we can
+            // `line_id * FEATURE_ID_STRIDE + sequence_order`, so we can
             // recover each shot's row and copy its UUID. Rows whose shot has no
             // UUID yet (pre-v6 .stalx, before the lazy in-memory mint) stay NULL
             // and fall back to legacy-position matching. The stride is
@@ -560,7 +563,7 @@ impl Database {
     /// That is only a seed: `pending_kind_classification` is set so the next
     /// project load runs the chain classifier once and demotes the runs that are
     /// not actually bounded, landing existing files where a fresh import would.
-    /// The classifier needs sections, merges and closures assembled into a
+    /// The classifier needs lines, merges and closures assembled into a
     /// `Project`, which is not available on this bare connection, hence the flag
     /// rather than doing it inline.
     ///
@@ -644,22 +647,22 @@ impl Database {
     /// DMP import used to keep the MNemo's +up reading, so shots from a DMP
     /// were stored with a pitch that contradicted their own depth change while
     /// Walls- and Compass-sourced shots were already +down. Nothing on a shot
-    /// or a section records which importer produced it, so the origin cannot be
+    /// or a line records which importer produced it, so the origin cannot be
     /// looked up, it has to be inferred from the numbers.
     ///
-    /// Decided per SECTION, never per shot. A single shot is often ambiguous:
+    /// Decided per LINE, never per shot. A single shot is often ambiguous:
     /// near-horizontal and very short shots carry almost no signal (1 cm depth
     /// resolution swamps the implied angle), and on real data individual shots
-    /// do score better in the wrong direction. A section is decisive because
+    /// do score better in the wrong direction. A line is decisive because
     /// the convention is a property of the file it was imported from, uniform
-    /// across it. Deciding per section also means a genuinely blundered shot
+    /// across it. Deciding per line also means a genuinely blundered shot
     /// cannot flip itself into agreement with its own depth change: it inherits
-    /// the section verdict and stays flagged by validation, which is the whole
+    /// the line verdict and stays flagged by validation, which is the whole
     /// point of the cross-check.
     ///
     /// Each usable shot casts ONE vote, and the votes are counted; the angular
     /// errors are deliberately not summed. Summing let a single shot decide the
-    /// section by sheer magnitude: three correct shallow shots disagreeing by
+    /// line by sheer magnitude: three correct shallow shots disagreeing by
     /// 4 degrees each are outweighed by one blunder recorded at -89 against
     /// +89 implied, which flips all four and launders the blunder, the exact
     /// opposite of the paragraph above. Counting votes bounds any one shot's
@@ -668,13 +671,13 @@ impl Database {
     /// A shot votes only when its own evidence is lopsided (one direction's
     /// error beats the other by `DECISIVE_RATIO`); otherwise it abstains, which
     /// is what keeps near-horizontal and very short shots from voting noise. A
-    /// section flips when at least `MIN_VOTING_SHOTS` shots vote to flip and
+    /// line flips when at least `MIN_VOTING_SHOTS` shots vote to flip and
     /// the flip votes outnumber the keep votes by `DECISIVE_RATIO`. That margin
-    /// is what lets a real DMP section carry one genuine blunder without being
-    /// held hostage by it, while a section that is mostly correct can never be
-    /// flipped by an outlier. Sections whose pitch is entirely zero (Ariane
+    /// is what lets a real DMP line carry one genuine blunder without being
+    /// held hostage by it, while a line that is mostly correct can never be
+    /// flipped by an outlier. Lines whose pitch is entirely zero (Ariane
     /// never populates inclination) produce no votes at all and are untouched.
-    /// Returns the ids of the sections that were flipped, so the caller can
+    /// Returns the ids of the lines that were flipped, so the caller can
     /// invalidate the state that still holds their pre-flip pitch (persisted
     /// undo history, dismissed inclination warnings). Empty means nothing moved.
     pub(super) fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<Vec<i64>> {
@@ -682,7 +685,7 @@ impl Database {
         const MIN_LENGTH_M: f64 = 0.05;
         /// Same, for the vertical change.
         const MIN_DZ_M: f64 = 0.05;
-        /// Fewer usable shots than this is not a section-wide verdict.
+        /// Fewer usable shots than this is not a line-wide verdict.
         const MIN_VOTING_SHOTS: usize = 3;
         /// Flipped must beat as-is by this factor to count as decisive.
         const DECISIVE_RATIO: f64 = 2.0;
@@ -705,11 +708,11 @@ impl Database {
             ))
         })?;
 
-        // section_id -> (votes to flip, votes to keep). Shots whose own
+        // line_id -> (votes to flip, votes to keep). Shots whose own
         // evidence is not lopsided abstain and appear in neither count.
         let mut tally: HashMap<i64, (usize, usize)> = HashMap::new();
         for row in rows {
-            let (section_id, length, depth_in, depth_out, pitch_in, pitch_out) = row?;
+            let (line_id, length, depth_in, depth_out, pitch_in, pitch_out) = row?;
             // Reject out-of-range legs BEFORE averaging, exactly as
             // `Validator::validate_shot` does. Testing only the average would
             // let a shot with one impossible leg vote whenever the other leg
@@ -738,7 +741,7 @@ impl Database {
             let as_is_error = (recorded - implied).abs();
             let flipped_error = (-recorded - implied).abs();
 
-            let entry = tally.entry(section_id).or_insert((0, 0));
+            let entry = tally.entry(line_id).or_insert((0, 0));
             if flipped_error * DECISIVE_RATIO < as_is_error {
                 entry.0 += 1;
             } else if as_is_error * DECISIVE_RATIO < flipped_error {
@@ -753,32 +756,32 @@ impl Database {
                 *flip_votes >= MIN_VOTING_SHOTS
                     && (*flip_votes as f64) > (*keep_votes as f64) * DECISIVE_RATIO
             })
-            .map(|(section_id, _)| *section_id)
+            .map(|(line_id, _)| *line_id)
             .collect();
 
-        // Sections that had usable geometry but were not decisive enough to
+        // Lines that had usable geometry but were not decisive enough to
         // flip keep whatever convention they were stored in, and the v12 stamp
         // means they are never re-examined.  If one of those was in fact a +up
-        // section, validation will now flag every sloped shot in it, so name
+        // line, validation will now flag every sloped shot in it, so name
         // them in the log rather than leaving the user to guess.
         let declined: Vec<i64> = tally
             .iter()
-            .filter(|(section_id, (flip_votes, keep_votes))| {
-                flip_votes + keep_votes >= MIN_VOTING_SHOTS && !flip.contains(section_id)
+            .filter(|(line_id, (flip_votes, keep_votes))| {
+                flip_votes + keep_votes >= MIN_VOTING_SHOTS && !flip.contains(line_id)
             })
-            .map(|(section_id, _)| *section_id)
+            .map(|(line_id, _)| *line_id)
             .collect();
         if !declined.is_empty() {
             tracing::warn!(
-                declined_sections = ?declined,
-                "Pitch convention was not decisive for these sections; leaving them as stored (v11 to v12)"
+                declined_lines = ?declined,
+                "Pitch convention was not decisive for these lines; leaving them as stored (v11 to v12)"
             );
         }
 
         if flip.is_empty() {
             tracing::info!(
-                sections_examined = tally.len(),
-                "No sections needed pitch-convention normalisation (v11 to v12)"
+                lines_examined = tally.len(),
+                "No lines needed pitch-convention normalisation (v11 to v12)"
             );
             return Ok(flip);
         }
@@ -786,19 +789,19 @@ impl Database {
         // No transaction here on purpose: the caller wraps this call and the
         // invalidation that follows it in one, so the two cannot be separated
         // by a crash.
-        for section_id in &flip {
+        for line_id in &flip {
             conn.execute(
                 "UPDATE shots
                  SET pitch_in  = CASE WHEN pitch_in  IS NULL THEN NULL ELSE -pitch_in  END,
                      pitch_out = CASE WHEN pitch_out IS NULL THEN NULL ELSE -pitch_out END
                  WHERE section_id = ?1",
-                [section_id],
+                [line_id],
             )?;
         }
 
         tracing::info!(
-            sections_flipped = flip.len(),
-            sections_examined = tally.len(),
+            lines_flipped = flip.len(),
+            lines_examined = tally.len(),
             "Normalised stored pitch to the +down convention (v11 to v12)"
         );
         Ok(flip)
@@ -870,7 +873,7 @@ impl Database {
     /// Normalise stored azimuth readings into `[0, 360)` (schema v13 to v14).
     ///
     /// Nothing derived is invalidated (see "What is deliberately NOT invalidated"), so
-    /// the sections holding a shot whose walked BEARING actually moved are only logged:
+    /// the lines holding a shot whose walked BEARING actually moved are only logged:
     /// that warning is the sole record that those shots used to render 180 degrees off.
     ///
     /// ## What changed, and why this is not a v11-to-v12-shaped flip
@@ -917,29 +920,29 @@ impl Database {
     ///   could never fire, so there is no dismissal to clear - and after normalisation it
     ///   starts firing correctly, which is the user-visible signal that these shots were
     ///   touched.
-    /// * **`section_offsets`.** These are the one derived value that a corrected bearing
+    /// * **`line_offsets`.** These are the one derived value that a corrected bearing
     ///   really can leave inconsistent, and they are still left alone - deliberately, not by
-    ///   omission. An offset is an ACCUMULATED translation: `adjust_section_offset` adds or
+    ///   omission. An offset is an ACCUMULATED translation: `adjust_line_offset` adds or
     ///   subtracts a shot's displacement each time a shot is inserted at or removed from a
-    ///   section's head, so what is stored is the running sum of past edits, not a function of
+    ///   line's head, so what is stored is the running sum of past edits, not a function of
     ///   the current shots. A compensation banked under the antipodal bearing cannot be
     ///   recomputed from the file - only replaying the edit history would do it, and that
     ///   history is not kept.
     ///
     ///   The affected population is the intersection of two already-rare conditions: the
-    ///   section must have held an out-of-range azimuth PAIR (see Reachability) *and* have had
-    ///   a shot inserted or removed at its head. For such a section the migration still fixes
+    ///   line must have held an out-of-range azimuth PAIR (see Reachability) *and* have had
+    ///   a shot inserted or removed at its head. For such a line the migration still fixes
     ///   what matters - the SHAPE, i.e. the direction its shots walk - while its absolute
     ///   placement can be out by up to twice the affected shot's horizontal vector. That is a
-    ///   visible displacement the user can correct by moving the section, not a silent
+    ///   visible displacement the user can correct by moving the line, not a silent
     ///   corruption of measured values.
     ///
-    ///   The alternatives are worse. Zeroing offsets would move every section that has one,
+    ///   The alternatives are worse. Zeroing offsets would move every line that has one,
     ///   including the overwhelming majority whose azimuths were always in range and whose
     ///   placement is correct today; recomputing them is impossible for the reason above. So
     ///   the rule is: correct the readings, leave the accumulated translation, and accept a
     ///   recoverable misplacement in a rare intersection rather than a certain one everywhere.
-    ///   Pinned by `migration_v14_leaves_section_offsets_untouched`.
+    ///   Pinned by `migration_v14_leaves_line_offsets_untouched`.
     pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT id, section_id, azimuth_in, azimuth_out
@@ -956,11 +959,11 @@ impl Database {
             ))
         })?;
 
-        // (shot id, normalised in, normalised out) plus the sections whose bearing moved.
+        // (shot id, normalised in, normalised out) plus the lines whose bearing moved.
         let mut updates: Vec<(i64, f64, f64)> = Vec::new();
         let mut reinterpreted: Vec<i64> = Vec::new();
         for row in rows {
-            let (id, section_id, azimuth_in, azimuth_out) = row?;
+            let (id, line_id, azimuth_in, azimuth_out) = row?;
             // A non-finite reading (SQLite rejects NaN into a NOT NULL REAL, but stores
             // infinities) has no canonical form; `normalize_azimuth` passes it through, so
             // without this guard the row would take a no-op UPDATE and still inflate the
@@ -969,7 +972,7 @@ impl Database {
                 continue;
             }
             if Self::old_wrap_returned_the_antipode(azimuth_in, azimuth_out) {
-                reinterpreted.push(section_id);
+                reinterpreted.push(line_id);
             }
             updates.push((
                 id,
@@ -994,13 +997,13 @@ impl Database {
         reinterpreted.dedup();
         tracing::info!(
             shots_normalised = updates.len(),
-            sections_reinterpreted = reinterpreted.len(),
+            lines_reinterpreted = reinterpreted.len(),
             "Normalised stored azimuth readings into [0, 360) (v13 to v14)"
         );
         if !reinterpreted.is_empty() {
             tracing::warn!(
-                sections = ?reinterpreted,
-                "These sections held a shot whose two azimuth readings were more than 540 \
+                lines = ?reinterpreted,
+                "These lines held a shot whose two azimuth readings were more than 540 \
                  degrees apart; earlier builds walked it 180 degrees off, and it now walks \
                  to the bearing its readings actually describe"
             );
@@ -1042,7 +1045,7 @@ impl Database {
     ///   classifier pass runs on an undo to correct it.
     /// - **v14→v15**: entries naming the removed `ApplyCollabChanges` command.
     /// - **v15→v16**: privacy - pre-v16 project snapshots carry `file_path`.
-    /// - **v16→v17**: explicit-null `SectionUpdates` fields (#413 finding 5) -
+    /// - **v16→v17**: explicit-null `LineUpdates` fields (#413 finding 5) -
     ///   the v6→v7 hazard below, one struct over.
     ///
     /// Pre-v7 builds serialized every untouched nullable `ShotUpdates` field as
@@ -1075,36 +1078,36 @@ impl Database {
 
     /// Discard everything outside the `shots` table that still holds a
     /// pre-#296 pitch, after `migrate_pitch_to_down_convention` flipped at
-    /// least one section (schema v11 to v12).
+    /// least one line (schema v11 to v12).
     ///
     /// The migration rewrites `shots` only. Two other stores hold the pitch of
-    /// the sections it moved, or a verdict derived from it, and neither is
+    /// the lines it moved, or a verdict derived from it, and neither is
     /// versioned, so a stale copy would outlive the migration and there is no
     /// second pass to catch it:
     ///
     /// 1. Persisted undo/redo. Payloads carry absolute pitch values and whole
     ///    project snapshots, so one undo of a pre-upgrade edit writes the +up
     ///    value straight back into a file already stamped v12. Whole-project
-    ///    snapshots are why this is all-or-nothing rather than per section.
+    ///    snapshots are why this is all-or-nothing rather than per line.
     /// 2. Dismissed inclination warnings. `resolved_warnings` is keyed by
-    ///    `(section_id, shot_id, warning_code)` with no value component, so a
+    ///    `(line_id, shot_id, warning_code)` with no value component, so a
     ///    mismatch the user dismissed under the old convention would keep
     ///    suppressing the check now that the number means something else. Only
-    ///    the flipped sections are cleared, and only the one warning code whose
+    ///    the flipped lines are cleared, and only the one warning code whose
     ///    meaning actually changed: `LENGTH_BELOW_DEPTH_CHANGE` compares length
     ///    against the depth change and never reads pitch, so its dismissals are
     ///    still valid.
-    fn invalidate_pre_pitch_flip_state(&self, flipped_sections: &[i64]) -> Result<()> {
+    fn invalidate_pre_pitch_flip_state(&self, flipped_lines: &[i64]) -> Result<()> {
         self.drop_legacy_undo_history()?;
 
         if self.table_exists("resolved_warnings")? {
             let mut cleared = 0usize;
-            for section_id in flipped_sections {
+            for line_id in flipped_lines {
                 cleared += self.conn.execute(
                     "DELETE FROM resolved_warnings
                      WHERE warning_code = 'INCLINATION_DEPTH_MISMATCH'
                        AND section_id = ?1",
-                    [section_id],
+                    [line_id],
                 )?;
             }
             if cleared > 0 {
@@ -1365,16 +1368,16 @@ impl Database {
         if current < 17 {
             // [#413 finding 5] The v7 hazard again, one struct over.
             //
-            // `SectionUpdates`' `name` / `surveyor` / `date` gained the
+            // `LineUpdates`' `name` / `surveyor` / `date` gained the
             // `double_option` + `skip_serializing_if` pair `ShotUpdates` has had
             // since v7. Pre-v17 writers serialized every untouched one as an
             // explicit `null` into both `command_json` (the
-            // `update_section_metadata` command carries a `SectionUpdates`) and
+            // `update_line_metadata` command carries a `LineUpdates`) and
             // `undo_data_json` (`PreviousValues { shot_id: None }`'s
             // `values_json`). Those payloads still PARSE - only their meaning
             // moved, from "leave this field alone" to "clear this field" - so
             // replaying one would wipe the name, surveyor and date off the
-            // section it names. `UNDO_FORMAT_SAFE_VERSION` is 7 and stays there
+            // line it names. `UNDO_FORMAT_SAFE_VERSION` is 7 and stays there
             // (it is the floor for the pre-v7 purge alone; bumping it would make
             // the v13 and v15 arms' own tests pass without those arms), so a v16
             // file arrives here with its stacks intact and needs this drop.
@@ -1652,6 +1655,8 @@ impl Database {
         // Station names - see `station_texts` for why this table carries no
         // schema bump.
         self.conn.execute(CREATE_STATION_NAMES, [])?;
+        // Station IDs - no bump either, see `station_ids`.
+        self.conn.execute(CREATE_STATION_IDS, [])?;
         // Per-shot survey credit - no bump either, see `shot_credits`.
         self.conn.execute_batch(CREATE_CREDIT_TABLES)?;
         // Zero datum GPS fixes and accuracies (#741) - no bump either, see

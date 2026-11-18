@@ -19,31 +19,31 @@ import { useUIStore } from '../../store/uiStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { EntitySymbol } from './toolIcons';
 
-export type DetailLinkType = 'station' | 'shot' | 'section';
+export type DetailLinkType = 'station' | 'shot' | 'line';
 
 /**
  * Target identifier for station or shot links.
- * Both sectionId and position are required.
+ * Both lineId and position are required.
  */
 export interface StationOrShotTarget {
-  sectionId: number;
-  /** Position within section: 0-indexed for stations, 1-indexed for shots */
+  lineId: number;
+  /** Position within line: 0-indexed for stations, 1-indexed for shots */
   position: number;
 }
 
 /**
- * Target identifier for section links.
- * Only sectionId is required.
+ * Target identifier for line links.
+ * Only lineId is required.
  */
-export interface SectionTarget {
-  sectionId: number;
+export interface LineTarget {
+  lineId: number;
 }
 
 /**
  * Union type for all target types.
- * Use StationOrShotTarget for stations/shots, SectionTarget for sections.
+ * Use StationOrShotTarget for stations/shots, LineTarget for lines.
  */
-export type DetailLinkTarget = StationOrShotTarget | SectionTarget;
+export type DetailLinkTarget = StationOrShotTarget | LineTarget;
 
 /**
  * Type guard to check if target has position (station or shot target).
@@ -55,10 +55,16 @@ export function hasPosition(target: DetailLinkTarget): target is StationOrShotTa
 export interface DetailLinkProps {
   /** Type of element this link navigates to */
   type: DetailLinkType;
-  /** Target identifier (sectionId required, position required for stations/shots) */
+  /** Target identifier (lineId required, position required for stations/shots) */
   target: DetailLinkTarget;
   /** Text to display in the link */
   displayText: string;
+  /**
+   * The target named with its line context, for the aria-label and the
+   * selection announcement (`Main Line / 17`, `Main Line: 4 → 5`) when the
+   * visible text omits the line. Defaults to `displayText`.
+   */
+  fullText?: string;
   /** Callback when link is clicked */
   onSelect: () => void;
   /** Whether the target element is missing/invalid */
@@ -74,39 +80,44 @@ export interface DetailLinkProps {
   /** Callback when hover/focus ends (for map highlighting). */
   onHoverEnd?: () => void;
   /**
-   * Short primary label for the Full-mode entity pill, shown before the dim id
-   * suffix. Used for sections (the bare name, e.g. "Main Line"); station/shot
-   * links derive their primary from the target position automatically.
+   * Short primary label for the Full-mode entity pill: the station name
+   * (`17`), the shot (`4 → 5`) or the line name. Defaults to `displayText`.
    */
   pillLabel?: string;
+  /**
+   * Dim context after a divider in the Full-mode pill: the line name of a
+   * station or shot link (`17 | Main Line`). Omitted for lines. Never an id -
+   * positional handles are not shown (SPEC 4.1).
+   */
+  pillContext?: string;
 }
 
 /**
  * Generate a stable test ID based on element type and target.
  *
  * Formats:
- * - Station: "station-{sectionId}-{position}-link"
- * - Shot: "shot-{sectionId}-{position}-link"
- * - Section: "section-{sectionId}-link"
+ * - Station: "station-{lineId}-{position}-link"
+ * - Shot: "shot-{lineId}-{position}-link"
+ * - Line: "line-{lineId}-link"
  *
  * @throws Error if station/shot type is used without position
  */
 export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): string {
-  if (type === 'section') {
-    return `section-${target.sectionId}-link`;
+  if (type === 'line') {
+    return `line-${target.lineId}-link`;
   }
   // Station and shot require position
   if (!hasPosition(target)) {
     throw new Error(`${type} links require a position in target, got: ${JSON.stringify(target)}`);
   }
-  return `${type}-${target.sectionId}-${target.position}-link`;
+  return `${type}-${target.lineId}-${target.position}-link`;
 }
 
 /**
  * Generate an accessible aria-label for the link.
  *
  * Format: "Select [type] [displayText]"
- * Example: "Select station 2:5"
+ * Example: "Select station Main Line / 17"
  */
 export function generateAriaLabel(type: DetailLinkType, displayText: string): string {
   const trimmed = displayText.trim();
@@ -123,6 +134,7 @@ export function DetailLink({
   type,
   target,
   displayText,
+  fullText,
   onSelect,
   isMissing = false,
   onAnnounce,
@@ -131,14 +143,16 @@ export function DetailLink({
   onHoverStart,
   onHoverEnd,
   pillLabel,
+  pillContext,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
-  const ariaLabel = generateAriaLabel(type, displayText);
+  const spokenText = fullText ?? displayText;
+  const ariaLabel = generateAriaLabel(type, spokenText);
 
   // Full highlighting: a leading entity symbol signals what the link points to
-  // (station ring, shot line, section zigzag), colored by entity. Hidden for
+  // (station ring, shot line, line zigzag), colored by entity. Hidden for
   // missing targets (the warning glyph already conveys state).
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   const showSymbol = syntacticLevelAtLeast(syntacticLevel, 'full') && !isMissing;
@@ -155,9 +169,9 @@ export function DetailLink({
     }
     onSelect();
     if (onAnnounce) {
-      onAnnounce(`Selected ${type} ${displayText}`);
+      onAnnounce(`Selected ${type} ${spokenText}`);
     }
-  }, [type, displayText, onSelect, onAnnounce, isMissing, onHoverEnd]);
+  }, [type, spokenText, onSelect, onAnnounce, isMissing, onHoverEnd]);
 
   const handleMouseEnter = useCallback(() => {
     if (isMissing || !onHoverStart) return;
@@ -206,19 +220,11 @@ export function DetailLink({
     ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
     : undefined;
 
-  // Pill content: a short primary label + the fully-qualified id after a divider,
-  // both at the same text size (shot "55 | 110:55", section "Main Line | 110").
-  let pillPrimary = displayText;
-  let pillId: string | null = null;
-  if (showSymbol) {
-    if (hasPosition(target)) {
-      pillPrimary = String(target.position);
-      pillId = displayText; // already the formatted "sectionId:position"
-    } else {
-      pillPrimary = pillLabel ?? displayText;
-      pillId = String(target.sectionId);
-    }
-  }
+  // Pill content: a short primary label + its line context after a divider,
+  // both at the same text size (station "17 | Main Line", shot "4 → 5 | Main
+  // Line", line "Main Line").
+  const pillPrimary = showSymbol ? (pillLabel ?? displayText) : displayText;
+  const pillId = showSymbol && pillContext ? pillContext : null;
 
   return (
     <button
@@ -243,10 +249,7 @@ export function DetailLink({
           <span>{pillPrimary}</span>
           {pillId !== null && (
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
-              {/* The id suffix is always cap-height digits, so it gets the same
-                  downward nudge whether the primary is a digit (shot/station) or
-                  a lowercase name (section). */}
-              <span className="sh-pill-nudge sh-pill-nudge--num">
+              <span className="sh-pill-nudge">
                 {pillId}
               </span>
             </span>

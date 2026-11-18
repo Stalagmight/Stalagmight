@@ -80,15 +80,15 @@ impl Database {
     pub(super) fn rebuild_tables_with_foreign_keys(&mut self) -> Result<()> {
         tracing::info!("Rebuilding tables with foreign key constraints (schema v2)");
 
-        let has_sections = self.table_exists("sections")?;
-        if !has_sections {
-            anyhow::bail!("Missing sections table during FK migration");
+        let has_lines = self.table_exists("sections")?;
+        if !has_lines {
+            anyhow::bail!("Missing lines table during FK migration");
         }
 
         let has_shots = self.table_exists("shots")?;
         let has_station_merges = self.table_exists("station_merges")?;
         let has_zero_datums = self.table_exists("zero_datums")?;
-        let has_section_offsets = self.table_exists("section_offsets")?;
+        let has_line_offsets = self.table_exists("section_offsets")?;
         let has_station_offsets = self.table_exists("station_offsets")?;
         let has_loop_closures = self.table_exists("loop_closures")?;
         let has_resolved_warnings = self.table_exists("resolved_warnings")?;
@@ -110,7 +110,7 @@ impl Database {
         if has_zero_datums {
             tx.execute("ALTER TABLE zero_datums RENAME TO zero_datums_old", [])?;
         }
-        if has_section_offsets {
+        if has_line_offsets {
             tx.execute(
                 "ALTER TABLE section_offsets RENAME TO section_offsets_old",
                 [],
@@ -246,8 +246,8 @@ impl Database {
 
         // Copy data
         tx.execute(
-            // Every column `migrate_schema` conditionally ADDs to `sections` has to appear
-            // here as well. That migration runs BEFORE this rebuild, so `sections_old` already
+            // Every column `migrate_schema` conditionally ADDs to `lines` has to appear
+            // here as well. That migration runs BEFORE this rebuild, so `lines_old` already
             // carries them - but this recreates the table from scratch, so anything missing
             // from the DDL and the copy is silently dropped and the file is then stamped
             // current, so no later open re-adds it. `save_project` inserts every column by
@@ -312,7 +312,7 @@ impl Database {
             )?;
         }
 
-        if has_section_offsets {
+        if has_line_offsets {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y)
                  SELECT section_id, offset_x, offset_y FROM section_offsets_old",
@@ -364,7 +364,7 @@ impl Database {
         if has_zero_datums {
             tx.execute("DROP TABLE zero_datums_old", [])?;
         }
-        if has_section_offsets {
+        if has_line_offsets {
             tx.execute("DROP TABLE section_offsets_old", [])?;
         }
         if has_station_offsets {

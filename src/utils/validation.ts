@@ -157,14 +157,14 @@ export function hasPitchDiscrepancy(
  * Validate a single shot and return all issues.
  *
  * @param shot The DMP shot to validate
- * @param sectionShots All shots in the section (for context like previous shot)
- * @param shotIndex The index of this shot in the section
+ * @param lineShots All shots in the line (for context like previous shot)
+ * @param shotIndex The index of this shot in the line
  * @param config Validation thresholds
  * @returns Array of validation issues (empty if valid)
  */
 export function validateShot(
   shot: DmpShot,
-  _sectionShots: DmpShot[],
+  _lineShots: DmpShot[],
   _shotIndex: number,
   config: ValidationConfig = DEFAULT_VALIDATION_CONFIG
 ): ValidationIssue[] {
@@ -302,22 +302,22 @@ export function validateShot(
 }
 
 /**
- * Validate all shots in a section and return issues keyed by shot index.
+ * Validate all shots in a line and return issues keyed by shot index.
  *
- * @param shots All shots in the section
+ * @param shots All shots in the line
  * @param config Validation thresholds
  * @returns Map of shot index to array of validation issues
  */
-export function validateSection(
+export function validateLine(
   shots: DmpShot[],
   config: ValidationConfig = DEFAULT_VALIDATION_CONFIG
 ): Map<number, ValidationIssue[]> {
   const issuesByShot = new Map<number, ValidationIssue[]>();
 
-  // Check for duplicate marker indices within the section
+  // Check for duplicate marker indices within the line
   // In DMP format, marker_index is a station number (0, 1, 2...) assigned during survey.
   // All values including 0 are valid station markers. null/undefined means no marker assigned.
-  // Duplicate marker indices within a section indicate potential data entry errors.
+  // Duplicate marker indices within a line indicate potential data entry errors.
   const markerCounts = new Map<number, number[]>();
   shots.forEach((shot, index) => {
     if (shot.shot_type === 'Standard' && shot.marker_index != null) {
@@ -391,18 +391,18 @@ export function getHighestSeverity(issues: ValidationIssue[]): ValidationSeverit
 }
 
 /**
- * Count issues by severity across all sections.
+ * Count issues by severity across all lines.
  *
- * @param issuesBySectionAndShot Map of section index to shot index to issues
+ * @param issuesByLineAndShot Map of line index to shot index to issues
  * @returns Object with error and warning counts
  */
 export function countIssues(
-  issuesBySectionAndShot: Map<number, Map<number, ValidationIssue[]>>
+  issuesByLineAndShot: Map<number, Map<number, ValidationIssue[]>>
 ): { errors: number; warnings: number } {
   let errors = 0;
   let warnings = 0;
 
-  for (const shotIssues of issuesBySectionAndShot.values()) {
+  for (const shotIssues of issuesByLineAndShot.values()) {
     for (const issues of shotIssues.values()) {
       for (const issue of issues) {
         if (issue.severity === 'error') {
@@ -428,21 +428,21 @@ export function countIssues(
 export type ImportErrorType = 'invalidData' | 'missingPlacement' | 'mergeConflict';
 
 /**
- * An error for a section during import.
+ * An error for a line during import.
  */
 export interface ImportError {
   type: ImportErrorType;
-  sectionIndex: number;
+  lineIndex: number;
   shotIndex?: number;
   field?: string;
   message: string;
 }
 
 /**
- * Errors for a single section.
+ * Errors for a single line.
  */
-export interface SectionErrors {
-  sectionIndex: number;
+export interface LineErrors {
+  lineIndex: number;
   errors: ImportError[];
 }
 
@@ -452,7 +452,7 @@ export interface SectionErrors {
  *
  * @param shot The editable shot to validate
  * @param shotIndex The index of this shot
- * @param sectionIndex The section this shot belongs to
+ * @param lineIndex The line this shot belongs to
  * @returns Array of import errors (empty if valid)
  */
 export function validateEditableShot(
@@ -463,7 +463,7 @@ export function validateEditableShot(
     isDeleted?: boolean;
   },
   shotIndex: number,
-  sectionIndex: number
+  lineIndex: number
 ): ImportError[] {
   const errors: ImportError[] = [];
 
@@ -476,7 +476,7 @@ export function validateEditableShot(
   if (shot.length <= 0) {
     errors.push({
       type: 'invalidData',
-      sectionIndex,
+      lineIndex,
       shotIndex,
       field: 'length',
       message: i18n.t('validation.import.lengthPositive'),
@@ -487,7 +487,7 @@ export function validateEditableShot(
   if (shot.azimuth_in < 0 || shot.azimuth_in >= 360) {
     errors.push({
       type: 'invalidData',
-      sectionIndex,
+      lineIndex,
       shotIndex,
       field: 'azimuth_in',
       message: i18n.t('validation.import.azimuthInRange', {
@@ -500,7 +500,7 @@ export function validateEditableShot(
   if (shot.azimuth_out < 0 || shot.azimuth_out >= 360) {
     errors.push({
       type: 'invalidData',
-      sectionIndex,
+      lineIndex,
       shotIndex,
       field: 'azimuth_out',
       message: i18n.t('validation.import.azimuthOutRange', {
@@ -513,21 +513,21 @@ export function validateEditableShot(
 }
 
 /**
- * Validate placement for a section.
- * Checks if section has been placed.
+ * Validate placement for a line.
+ * Checks if line has been placed.
  *
- * @param isPlaced Whether the section has been placed
- * @param sectionIndex The section index
+ * @param isPlaced Whether the line has been placed
+ * @param lineIndex The line index
  * @returns ImportError if not placed, null otherwise
  */
 export function validatePlacement(
   isPlaced: boolean,
-  sectionIndex: number
+  lineIndex: number
 ): ImportError | null {
   if (!isPlaced) {
     return {
       type: 'missingPlacement',
-      sectionIndex,
+      lineIndex,
       message: i18n.t('validation.import.sectionNotPlaced'),
     };
   }
@@ -536,39 +536,39 @@ export function validatePlacement(
 
 /**
  * Validate merge target exists.
- * For "fromExisting" placement, the target section must exist.
+ * For "fromExisting" placement, the target line must exist.
  *
  * @param placementType The type of placement
- * @param targetSectionId The target section ID for fromExisting placement
- * @param existingSectionIds Set of existing section IDs in the project
- * @param placedSectionIds Set of section IDs that have been placed in this import
- * @param sectionIndex The current section index
+ * @param targetLineId The target line ID for fromExisting placement
+ * @param existingLineIds Set of existing line IDs in the project
+ * @param placedLineIds Set of line IDs that have been placed in this import
+ * @param lineIndex The current line index
  * @returns ImportError if merge target doesn't exist, null otherwise
  */
 export function validateMergeTarget(
   placementType: string,
-  targetSectionId: number | undefined,
-  existingSectionIds: Set<number>,
-  placedSectionIds: Set<number>,
-  sectionIndex: number
+  targetLineId: number | undefined,
+  existingLineIds: Set<number>,
+  placedLineIds: Set<number>,
+  lineIndex: number
 ): ImportError | null {
   if (placementType !== 'fromExisting') {
     return null;
   }
 
-  if (targetSectionId === undefined) {
+  if (targetLineId === undefined) {
     return {
       type: 'mergeConflict',
-      sectionIndex,
+      lineIndex,
       message: i18n.t('validation.import.mergeTargetMissing'),
     };
   }
 
-  // Check if target exists in project or in already-placed sections
-  if (!existingSectionIds.has(targetSectionId) && !placedSectionIds.has(targetSectionId)) {
+  // Check if target exists in project or in already-placed lines
+  if (!existingLineIds.has(targetLineId) && !placedLineIds.has(targetLineId)) {
     return {
       type: 'mergeConflict',
-      sectionIndex,
+      lineIndex,
       message: i18n.t('validation.import.mergeTargetNotFound'),
     };
   }

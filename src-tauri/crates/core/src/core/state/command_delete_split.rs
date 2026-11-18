@@ -1,39 +1,92 @@
 use super::AppState;
+use crate::core::undo::history_batch::{delete_shots, ShotsDeleted};
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    Project, SectionData, SectionId, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
-    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    LineData, LineId, Project, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 
-/// Every split path (both delete-and-split paths and Split Section Here) turns
-/// one section into two, so each MINTS a section id (#555) through the same
-/// `Project::add_section` door `create_section` guards, while going nowhere
-/// near `create_section` itself. Refused before any path mutates anything: a
-/// split that ran out of ids half-way would leave section A truncated with
+/// Every split path (both delete-and-split paths and Split Line Here) turns
+/// one line into two, so each MINTS a line id (#555) through the same
+/// `Project::add_line` door `create_line` guards, while going nowhere
+/// near `create_line` itself. Refused before any path mutates anything: a
+/// split that ran out of ids half-way would leave line A truncated with
 /// nowhere to put its tail.
-pub(super) fn section_budget_refusal(
-    project: &Project,
-    section_id: SectionId,
-) -> Option<CommandResult> {
-    if project.next_section_id <= MAX_SECTION_ID {
+pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<CommandResult> {
+    if project.next_line_id <= MAX_LINE_ID {
         return None;
     }
     Some(CommandResult::failure(format!(
-        "Cannot split section {section_id}: to split it into two sections needs \
-         a new section id, but the project has reached the maximum number of sections \
-         (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
-         section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
-         past {MAX_SECTION_ID} cannot hold shots"
+        "Cannot split {}: to split it into two lines needs \
+         a new line id, but the project has reached the maximum number of lines \
+         (limit = {MAX_LINES_IN_ID_SPACE}); shot ids encode as \
+         line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
+         past {MAX_LINE_ID} cannot hold shots",
+        project
+            .line_label(line_id)
+            .map_or_else(|| "the line".to_string(), |name| format!("line \"{name}\""))
     )))
 }
 
 impl AppState {
-    /// Execute a delete-shot-and-split-section operation as a single atomic undo/redo unit.
-    /// Deletes a mid-section shot and splits the section into two, with user-provided names.
+    /// The history label of a delete of the shots from `first` to `last`
+    /// (either order) of `line_id`, worded before the delete names them
+    /// away (`history_batch::delete_shots`). `None` when a shot is not
+    /// there: the command then refuses before it records anything.
+    fn delete_label(
+        &self,
+        line_id: LineId,
+        first: ShotId,
+        last: ShotId,
+        then: ShotsDeleted,
+    ) -> Option<String> {
+        self.batch_label(|project| {
+            let pos = |id: ShotId| {
+                project
+                    .get_line(line_id)
+                    .and_then(|line| line.shots.iter().position(|s| s.id == id))
+            };
+            pos(first)
+                .zip(pos(last))
+                .map(|(a, b)| delete_shots(project, line_id, a.min(b), a.max(b), then))
+                .unwrap_or_default()
+        })
+        .filter(|label| !label.is_empty())
+    }
+
+    /// The two halves' names of a delete-and-split of `line_id`, trimmed, or
+    /// the refusal (`Project::validate_replacement_line_names`: empty, or
+    /// another line's, as a rename is refused). A missing line or project is
+    /// left for the command to report.
+    fn validate_split_names(
+        &self,
+        line_id: LineId,
+        name_a: &str,
+        name_b: &str,
+    ) -> Result<(String, String), CommandResult> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(project) = guard.as_ref() else {
+            return Ok((name_a.trim().to_string(), name_b.trim().to_string()));
+        };
+        match project.validate_replacement_line_names(&[name_a, name_b], &[line_id]) {
+            Ok(mut names) => {
+                let name_b = names.pop().unwrap_or_default();
+                let name_a = names.pop().unwrap_or_default();
+                Ok((name_a, name_b))
+            }
+            Err(e) => Err(CommandResult::failure(e)),
+        }
+    }
+
+    /// Execute a delete-shot-and-split-line operation as a single atomic undo/redo unit.
+    /// Deletes a mid-line shot and splits the line into two, with user-provided names.
     /// Uses `ProjectSnapshotPair` for single-undo. Follows `execute_create_and_merge()` pattern.
     pub fn execute_delete_shot_and_split(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         name_a: String,
         name_b: String,
@@ -43,13 +96,19 @@ impl AppState {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
-        if let Err(f) = self.guard_mutation("Delete shot and split section") {
+        if let Err(f) = self.guard_mutation("Delete shot and split line") {
             return f;
         }
+        // The halves' names replace the line's: refused like a rename when
+        // empty or another line's, before anything changes.
+        let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
+            Ok(names) => names,
+            Err(refusal) => return refusal,
+        };
         tracing::info!(
-            section_id,
+            line_id,
             shot_id,
-            purpose = "split section after deleting shot",
+            purpose = "split line after deleting shot",
             "Executing delete_shot_and_split as single undo unit"
         );
 
@@ -65,10 +124,11 @@ impl AppState {
         // the next one, which re-defines what every stored coordinate means.
         let datums_before = self.datum_layout();
 
-        let undo_section_b_name = name_b.clone();
+        let undo_line_b_name = name_b.clone();
+        let label = self.delete_label(line_id, shot_id, shot_id, ShotsDeleted::Split);
 
         // Step 2: Get split data and perform the operation
-        let (new_section_id, swept_warnings) = {
+        let (new_line_id, swept_warnings) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -79,19 +139,15 @@ impl AppState {
             // Before anything changes, to name what the orphan sweep removes (#738).
             let closures_before = project.closures_before_sweep();
 
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            let Some(line) = project.get_line(line_id) else {
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             // Pre-check: distinguish "shot not found" from "edge shot"
-            let shot_pos = section.shots.iter().position(|s| s.id == shot_id);
+            let shot_pos = line.shots.iter().position(|s| s.id == shot_id);
             match shot_pos {
-                None => {
-                    return CommandResult::failure(format!(
-                        "Shot {shot_id} not found in section {section_id}"
-                    ))
-                }
-                Some(p) if p == 0 || p == section.shots.len() - 1 => {
+                None => return CommandResult::failure(crate::models::SHOT_GONE.to_string()),
+                Some(p) if p == 0 || p == line.shots.len() - 1 => {
                     return CommandResult::failure(
                         "Cannot split at edge shot (first or last). Use simple delete instead."
                             .to_string(),
@@ -102,63 +158,65 @@ impl AppState {
 
             // Frozen-geometry guard (mirrors delete_shot and the range-split
             // path): this path deletes `shot_id`, so refuse if it is part of an
-            // adjusted survey network -- otherwise a frozen mid-section shot can
+            // adjusted survey network -- otherwise a frozen mid-line shot can
             // be deleted through the split path, silently breaking the LSQ
             // solution's frozen geometry. (#241)
-            if project.is_shot_frozen_by_id(section_id, shot_id) {
+            if project.is_shot_frozen_by_id(line_id, shot_id) {
                 return CommandResult::failure(
                     "Cannot delete a frozen shot. This shot is part of an adjusted survey network."
                         .to_string(),
                 );
             }
 
-            // Section-id budget (#555), with the other pre-checks: the split
-            // mints section B below, and the truncation of section A that
+            // Line-id budget (#555), with the other pre-checks: the split
+            // mints line B below, and the truncation of line A that
             // precedes it has already destroyed the shots B is supposed to
             // carry.
-            if let Some(refusal) = section_budget_refusal(project, section_id) {
+            if let Some(refusal) = line_budget_refusal(project, line_id) {
                 return refusal;
             }
 
             // Get split data (safe after pre-checks above)
-            let Some((pos, shots_before, shots_after)) = section.split_shots_at(shot_id) else {
-                return CommandResult::failure(format!("Failed to split at shot {shot_id}"));
+            let Some((pos, shots_before, shots_after)) = line.split_shots_at(shot_id) else {
+                return CommandResult::failure("Failed to split at that shot".to_string());
             };
 
             // Capture deleted shot data for offset calculation
-            let deleted_shot_data = section.shots[pos].to_shot_data();
+            let deleted_shot_data = line.shots[pos].to_shot_data();
 
-            // Capture metadata from original section (color, direction -- NOT
+            // Capture metadata from original line (color, direction -- NOT
             // comment). The survey credit needs no copy: it rides on the shots.
-            let color = section.color.clone();
-            let direction = section.direction;
-            let quality = section.quality;
-            // Section B is the same survey, so it keeps the same north reference
-            // (#438) - `SectionData` cannot carry it, so it is copied explicitly
+            let color = line.color.clone();
+            let direction = line.direction;
+            let quality = line.quality;
+            // Line B is the same survey, so it keeps the same north reference
+            // (#438) - `LineData` cannot carry it, so it is copied explicitly
             // below, exactly like the metadata above.
-            let azimuth_reference = section.azimuth_reference;
-            // Section B must also keep the reverse parity and the gauge's
+            let azimuth_reference = line.azimuth_reference;
+            // And it stays in the line's Section (#327).
+            let section = line.section_id;
+            // Line B must also keep the reverse parity and the gauge's
             // physical station (`settle_cut_halves` below), or a reversed
-            // section's single-neighbour plan pins and gauge fallback land one
+            // line's single-neighbour plan pins and gauge fallback land one
             // station off in it.
-            let orientation = project.cut_orientation(section_id);
+            let orientation = project.cut_orientation(line_id);
             // The component's least-squares anchor, kept on its station below.
-            let component_gauges = project.hold_component_gauges(&[section_id]);
-            let resolved_reference = project.azimuth_reference_for_id(section_id);
+            let component_gauges = project.hold_component_gauges(&[line_id]);
+            let resolved_reference = project.azimuth_reference_for_id(line_id);
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
-            // to its CURRENT positional ref BEFORE we mutate the section.
+            // to its CURRENT positional ref BEFORE we mutate the line.
             //
-            // Shot UUIDs now survive the split (#423 - section B is rebuilt from
+            // Shot UUIDs now survive the split (#423 - line B is rebuilt from
             // `to_shot_data`, which carries them), but the remap is still
-            // required: a `StationKey` is `(section_id, anchor)`, so an anchor
-            // cannot follow a shot ACROSS a section boundary. A ref into the B
-            // half would keep pointing at section A, where its shot no longer
+            // required: a `StationKey` is `(line_id, anchor)`, so an anchor
+            // cannot follow a shot ACROSS a line boundary. A ref into the B
+            // half would keep pointing at line A, where its shot no longer
             // exists, and dangle. Positional-then-reanchor rewrites the
-            // section_id; carrying the uuid is what makes the reanchored key
+            // line_id; carrying the uuid is what makes the reanchored key
             // come back identical for the A half and stable for the B half.
             let split_station = (pos + 1) as u32;
-            let original_station_count = section.shots.len() as u32 + 1;
+            let original_station_count = line.shots.len() as u32 + 1;
             let old_refs: Vec<Option<StationRef>> = {
                 let p: &Project = project;
                 let mut out = Vec::new();
@@ -166,15 +224,15 @@ impl AppState {
                 out
             };
 
-            // Step 3: Modify original section -> section A
+            // Step 3: Modify original line -> line A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
-            let Some(section_mut) = project.get_section_mut(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            let Some(line_mut) = project.get_line_mut(line_id) else {
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
-            section_mut.name = Some(name_a);
-            section_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
+            line_mut.name = Some(name_a);
+            line_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
 
-            // Step 4: Calculate offset for section B
+            // Step 4: Calculate offset for line B
             // Walk shots_before + deleted shot to accumulate (bx, by)
             let mut bx: f64 = 0.0;
             let mut by: f64 = 0.0;
@@ -194,14 +252,14 @@ impl AppState {
                 by += horizontal * azimuth_rad.cos();
             }
 
-            // Get existing section offset to add to computed B offset
-            let (section_ox, section_oy) = project.section_offset(section_id);
+            // Get existing line offset to add to computed B offset
+            let (line_ox, line_oy) = project.line_offset(line_id);
 
             // Capture counts before moving data
             let shots_after_len = shots_after.len();
 
-            // Step 5: Create section B with inherited metadata
-            let section_b_data = SectionData {
+            // Step 5: Create line B with inherited metadata
+            let line_b_data = LineData {
                 name: Some(name_b),
                 surveyor: None,
                 date: None,
@@ -211,26 +269,28 @@ impl AppState {
                 shots: shots_after,
             };
 
-            let section_b = project.add_section(section_b_data);
-            let new_id = section_b.id;
-            if let Some(section_b) = project.get_section_mut(new_id) {
-                section_b.azimuth_reference = azimuth_reference;
+            let line_b = project.add_line(line_b_data);
+            let new_id = line_b.id;
+            if let Some(line_b) = project.get_line_mut(new_id) {
+                line_b.azimuth_reference = azimuth_reference;
+                line_b.section_id = section;
             }
             // A keeps the original stations 0..=pos, B starts at pos + 1.
             if let Some(orientation) = &orientation {
-                project.settle_cut_halves(section_id, new_id, orientation, pos, pos + 1);
+                project.settle_cut_halves(line_id, new_id, orientation, pos, pos + 1);
             }
 
-            // Set section B offset
-            project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
+            // Set line B offset
+            project.set_line_offset(new_id, (line_ox + bx, line_oy + by));
+            project.dedupe_touched_line_names(&[line_id, new_id]);
 
             // Step 6: Remap every cross-reference across the split.
-            // Stations whose positional index moved into section B (index in
-            // [split_station, original_station_count)) become section B refs with
+            // Stations whose positional index moved into line B (index in
+            // [split_station, original_station_count)) become line B refs with
             // index -= split_station; everything else stays put. We re-derive each
             // ref's stable key from its NEW positional home against the now-final
             // structure - which, since B's shots kept their UUIDs, differs from the
-            // old key only in the section id. `old_refs` was
+            // old key only in the line id. `old_refs` was
             // captured before truncation, in `for_each_station_ref` order; the
             // `new_keys` Vec is consumed by `map_station_refs` in that same order.
             let _ = shots_after_len;
@@ -238,7 +298,7 @@ impl AppState {
                 .iter()
                 .map(|old_ref| {
                     let sr = (*old_ref)?;
-                    let new_ref = if sr.section_id == section_id
+                    let new_ref = if sr.line_id == line_id
                         && sr.station_index >= split_station
                         && sr.station_index < original_station_count
                     {
@@ -263,14 +323,14 @@ impl AppState {
             debug_assert_eq!(
                 remap_i,
                 new_keys.len(),
-                "split-section remap: map_station_refs visited a different number of \
+                "split-line remap: map_station_refs visited a different number of \
                  refs than were captured in old_refs - traversal order diverged"
             );
 
-            // The split can strand a section so its only attachment is a loop
+            // The split can strand a line so its only attachment is a loop
             // closure - that is a merge, not a loop. Convert it now (issue #8)
             // so it's fixed immediately, not only on the next reload.
-            // Once every cross-reference names its new section (components are
+            // Once every cross-reference names its new line (components are
             // read off them), hold each component at the station the
             // adjustment held before; before the orphan sweep, which only
             // turns a closure edge into a merge edge.
@@ -302,22 +362,21 @@ impl AppState {
         };
 
         // Step 8: Push single undo entry with ProjectSnapshotPair
-        // Use a Batch with both DeleteShot + CreateSection to accurately describe the compound op
+        // Use a Batch with both DeleteShot + CreateLine to accurately describe the compound op
         let batch_cmd = Command::Batch {
             commands: vec![
-                Command::DeleteShot {
-                    section_id,
-                    shot_id,
-                },
-                Command::CreateSection {
-                    name: Some(undo_section_b_name),
+                Command::DeleteShot { line_id, shot_id },
+                Command::CreateLine {
+                    name: Some(undo_line_b_name),
                     surveyor: None,
                     date: None,
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
             ],
+            label,
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
@@ -326,29 +385,29 @@ impl AppState {
         self.mark_remote_forward_edit();
 
         tracing::info!(
-            section_id,
+            line_id,
             shot_id,
-            new_section_id,
-            purpose = "split section after deleting shot",
-            "Delete shot and split section completed"
+            new_line_id,
+            purpose = "split line after deleting shot",
+            "Delete shot and split line completed"
         );
 
         CommandResult::success()
-            .with_section_id(new_section_id)
+            .with_line_id(new_line_id)
             .with_warnings(swept_warnings)
     }
 
-    /// Delete a contiguous *interior* range of shots and split the section into
-    /// two: section A keeps the shots before the range (in place), section B is a
-    /// new section holding the shots after the range (offset so it keeps its
+    /// Delete a contiguous *interior* range of shots and split the line into
+    /// two: line A keeps the shots before the range (in place), line B is a
+    /// new line holding the shots after the range (offset so it keeps its
     /// absolute position). Generalizes [`Self::execute_delete_shot_and_split`]
     /// from a single shot to `[start_pos..=end_pos]`. Commits as ONE
     /// `ProjectSnapshotPair` undo entry. The range must be interior (shots remain
     /// before AND after); prefix/suffix/whole ranges use the shift or
-    /// section-delete paths.
+    /// line-delete paths.
     pub fn execute_delete_shot_range_split(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         start_shot_id: ShotId,
         end_shot_id: ShotId,
         name_a: String,
@@ -358,14 +417,20 @@ impl AppState {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
-        if let Err(f) = self.guard_mutation("Delete shot range and split section") {
+        if let Err(f) = self.guard_mutation("Delete shot range and split line") {
             return f;
         }
+        // The halves' names replace the line's: refused like a rename when
+        // empty or another line's, before anything changes.
+        let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
+            Ok(names) => names,
+            Err(refusal) => return refusal,
+        };
         tracing::info!(
-            section_id,
+            line_id,
             start_shot_id,
             end_shot_id,
-            purpose = "split section after deleting shot range",
+            purpose = "split line after deleting shot range",
             "Executing delete_shot_range_split as single undo unit"
         );
 
@@ -375,9 +440,10 @@ impl AppState {
         };
         // Same frame check as the single-shot split above (#469, item 1).
         let datums_before = self.datum_layout();
-        let undo_section_b_name = name_b.clone();
+        let undo_line_b_name = name_b.clone();
+        let label = self.delete_label(line_id, start_shot_id, end_shot_id, ShotsDeleted::Split);
 
-        let (new_section_id, swept_warnings) = {
+        let (new_line_id, swept_warnings) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -386,21 +452,16 @@ impl AppState {
             };
             // Before anything changes, to name what the orphan sweep removes (#738).
             let closures_before = project.closures_before_sweep();
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            let Some(line) = project.get_line(line_id) else {
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
-            let n = section.shots.len();
-            let Some(mut start_pos) = section.shots.iter().position(|s| s.id == start_shot_id)
-            else {
-                return CommandResult::failure(format!(
-                    "Shot {start_shot_id} not found in section {section_id}"
-                ));
+            let n = line.shots.len();
+            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
-            let Some(mut end_pos) = section.shots.iter().position(|s| s.id == end_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {end_shot_id} not found in section {section_id}"
-                ));
+            let Some(mut end_pos) = line.shots.iter().position(|s| s.id == end_shot_id) else {
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             if start_pos > end_pos {
                 std::mem::swap(&mut start_pos, &mut end_pos);
@@ -408,43 +469,45 @@ impl AppState {
             // Split requires shots both before and after the range.
             if start_pos == 0 || end_pos >= n - 1 {
                 return CommandResult::failure(
-                    "Range is not interior to the section (split needs shots before and after). \
-                     Use shift or delete the section instead."
+                    "Range is not interior to the line (split needs shots before and after). \
+                     Use shift or delete the line instead."
                         .to_string(),
                 );
             }
 
-            // Capture owned data; afterwards the `section` borrow ends so we can mutate.
-            let shots_before: Vec<ShotData> = section.shots[..start_pos]
+            // Capture owned data; afterwards the `line` borrow ends so we can mutate.
+            let shots_before: Vec<ShotData> = line.shots[..start_pos]
                 .iter()
                 .map(|s| s.to_shot_data())
                 .collect();
-            let shots_after: Vec<ShotData> = section.shots[end_pos + 1..]
+            let shots_after: Vec<ShotData> = line.shots[end_pos + 1..]
                 .iter()
                 .map(|s| s.to_shot_data())
                 .collect();
-            let deleted_shots_data: Vec<ShotData> = section.shots[start_pos..=end_pos]
+            let deleted_shots_data: Vec<ShotData> = line.shots[start_pos..=end_pos]
                 .iter()
                 .map(|s| s.to_shot_data())
                 .collect();
-            let range_shot_ids: Vec<ShotId> = section.shots[start_pos..=end_pos]
+            let range_shot_ids: Vec<ShotId> = line.shots[start_pos..=end_pos]
                 .iter()
                 .map(|s| s.id)
                 .collect();
             // The survey credit rides on the shots; nothing to copy.
-            let color = section.color.clone();
-            let direction = section.direction;
-            let quality = section.quality;
-            // Same survey, same north reference (#438); see the single-shot path.
-            let azimuth_reference = section.azimuth_reference;
+            let color = line.color.clone();
+            let direction = line.direction;
+            let quality = line.quality;
+            // Same survey, same north reference (#438) and Section (#327); see
+            // the single-shot path.
+            let azimuth_reference = line.azimuth_reference;
+            let section = line.section_id;
             // And the same reverse parity and gauge station; see the single-shot path.
-            let orientation = project.cut_orientation(section_id);
+            let orientation = project.cut_orientation(line_id);
             // The component's least-squares anchor, kept on its station below.
-            let component_gauges = project.hold_component_gauges(&[section_id]);
+            let component_gauges = project.hold_component_gauges(&[line_id]);
 
             // Frozen-geometry guard (mirrors delete_shot).
             for &sid in &range_shot_ids {
-                if project.is_shot_frozen_by_id(section_id, sid) {
+                if project.is_shot_frozen_by_id(line_id, sid) {
                     return CommandResult::failure(
                         "Cannot delete a frozen shot. This range includes shots that are part of \
                          an adjusted survey network."
@@ -453,10 +516,10 @@ impl AppState {
                 }
             }
 
-            // Section-id budget (#555), before the connectivity rewrites below:
+            // Line-id budget (#555), before the connectivity rewrites below:
             // this path mutates the project (preserve/cleanup) well before it
-            // mints section B, so a refusal has to happen here to stay free.
-            if let Some(refusal) = section_budget_refusal(project, section_id) {
+            // mints line B, so a refusal has to happen here to stay free.
+            if let Some(refusal) = line_budget_refusal(project, line_id) {
                 return refusal;
             }
 
@@ -464,13 +527,13 @@ impl AppState {
             // boundary stations `start_pos` (→A) and `end_pos+1` (→B:0)).
             let interior: std::collections::HashSet<StationRef> = ((start_pos as u32 + 1)
                 ..=(end_pos as u32))
-                .map(|i| StationRef::new(section_id, i))
+                .map(|i| StationRef::new(line_id, i))
                 .collect();
 
             // Preserve connectivity across the dropped stations, then drop their
             // own refs - BEFORE we capture old_refs, so the stored-ref set is
             // final and the positional remap below stays 1:1 aligned. Both run
-            // while the section is structurally intact (indices still resolve).
+            // while the line is structurally intact (indices still resolve).
             project.preserve_connections_for_removed_stations(&interior);
             project.cleanup_removed_station_references(&interior);
 
@@ -485,21 +548,21 @@ impl AppState {
                 out
             };
 
-            // Section A = before (truncate in place to preserve shot IDs).
-            let Some(section_mut) = project.get_section_mut(section_id) else {
+            // Line A = before (truncate in place to preserve shot IDs).
+            let Some(line_mut) = project.get_line_mut(line_id) else {
                 // preserve/cleanup above already mutated the project; roll back
                 // to the before-snapshot so a failure here leaves no half-applied
                 // state (mirrors the shift path's rollback on remove failure).
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!("Section {section_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
-            section_mut.name = Some(name_a);
-            section_mut.shots.truncate(start_pos);
+            line_mut.name = Some(name_a);
+            line_mut.shots.truncate(start_pos);
 
-            // Section B offset = section offset + displacement of (before ++ deleted).
+            // Line B offset = line offset + displacement of (before ++ deleted).
             let mut bx: f64 = 0.0;
             let mut by: f64 = 0.0;
-            let resolved_reference = project.azimuth_reference_for_id(section_id);
+            let resolved_reference = project.azimuth_reference_for_id(line_id);
             for shot_data in shots_before.iter().chain(deleted_shots_data.iter()) {
                 let temp_shot = crate::models::Shot::new(0, shot_data.clone());
                 let azimuth_rad = temp_shot.average_azimuth_true_rad(resolved_reference);
@@ -507,9 +570,9 @@ impl AppState {
                 bx += horizontal * azimuth_rad.sin();
                 by += horizontal * azimuth_rad.cos();
             }
-            let (section_ox, section_oy) = project.section_offset(section_id);
+            let (line_ox, line_oy) = project.line_offset(line_id);
 
-            let section_b_data = SectionData {
+            let line_b_data = LineData {
                 name: Some(name_b),
                 surveyor: None,
                 date: None,
@@ -518,17 +581,19 @@ impl AppState {
                 quality,
                 shots: shots_after,
             };
-            let section_b = project.add_section(section_b_data);
-            let new_id = section_b.id;
-            if let Some(section_b) = project.get_section_mut(new_id) {
-                section_b.azimuth_reference = azimuth_reference;
+            let line_b = project.add_line(line_b_data);
+            let new_id = line_b.id;
+            if let Some(line_b) = project.get_line_mut(new_id) {
+                line_b.azimuth_reference = azimuth_reference;
+                line_b.section_id = section;
             }
             // A keeps the original stations 0..=start_pos, B starts after
             // the deleted range, at end_pos + 1.
             if let Some(orientation) = &orientation {
-                project.settle_cut_halves(section_id, new_id, orientation, start_pos, end_pos + 1);
+                project.settle_cut_halves(line_id, new_id, orientation, start_pos, end_pos + 1);
             }
-            project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
+            project.set_line_offset(new_id, (line_ox + bx, line_oy + by));
+            project.dedupe_touched_line_names(&[line_id, new_id]);
 
             // Remap cross-refs across the split: stations at index >= split_station
             // (= end_pos+1) move to B with index -= split_station; everything else
@@ -538,7 +603,7 @@ impl AppState {
                 .iter()
                 .map(|old_ref| {
                     let sr = (*old_ref)?;
-                    let new_ref = if sr.section_id == section_id
+                    let new_ref = if sr.line_id == line_id
                         && sr.station_index >= split_station
                         && sr.station_index < original_station_count
                     {
@@ -562,7 +627,7 @@ impl AppState {
                  than were captured in old_refs - traversal order diverged"
             );
 
-            // Once every cross-reference names its new section (components are
+            // Once every cross-reference names its new line (components are
             // read off them), hold each component at the station the
             // adjustment held before; before the orphan sweep, which only
             // turns a closure edge into a merge edge.
@@ -591,18 +656,20 @@ impl AppState {
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
-                    section_id,
+                    line_id,
                     shot_id: start_shot_id,
                 },
-                Command::CreateSection {
-                    name: Some(undo_section_b_name),
+                Command::CreateLine {
+                    name: Some(undo_line_b_name),
                     surveyor: None,
                     date: None,
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
@@ -610,24 +677,24 @@ impl AppState {
         self.mark_remote_forward_edit();
 
         tracing::info!(
-            section_id,
-            new_section_id,
-            purpose = "split section after deleting shot range",
-            "Delete shot range and split section completed"
+            line_id,
+            new_line_id,
+            purpose = "split line after deleting shot range",
+            "Delete shot range and split line completed"
         );
         CommandResult::success()
-            .with_section_id(new_section_id)
+            .with_line_id(new_line_id)
             .with_warnings(swept_warnings)
     }
 
     /// Delete a contiguous range of shots by gap-closing (shifting) - the
-    /// survivors rejoin and the section stays single. ATOMIC: the range's shots
+    /// survivors rejoin and the line stays single. ATOMIC: the range's shots
     /// go in forward order inside ONE project lock and ONE `ProjectSnapshotPair`
     /// undo unit, with the geometry cascade DEFERRED to a single reconcile at the
     /// end (each step is a valid single-shot gap-close: head/before stays for
     /// interior & suffix ranges, tail/after stays for prefix ranges). Refuses
-    /// when the range is shift-blocked or would empty the section (use split /
-    /// section delete respectively).
+    /// when the range is shift-blocked or would empty the line (use split /
+    /// line delete respectively).
     ///
     /// # Not a composition of `n` `Command::DeleteShot`s, on purpose
     ///
@@ -641,16 +708,16 @@ impl AppState {
     ///   identical - measured over prefix and interior ranges, they agree to the
     ///   last bit;
     /// * for a range whose removed stations DO include one a merged partner
-    ///   section is anchored to (the doomed-tail-anchor shape), they deliberately
+    ///   line is anchored to (the doomed-tail-anchor shape), they deliberately
     ///   DIVERGE. `AppState::execute` runs the geometry epilogue after every
     ///   command, so the single-delete sequence re-anchors the partner while the
-    ///   merge is still live, drags it along as the section shrinks, and then
+    ///   merge is still live, drags it along as the line shrinks, and then
     ///   deletes the merge - leaving the partner displaced with no edge to pull
     ///   it back. Deferring to one final cascade leaves it where the surveyor put
     ///   it, which is what this method does.
     ///
     /// The atomic behaviour is the reviewed intent, pinned by
-    /// `test_delete_range_shift_does_not_displace_free_floating_merged_section`
+    /// `test_delete_range_shift_does_not_displace_free_floating_merged_line`
     /// and `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`
     /// (PR #95, `core/state/tests.rs`), and asserted on random topology by the
     /// metamorphic pair `range-shift-is-n-single-deletes`
@@ -658,7 +725,7 @@ impl AppState {
     /// other shape.
     pub fn execute_delete_shot_range_shift(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> CommandResult {
@@ -670,7 +737,7 @@ impl AppState {
             return f;
         }
         tracing::info!(
-            section_id,
+            line_id,
             start_shot_id,
             end_shot_id,
             purpose = "gap-close a deleted shot range",
@@ -684,51 +751,46 @@ impl AppState {
 
         // Same frame check as the split paths above (#469, item 1).
         let datums_before = self.datum_layout();
+        let label = self.delete_label(line_id, start_shot_id, end_shot_id, ShotsDeleted::CloseUp);
 
-        let (result_section, removed_closures) = {
+        let (result_line, removed_closures) = {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            let Some(line) = project.get_line(line_id) else {
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
-            let n = section.shots.len();
-            let Some(mut start_pos) = section.shots.iter().position(|s| s.id == start_shot_id)
-            else {
-                return CommandResult::failure(format!(
-                    "Shot {start_shot_id} not found in section {section_id}"
-                ));
+            let n = line.shots.len();
+            let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
-            let Some(mut end_pos) = section.shots.iter().position(|s| s.id == end_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {end_shot_id} not found in section {section_id}"
-                ));
+            let Some(mut end_pos) = line.shots.iter().position(|s| s.id == end_shot_id) else {
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             if start_pos > end_pos {
                 std::mem::swap(&mut start_pos, &mut end_pos);
             }
-            // Deleting the whole section this way would leave it empty - route
-            // that through delete_section instead.
+            // Deleting the whole line this way would leave it empty - route
+            // that through delete_line instead.
             if start_pos == 0 && end_pos == n - 1 {
                 return CommandResult::failure(
-                    "Cannot shift-delete an entire section; delete the section instead."
-                        .to_string(),
+                    "Cannot shift-delete an entire line; delete the line instead.".to_string(),
                 );
             }
 
             // Delete in forward (ascending position) order by stable shot id.
-            let range_shot_ids: Vec<ShotId> = section.shots[start_pos..=end_pos]
+            let range_shot_ids: Vec<ShotId> = line.shots[start_pos..=end_pos]
                 .iter()
                 .map(|s| s.id)
                 .collect();
 
             // Frozen-geometry + shift-blocked prechecks (no mutation yet).
             for &sid in &range_shot_ids {
-                if project.is_shot_frozen_by_id(section_id, sid) {
+                if project.is_shot_frozen_by_id(line_id, sid) {
                     return CommandResult::failure(
                         "Cannot delete a frozen shot. This range includes shots that are part of \
                          an adjusted survey network."
@@ -738,11 +800,9 @@ impl AppState {
             }
             // Without the gap-close closure prediction: this command is about
             // to run that very gap-close for real.
-            if let Ok(impact) = project.preview_delete_shot_range_relationships(
-                section_id,
-                start_shot_id,
-                end_shot_id,
-            ) {
+            if let Ok(impact) =
+                project.preview_delete_shot_range_relationships(line_id, start_shot_id, end_shot_id)
+            {
                 if impact.shift_blocked {
                     let reasons = if impact.shift_blocked_reasons.is_empty() {
                         "Shift geometry is not allowed for this range.".to_string()
@@ -761,7 +821,7 @@ impl AppState {
             // The gap-close itself, shared with the preview that predicts its
             // closure removals (`Project::gap_close_shot_range`, which also
             // keeps the doomed-anchor rule this path used to spell out here).
-            if let Err(e) = project.gap_close_shot_range(section_id, start_pos, end_pos) {
+            if let Err(e) = project.gap_close_shot_range(line_id, start_pos, end_pos) {
                 // Already mutated - roll back to the before snapshot.
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(e);
@@ -779,15 +839,15 @@ impl AppState {
             );
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
-            // a connected free-floating section - the per-shot cascades were
+            // a connected free-floating line - the per-shot cascades were
             // deferred for exactly this reason. Assert alignment here, since each
             // per-shot delete skipped its own alignment check.
-            project.cascade_connection_offsets(&[section_id]);
-            // That cascade is seeded with the edited section plus the datum
-            // sections, which is the right frame for THIS edit and is not a set
+            project.cascade_connection_offsets(&[line_id]);
+            // That cascade is seeded with the edited line plus the datum
+            // lines, which is the right frame for THIS edit and is not a set
             // that reaches every merge the assert below covers: a range can cut a
             // whole component loose, and the BFS never enters one with no
-            // authoritative section in it. `realign_merges` closes that hole with
+            // authoritative line in it. `realign_merges` closes that hole with
             // one anchor per connected component - and it is not an extra state
             // change, because the epilogue's `reconcile_geometry` (just below this
             // scope, before the `after` snapshot is taken) runs the very same heal
@@ -824,7 +884,7 @@ impl AppState {
             // Undo restores from the `ProjectSnapshotPair`, which legitimately puts
             // the PRE-conversion state back: the closure was a true loop before the
             // delete, so restoring it as a closure is the correct inverse.
-            (section_id, removed_closures)
+            (line_id, removed_closures)
         };
 
         self.settle_datum_layout(&datums_before);
@@ -838,14 +898,15 @@ impl AppState {
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
-                    section_id,
+                    line_id,
                     shot_id: start_shot_id,
                 },
                 Command::DeleteShot {
-                    section_id,
+                    line_id,
                     shot_id: end_shot_id,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
@@ -853,22 +914,22 @@ impl AppState {
         self.mark_remote_forward_edit();
 
         tracing::info!(
-            section_id,
+            line_id,
             purpose = "gap-close a deleted shot range",
             "Delete shot range (shift) completed"
         );
         CommandResult::success()
-            .with_section_id(result_section)
+            .with_line_id(result_line)
             .with_warnings(removed_closures)
     }
 
-    /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.
-    /// When a section has exactly 1 shot remaining, this removes the section (and its
-    /// only shot) along with all section references (merges, closures, section_offsets,
+    /// Execute a delete-last-shot-and-line operation as a single atomic undo/redo unit.
+    /// When a line has exactly 1 shot remaining, this removes the line (and its
+    /// only shot) along with all line references (merges, closures, line_offsets,
     /// station_offsets, zero_datums). Uses `ProjectSnapshotPair` for single-undo.
-    pub fn execute_delete_last_shot_and_section(
+    pub fn execute_delete_last_shot_and_line(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
@@ -876,14 +937,14 @@ impl AppState {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
-        if let Err(f) = self.guard_mutation("Delete last shot and section") {
+        if let Err(f) = self.guard_mutation("Delete last shot and line") {
             return f;
         }
         tracing::info!(
-            section_id,
+            line_id,
             shot_id,
-            purpose = "remove single-shot section",
-            "Executing delete_last_shot_and_section as single undo unit"
+            purpose = "remove single-shot line",
+            "Executing delete_last_shot_and_line as single undo unit"
         );
 
         // Step 1: Take BEFORE snapshot
@@ -893,8 +954,9 @@ impl AppState {
         };
 
         // Same frame check as the split paths above (#469, item 1). This path
-        // removes a whole SECTION, so it can drop the primary datum outright.
+        // removes a whole LINE, so it can drop the primary datum outright.
         let datums_before = self.datum_layout();
+        let label = self.delete_label(line_id, shot_id, shot_id, ShotsDeleted::LastOfLine);
 
         // Step 2: Validate and mutate in a single lock scope. On any failure after
         // mutation we roll back from before_snapshot. `command_lock` is held for the
@@ -911,80 +973,74 @@ impl AppState {
             // Before anything changes, to name what the orphan sweep removes (#738).
             let closures_before = project.closures_before_sweep();
 
-            // Validate section exists
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
+            // Validate line exists
+            let Some(line) = project.get_line(line_id) else {
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
-            // Verify section has exactly 1 shot
-            if section.shots.len() != 1 {
+            // Verify line has exactly 1 shot
+            if line.shots.len() != 1 {
                 return CommandResult::failure(format!(
-                    "Section {} has {} shots, expected exactly 1",
-                    section_id,
-                    section.shots.len()
+                    "That line has {} shots, not exactly 1.",
+                    line.shots.len()
                 ));
             }
 
             // Verify the shot matches
-            if section.shots[0].id != shot_id {
-                return CommandResult::failure(format!(
-                    "Shot {} not found in section {} (section has shot {})",
-                    shot_id, section_id, section.shots[0].id
-                ));
+            if line.shots[0].id != shot_id {
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             }
 
-            // Step 3: Preserve merge/closure connectivity, then clean up section references
-            project.preserve_connections_for_section_deletion(section_id);
+            // Step 3: Preserve merge/closure connectivity, then clean up line references
+            project.preserve_connections_for_line_deletion(line_id);
 
-            project.station_merges.retain(|m| {
-                m.station_a.section_id != section_id && m.station_b.section_id != section_id
-            });
+            project
+                .station_merges
+                .retain(|m| m.station_a.line_id != line_id && m.station_b.line_id != line_id);
 
-            project.loop_closures.retain(|lc| {
-                lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
-            });
+            project
+                .loop_closures
+                .retain(|lc| lc.station_a.line_id != line_id && lc.station_b.line_id != line_id);
 
-            // Remove section offsets
-            project.remove_section_offset(section_id);
+            // Remove line offsets
+            project.remove_line_offset(line_id);
 
-            // Remove station offsets referencing this section
+            // Remove station offsets referencing this line
             project
                 .station_offsets
-                .retain(|key, _| key.section_id != section_id);
+                .retain(|key, _| key.line_id != line_id);
 
-            // Remove station comments and names referencing this section
+            // Remove station comments and names referencing this line
             project
                 .station_comments
-                .retain(|key, _| key.section_id != section_id);
+                .retain(|key, _| key.line_id != line_id);
             project
                 .station_names
-                .retain(|key, _| key.section_id != section_id);
+                .retain(|key, _| key.line_id != line_id);
 
-            // Remove zero datums referencing this section
+            // Remove zero datums referencing this line
             project
                 .zero_datums
-                .retain(|zd| zd.station_ref.section_id != section_id);
+                .retain(|zd| zd.station_ref.line_id != line_id);
 
-            // Step 4: Remove the section (and its only shot)
-            if project.remove_section(section_id).is_none() {
-                // Section vanished between validation and removal (should not happen).
+            // Step 4: Remove the line (and its only shot)
+            if project.remove_line(line_id).is_none() {
+                // Line vanished between validation and removal (should not happen).
                 // Rollback to before_snapshot to undo reference cleanup.
                 tracing::error!(
-                    section_id,
-                    purpose = "remove single-shot section",
-                    "remove_section returned None after validation; rolling back"
+                    line_id,
+                    purpose = "remove single-shot line",
+                    "remove_line returned None after validation; rolling back"
                 );
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!(
-                    "Section {section_id} not found during removal"
-                ));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             }
 
             // Step 5: Enforce the closures-are-loops invariant, like the two split
             // siblings do (`execute_delete_shot_and_split`,
             // `execute_delete_shot_range_split`) and like `execute()`'s epilogue does
             // for every `can_orphan_closures` command. A loop closure exists only for
-            // a TRUE loop; removing the section that carried the loop's other path
+            // a TRUE loop; removing the line that carried the loop's other path
             // leaves the closure as the sole connection, which is a merge. Every
             // delete entry point converts its orphans here so memory and disk agree
             // and the loader's unconditional pass (`redrive_offsets_after_load`)
@@ -1009,15 +1065,15 @@ impl AppState {
                 project,
                 &closures_before,
                 &sweep,
-                "delete last shot and section",
+                "delete last shot and line",
                 super::command_shot::OnePointCause::Promotion,
             );
 
             tracing::info!(
-                section_id,
+                line_id,
                 shot_id,
-                purpose = "remove single-shot section",
-                "Deleted last shot and removed section"
+                purpose = "remove single-shot line",
+                "Deleted last shot and removed line"
             );
             swept_warnings
         };
@@ -1039,12 +1095,10 @@ impl AppState {
         // Step 7: Push single undo entry with ProjectSnapshotPair
         let batch_cmd = Command::Batch {
             commands: vec![
-                Command::DeleteShot {
-                    section_id,
-                    shot_id,
-                },
-                Command::DeleteSection { section_id },
+                Command::DeleteShot { line_id, shot_id },
+                Command::DeleteLine { line_id },
             ],
+            label,
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);

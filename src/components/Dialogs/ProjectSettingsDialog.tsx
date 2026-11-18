@@ -25,7 +25,7 @@ const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 
 /**
  * Per-project settings (#57). Mirrors the global Settings dialog's structure
- * (sidebar tabs + sections) but edits the values stored in the .stalx that
+ * (sidebar tabs + lines) but edits the values stored in the .stalx that
  * travel with the project: General = project name, Validation = the same
  * thresholds as the global settings (which are the defaults for new projects).
  */

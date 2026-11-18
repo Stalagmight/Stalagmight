@@ -1,33 +1,33 @@
 /**
  * Pure helpers for computing segment context geometry in the DMP import wizard.
- * These functions position DMP sections and existing project sections relative
+ * These functions position DMP lines and existing project lines relative
  * to each other using BFS through virtual connections and segment geometry data.
  */
 import type { DmpSection } from '../types/commands';
-import { type ContextSectionGeometry, computeStationsFromDmpShots } from '../components/Dialogs/SectionPreview';
-import { SECTION_COLORS } from './colors';
-export { SECTION_COLORS } from './colors';
+import { type ContextLineGeometry, computeStationsFromDmpShots } from '../components/Dialogs/LinePreview';
+import { LINE_COLORS } from './colors';
+export { LINE_COLORS } from './colors';
 
 /** A virtual connection recorded by the user - no backend import yet. */
 export type VirtualConnection = {
-  importSectionIndex: number;
+  importLineIndex: number;
   importStationIndex: number;
   targetType: 'existing' | 'importing';
-  existingSectionId?: number;
+  existingLineId?: number;
   existingStationIndex?: number;
   targetImportIndex?: number;
   targetImportStationIndex?: number;
 };
 
 export type ExistingAnchor = {
-  existingSectionId: number;
+  existingLineId: number;
   existingStationIdx: number;
   x: number;
   y: number;
 };
 
-/** Stored geometry for an existing project section, positioned in a coordinate frame. */
-export type ExistingSectionGeoEntry = {
+/** Stored geometry for an existing project line, positioned in a coordinate frame. */
+export type ExistingLineGeoEntry = {
   shotLines: Array<Array<Array<number>>>;
   frameOffsetX: number;
   frameOffsetY: number;
@@ -42,11 +42,11 @@ export function buildAdjacency(
   const ensure = (k: number) => { if (!adj.has(k)) adj.set(k, []); };
 
   for (const c of connections) {
-    ensure(c.importSectionIndex);
+    ensure(c.importLineIndex);
     if (c.targetType === 'importing' && c.targetImportIndex != null) {
       ensure(c.targetImportIndex);
-      adj.get(c.importSectionIndex)!.push({ neighbor: c.targetImportIndex, connection: c });
-      adj.get(c.targetImportIndex)!.push({ neighbor: c.importSectionIndex, connection: c });
+      adj.get(c.importLineIndex)!.push({ neighbor: c.targetImportIndex, connection: c });
+      adj.get(c.targetImportIndex)!.push({ neighbor: c.importLineIndex, connection: c });
     }
     // 'existing' connections anchor this node to the project graph - no import neighbor
   }
@@ -54,8 +54,8 @@ export function buildAdjacency(
 }
 
 /**
- * BFS from a DMP section through importing-type connections, collecting
- * neighboring DMP section geometry and existing-type anchor positions.
+ * BFS from a DMP line through importing-type connections, collecting
+ * neighboring DMP line geometry and existing-type anchor positions.
  */
 export function computeDmpBfsContext(
   startIdx: number,
@@ -63,7 +63,7 @@ export function computeDmpBfsContext(
   connections: VirtualConnection[],
   dmpSections: DmpSection[],
 ): {
-  dmpContext: ContextSectionGeometry[];
+  dmpContext: ContextLineGeometry[];
   existingAnchors: ExistingAnchor[];
   visitedIndices: Set<number>;
 } {
@@ -74,7 +74,7 @@ export function computeDmpBfsContext(
   for (const ex of excludeIndices) visited.add(ex);
   queue.push({ idx: startIdx, offsetX: 0, offsetY: 0 });
 
-  const dmpContext: ContextSectionGeometry[] = [];
+  const dmpContext: ContextLineGeometry[] = [];
   const existingAnchors: ExistingAnchor[] = [];
 
   while (queue.length > 0) {
@@ -87,14 +87,14 @@ export function computeDmpBfsContext(
     for (const conn of connections) {
       if (
         conn.targetType === 'existing' &&
-        conn.importSectionIndex === idx &&
-        conn.existingSectionId != null &&
+        conn.importLineIndex === idx &&
+        conn.existingLineId != null &&
         conn.existingStationIndex != null
       ) {
         const stn = nodeStations[conn.importStationIndex];
         if (stn) {
           existingAnchors.push({
-            existingSectionId: conn.existingSectionId,
+            existingLineId: conn.existingLineId,
             existingStationIdx: conn.existingStationIndex,
             x: offsetX + stn.x,
             y: offsetY + stn.y,
@@ -111,25 +111,25 @@ export function computeDmpBfsContext(
       const conn = edge.connection;
       let stationInA: number;
       let stationInB: number;
-      let sectionA: number;
-      if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
-        sectionA = idx;
+      let lineA: number;
+      if (conn.importLineIndex === idx && conn.targetImportIndex === edge.neighbor) {
+        lineA = idx;
         stationInA = conn.importStationIndex;
         stationInB = conn.targetImportStationIndex ?? 0;
-      } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
-        sectionA = conn.targetImportIndex;
+      } else if (conn.targetImportIndex === idx && conn.importLineIndex === edge.neighbor) {
+        lineA = conn.targetImportIndex;
         stationInA = conn.targetImportStationIndex ?? 0;
         stationInB = conn.importStationIndex;
       } else {
         continue;
       }
 
-      const sectionAData = dmpSections[sectionA];
+      const lineAData = dmpSections[lineA];
       const neighborData = dmpSections[edge.neighbor];
-      if (!sectionAData || !neighborData) continue;
+      if (!lineAData || !neighborData) continue;
 
       const stationsA = computeStationsFromDmpShots(
-        sectionAData.shots.filter((s) => s.shot_type === 'Standard')
+        lineAData.shots.filter((s) => s.shot_type === 'Standard')
       );
       const stationsB = computeStationsFromDmpShots(
         neighborData.shots.filter((s) => s.shot_type === 'Standard')
@@ -142,8 +142,8 @@ export function computeDmpBfsContext(
       const neighborOffsetX = offsetX + posA.x - posB.x;
       const neighborOffsetY = offsetY + posA.y - posB.y;
 
-      const colorIdx = edge.neighbor % SECTION_COLORS.length;
-      const neighborColor = SECTION_COLORS[colorIdx] ?? '#95a5a6';
+      const colorIdx = edge.neighbor % LINE_COLORS.length;
+      const neighborColor = LINE_COLORS[colorIdx] ?? '#95a5a6';
 
       const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
       for (let i = 0; i < stationsB.length - 1; i++) {
@@ -171,8 +171,8 @@ export function computeDmpBfsContext(
 
 /**
  * Extract a station's XY position from backend shot_lines geometry.
- * Works for both the queried section (station 0 at origin = shot_lines[0][0])
- * and other sections in a segment result (station 0 at their global position).
+ * Works for both the queried line (station 0 at origin = shot_lines[0][0])
+ * and other lines in a segment result (station 0 at their global position).
  */
 export function stationPositionFromShotLines(
   shotLines: Array<Array<Array<number>>>,
@@ -190,15 +190,15 @@ export function stationPositionFromShotLines(
 }
 
 /**
- * Discover DMP sections that are connected through shared existing project sections
+ * Discover DMP lines that are connected through shared existing project lines
  * ("bridges") but have no direct importing-type edge between them.
  *
- * For example: DMP sections A and B both connect to existing section X.
+ * For example: DMP lines A and B both connect to existing line X.
  * When previewing C→X, A and B should appear as context even though they
  * are not reachable from C via importing-type BFS.
  */
 /**
- * Group unreachable DMP section indices into connected components
+ * Group unreachable DMP line indices into connected components
  * via importing-type virtual connections restricted to the unreachable set.
  * Returns array of segments (each sorted by index), ordered by first index.
  */
@@ -216,7 +216,7 @@ export function computeUnreachableSegments(
 
   for (const c of connections) {
     if (c.targetType !== 'importing' || c.targetImportIndex == null) continue;
-    const a = c.importSectionIndex;
+    const a = c.importLineIndex;
     const b = c.targetImportIndex;
     if (!unreachableSet.has(a) || !unreachableSet.has(b)) continue;
     adj.get(a)!.push(b);
@@ -252,15 +252,15 @@ export function computeUnreachableSegments(
 }
 
 /**
- * Compute XY offsets for each section in a segment relative to the first
- * section's station 0. Uses BFS through importing-type connections within
+ * Compute XY offsets for each line in a segment relative to the first
+ * line's station 0. Uses BFS through importing-type connections within
  * the segment, aligning merge stations to compute offsets.
  */
 export function computeSegmentLayout(
   segmentIndices: number[],
   connections: VirtualConnection[],
   dmpSections: DmpSection[],
-): Array<{ sectionIndex: number; offsetX: number; offsetY: number }> {
+): Array<{ lineIndex: number; offsetX: number; offsetY: number }> {
   if (segmentIndices.length === 0) return [];
 
   const segmentSet = new Set(segmentIndices);
@@ -272,14 +272,14 @@ export function computeSegmentLayout(
 
   for (const c of connections) {
     if (c.targetType !== 'importing' || c.targetImportIndex == null) continue;
-    const a = c.importSectionIndex;
+    const a = c.importLineIndex;
     const b = c.targetImportIndex;
     if (!segmentSet.has(a) || !segmentSet.has(b)) continue;
     adj.get(a)!.push({ neighbor: b, connection: c });
     adj.get(b)!.push({ neighbor: a, connection: c });
   }
 
-  const result: Array<{ sectionIndex: number; offsetX: number; offsetY: number }> = [];
+  const result: Array<{ lineIndex: number; offsetX: number; offsetY: number }> = [];
   const visited = new Set<number>();
   const queue: Array<{ idx: number; offsetX: number; offsetY: number }> = [];
 
@@ -288,7 +288,7 @@ export function computeSegmentLayout(
 
   while (queue.length > 0) {
     const { idx, offsetX, offsetY } = queue.shift()!;
-    result.push({ sectionIndex: idx, offsetX, offsetY });
+    result.push({ lineIndex: idx, offsetX, offsetY });
 
     for (const edge of adj.get(idx) ?? []) {
       if (visited.has(edge.neighbor)) continue;
@@ -297,26 +297,26 @@ export function computeSegmentLayout(
       const conn = edge.connection;
       let stationInA: number;
       let stationInB: number;
-      let sectionA: number;
+      let lineA: number;
 
-      if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
-        sectionA = idx;
+      if (conn.importLineIndex === idx && conn.targetImportIndex === edge.neighbor) {
+        lineA = idx;
         stationInA = conn.importStationIndex;
         stationInB = conn.targetImportStationIndex ?? 0;
-      } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
-        sectionA = conn.targetImportIndex;
+      } else if (conn.targetImportIndex === idx && conn.importLineIndex === edge.neighbor) {
+        lineA = conn.targetImportIndex;
         stationInA = conn.targetImportStationIndex ?? 0;
         stationInB = conn.importStationIndex;
       } else {
         continue;
       }
 
-      const sectionAData = dmpSections[sectionA];
+      const lineAData = dmpSections[lineA];
       const neighborData = dmpSections[edge.neighbor];
-      if (!sectionAData || !neighborData) continue;
+      if (!lineAData || !neighborData) continue;
 
       const stationsA = computeStationsFromDmpShots(
-        sectionAData.shots.filter((s) => s.shot_type === 'Standard')
+        lineAData.shots.filter((s) => s.shot_type === 'Standard')
       );
       const stationsB = computeStationsFromDmpShots(
         neighborData.shots.filter((s) => s.shot_type === 'Standard')
@@ -333,10 +333,10 @@ export function computeSegmentLayout(
     }
   }
 
-  // Include any unreachable sections within the segment (disconnected from root)
+  // Include any unreachable lines within the segment (disconnected from root)
   for (const idx of segmentIndices) {
     if (!visited.has(idx)) {
-      result.push({ sectionIndex: idx, offsetX: 0, offsetY: 0 });
+      result.push({ lineIndex: idx, offsetX: 0, offsetY: 0 });
     }
   }
 
@@ -346,30 +346,30 @@ export function computeSegmentLayout(
 export function discoverBridgedDmpSections(
   connections: VirtualConnection[],
   initialShownIndices: Set<number>,
-  existingSectionGeo: Map<number, ExistingSectionGeoEntry>,
+  existingLineGeo: Map<number, ExistingLineGeoEntry>,
   dmpSections: DmpSection[],
 ): {
-  importSide: ContextSectionGeometry[];
-  targetSide: ContextSectionGeometry[];
+  importSide: ContextLineGeometry[];
+  targetSide: ContextLineGeometry[];
   discoveredIndices: Set<number>;
 } {
-  const importSide: ContextSectionGeometry[] = [];
-  const targetSide: ContextSectionGeometry[] = [];
+  const importSide: ContextLineGeometry[] = [];
+  const targetSide: ContextLineGeometry[] = [];
   const shownIndices = new Set(initialShownIndices);
 
   for (const conn of connections) {
     if (conn.targetType !== 'existing') continue;
-    if (shownIndices.has(conn.importSectionIndex)) continue;
-    if (conn.existingSectionId == null || conn.existingStationIndex == null) continue;
+    if (shownIndices.has(conn.importLineIndex)) continue;
+    if (conn.existingLineId == null || conn.existingStationIndex == null) continue;
 
-    const geo = existingSectionGeo.get(conn.existingSectionId);
+    const geo = existingLineGeo.get(conn.existingLineId);
     if (!geo) continue;
 
-    // Found a DMP section connected to an existing section we have geometry for
+    // Found a DMP line connected to an existing line we have geometry for
     const existingMergePos = stationPositionFromShotLines(geo.shotLines, conn.existingStationIndex);
     if (!existingMergePos) continue;
 
-    const dmpSection = dmpSections[conn.importSectionIndex];
+    const dmpSection = dmpSections[conn.importLineIndex];
     if (!dmpSection) continue;
 
     const dmpStations = computeStationsFromDmpShots(
@@ -381,9 +381,9 @@ export function discoverBridgedDmpSections(
     const dmpOffsetX = geo.frameOffsetX + existingMergePos.x - dmpMergeStation.x;
     const dmpOffsetY = geo.frameOffsetY + existingMergePos.y - dmpMergeStation.y;
 
-    // Build shot lines for this bridged DMP section
-    const colorIdx = conn.importSectionIndex % SECTION_COLORS.length;
-    const color = SECTION_COLORS[colorIdx] ?? '#95a5a6';
+    // Build shot lines for this bridged DMP line
+    const colorIdx = conn.importLineIndex % LINE_COLORS.length;
+    const color = LINE_COLORS[colorIdx] ?? '#95a5a6';
     const dmpShots: Array<{ from: [number, number]; to: [number, number] }> = [];
     for (let i = 0; i < dmpStations.length - 1; i++) {
       const from = dmpStations[i]!;
@@ -399,15 +399,15 @@ export function discoverBridgedDmpSections(
       else importSide.push({ color, shots: dmpShots });
     }
 
-    shownIndices.add(conn.importSectionIndex);
+    shownIndices.add(conn.importLineIndex);
 
-    // BFS from this bridged DMP section for its importing-type neighbors
-    const bridgeBfs = computeDmpBfsContext(conn.importSectionIndex, shownIndices, connections, dmpSections);
+    // BFS from this bridged DMP line for its importing-type neighbors
+    const bridgeBfs = computeDmpBfsContext(conn.importLineIndex, shownIndices, connections, dmpSections);
     for (const idx of bridgeBfs.visitedIndices) shownIndices.add(idx);
 
     // Offset BFS context into the correct frame
     for (const ctx of bridgeBfs.dmpContext) {
-      const offsetCtx: ContextSectionGeometry = {
+      const offsetCtx: ContextLineGeometry = {
         color: ctx.color,
         shots: ctx.shots.map((shot) => ({
           from: [shot.from[0] + dmpOffsetX, shot.from[1] + dmpOffsetY] as [number, number],

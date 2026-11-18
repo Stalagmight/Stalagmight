@@ -1,45 +1,45 @@
 use super::AppState;
 use crate::core::CommandResult;
-use crate::models::{normalize_azimuth, Coordinates, SectionId, StationRef};
+use crate::models::{normalize_azimuth, Coordinates, LineId, StationRef};
 
 impl AppState {
-    pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
-        // "Adjust Position" on a section moves the WHOLE rigid group it belongs to
-        // (its merge partners and aligned-closure-connected sections), not just this
-        // one section. A merged section is rigidly bound to its partner: moving it
+    pub(super) fn move_line(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
+        // "Adjust Position" on a line moves the WHOLE rigid group it belongs to
+        // (its merge partners and aligned-closure-connected lines), not just this
+        // one line. A merged line is rigidly bound to its partner: moving it
         // alone would shove its merged station off the partner's, and the
         // post-command geometry reconcile would then either snap it back (silently
         // discarding the move when this isn't the group's min-id anchor) or drag the
         // partner along. Moving the rigid group as one body keeps every merge aligned,
-        // so the move sticks. For a standalone section the rigid group is just itself,
-        // so this is identical to the previous single-section move. Delegating to
-        // `move_segment` also upgrades the datum guard from "this section holds a
+        // so the move sticks. For a standalone line the rigid group is just itself,
+        // so this is identical to the previous single-line move. Delegating to
+        // `move_segment` also upgrades the datum guard from "this line holds a
         // datum" to "the group holds a datum" (a partner's datum now blocks too).
-        self.move_segment(section_id, offset)
+        self.move_segment(line_id, offset)
     }
 
-    pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
+    pub(super) fn move_segment(&self, line_id: LineId, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
             if !offset.is_finite() {
                 return CommandResult::failure(
                     "Move offset must be finite (no NaN/inf)".to_string(),
                 );
             }
-            // Validate section exists
-            if !project.sections.iter().any(|s| s.id == section_id) {
-                return CommandResult::failure("Section not found".to_string());
+            // Validate line exists
+            if !project.lines.iter().any(|s| s.id == line_id) {
+                return CommandResult::failure("Line not found".to_string());
             }
 
-            // Get all connected section IDs (merges + closures), filtered to existing sections
-            let existing: std::collections::HashSet<SectionId> =
-                project.sections.iter().map(|s| s.id).collect();
-            let connected: Vec<SectionId> = project
-                .get_rigid_connected_section_ids(section_id)
+            // Get all connected line IDs (merges + closures), filtered to existing lines
+            let existing: std::collections::HashSet<LineId> =
+                project.lines.iter().map(|s| s.id).collect();
+            let connected: Vec<LineId> = project
+                .get_rigid_connected_line_ids(line_id)
                 .into_iter()
                 .filter(|id| existing.contains(id))
                 .collect();
 
-            // Guard the set actually being offset, not just this section's merge
+            // Guard the set actually being offset, not just this line's merge
             // group. `connected` follows merges AND aligned closures, while
             // `rigid_group_has_datum` walks merges only, so in principle a datum
             // reachable over a closure-only edge could slip through.
@@ -48,23 +48,23 @@ impl AppState {
             // `convert_orphan_closures_to_merges` runs after every command and
             // promotes any sole-bridge closure to a merge, skipping only the case
             // where both endpoint groups are already zero-datum-anchored - and in
-            // THAT case the dragged section's own merge group holds a datum, so the
+            // THAT case the dragged line's own merge group holds a datum, so the
             // narrow check catches it too. The point of widening it is to stop this
             // guard depending on an invariant maintained in another module.
             //
-            // Resolved once against `connected` rather than per section: calling
+            // Resolved once against `connected` rather than per line: calling
             // rigid_group_has_datum for each member rebuilds a whole merge component
             // and rescans the datum list every time, which is quadratic on a large
             // merge-connected survey. Equivalent, because a merge edge is also a
             // rigid edge, so every member's merge component is a subset of
             // `connected`.
-            let connected_set: std::collections::HashSet<SectionId> =
+            let connected_set: std::collections::HashSet<LineId> =
                 connected.iter().copied().collect();
             let group_has_datum = project
                 .zero_datums
                 .iter()
                 .filter_map(|zd| project.resolve_key(&zd.station_ref))
-                .any(|sr| connected_set.contains(&sr.section_id));
+                .any(|sr| connected_set.contains(&sr.line_id));
             if (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
                 && group_has_datum
             {
@@ -73,17 +73,17 @@ impl AppState {
                 );
             }
 
-            // Apply offset to every section in the connected set
+            // Apply offset to every line in the connected set
             // (uses the pre-filtered connected set, not adjust_rigid_group_offsets,
             // because move_segment follows rigid + aligned-closure connectivity)
             for sid in &connected {
-                project.adjust_section_offset(*sid, offset.x, offset.y);
+                project.adjust_line_offset(*sid, offset.x, offset.y);
             }
             project.touch();
             tracing::info!(
-                ?section_id,
+                ?line_id,
                 ?offset,
-                section_count = connected.len(),
+                line_count = connected.len(),
                 purpose = "move connected segment as rigid group",
                 "Segment moved"
             );
@@ -126,28 +126,28 @@ impl AppState {
             // Resolved before the `&mut` borrow below: the geometry here is in
             // world space, so every read adds this and every write-back removes
             // it again (#438).
-            let azimuth_reference = project.azimuth_reference_for_id(station_ref.section_id);
+            let azimuth_reference = project.azimuth_reference_for_id(station_ref.line_id);
 
-            // Find the section containing this station (mutable)
-            let Some(section) = project
-                .sections
+            // Find the line containing this station (mutable)
+            let Some(line) = project
+                .lines
                 .iter_mut()
-                .find(|s| s.id == station_ref.section_id)
+                .find(|s| s.id == station_ref.line_id)
             else {
-                return CommandResult::failure("Section not found".to_string());
+                return CommandResult::failure("Line not found".to_string());
             };
 
             let idx = station_ref.station_index as usize;
 
             // Validate station index (N shots → N+1 stations, indices 0..=N)
-            if idx > section.shots.len() {
+            if idx > line.shots.len() {
                 return CommandResult::failure("Invalid station index".to_string());
             }
 
             // Pre-compute updates to avoid partial mutations on failure.
             let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
             if idx > 0 {
-                let shot = &section.shots[idx - 1];
+                let shot = &line.shots[idx - 1];
                 let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
@@ -175,7 +175,7 @@ impl AppState {
             }
 
             let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
-            if let Some(shot) = section.shots.get(idx) {
+            if let Some(shot) = line.shots.get(idx) {
                 let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
@@ -202,31 +202,31 @@ impl AppState {
                 next_update = Some((new_len, new_azi, new_depth_in, pitch));
             }
 
-            // Special case: moving station 0 should move the section offset so the
+            // Special case: moving station 0 should move the line offset so the
             // rest of the geometry stays in place. Shot 0 is adjusted below to
             // compensate for the offset shift.
-            // Note: can't use project.adjust_section_offset() here because `section`
-            // is a live &mut borrow from project.sections - hence the associated
-            // `write_section_offset`, which takes the map (a disjoint field borrow)
+            // Note: can't use project.adjust_line_offset() here because `line`
+            // is a live &mut borrow from project.lines - hence the associated
+            // `write_line_offset`, which takes the map (a disjoint field borrow)
             // and drops the key when the move lands the offset back within dust of
             // the origin, instead of leaving an inert entry behind (#413 finding 2,
             // and the invariant on that function).
             if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
                 let current = project
-                    .section_offsets
-                    .get(&station_ref.section_id)
+                    .line_offsets
+                    .get(&station_ref.line_id)
                     .copied()
                     .unwrap_or((0.0, 0.0));
-                crate::models::Project::write_section_offset(
-                    &mut project.section_offsets,
-                    station_ref.section_id,
+                crate::models::Project::write_line_offset(
+                    &mut project.line_offsets,
+                    station_ref.line_id,
                     (current.0 + total_dx, current.1 + total_dy),
                 );
             }
 
             // Apply updates after validation
             if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
-                if let Some(shot) = section.shots.get_mut(idx - 1) {
+                if let Some(shot) = line.shots.get_mut(idx - 1) {
                     shot.length = new_len;
                     shot.azimuth_in = new_azi;
                     shot.azimuth_out = new_azi;
@@ -237,7 +237,7 @@ impl AppState {
             }
 
             if let Some((new_len, new_azi, new_depth_in, pitch)) = next_update {
-                if let Some(shot) = section.shots.get_mut(idx) {
+                if let Some(shot) = line.shots.get_mut(idx) {
                     shot.length = new_len;
                     shot.azimuth_in = new_azi;
                     shot.azimuth_out = new_azi;

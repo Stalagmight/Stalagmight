@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
 
 use super::{Command, PersistStack, UndoData, UndoEntry, UndoStack};
-use crate::models::{Project, SectionId, ShotId};
+use crate::models::{disk_names, LineId, Project, ShotId};
 
-/// What [`UndoData::shot_target`] hands back: the section, the target's uuid if
+/// What [`UndoData::shot_target`] hands back: the line, the target's uuid if
 /// the entry records one, and the in-session id it was recorded with.
-type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
+type ShotTarget<'a> = (LineId, Option<&'a str>, ShotId);
 
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
@@ -41,9 +41,12 @@ impl UndoStack {
     }
 
     /// Serialize an entry to JSON.
+    ///
+    /// In the on-disk vocabulary (see [`disk_names`]): the history a file
+    /// carries stays readable by builds from before the Section -> Line rename.
     pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        let command_json = disk_names::to_disk_string(&entry.command).ok()?;
+        let undo_data_json = disk_names::to_disk_string(&entry.undo_data).ok()?;
         Some((command_json, undo_data_json))
     }
 
@@ -51,8 +54,8 @@ impl UndoStack {
     pub fn serialize_entry_with_timestamp(
         entry: &UndoEntry,
     ) -> Option<(String, String, Option<String>)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        let command_json = disk_names::to_disk_string(&entry.command).ok()?;
+        let undo_data_json = disk_names::to_disk_string(&entry.undo_data).ok()?;
         let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
         Some((command_json, undo_data_json, timestamp_str))
     }
@@ -60,7 +63,7 @@ impl UndoStack {
     /// Deserialize a legacy entry without a timestamp.
     pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
         let command = Self::deserialize_command(command_json)?;
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        let undo_data: UndoData = disk_names::from_disk_str(undo_data_json).ok()?;
         Some(UndoEntry {
             command_bytes: None,
             command,
@@ -76,7 +79,7 @@ impl UndoStack {
         timestamp_str: Option<&str>,
     ) -> Option<UndoEntry> {
         let command = Self::deserialize_command(command_json)?;
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        let undo_data: UndoData = disk_names::from_disk_str(undo_data_json).ok()?;
         let timestamp = match timestamp_str {
             Some(raw) => Some(DateTime::parse_from_rfc3339(raw).ok()?.with_timezone(&Utc)),
             None => None,
@@ -90,7 +93,7 @@ impl UndoStack {
     }
 
     fn deserialize_command(command_json: &str) -> Option<Command> {
-        match serde_json::from_str(command_json) {
+        match disk_names::from_disk_str(command_json) {
             Ok(command) => Some(command),
             Err(e) => {
                 tracing::warn!(
@@ -145,13 +148,13 @@ impl UndoStack {
     /// the uuid arm exists; this filter only promises to drop the entries that
     /// would WEDGE the history, not to catch every legacy misfire.
     fn shot_target_resolves(target: ShotTarget<'_>, project: &Project) -> bool {
-        let (section_id, uuid, recorded_id) = target;
+        let (line_id, uuid, recorded_id) = target;
         match uuid {
-            Some(uuid) => project.shot_id_by_uuid(section_id, uuid).is_some(),
+            Some(uuid) => project.shot_id_by_uuid(line_id, uuid).is_some(),
             // A legacy entry addresses by id, so that is what has to hold.
             None => project
-                .get_section(section_id)
-                .is_some_and(|section| section.shots.iter().any(|s| s.id == recorded_id)),
+                .get_line(line_id)
+                .is_some_and(|line| line.shots.iter().any(|s| s.id == recorded_id)),
         }
     }
 
@@ -175,13 +178,13 @@ impl UndoStack {
     /// newline forges a log line of its own) and bidi overrides dropped, then
     /// clamped on a char boundary.
     fn describe_dropped(entry: &UndoEntry, target: ShotTarget<'_>) -> String {
-        let (section_id, uuid, recorded_id) = target;
+        let (line_id, uuid, recorded_id) = target;
         let shot = uuid.map_or_else(
             || recorded_id.to_string(),
             |u| crate::core::command::sanitize_display_text(u, Self::DROPPED_UUID_CHARS),
         );
         format!(
-            "{} (section {section_id}, shot {shot})",
+            "{} (line {line_id}, shot {shot})",
             entry.command.description(),
         )
     }
@@ -210,7 +213,7 @@ impl UndoStack {
     /// Deliberately a TOP-DOWN scan that STOPS at the first entry whose undo
     /// restores recorded state wholesale
     /// ([`UndoData::restores_recorded_state`]). Such an entry is a wall: it puts
-    /// a whole project or section back, in the id space it was recorded in, so
+    /// a whole project or line back, in the id space it was recorded in, so
     /// a target that does not resolve against the project as loaded may resolve
     /// perfectly once the walk gets there. Above the wall the question is
     /// answerable, because every live path that REMOVES a shot records a

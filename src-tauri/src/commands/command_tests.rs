@@ -1,11 +1,11 @@
 //! Command wrapper tests focused on critical/edge behaviors.
 
 use super::{
-    cache, config, export, history, import, project, raw_data, section, shot, station, validation,
+    cache, config, export, history, import, line, project, raw_data, shot, station, validation,
 };
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineData, LineUpdates, Project, ShotData,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
@@ -124,13 +124,13 @@ fn create_project(app: &tauri::App<MockRuntime>) {
     assert_success(&result);
 }
 
-/// Test read-back helper; replaces the retired get_section IPC command (#275).
-fn get_section(
+/// Test read-back helper; replaces the retired get_line IPC command (#275).
+fn get_line(
     state: State<'_, AppState>,
-    section_id: crate::models::SectionId,
-) -> Option<crate::models::Section> {
+    line_id: crate::models::LineId,
+) -> Option<crate::models::Line> {
     let project = state.get_project_state()?;
-    project.get_section(section_id).cloned()
+    project.get_line(line_id).cloned()
 }
 
 /// Test helper; replaces the retired open_project IPC command (#275). Calls
@@ -144,24 +144,35 @@ fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
     state(app).inner().set_project_for_tests(project);
 }
 
-fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
-    let result = section::create_section(
+fn create_line_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
+    // Line names are unique (the create_line IPC refuses a taken one): the
+    // first line is "Line A", later ones "Line A2", "Line A3", ...
+    let taken = state(app)
+        .get_project_state()
+        .map_or(0, |project| project.lines.len());
+    let name = if taken == 0 {
+        "Line A".to_string()
+    } else {
+        format!("Line A{}", taken + 1)
+    };
+    let result = line::create_line(
         state(app),
-        Some("Section A".to_string()),
+        Some(name),
         Some("Surveyor".to_string()),
         None,
         "#4ecdc4".to_string(),
         Some(SurveyDirection::In),
         shots,
+        None,
     );
     assert_success(&result);
-    result.section_id.expect("section id")
+    result.line_id.expect("line id")
 }
 
-fn project_with_section(shots: Vec<ShotData>) -> Project {
+fn project_with_line(shots: Vec<ShotData>) -> Project {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Section A".to_string()),
+    project.add_line(LineData {
+        name: Some("Line A".to_string()),
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
@@ -210,7 +221,7 @@ fn test_get_config_defaults_panels() {
     assert_eq!(
         cfg.panels.data_table_shot_hidden_columns,
         vec![
-            "section_id",
+            "line_id",
             "shot_id",
             "surveyors",
             "explorers",
@@ -221,10 +232,10 @@ fn test_get_config_defaults_panels() {
         cfg.panels.data_table_shot_columns_seen,
         vec!["surveyors", "explorers", "survey_date"]
     );
-    // The new-section dialog opens on what the old hand-rolled table showed.
-    assert!(cfg.panels.new_section_column_order.is_empty());
+    // The new-line dialog opens on what the old hand-rolled table showed.
+    assert!(cfg.panels.new_line_column_order.is_empty());
     assert_eq!(
-        cfg.panels.new_section_hidden_columns,
+        cfg.panels.new_line_hidden_columns,
         vec![
             "azimuth_in",
             "azimuth_out",
@@ -237,13 +248,13 @@ fn test_get_config_defaults_panels() {
             "down"
         ]
     );
-    assert!(cfg.panels.new_section_column_widths.is_empty());
-    // The edit-section grid edits an existing survey, so it opens on everything
+    assert!(cfg.panels.new_line_column_widths.is_empty());
+    // The edit-line grid edits an existing survey, so it opens on everything
     // except the five columns added to it after the fact - hiding those is what
     // keeps its four host dialogs looking as they did before they existed.
-    assert!(cfg.panels.edit_section_column_order.is_empty());
+    assert!(cfg.panels.edit_line_column_order.is_empty());
     assert_eq!(
-        cfg.panels.edit_section_hidden_columns,
+        cfg.panels.edit_line_hidden_columns,
         vec![
             "azimuth_in",
             "azimuth_out",
@@ -252,7 +263,7 @@ fn test_get_config_defaults_panels() {
             "pitch_out"
         ]
     );
-    assert!(cfg.panels.edit_section_column_widths.is_empty());
+    assert!(cfg.panels.edit_line_column_widths.is_empty());
 }
 
 #[test]
@@ -333,24 +344,24 @@ fn test_update_data_table_view_roundtrip() {
 }
 
 #[test]
-fn test_update_new_section_view_roundtrip() {
+fn test_update_new_line_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_new_section_view_impl(
+        config::update_new_line_view_impl(
             state(&app).inner(),
             Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
             Some(vec!["comment".to_string()]),
             Some(BTreeMap::from([("length".to_string(), 180)])),
         )
-        .expect("update new-section view");
+        .expect("update new-line view");
         let cfg = config::get_config(state(&app));
         assert_eq!(
-            cfg.panels.new_section_column_order,
+            cfg.panels.new_line_column_order,
             vec!["length", "_azimuth_avg"]
         );
-        assert_eq!(cfg.panels.new_section_hidden_columns, vec!["comment"]);
+        assert_eq!(cfg.panels.new_line_hidden_columns, vec!["comment"]);
         assert_eq!(
-            cfg.panels.new_section_column_widths,
+            cfg.panels.new_line_column_widths,
             BTreeMap::from([("length".to_string(), 180)])
         );
 
@@ -360,7 +371,7 @@ fn test_update_new_section_view_roundtrip() {
         assert_eq!(
             cfg.panels.data_table_shot_hidden_columns,
             vec![
-                "section_id",
+                "line_id",
                 "shot_id",
                 "surveyors",
                 "explorers",
@@ -369,17 +380,17 @@ fn test_update_new_section_view_roundtrip() {
         );
 
         // A partial update leaves the fields it omits alone.
-        config::update_new_section_view_impl(
+        config::update_new_line_view_impl(
             state(&app).inner(),
             None,
             Some(vec!["left".to_string()]),
             None,
         )
-        .expect("update new-section view");
+        .expect("update new-line view");
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.panels.new_section_hidden_columns, vec!["left"]);
+        assert_eq!(cfg.panels.new_line_hidden_columns, vec!["left"]);
         assert_eq!(
-            cfg.panels.new_section_column_order,
+            cfg.panels.new_line_column_order,
             vec!["length", "_azimuth_avg"],
             "an omitted field keeps its stored value"
         );
@@ -387,30 +398,30 @@ fn test_update_new_section_view_roundtrip() {
 }
 
 #[test]
-fn test_update_edit_section_view_roundtrip() {
+fn test_update_edit_line_view_roundtrip() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_edit_section_view_impl(
+        config::update_edit_line_view_impl(
             state(&app).inner(),
             Some(vec!["length".to_string()]),
             Some(vec!["comment".to_string()]),
             Some(BTreeMap::from([("length".to_string(), 190)])),
         )
-        .expect("update edit-section view");
+        .expect("update edit-line view");
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.panels.edit_section_column_order, vec!["length"]);
-        assert_eq!(cfg.panels.edit_section_hidden_columns, vec!["comment"]);
+        assert_eq!(cfg.panels.edit_line_column_order, vec!["length"]);
+        assert_eq!(cfg.panels.edit_line_hidden_columns, vec!["comment"]);
         assert_eq!(
-            cfg.panels.edit_section_column_widths,
+            cfg.panels.edit_line_column_widths,
             BTreeMap::from([("length".to_string(), 190)])
         );
 
         // Three grids, three disjoint field sets: writing one leaves the others.
-        assert!(cfg.panels.new_section_column_order.is_empty());
+        assert!(cfg.panels.new_line_column_order.is_empty());
         assert!(cfg.panels.data_table_shot_column_order.is_empty());
 
         // Degenerate widths are clamped on the way in, as everywhere else.
-        config::update_edit_section_view_impl(
+        config::update_edit_line_view_impl(
             state(&app).inner(),
             None,
             None,
@@ -419,21 +430,21 @@ fn test_update_edit_section_view_roundtrip() {
                 ("runaway".to_string(), 100_000),
             ])),
         )
-        .expect("update edit-section view");
+        .expect("update edit-line view");
         assert_eq!(
             config::get_config(state(&app))
                 .panels
-                .edit_section_column_widths,
+                .edit_line_column_widths,
             BTreeMap::from([("collapsed".to_string(), 40), ("runaway".to_string(), 2000),])
         );
     });
 }
 
 #[test]
-fn test_update_new_section_view_clamps_degenerate_widths() {
+fn test_update_new_line_view_clamps_degenerate_widths() {
     with_config_lock(|| {
         let app = app_with_state();
-        config::update_new_section_view_impl(
+        config::update_new_line_view_impl(
             state(&app).inner(),
             None,
             None,
@@ -443,11 +454,11 @@ fn test_update_new_section_view_clamps_degenerate_widths() {
                 ("sane".to_string(), 150),
             ])),
         )
-        .expect("update new-section view");
+        .expect("update new-line view");
         assert_eq!(
             config::get_config(state(&app))
                 .panels
-                .new_section_column_widths,
+                .new_line_column_widths,
             BTreeMap::from([
                 ("collapsed".to_string(), 40),
                 ("runaway".to_string(), 2000),
@@ -594,37 +605,28 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         );
         assert_eq!(panels.data_table_shot_hidden_columns, vec!["left"]);
 
-        // Same door, the new-section dialog's own lists.
-        config::update_new_section_view_impl(
+        // Same door, the new-line dialog's own lists.
+        config::update_new_line_view_impl(
             state(&app).inner(),
             Some(hostile_order()),
             Some(hostile_hidden()),
             None,
         )
-        .expect("update new-section view");
+        .expect("update new-line view");
         let panels = config::get_config(state(&app)).panels;
-        assert_bounded(&panels.new_section_column_order, "new_section_column_order");
-        assert_bounded(
-            &panels.new_section_hidden_columns,
-            "new_section_hidden_columns",
-        );
+        assert_bounded(&panels.new_line_column_order, "new_line_column_order");
+        assert_bounded(&panels.new_line_hidden_columns, "new_line_hidden_columns");
 
-        config::update_edit_section_view_impl(
+        config::update_edit_line_view_impl(
             state(&app).inner(),
             Some(hostile_order()),
             Some(hostile_hidden()),
             None,
         )
-        .expect("update edit-section view");
+        .expect("update edit-line view");
         let panels = config::get_config(state(&app)).panels;
-        assert_bounded(
-            &panels.edit_section_column_order,
-            "edit_section_column_order",
-        );
-        assert_bounded(
-            &panels.edit_section_hidden_columns,
-            "edit_section_hidden_columns",
-        );
+        assert_bounded(&panels.edit_line_column_order, "edit_line_column_order");
+        assert_bounded(&panels.edit_line_hidden_columns, "edit_line_hidden_columns");
 
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
@@ -634,10 +636,10 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.data_table_shot_hidden_columns = hostile_hidden();
             cfg.panels.data_table_station_column_order = hostile_order();
             cfg.panels.data_table_station_hidden_columns = hostile_hidden();
-            cfg.panels.new_section_column_order = hostile_order();
-            cfg.panels.new_section_hidden_columns = hostile_hidden();
-            cfg.panels.edit_section_column_order = hostile_order();
-            cfg.panels.edit_section_hidden_columns = hostile_hidden();
+            cfg.panels.new_line_column_order = hostile_order();
+            cfg.panels.new_line_hidden_columns = hostile_hidden();
+            cfg.panels.edit_line_column_order = hostile_order();
+            cfg.panels.edit_line_hidden_columns = hostile_hidden();
             config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
@@ -654,19 +656,10 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
                 &panels.data_table_station_hidden_columns,
                 "station_hidden_columns",
             );
-            assert_bounded(&panels.new_section_column_order, "new_section_column_order");
-            assert_bounded(
-                &panels.new_section_hidden_columns,
-                "new_section_hidden_columns",
-            );
-            assert_bounded(
-                &panels.edit_section_column_order,
-                "edit_section_column_order",
-            );
-            assert_bounded(
-                &panels.edit_section_hidden_columns,
-                "edit_section_hidden_columns",
-            );
+            assert_bounded(&panels.new_line_column_order, "new_line_column_order");
+            assert_bounded(&panels.new_line_hidden_columns, "new_line_hidden_columns");
+            assert_bounded(&panels.edit_line_column_order, "edit_line_column_order");
+            assert_bounded(&panels.edit_line_hidden_columns, "edit_line_hidden_columns");
         });
     });
 }
@@ -743,7 +736,7 @@ fn test_update_config_repairs_invalid_angle_modes() {
 ///     payload write this replaced carried a stale snapshot of every other field
 ///     and silently reverted whatever landed inside its debounce window.
 #[test]
-fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
+fn test_update_gas_config_normalizes_and_leaves_other_lines_alone() {
     with_config_lock(|| {
         let app = app_with_state();
         // A value inside the 100..500 clamp, so anything other than 321 coming
@@ -776,9 +769,9 @@ fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
 
 /// `update_map_palette` is the partial door for `[map_palette]`: it normalizes
 /// (an invalid id falls back to the theme palette, pins are deduped) and leaves
-/// every other section alone, like `update_gas_config` above.
+/// every other line alone, like `update_gas_config` above.
 #[test]
-fn test_update_map_palette_normalizes_and_leaves_other_sections_alone() {
+fn test_update_map_palette_normalizes_and_leaves_other_lines_alone() {
     with_config_lock(|| {
         let app = app_with_state();
         config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321), None)
@@ -820,9 +813,9 @@ fn test_update_map_palette_normalizes_and_leaves_other_sections_alone() {
 
 /// `remember_people` is the partial door for `[people].recent`: the given
 /// people move to the front in order, a known identity takes the new spelling,
-/// an empty call writes nothing, and other sections are left alone.
+/// an empty call writes nothing, and other lines are left alone.
 #[test]
-fn test_remember_people_orders_dedupes_and_leaves_other_sections_alone() {
+fn test_remember_people_orders_dedupes_and_leaves_other_lines_alone() {
     use crate::models::Person;
     let person = |name: &str, email: Option<&str>| Person {
         name: name.to_string(),
@@ -1032,7 +1025,7 @@ fn test_update_config_roundtrip_recent_projects() {
 }
 
 #[test]
-fn test_update_panel_sizes_sections_only() {
+fn test_update_panel_sizes_lines_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
@@ -1291,51 +1284,51 @@ fn test_redo_fails_when_empty() {
 }
 
 #[test]
-fn test_can_undo_true_after_create_section() {
+fn test_can_undo_true_after_create_line() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     assert!(history::can_undo(state(&app)));
 }
 
 #[test]
-fn test_undo_removes_section() {
+fn test_undo_removes_line() {
     let app = app_with_state();
     create_project(&app);
-    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let line_id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let undo_result = history::undo(state(&app));
     assert_success(&undo_result);
-    let section = get_section(state(&app), section_id);
-    assert!(section.is_none());
+    let line = get_line(state(&app), line_id);
+    assert!(line.is_none());
 }
 
 #[test]
 fn test_can_redo_true_after_undo() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let _ = history::undo(state(&app));
     assert!(history::can_redo(state(&app)));
 }
 
 #[test]
-fn test_redo_restores_section() {
+fn test_redo_restores_line() {
     let app = app_with_state();
     create_project(&app);
-    let _section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _line_id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let _ = history::undo(state(&app));
     let redo_result = history::redo(state(&app));
     assert_success(&redo_result);
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 1);
+    assert_eq!(project_state.project.lines.len(), 1);
 }
 
 #[test]
 fn test_undo_to_fails_when_index_out_of_bounds() {
     let app = app_with_state();
     create_project(&app);
-    // Create one section - only 1 item in undo stack
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    // Create one line - only 1 item in undo stack
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
 
     // Index 0 should work (1 item), but index 1 should fail
     let result = history::undo_to(1, state(&app));
@@ -1347,15 +1340,15 @@ fn test_undo_to_fails_when_index_out_of_bounds() {
 fn test_undo_to_index_0_undoes_one_operation() {
     let app = app_with_state();
     create_project(&app);
-    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let line_id = create_line_with_shots(&app, vec![shot_data(1.0)]);
 
     // Undo to index 0 should undo just the most recent action
     let result = history::undo_to(0, state(&app));
     assert_success(&result);
 
-    // Section should be removed
-    let section = get_section(state(&app), section_id);
-    assert!(section.is_none());
+    // Line should be removed
+    let line = get_line(state(&app), line_id);
+    assert!(line.is_none());
 }
 
 #[test]
@@ -1363,29 +1356,29 @@ fn test_undo_to_index_2_undoes_three_operations() {
     let app = app_with_state();
     create_project(&app);
 
-    // Create 3 sections (3 undo entries)
-    let _section_1 = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _section_2 = create_section_with_shots(&app, vec![shot_data(2.0)]);
-    let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
+    // Create 3 lines (3 undo entries)
+    let _line_1 = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let _line_2 = create_line_with_shots(&app, vec![shot_data(2.0)]);
+    let _line_3 = create_line_with_shots(&app, vec![shot_data(3.0)]);
 
-    // Verify we have 3 sections
+    // Verify we have 3 lines
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 3);
+    assert_eq!(project_state.project.lines.len(), 3);
 
-    // Undo to index 2 should undo all 3 sections (indices 0, 1, 2)
+    // Undo to index 2 should undo all 3 lines (indices 0, 1, 2)
     let result = history::undo_to(2, state(&app));
     assert_success(&result);
 
-    // All sections should be removed
+    // All lines should be removed
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 0);
+    assert_eq!(project_state.project.lines.len(), 0);
 }
 
 #[test]
 fn test_redo_to_fails_when_index_out_of_bounds() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     // Undo to create a redo entry
     let _ = history::undo(state(&app));
 
@@ -1399,20 +1392,20 @@ fn test_redo_to_fails_when_index_out_of_bounds() {
 fn test_redo_to_index_0_redoes_one_operation() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let _ = history::undo(state(&app));
 
-    // Verify section is gone
+    // Verify line is gone
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 0);
+    assert_eq!(project_state.project.lines.len(), 0);
 
     // Redo to index 0 should redo just the most recent undone action
     let result = history::redo_to(0, state(&app));
     assert_success(&result);
 
-    // Section should be restored
+    // Line should be restored
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 1);
+    assert_eq!(project_state.project.lines.len(), 1);
 }
 
 #[test]
@@ -1420,25 +1413,25 @@ fn test_redo_to_index_2_redoes_three_operations() {
     let app = app_with_state();
     create_project(&app);
 
-    // Create 3 sections
-    let _section_1 = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _section_2 = create_section_with_shots(&app, vec![shot_data(2.0)]);
-    let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
+    // Create 3 lines
+    let _line_1 = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let _line_2 = create_line_with_shots(&app, vec![shot_data(2.0)]);
+    let _line_3 = create_line_with_shots(&app, vec![shot_data(3.0)]);
 
     // Undo all 3
     let _ = history::undo_to(2, state(&app));
 
-    // Verify all sections are gone
+    // Verify all lines are gone
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 0);
+    assert_eq!(project_state.project.lines.len(), 0);
 
-    // Redo to index 2 should redo all 3 sections (indices 0, 1, 2)
+    // Redo to index 2 should redo all 3 lines (indices 0, 1, 2)
     let result = history::redo_to(2, state(&app));
     assert_success(&result);
 
-    // All sections should be restored
+    // All lines should be restored
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 3);
+    assert_eq!(project_state.project.lines.len(), 3);
 }
 
 #[test]
@@ -1468,13 +1461,13 @@ fn test_get_project_state_none_when_no_project() {
 }
 
 /// The depth stats the frontend gets are the ABSOLUTE station range, matching
-/// the station z on the very same payload - not the per-section delta walk that
+/// the station z on the very same payload - not the per-line delta walk that
 /// reported 0..3 for a survey that never leaves 5..8 m (#481).
 #[test]
 fn test_get_project_state_depth_stats_match_station_z() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(
+    create_line_with_shots(
         &app,
         vec![
             shot_data_with_depth(10.0, 5.0, 6.0),
@@ -1553,19 +1546,19 @@ fn test_project_lifecycle_persists_undo_and_state() {
     with_config_lock(|| {
         let app = app_with_state();
         create_project(&app);
-        let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
-        let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
+        let line_a = create_line_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
+        let line_b = create_line_with_shots(&app, vec![shot_data(7.0)]);
 
         let merge_result = station::merge_stations(
             state(&app),
-            StationRef::new(section_a, 0),
-            StationRef::new(section_b, 0),
+            StationRef::new(line_a, 0),
+            StationRef::new(line_b, 0),
         );
         assert_success(&merge_result);
 
         let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
         let datum_result =
-            station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps, None, None);
+            station::set_zero_datum(state(&app), StationRef::new(line_a, 0), gps, None, None);
         assert_success(&datum_result);
 
         let updates = ShotUpdates {
@@ -1573,7 +1566,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
             comment: Some(Some("recalc".to_string())),
             ..Default::default()
         };
-        let update_result = shot::update_shot(state(&app), section_a, 0, updates);
+        let update_result = shot::update_shot(state(&app), line_a, 0, updates);
         assert_success(&update_result);
 
         let undo_before = history::get_undo_stack(state(&app));
@@ -1594,16 +1587,13 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert_success(&open_result);
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
-        assert_eq!(project_state.project.sections.len(), 2);
+        assert_eq!(project_state.project.lines.len(), 2);
         assert_eq!(project_state.project.station_merges.len(), 1);
         assert_eq!(project_state.project.zero_datums.len(), 1);
 
-        let section = project_state
-            .project
-            .get_section(section_a)
-            .expect("section a");
-        assert!((section.shots[0].length - 12.5).abs() < f64::EPSILON);
-        assert_eq!(section.shots[0].comment.as_deref(), Some("recalc"));
+        let line = project_state.project.get_line(line_a).expect("line a");
+        assert!((line.shots[0].length - 12.5).abs() < f64::EPSILON);
+        assert_eq!(line.shots[0].comment.as_deref(), Some("recalc"));
 
         let undo_after = history::get_undo_stack(state(&app));
         assert_eq!(undo_after.len(), undo_before.len());
@@ -1616,14 +1606,14 @@ fn test_get_project_state_emits_positional_wire_refs() {
     with_config_lock(|| {
         let app = app_with_state();
         create_project(&app);
-        let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
-        let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
-        // Merge two AfterShot stations across sections so the wire form must
+        let line_a = create_line_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
+        let line_b = create_line_with_shots(&app, vec![shot_data(7.0)]);
+        // Merge two AfterShot stations across lines so the wire form must
         // resolve a non-trivial positional index.
         assert_success(&station::merge_stations(
             state(&app),
-            StationRef::new(section_a, 1),
-            StationRef::new(section_b, 1),
+            StationRef::new(line_a, 1),
+            StationRef::new(line_b, 1),
         ));
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
@@ -1681,7 +1671,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let project_path = project_dir.path().join("config-fail.stalx");
 
         let mut project = Project::new("Config Fail".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot_data(1.0)],
             ..Default::default()
         });
@@ -1739,7 +1729,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let project_path = project_dir.path().join("config-fail.stalx");
 
         let mut project = Project::new("Config Fail".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: vec![shot_data(1.0)],
             ..Default::default()
         });
@@ -1783,7 +1773,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
 
             for (path, name) in [(&path_a, "A"), (&path_b, "B"), (&path_c, "C")] {
                 let mut project = Project::new(name.to_string(), None);
-                project.add_section(SectionData {
+                project.add_line(LineData {
                     shots: vec![shot_data(1.0)],
                     ..Default::default()
                 });
@@ -1809,18 +1799,18 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
 }
 
 #[test]
-fn test_save_project_persists_sections() {
+fn test_save_project_persists_lines() {
     with_config_lock(|| {
         let app = app_with_state();
         create_project(&app);
-        create_section_with_shots(&app, vec![shot_data(1.0)]);
+        create_line_with_shots(&app, vec![shot_data(1.0)]);
         let dir = TempDir::new().unwrap();
         let saved_path = save_project_to_temp(&app, &dir);
 
         let app2 = app_with_state();
         let _ = open_project(state(&app2), saved_path);
         let project_state = project::get_project_state(state(&app2)).expect("project state");
-        assert_eq!(project_state.project.sections.len(), 1);
+        assert_eq!(project_state.project.lines.len(), 1);
     });
 }
 
@@ -1847,11 +1837,11 @@ fn test_save_project_fails_when_output_is_directory() {
 }
 
 // #92: importing into a never-saved (deferred) project must durably persist it -
-// write the .stalx and add it to Recent Projects - at the `import_sections`
+// write the .stalx and add it to Recent Projects - at the `import_lines`
 // command every import path funnels through, so the fix survives changes to the
 // import UI. Guards the backend chokepoint (PR #104).
 #[test]
-fn test_import_sections_persists_deferred_new_project() {
+fn test_import_lines_persists_deferred_new_project() {
     with_config_lock(|| {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
@@ -1874,10 +1864,11 @@ fn test_import_sections_persists_deferred_new_project() {
             "precondition: .stalx must not exist yet"
         );
 
-        // Import one origin-placed section through the command.
-        let sections = vec![crate::models::ImportSectionConfig {
+        // Import one origin-placed line through the command.
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -1893,17 +1884,8 @@ fn test_import_sections_persists_deferred_new_project() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
         assert_success(&result);
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
@@ -1922,16 +1904,16 @@ fn test_import_sections_persists_deferred_new_project() {
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
-        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.lines_imported, 1);
         assert_eq!(receipt.shot_count, 1);
     });
 }
 
 /// #674: `add_project_file` is an import door too - into a never-saved project
 /// it resolves the deferred save, and its result carries exactly the added
-/// section ids (the orphan-placement input) plus a receipt.
+/// line ids (the orphan-placement input) plus a receipt.
 #[test]
-fn test_add_project_file_reports_added_sections_and_persists_deferred_project() {
+fn test_add_project_file_reports_added_lines_and_persists_deferred_project() {
     with_config_lock(|| {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
@@ -1944,7 +1926,7 @@ fn test_add_project_file_reports_added_sections_and_persists_deferred_project() 
             .set_initial_save_deferred_for_tests(true);
 
         let mut source = Project::new("Source".to_string(), None);
-        source.add_section(SectionData {
+        source.add_line(LineData {
             name: Some("Added".to_string()),
             shots: vec![shot_data(5.0), shot_data(6.0)],
             ..Default::default()
@@ -1962,11 +1944,11 @@ fn test_add_project_file_reports_added_sections_and_persists_deferred_project() 
             source_path.to_string_lossy().into_owned(),
         ));
         assert_success(&result);
-        assert_eq!(result.section_ids, vec![0], "exactly the added section");
+        assert_eq!(result.line_ids, vec![0], "exactly the added line");
         let receipt = result.import_receipt.as_ref().expect("a receipt");
         assert_eq!(receipt.source_format, "Stalagmight");
         assert_eq!(receipt.file_name, "source.stalx");
-        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.lines_imported, 1);
         assert_eq!(receipt.shot_count, 2);
         assert!(project_path.exists(), "the deferred project was saved");
         assert!(!state(&app).initial_save_deferred());
@@ -1974,8 +1956,8 @@ fn test_add_project_file_reports_added_sections_and_persists_deferred_project() 
 }
 
 /// #674: `suggest_orphan_placements` runs on a blocking thread; driven through
-/// the async command, a newly imported floating section that re-surveys an
-/// anchored one is offered that section as its target.
+/// the async command, a newly imported floating line that re-surveys an
+/// anchored one is offered that line as its target.
 #[test]
 fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
     with_config_lock(|| {
@@ -1995,7 +1977,7 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
         };
         let mut project = Project::new("Host".to_string(), None);
         let host = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: leg(),
                 ..Default::default()
             })
@@ -2008,7 +1990,7 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
             )
             .unwrap();
         let added = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: leg(),
                 ..Default::default()
             })
@@ -2024,18 +2006,18 @@ fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
         assert!(
             suggestions
                 .iter()
-                .any(|s| s.orphan_section_id == added && s.target_section_id == host),
-            "the added section must be offered the anchored host: {suggestions:?}"
+                .any(|s| s.orphan_line_id == added && s.target_line_id == host),
+            "the added line must be offered the anchored host: {suggestions:?}"
         );
     });
 }
 
-/// #391: `import_sections`' additive provenance params (used by the MNemo DMP
+/// #391: `import_lines`' additive provenance params (used by the MNemo DMP
 /// wizard) decorate the base receipt when passed, and leave it at its
 /// (empty-provenance) defaults when omitted - the shape every other caller
 /// still uses.
 #[test]
-fn test_import_sections_provenance_params_decorate_receipt() {
+fn test_import_lines_provenance_params_decorate_receipt() {
     with_config_lock(|| {
         let app = app_with_state();
         state(&app).execute(Command::CreateProject {
@@ -2043,9 +2025,10 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             location: None,
         });
 
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -2062,9 +2045,9 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             surveyors: None,
         }];
 
-        let result = import::import_sections(
+        let result = import::import_lines(
             state(&app),
-            sections,
+            lines,
             None,
             None,
             None,
@@ -2080,21 +2063,21 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             .expect("import must attach an import receipt");
         assert_eq!(receipt.source_format, "MNemo DMP");
         assert_eq!(receipt.file_name, "dive.dmp");
-        assert_eq!(receipt.sections_found, 1);
+        assert_eq!(receipt.lines_found, 1);
     });
 }
 
-/// PR #529 Codex review: `import_sections` (the MNemo DMP wizard's actual IPC
+/// PR #529 Codex review: `import_lines` (the MNemo DMP wizard's actual IPC
 /// entry point) never calls `decorate_receipt` - it only overwrites
-/// source_format/file_name/sections_found directly (see above and
-/// `import::import_sections`). A `zero_datum_created` sanitized ONLY in
+/// source_format/file_name/lines_found directly (see above and
+/// `import::import_lines`). A `zero_datum_created` sanitized ONLY in
 /// `decorate_receipt` would therefore reach the frontend as a raw,
-/// file-controlled `ImportSectionConfig::name` through this exact command.
+/// file-controlled `ImportLineConfig::name` through this exact command.
 /// Drives the real command with a hostile name (a bidi override + 10k chars)
 /// and asserts the receipt field arrives clean - proof this route, not just
 /// `decorate_receipt`'s callers, is sanitized.
 #[test]
-fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
+fn test_import_lines_sanitizes_hostile_zero_datum_line_name() {
     with_config_lock(|| {
         let app = app_with_state();
         state(&app).execute(Command::CreateProject {
@@ -2103,9 +2086,10 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
         });
 
         let hostile_name = format!("A\u{202e}B{}", "x".repeat(10_000));
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some(hostile_name),
             surveyor: None,
             date: None,
@@ -2125,9 +2109,9 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             surveyors: None,
         }];
 
-        let result = import::import_sections(
+        let result = import::import_lines(
             state(&app),
-            sections,
+            lines,
             None,
             None,
             None,
@@ -2159,7 +2143,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
 }
 
 #[test]
-fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
+fn test_import_lines_without_provenance_params_leaves_receipt_defaults() {
     with_config_lock(|| {
         let app = app_with_state();
         state(&app).execute(Command::CreateProject {
@@ -2167,9 +2151,10 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             location: None,
         });
 
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -2186,31 +2171,22 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             surveyors: None,
         }];
 
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
         assert_success(&result);
         let receipt = result
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
-        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.lines_imported, 1);
         assert_eq!(receipt.source_format, "");
         assert_eq!(receipt.file_name, "");
-        assert_eq!(receipt.sections_found, 0);
+        assert_eq!(receipt.lines_found, 0);
     });
 }
 
 /// #391: `execute_gpx_import` decorates the import receipt with source format
-/// "GPX", no unit conversion, and `sections_found` counting the tracks/routes/
+/// "GPX", no unit conversion, and `lines_found` counting the tracks/routes/
 /// waypoints actually selected for import.
 #[test]
 fn test_execute_gpx_import_decorates_receipt() {
@@ -2252,19 +2228,19 @@ fn test_execute_gpx_import_decorates_receipt() {
             .as_ref()
             .expect("import must attach an import receipt");
         assert_eq!(receipt.source_format, "GPX");
-        assert_eq!(receipt.sections_found, 1);
+        assert_eq!(receipt.lines_found, 1);
         assert_eq!(receipt.unit_conversion, None);
     });
 }
 
-/// #411: an import whose sections all vanished before they reached the command
-/// (every shot excluded, or every section malformed) lands NOTHING. It must
+/// #411: an import whose lines all vanished before they reached the command
+/// (every shot excluded, or every line malformed) lands NOTHING. It must
 /// still return a receipt - a zero one - because `decorate_receipt` hangs the
 /// converter's "why" on that receipt and had nothing to hang it on when the
 /// command returned a bare success. A silent, successful, empty import is the
 /// exact failure this closes.
 #[test]
-fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
+fn test_import_lines_with_nothing_to_import_still_reports_a_receipt() {
     with_config_lock(|| {
         let app = app_with_state();
         state(&app).execute(Command::CreateProject {
@@ -2272,7 +2248,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
             location: None,
         });
 
-        let result = import::import_sections(
+        let result = import::import_lines(
             state(&app),
             Vec::new(),
             None,
@@ -2289,7 +2265,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
             .import_receipt
             .as_ref()
             .expect("an import that landed nothing must still report a receipt");
-        assert_eq!(receipt.sections_imported, 0);
+        assert_eq!(receipt.lines_imported, 0);
         assert_eq!(receipt.shot_count, 0);
         assert_eq!(receipt.closures_requested, 0);
         assert!(receipt.warnings.is_empty());
@@ -2305,7 +2281,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
 // phantom-add the never-written project to Recent Projects. A hard failure (or a
 // silent "saved") would put us back in the #92 data-loss class.
 #[test]
-fn test_import_sections_deferred_save_failure_warns_no_phantom() {
+fn test_import_lines_deferred_save_failure_warns_no_phantom() {
     with_config_lock(|| {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
@@ -2333,11 +2309,12 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             "precondition: project must be deferred (never saved)"
         );
 
-        // Import one origin-placed section through the command - same shape as the
+        // Import one origin-placed line through the command - same shape as the
         // success test, only the save target differs.
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -2353,17 +2330,8 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
@@ -2389,16 +2357,16 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             "a failed deferred save must leave the project deferred (still unsaved)"
         );
 
-        // ...and the just-imported section must still be in memory: the partial-
+        // ...and the just-imported line must still be in memory: the partial-
         // success contract keeps the import under the close-guard so it isn't lost.
         // A regression that returns success+warning while dropping the in-memory
         // import would be the #92 data-loss class on the failure path - assert the
         // CommandResult flag (above) is NOT enough on its own.
         let project_state = state(&app).inner().get_project_state().unwrap();
         assert_eq!(
-            project_state.sections.len(),
+            project_state.lines.len(),
             1,
-            "the imported section must survive in memory after a failed deferred save"
+            "the imported line must survive in memory after a failed deferred save"
         );
 
         // The import receipt is orthogonal to the deferred-save-failure warning: the
@@ -2439,7 +2407,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 // message mapping.
 #[cfg(unix)]
 #[test]
-fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak() {
+fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() {
     use std::os::unix::fs::PermissionsExt;
     with_config_lock(|| {
         let app = app_with_state();
@@ -2465,9 +2433,10 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             "precondition: project must be deferred (never saved)"
         );
 
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -2483,17 +2452,8 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
 
@@ -2526,7 +2486,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
 // The deferred-import warning must therefore carry the plain failure, with no
 // marker of any kind in it.
 #[test]
-fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
+fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
     with_config_lock(|| {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
@@ -2542,9 +2502,10 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             .inner()
             .set_initial_save_deferred_for_tests(true);
 
-        let sections = vec![crate::models::ImportSectionConfig {
+        let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
-            section_index: 0,
+            line_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
             date: None,
@@ -2560,17 +2521,8 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             override_date: None,
             surveyors: None,
         }];
-        let result = import::import_sections(
-            state(&app),
-            sections,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let result =
+            import::import_lines(state(&app), lines, None, None, None, None, None, None, None);
 
         assert_success(&result);
         assert!(
@@ -2867,8 +2819,8 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
             // Two undoable commands and then one undo, so BOTH stacks are genuinely
             // non-empty going in - asserting "empty afterwards" on a stack that was
             // already empty would prove nothing.
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
-            create_section_with_shots(&app, vec![shot_data(2.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(2.0)]);
             assert_success(&history::undo(state(&app)));
 
             assert_eq!(
@@ -2967,7 +2919,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
                 history::can_undo(state(&app)),
                 "precondition: there is real undo history to tear down"
@@ -3065,7 +3017,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             let open_dir = TempDir::new().unwrap();
             create_project(&app);
             let open_path = save_project_to_temp(&app, &open_dir);
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
 
             let other = project::delete_project_impl(state(&app).inner(), other_path.clone());
             assert_success(&other);
@@ -3123,7 +3075,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
                 history::can_undo(state(&app)),
                 "precondition: there is real undo history to tear down"
@@ -3336,7 +3288,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
                 history::can_undo(state(&app)),
                 "precondition: there is real undo history that must NOT be torn down"
@@ -3432,7 +3384,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             let link = dir.path().join("link.stalx");
             std::os::unix::fs::symlink(&real_path, &link).unwrap();
             assert_success(&open_project(state(&app), link.clone()));
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
 
             assert_eq!(
                 project::get_project_state(state(&app))
@@ -3530,7 +3482,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                 saved_path.exists(),
                 "precondition: the .stalx really is under the real directory"
             );
-            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_line_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
                 history::can_undo(state(&app)),
                 "precondition: there is real undo history to tear down"
@@ -3616,7 +3568,7 @@ fn test_save_project_fails_when_directory_missing() {
 #[test]
 fn test_merge_projects_fails_when_source_missing() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(1.0)]);
+    let project = project_with_line(vec![shot_data(1.0)]);
     let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
     let missing_path = db_a.path().with_file_name("missing.stalx");
     let output_dir = TempDir::new().unwrap();
@@ -3633,179 +3585,181 @@ fn test_merge_projects_fails_when_source_missing() {
     assert_failure_contains(&result, "Source file not found");
 }
 
-// === Section commands ===
+// === Line commands ===
 
 #[test]
-fn test_create_section_fails_without_project() {
+fn test_create_line_fails_without_project() {
     let app = app_with_state();
-    let result = section::create_section(
+    let result = line::create_line(
         state(&app),
-        Some("Section".to_string()),
+        Some("Line".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
+        None,
     );
     assert_failure_contains(&result, "No project open");
 }
 
 #[test]
-fn test_create_section_success_returns_id() {
+fn test_create_line_success_returns_id() {
     let app = app_with_state();
     create_project(&app);
-    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    assert_eq!(section_id, 0);
+    let line_id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    assert_eq!(line_id, 0);
 }
 
 #[test]
-fn test_create_section_defaults_direction() {
+fn test_create_line_defaults_direction() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::create_section(
+    let result = line::create_line(
         state(&app),
-        Some("Section".to_string()),
+        Some("Line".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
+        None,
     );
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
-    assert_eq!(section.direction, SurveyDirection::In);
+    let line = get_line(state(&app), result.line_id.unwrap()).unwrap();
+    assert_eq!(line.direction, SurveyDirection::In);
 }
 
 #[test]
-fn test_get_section_returns_none_missing() {
+fn test_get_line_returns_none_missing() {
     let app = app_with_state();
     create_project(&app);
-    assert!(get_section(state(&app), 999).is_none());
+    assert!(get_line(state(&app), 999).is_none());
 }
 
 #[test]
-fn test_get_section_returns_section() {
+fn test_get_line_returns_line() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.id, id);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.id, id);
 }
 
 #[test]
-fn test_update_section_fails_missing() {
+fn test_update_line_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::update_section(state(&app), 99, SectionUpdates::default());
-    assert_failure_contains(&result, "not found");
+    let result = line::update_line(state(&app), 99, LineUpdates::default());
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
-fn test_update_section_updates_name() {
+fn test_update_line_updates_name() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let updates = SectionUpdates {
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let updates = LineUpdates {
         name: Some(Some("Updated".to_string())),
         ..Default::default()
     };
-    let result = section::update_section(state(&app), id, updates);
+    let result = line::update_line(state(&app), id, updates);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.name, Some("Updated".to_string()));
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.name, Some("Updated".to_string()));
 }
 
 #[test]
-fn test_update_section_updates_color() {
+fn test_update_line_updates_color() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let updates = SectionUpdates {
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let updates = LineUpdates {
         color: Some("#123456".to_string()),
         ..Default::default()
     };
-    let result = section::update_section(state(&app), id, updates);
+    let result = line::update_line(state(&app), id, updates);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.color, "#123456".to_string());
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.color, "#123456".to_string());
 }
 
 #[test]
-fn test_delete_section_fails_missing() {
+fn test_delete_line_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::delete_section(state(&app), 22);
-    assert_failure_contains(&result, "not found");
+    let result = line::delete_line(state(&app), 22);
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
-fn test_delete_section_removes_section() {
+fn test_delete_line_removes_line() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = section::delete_section(state(&app), id);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let result = line::delete_line(state(&app), id);
     assert_success(&result);
-    assert!(get_section(state(&app), id).is_none());
+    assert!(get_line(state(&app), id).is_none());
 }
 
 #[test]
-fn test_move_section_fails_missing() {
+fn test_move_line_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::move_section(state(&app), 22, Coordinates::new(1.0, 1.0, 0.0));
-    assert_failure_contains(&result, "Section not found");
+    let result = line::move_line(state(&app), 22, Coordinates::new(1.0, 1.0, 0.0));
+    assert_failure_contains(&result, "Line not found");
 }
 
 #[test]
-fn test_move_section_success() {
+fn test_move_line_success() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = section::move_section(state(&app), id, Coordinates::new(2.0, -3.0, 0.0));
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let result = line::move_line(state(&app), id, Coordinates::new(2.0, -3.0, 0.0));
     assert_success(&result);
 }
 
 #[test]
-fn test_move_segment_moves_connected_sections() {
+fn test_move_segment_moves_connected_lines() {
     let app = app_with_state();
     create_project(&app);
-    let section_a = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let section_b = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let line_a = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let line_b = create_line_with_shots(&app, vec![shot_data(1.0)]);
 
     assert_success(&station::merge_stations(
         state(&app),
-        StationRef::new(section_a, 1),
-        StationRef::new(section_b, 0),
+        StationRef::new(line_a, 1),
+        StationRef::new(line_b, 0),
     ));
 
     let before = project::get_project_state(state(&app)).expect("project state");
     let offset_a_before = before
         .project
-        .section_offsets
-        .get(&section_a)
+        .line_offsets
+        .get(&line_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_before = before
         .project
-        .section_offsets
-        .get(&section_b)
+        .line_offsets
+        .get(&line_b)
         .copied()
         .unwrap_or((0.0, 0.0));
 
     let delta = Coordinates::new(3.0, -2.0, 0.0);
-    assert_success(&section::move_segment(state(&app), section_a, delta));
+    assert_success(&line::move_segment(state(&app), line_a, delta));
 
     let after = project::get_project_state(state(&app)).expect("project state");
     let offset_a_after = after
         .project
-        .section_offsets
-        .get(&section_a)
+        .line_offsets
+        .get(&line_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_after = after
         .project
-        .section_offsets
-        .get(&section_b)
+        .line_offsets
+        .get(&line_b)
         .copied()
         .unwrap_or((0.0, 0.0));
 
@@ -3816,17 +3770,18 @@ fn test_move_segment_moves_connected_sections() {
 }
 
 #[test]
-fn test_create_section_with_validation_warnings() {
+fn test_create_line_with_validation_warnings() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::create_section(
+    let result = line::create_line(
         state(&app),
-        Some("Section".to_string()),
+        Some("Line".to_string()),
         None,
         None,
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(0.05)],
+        None,
     );
     assert!(result.success);
     assert!(!result.warnings.is_empty());
@@ -3842,41 +3797,41 @@ fn test_create_shot_fails_without_project() {
 }
 
 #[test]
-fn test_create_shot_fails_invalid_section() {
+fn test_create_shot_fails_invalid_line() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::create_shot(state(&app), 99, shot_data(1.0), None, None);
-    assert_failure_contains(&result, "Section 99 not found");
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
 fn test_create_shot_success_adds_shot() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![]);
+    let id = create_line_with_shots(&app, vec![]);
     let result = shot::create_shot(state(&app), id, shot_data(1.0), None, None);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots.len(), 1);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots.len(), 1);
 }
 
 #[test]
 fn test_create_shot_after_shot_id_inserts() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), None);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots.len(), 3);
-    assert_eq!(section.shots[1].length, 3.0);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots.len(), 3);
+    assert_eq!(line.shots[1].length, 3.0);
 }
 
 #[test]
 fn test_create_shot_returns_warning_for_short() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![]);
+    let id = create_line_with_shots(&app, vec![]);
     let result = shot::create_shot(state(&app), id, shot_data(0.05), None, None);
     assert!(result.success);
     assert!(!result.warnings.is_empty());
@@ -3890,7 +3845,7 @@ fn test_create_shot_returns_warning_for_short() {
 fn test_create_shot_rejects_both_after_and_before() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), Some(1));
     assert_failure_contains(&result, "Cannot specify both");
 }
@@ -3899,7 +3854,7 @@ fn test_create_shot_rejects_both_after_and_before() {
 fn test_create_shot_before_inserts_at_position() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     // Insert before the first shot (position 0)
     let result = shot::create_shot(state(&app), id, shot_data(5.0), None, Some(0));
     assert_success(&result);
@@ -3907,14 +3862,14 @@ fn test_create_shot_before_inserts_at_position() {
         result.shot_id.is_some(),
         "shot_id must be returned on success"
     );
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots.len(), 3);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots.len(), 3);
     assert_eq!(
-        section.shots[0].length, 5.0,
+        line.shots[0].length, 5.0,
         "New shot should be at position 0 (prepended)"
     );
-    assert_eq!(section.shots[1].length, 1.0);
-    assert_eq!(section.shots[2].length, 2.0);
+    assert_eq!(line.shots[1].length, 1.0);
+    assert_eq!(line.shots[2].length, 2.0);
 }
 
 #[test]
@@ -3927,7 +3882,7 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
     const SPOOFED: &str = "ffffffff-0000-4000-8000-000000000423";
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::create_shot_impl(
         state(&app).inner(),
         id,
@@ -3939,8 +3894,8 @@ fn test_create_shot_wrapper_strips_a_client_named_uuid() {
         None,
     );
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    let created = section.shots.last().unwrap();
+    let line = get_line(state(&app), id).unwrap();
+    let created = line.shots.last().unwrap();
     assert_ne!(
         created.uuid.as_deref(),
         Some(SPOOFED),
@@ -3967,37 +3922,37 @@ fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::update_shot(state(&app), 0, 999, ShotUpdates::default());
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That shot no longer exists.");
 }
 
 #[test]
 fn test_update_shot_updates_length() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let updates = ShotUpdates {
         length: Some(12.0),
         ..Default::default()
     };
     let result = shot::update_shot(state(&app), id, 0, updates);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots[0].length, 12.0);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots[0].length, 12.0);
 }
 
 #[test]
 fn test_update_shot_updates_comment() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let updates = ShotUpdates {
         comment: Some(Some("note".to_string())),
         ..Default::default()
     };
     let result = shot::update_shot(state(&app), id, 0, updates);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots[0].comment, Some("note".to_string()));
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots[0].comment, Some("note".to_string()));
 }
 
 #[test]
@@ -4005,57 +3960,57 @@ fn test_delete_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::delete_shot(state(&app), 0, 1);
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "no longer exists.");
 }
 
 #[test]
 fn test_delete_shot_removes_shot() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::delete_shot(state(&app), id, 0);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert!(section.shots.is_empty());
+    let line = get_line(state(&app), id).unwrap();
+    assert!(line.shots.is_empty());
 }
 
 #[test]
-fn test_delete_shot_and_split_creates_new_section() {
+fn test_delete_shot_and_split_creates_new_line() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
-    let section_state = get_section(state(&app), id).unwrap();
-    let shot_id = section_state.shots[1].id;
+    let id = create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
+    let line_state = get_line(state(&app), id).unwrap();
+    let shot_id = line_state.shots[1].id;
 
     let result = shot::delete_shot_and_split(
         state(&app),
         id,
         shot_id,
-        "Section A".to_string(),
-        "Section B".to_string(),
+        "Line A".to_string(),
+        "Line B".to_string(),
     );
     assert_success(&result);
-    let new_id = result.section_id.expect("new section id");
+    let new_id = result.line_id.expect("new line id");
 
-    let section_a = get_section(state(&app), id).unwrap();
-    let section_b = get_section(state(&app), new_id).unwrap();
-    assert_eq!(section_a.name, Some("Section A".to_string()));
-    assert_eq!(section_b.name, Some("Section B".to_string()));
-    assert_eq!(section_a.shots.len(), 1);
-    assert_eq!(section_b.shots.len(), 1);
+    let line_a = get_line(state(&app), id).unwrap();
+    let line_b = get_line(state(&app), new_id).unwrap();
+    assert_eq!(line_a.name, Some("Line A".to_string()));
+    assert_eq!(line_b.name, Some("Line B".to_string()));
+    assert_eq!(line_a.shots.len(), 1);
+    assert_eq!(line_b.shots.len(), 1);
 }
 
 #[test]
-fn test_delete_last_shot_and_section_removes_section() {
+fn test_delete_last_shot_and_line_removes_line() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let section_state = get_section(state(&app), id).unwrap();
-    let shot_id = section_state.shots[0].id;
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
+    let line_state = get_line(state(&app), id).unwrap();
+    let shot_id = line_state.shots[0].id;
 
-    let result = shot::delete_last_shot_and_section(state(&app), id, shot_id);
+    let result = shot::delete_last_shot_and_line(state(&app), id, shot_id);
     assert_success(&result);
-    assert!(get_section(state(&app), id).is_none());
+    assert!(get_line(state(&app), id).is_none());
 }
 
 #[test]
@@ -4063,41 +4018,41 @@ fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That shot no longer exists.");
 }
 
 #[test]
 fn test_set_shot_kind_sets_jump() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots[0].kind, ShotKind::Jump);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots[0].kind, ShotKind::Jump);
 }
 
 #[test]
 fn test_set_shot_kind_sets_reference() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Reference);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots[0].kind, ShotKind::Reference);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots[0].kind, ShotKind::Reference);
 }
 
 #[test]
 fn test_set_shot_kind_back_to_normal() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     let _ = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
     let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Normal);
     assert_success(&result);
-    let section = get_section(state(&app), id).unwrap();
-    assert_eq!(section.shots[0].kind, ShotKind::Normal);
+    let line = get_line(state(&app), id).unwrap();
+    assert_eq!(line.shots[0].kind, ShotKind::Normal);
 }
 
 #[test]
@@ -4107,7 +4062,7 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
     // NOT to Normal.
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(1.0)]);
     assert_success(&shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump));
     assert_success(&shot::set_shot_kind(
         state(&app),
@@ -4118,9 +4073,9 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
 
     assert_success(&history::undo_impl(state(&app).inner()));
 
-    let section = get_section(state(&app), id).unwrap();
+    let line = get_line(state(&app), id).unwrap();
     assert_eq!(
-        section.shots[0].kind,
+        line.shots[0].kind,
         ShotKind::Jump,
         "undo must restore the captured previous kind, not toggle to Normal"
     );
@@ -4136,20 +4091,20 @@ fn test_merge_stations_fails_without_project() {
 }
 
 #[test]
-fn test_merge_stations_fails_same_section() {
+fn test_merge_stations_fails_same_line() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(0, 1));
-    assert_failure_contains(&result, "same section");
+    assert_failure_contains(&result, "same line");
 }
 
 #[test]
-fn test_merge_stations_success_between_sections() {
+fn test_merge_stations_success_between_lines() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
     assert_success(&result);
 }
@@ -4158,7 +4113,7 @@ fn test_merge_stations_success_between_sections() {
 fn test_unmerge_stations_noop_success() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 0));
     assert_success(&result);
 }
@@ -4167,8 +4122,8 @@ fn test_unmerge_stations_noop_success() {
 fn test_unmerge_stations_removes_merge() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let _ = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);
@@ -4178,7 +4133,7 @@ fn test_unmerge_stations_removes_merge() {
 fn test_set_zero_datum_success() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let gps = GpsCoordinates {
         latitude: 1.0,
         longitude: 2.0,
@@ -4205,7 +4160,7 @@ fn test_set_zero_datum_fails_invalid_station() {
 fn test_remove_zero_datum_fails_when_not_zero() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::remove_zero_datum(state(&app), StationRef::new(0, 0));
     assert_failure_contains(&result, "not a zero datum");
 }
@@ -4214,7 +4169,7 @@ fn test_remove_zero_datum_fails_when_not_zero() {
 fn test_remove_zero_datum_success() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let gps = GpsCoordinates {
         latitude: 1.0,
         longitude: 2.0,
@@ -4237,7 +4192,7 @@ fn test_move_station_fails_without_project() {
 }
 
 #[test]
-fn test_move_station_fails_invalid_section() {
+fn test_move_station_fails_invalid_line() {
     let app = app_with_state();
     create_project(&app);
     let result = station::move_station(
@@ -4245,14 +4200,14 @@ fn test_move_station_fails_invalid_section() {
         StationRef::new(99, 0),
         Coordinates::new(1.0, 1.0, 0.0),
     );
-    assert_failure_contains(&result, "Section not found");
+    assert_failure_contains(&result, "Line not found");
 }
 
 #[test]
 fn test_move_station_fails_invalid_index() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::move_station(
         state(&app),
         StationRef::new(0, 5),
@@ -4265,7 +4220,7 @@ fn test_move_station_fails_invalid_index() {
 fn test_move_station_success() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let result = station::move_station(
         state(&app),
         StationRef::new(0, 0),
@@ -4390,7 +4345,7 @@ fn test_export_value_histogram_needs_a_project_and_bins_its_stations() {
             .is_err()
     );
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let depth =
         export::export_value_histogram_impl(state(&app).inner(), ExportValueKind::Depth, 16)
             .expect("depth histogram");
@@ -4407,7 +4362,7 @@ fn test_export_value_histogram_needs_a_project_and_bins_its_stations() {
 fn test_export_csv_fails_when_directory_missing() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let missing_dir = dir.path().join("missing");
     let path = missing_dir.join("out.csv");
@@ -4420,7 +4375,7 @@ fn test_export_csv_fails_when_directory_missing() {
 fn test_export_json_fails_when_directory_missing() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let missing_dir = dir.path().join("missing");
     let path = missing_dir.join("out.json");
@@ -4433,7 +4388,7 @@ fn test_export_json_fails_when_directory_missing() {
 fn test_export_image_fails_when_directory_missing() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let missing_dir = dir.path().join("missing");
     let path = missing_dir.join("out.svg");
@@ -4451,7 +4406,7 @@ fn test_export_image_refuses_to_overwrite_open_project_file() {
     // that path before any write, leaving the project file intact.
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let saved_path = save_project_to_temp(&app, &dir);
 
@@ -4482,7 +4437,7 @@ fn test_export_image_refuses_to_overwrite_the_plnx_sibling() {
     // guard exists for, and which the export fuzzer drives.
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let saved_path = save_project_to_temp(&app, &dir);
     let plnx = saved_path.with_extension("plnx");
@@ -4515,7 +4470,7 @@ fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
     // a regression that narrowed THEIR guard would otherwise go unnoticed.
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let saved_path = save_project_to_temp(&app, &dir);
     let plnx = saved_path.with_extension("plnx");
@@ -4542,7 +4497,7 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
     // reject before any write, leaving the DB bytes byte-for-byte intact.
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let saved_path = save_project_to_temp(&app, &dir);
     let before = fs::read(&saved_path).unwrap();
@@ -4569,7 +4524,7 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
 fn test_export_image_rejects_zero_dpi() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.png");
     let mut options = crate::export::ExportImageOptions::default();
@@ -4584,7 +4539,7 @@ fn test_export_image_rejects_zero_dpi() {
 fn test_export_json_overwrites_existing_file() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.json");
     fs::write(&path, "sentinel").unwrap();
@@ -4598,7 +4553,7 @@ fn test_export_json_overwrites_existing_file() {
 fn test_export_csv_success_creates_file() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.csv");
     export::export_csv(state(&app), path.clone()).unwrap();
@@ -4609,7 +4564,7 @@ fn test_export_csv_success_creates_file() {
 fn test_export_json_success_creates_file() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.json");
     export::export_json(state(&app), path.clone()).unwrap();
@@ -4620,7 +4575,7 @@ fn test_export_json_success_creates_file() {
 fn test_export_image_success_creates_file() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    create_line_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.svg");
     let mut options = crate::export::ExportImageOptions::default();
@@ -4646,10 +4601,10 @@ fn test_export_roundtrip_includes_reference_and_comment() {
         comment: Some("note,with comma".to_string()),
         ..Default::default()
     };
-    let section_id = create_section_with_shots(&app, vec![shot]);
+    let line_id = create_line_with_shots(&app, vec![shot]);
     assert_success(&shot::set_shot_kind(
         state(&app),
-        section_id,
+        line_id,
         0,
         ShotKind::Jump,
     ));
@@ -4662,7 +4617,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
     export::export_json(state(&app), json_path.clone()).unwrap();
 
     let csv_contents = fs::read_to_string(&csv_path).unwrap();
-    assert!(csv_contents.contains("section_id,section_name"));
+    assert!(csv_contents.starts_with("line,from,to,from_id,to_id,"));
     assert!(csv_contents.contains("\"note,with comma\""));
     // #27 replaced the boolean `is_reference` column with the 3-way `kind`,
     // so the export now names the kind instead of emitting "true".
@@ -4671,7 +4626,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
 
     let json_contents = fs::read_to_string(&json_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
-    let shot_json = &parsed["sections"][0]["shots"][0];
+    let shot_json = &parsed["lines"][0]["shots"][0];
     assert_eq!(shot_json["kind"], "Jump");
     assert_eq!(shot_json["comment"], "note,with comma");
     assert!(shot_json["lrud"].is_array());
@@ -4808,7 +4763,7 @@ fn test_get_project_warnings_empty_when_no_project() {
 #[test]
 fn test_get_project_warnings_detects_zero_length() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(0.0)]);
+    let project = project_with_line(vec![shot_data(0.0)]);
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
@@ -4817,7 +4772,7 @@ fn test_get_project_warnings_detects_zero_length() {
 #[test]
 fn test_get_project_warnings_detects_negative_length() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(-1.0)]);
+    let project = project_with_line(vec![shot_data(-1.0)]);
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
@@ -4827,7 +4782,7 @@ fn test_get_project_warnings_detects_negative_length() {
 fn test_get_project_warnings_detects_short_shot() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(0.05)]);
+    create_line_with_shots(&app, vec![shot_data(0.05)]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
 }
@@ -4836,7 +4791,7 @@ fn test_get_project_warnings_detects_short_shot() {
 fn test_get_project_warnings_detects_long_shot() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(100.0)]);
+    create_line_with_shots(&app, vec![shot_data(100.0)]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
 }
@@ -4844,7 +4799,7 @@ fn test_get_project_warnings_detects_long_shot() {
 #[test]
 fn test_get_project_warnings_orders_error_before_warning() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(0.0), shot_data(0.05)]);
+    let project = project_with_line(vec![shot_data(0.0), shot_data(0.05)]);
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(!warnings.is_empty());
@@ -4854,7 +4809,7 @@ fn test_get_project_warnings_orders_error_before_warning() {
 #[test]
 fn test_get_project_warnings_includes_shot_index() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let project = project_with_line(vec![shot_data(0.0), shot_data(0.0)]);
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.shot_index == 0));
@@ -4862,28 +4817,28 @@ fn test_get_project_warnings_includes_shot_index() {
 }
 
 #[test]
-fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
+fn test_get_project_warnings_multiple_lines_sorted_by_line_id() {
     let app = app_with_state();
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot_data(0.0)],
         ..Default::default()
     });
-    project.add_section(SectionData {
+    project.add_line(LineData {
         shots: vec![shot_data(0.0)],
         ..Default::default()
     });
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.len() >= 2);
-    assert!(warnings[0].section_id <= warnings[1].section_id);
+    assert!(warnings[0].line_id <= warnings[1].line_id);
 }
 
 #[test]
 fn test_get_project_warnings_detects_large_depth_change() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data_with_depth(5.0, 0.0, 20.0)]);
+    create_line_with_shots(&app, vec![shot_data_with_depth(5.0, 0.0, 20.0)]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }
@@ -4904,7 +4859,7 @@ fn test_unresolve_warning_fails_without_db() {
 
 #[test]
 fn test_resolve_warning_marks_resolved_in_list() {
-    let project = project_with_section(vec![shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -4917,7 +4872,7 @@ fn test_resolve_warning_marks_resolved_in_list() {
 
     validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         Some("ack".to_string()),
@@ -4949,7 +4904,7 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     // Issue #57 (Item 8): with a project open, resolving a warning for a shot
     // that does not exist must be refused (no stable identity to bind), and no
     // position-keyed row may be written.
-    let project = project_with_section(vec![shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -4958,10 +4913,10 @@ fn test_resolve_warning_refuses_when_shot_missing() {
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
 
-    // A shot_id that does not exist in the section.
+    // A shot_id that does not exist in the line.
     let result = validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id + 9999,
         "SHORT_SHOT".to_string(),
         None,
@@ -4979,7 +4934,7 @@ fn test_resolve_warning_refuses_when_shot_missing() {
 
 #[test]
 fn test_unresolve_warning_clears_resolved_flag() {
-    let project = project_with_section(vec![shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -4990,20 +4945,15 @@ fn test_unresolve_warning_clears_resolved_flag() {
 
     validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         None,
     )
     .unwrap();
 
-    validation::unresolve_warning(
-        state(&app),
-        warning.section_id,
-        warning.shot_id,
-        warning.code,
-    )
-    .unwrap();
+    validation::unresolve_warning(state(&app), warning.line_id, warning.shot_id, warning.code)
+        .unwrap();
 
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
@@ -5017,8 +4967,8 @@ fn test_unresolve_warning_clears_resolved_flag() {
 fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     // Issue #57: an ignore is keyed by the shot's stable UUID, so it stays
     // bound to the same shot even after a structural edit renumbers shot_id
-    // (e.g. inserting a shot earlier in the section).
-    let mut project = project_with_section(vec![shot_data(0.1)]);
+    // (e.g. inserting a shot earlier in the line).
+    let mut project = project_with_line(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5032,7 +4982,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 
     validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         None,
@@ -5044,7 +4994,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 
     // Drift the unstable shot_id (mimicking an insert/reload) but keep the UUID.
     let mut renumbered = state(&app).inner().get_project_state().unwrap();
-    renumbered.sections[0].shots[0].id = original_shot_id + 1000;
+    renumbered.lines[0].shots[0].id = original_shot_id + 1000;
     state(&app).inner().set_project_for_tests(renumbered);
 
     let after = validation::get_project_warnings(state(&app));
@@ -5063,10 +5013,10 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 #[test]
 fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     // Issue #57: a pre-v8 (or pre-v6) suppression row carries no shot_uuid and is
-    // keyed by (section_id, shot_id) position. After load the shot has a freshly
+    // keyed by (line_id, shot_id) position. After load the shot has a freshly
     // minted in-memory UUID, but the legacy row must still suppress it - without
     // the position fallback a pre-v6 file's ignores would be silently lost.
-    let mut project = project_with_section(vec![shot_data(0.1)]);
+    let mut project = project_with_line(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5085,7 +5035,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     state(&app)
         .inner()
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: warning.section_id,
+            line_id: warning.line_id,
             shot_id: warning.shot_id,
             warning_code: warning.code.clone(),
             resolved_at: chrono::Utc::now(),
@@ -5111,7 +5061,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     // refactor in compute_project_warnings: a UUID-keyed row suppresses via the
     // UUID branch, and a legacy NULL-uuid row suppresses via the position-fallback
     // branch. Both branches must light up `is_resolved` and only for their shot.
-    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5133,7 +5083,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     state(&app)
         .inner()
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: shot_uuid_hit.section_id,
+            line_id: shot_uuid_hit.line_id,
             shot_id: shot_uuid_hit.shot_id,
             warning_code: "SHORT_SHOT".to_string(),
             resolved_at: chrono::Utc::now(),
@@ -5141,11 +5091,11 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
             shot_uuid: Some(uuid),
         })
         .unwrap();
-    // Position-fallback branch: a legacy NULL-uuid row keyed by (section, shot).
+    // Position-fallback branch: a legacy NULL-uuid row keyed by (line, shot).
     state(&app)
         .inner()
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: shot_pos_hit.section_id,
+            line_id: shot_pos_hit.line_id,
             shot_id: shot_pos_hit.shot_id,
             warning_code: "SHORT_SHOT".to_string(),
             resolved_at: chrono::Utc::now(),
@@ -5178,7 +5128,7 @@ fn test_resolved_warning_survives_save() {
     // Issue #57 regression: resolved (ignored) warnings live in their own table,
     // not the Project model, so the save pipeline (temp file + atomic rename)
     // used to drop them. A save must carry them over so an ignore persists.
-    let mut project = project_with_section(vec![shot_data(0.1)]);
+    let mut project = project_with_line(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5189,7 +5139,7 @@ fn test_resolved_warning_survives_save() {
         .expect("short shot warning");
     validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         None,
@@ -5212,14 +5162,14 @@ fn test_resolved_warning_survives_save() {
 }
 
 #[test]
-fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
-    // Regression (#57 review): a resolved_warnings row for a deleted section is
-    // orphaned in the DB (delete_section is in-memory and never prunes the
+fn test_save_keeps_other_ignores_when_a_line_was_deleted() {
+    // Regression (#57 review): a resolved_warnings row for a deleted line is
+    // orphaned in the DB (delete_line is in-memory and never prunes the
     // table). The save carry-over must skip it instead of letting one FK-violating
     // row abort the whole transaction and silently drop every other ignore.
     let mut project = Project::new("Test Cave".to_string(), None);
     for (name, color) in [("A", "#4ecdc4"), ("B", "#ff6b6b")] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -5233,33 +5183,33 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    // Ignore the SHORT_SHOT warning in each section.
+    // Ignore the SHORT_SHOT warning in each line.
     let zero: Vec<_> = validation::get_project_warnings(state(&app))
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
         .collect();
-    assert_eq!(zero.len(), 2, "expected a short-shot warning per section");
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per line");
     for w in &zero {
-        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
+        validation::resolve_warning(state(&app), w.line_id, w.shot_id, w.code.clone(), None)
             .unwrap();
     }
-    let surviving_section = zero[1].section_id;
+    let surviving_line = zero[1].line_id;
 
-    // Delete the first section - its resolved_warnings row is now orphaned.
-    assert_success(&section::delete_section(state(&app), zero[0].section_id));
+    // Delete the first line - its resolved_warnings row is now orphaned.
+    assert_success(&line::delete_line(state(&app), zero[0].line_id));
 
-    // Save, then confirm the surviving section's ignore is still resolved.
+    // Save, then confirm the surviving line's ignore is still resolved.
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
 
     let after = validation::get_project_warnings(state(&app));
     let surviving = after
         .iter()
-        .find(|w| w.section_id == surviving_section && w.code == "SHORT_SHOT")
-        .expect("surviving section's short-shot warning");
+        .find(|w| w.line_id == surviving_line && w.code == "SHORT_SHOT")
+        .expect("surviving line's short-shot warning");
     assert!(
         surviving.is_resolved,
-        "an ignore in a surviving section must not be lost because another section was deleted"
+        "an ignore in a surviving line must not be lost because another line was deleted"
     );
 }
 
@@ -5269,18 +5219,18 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     // stored at A's old position. A renumber later moves A to a new position and
     // lands a DIFFERENT shot B on A's old position; B then gets ignored at that
     // stale position+code. On save, the carry-over re-derives each by-UUID row's
-    // (section_id, shot_id) from the live shot's CURRENT position, so A's ignore
-    // and B's ignore never collide on UNIQUE(section_id, shot_id, warning_code)
+    // (line_id, shot_id) from the live shot's CURRENT position, so A's ignore
+    // and B's ignore never collide on UNIQUE(line_id, shot_id, warning_code)
     // and both survive. Without the remap, INSERT OR REPLACE would overwrite A.
-    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     // The two loaded shots, each with a stable UUID.
     let loaded = state(&app).inner().get_project_state().unwrap();
-    let shot_a = loaded.sections[0].shots[0].clone();
-    let shot_b = loaded.sections[0].shots[1].clone();
-    let section_id = loaded.sections[0].id;
+    let shot_a = loaded.lines[0].shots[0].clone();
+    let shot_b = loaded.lines[0].shots[1].clone();
+    let line_id = loaded.lines[0].id;
     let uuid_a = shot_a.uuid.clone().expect("shot A uuid");
     let uuid_b = shot_b.uuid.clone().expect("shot B uuid");
     assert_ne!(shot_a.id, shot_b.id);
@@ -5291,7 +5241,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
         state(&app)
             .inner()
             .save_resolved_warning(&crate::persistence::ResolvedWarning {
-                section_id,
+                line_id,
                 shot_id,
                 warning_code: "SHORT_SHOT".to_string(),
                 resolved_at: chrono::Utc::now(),
@@ -5305,7 +5255,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     // A's old position. The carry-over derives live positions from sequence
     // order, so A's stored shot_id (== shot_a.id, now occupied by B) is stale.
     let mut renumbered = loaded.clone();
-    renumbered.sections[0].shots.swap(0, 1);
+    renumbered.lines[0].shots.swap(0, 1);
     state(&app).inner().set_project_for_tests(renumbered);
 
     // Save: rebuilds the .stalx and re-applies the carried-over ignores.
@@ -5333,13 +5283,13 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // Issue #57 (review regression): when a shot is deleted, its by-UUID
     // resolved_warnings row is orphaned (delete_shot is in-memory only and never
     // prunes the table). The surviving successor shifts down into the deleted
-    // shot's old position, so on save it re-derives to that same (section_id,
+    // shot's old position, so on save it re-derives to that same (line_id,
     // shot_id). If the dead row were carried over at its stale id, the two would
-    // collide on UNIQUE(section_id, shot_id, warning_code) and INSERT OR REPLACE
+    // collide on UNIQUE(line_id, shot_id, warning_code) and INSERT OR REPLACE
     // would - depending on insert order - drop the SURVIVOR's still-valid ignore.
     // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
     // ignore always persists and dead rows don't accumulate.
-    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let project = project_with_line(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5350,14 +5300,14 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
         .collect();
     assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
     for w in &zero {
-        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
+        validation::resolve_warning(state(&app), w.line_id, w.shot_id, w.code.clone(), None)
             .unwrap();
     }
 
     let loaded = state(&app).inner().get_project_state().unwrap();
-    let section_id = loaded.sections[0].id;
-    let shot_a_id = loaded.sections[0].shots[0].id;
-    let survivor_uuid = loaded.sections[0].shots[1]
+    let line_id = loaded.lines[0].id;
+    let shot_a_id = loaded.lines[0].shots[0].id;
+    let survivor_uuid = loaded.lines[0].shots[1]
         .uuid
         .clone()
         .expect("survivor uuid");
@@ -5365,7 +5315,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // Delete the first shot. The successor shifts into its index/position, so the
     // orphaned by-UUID row for the deleted shot now shares the survivor's new
     // position. (No datums → not frozen → delete succeeds.)
-    assert_success(&shot::delete_shot(state(&app), section_id, shot_a_id));
+    assert_success(&shot::delete_shot(state(&app), line_id, shot_a_id));
 
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
@@ -5399,7 +5349,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
 fn test_project_validation_drives_warnings_and_persists() {
     // Per-project validation (#57): warnings use the project's own thresholds,
     // and those thresholds survive a save into the .stalx.
-    let mut project = project_with_section(vec![shot_data(1.0)]);
+    let mut project = project_with_line(vec![shot_data(1.0)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5438,7 +5388,7 @@ fn test_update_project_settings_is_undoable() {
     // The settings change must be its own undo entry (#57 review). Otherwise
     // undoing an unrelated edit made earlier would silently revert the
     // name/validation back to whatever the edit's snapshot captured.
-    let mut project = project_with_section(vec![shot_data(1.0)]);
+    let mut project = project_with_line(vec![shot_data(1.0)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5482,7 +5432,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
     assert!(warning_is_ignorable("AZIMUTH_DEVIATION"));
     assert!(warning_is_ignorable("INCLINATION_DEPTH_MISMATCH"));
 
-    let project = project_with_section(vec![shot_data(0.0)]); // ZERO_LENGTH (error)
+    let project = project_with_line(vec![shot_data(0.0)]); // ZERO_LENGTH (error)
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -5492,7 +5442,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
         .expect("zero length warning");
     validation::resolve_warning(
         state(&app),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         None,
@@ -5518,28 +5468,28 @@ fn test_resolve_warning_refuses_error_severity_codes() {
 }
 
 #[test]
-fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
+fn test_cross_line_duplicate_uuid_ignore_does_not_cross_suppress() {
     // A file saved before shot UUIDs were project-wide unique can hold one id in
-    // two sections, and an undo of an integrity Repair can put such a state back
+    // two lines, and an undo of an integrity Repair can put such a state back
     // in memory. Ignoring a warning on one shot must NOT suppress the same code
-    // on the other section's shot (issue #57 / Codex) - suppression is keyed by
-    // (section_id, uuid, code), not the UUID alone.
+    // on the other line's shot (issue #57 / Codex) - suppression is keyed by
+    // (line_id, uuid, code), not the UUID alone.
     let mut project = Project::new("Dup UUID".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(0.1)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(0.1)],
             ..Default::default()
         })
         .id;
-    // Force the same (cross-section) UUID on both shots - a legal duplicate.
-    for section in &mut project.sections {
-        section.shots[0].uuid = Some("shared-uuid".to_string());
+    // Force the same (cross-line) UUID on both shots - a legal duplicate.
+    for line in &mut project.lines {
+        line.shots[0].uuid = Some("shared-uuid".to_string());
     }
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
@@ -5547,15 +5497,15 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     let warnings = validation::get_project_warnings(state(&app));
     let a_warning = warnings
         .iter()
-        .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
-        .expect("section A short-shot warning");
+        .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
+        .expect("line A short-shot warning");
     assert!(warnings
         .iter()
-        .any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
+        .any(|w| w.line_id == b && w.code == "SHORT_SHOT"));
 
     validation::resolve_warning(
         state(&app),
-        a_warning.section_id,
+        a_warning.line_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
         None,
@@ -5566,31 +5516,31 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     assert!(
         after
             .iter()
-            .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+            .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
             .unwrap()
             .is_resolved,
-        "section A's ignore is recorded"
+        "line A's ignore is recorded"
     );
     assert!(
         !after
             .iter()
-            .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+            .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
             .unwrap()
             .is_resolved,
-        "section B's shot shares the UUID but a different section - it must NOT be suppressed"
+        "line B's shot shares the UUID but a different line - it must NOT be suppressed"
     );
 
     // Now ignore B too, then un-ignore A: B's suppression must SURVIVE, because the
-    // delete is also keyed by (section_id, uuid) - un-ignoring A's shared-UUID shot
+    // delete is also keyed by (line_id, uuid) - un-ignoring A's shared-UUID shot
     // must not clear B's row (issue #57 / Codex round 7).
     let b_warning = after
         .iter()
-        .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+        .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
         .unwrap()
         .clone();
     validation::resolve_warning(
         state(&app),
-        b_warning.section_id,
+        b_warning.line_id,
         b_warning.shot_id,
         "SHORT_SHOT".to_string(),
         None,
@@ -5598,7 +5548,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     .unwrap();
     validation::unresolve_warning(
         state(&app),
-        a_warning.section_id,
+        a_warning.line_id,
         a_warning.shot_id,
         "SHORT_SHOT".to_string(),
     )
@@ -5607,18 +5557,18 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     assert!(
         !cleared
             .iter()
-            .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+            .find(|w| w.line_id == a && w.code == "SHORT_SHOT")
             .unwrap()
             .is_resolved,
-        "section A was un-ignored"
+        "line A was un-ignored"
     );
     assert!(
         cleared
             .iter()
-            .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+            .find(|w| w.line_id == b && w.code == "SHORT_SHOT")
             .unwrap()
             .is_resolved,
-        "section B's ignore (same UUID, different section) must survive A's un-ignore"
+        "line B's ignore (same UUID, different line) must survive A's un-ignore"
     );
 }
 
@@ -5638,7 +5588,7 @@ fn test_datum_gps_gap_warning_is_ignorable() {
     };
     let mut project = Project::new("TwoEntrances".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![north.clone(); 5],
             ..Default::default()
         })
@@ -5665,7 +5615,7 @@ fn test_datum_gps_gap_warning_is_ignorable() {
     assert_eq!(gap.datum_station_index, Some(5));
     assert!(!gap.is_resolved);
 
-    validation::resolve_warning(state(&app), gap.section_id, gap.shot_id, gap.code, None).unwrap();
+    validation::resolve_warning(state(&app), gap.line_id, gap.shot_id, gap.code, None).unwrap();
     let after = validation::get_project_warnings(state(&app));
     assert!(
         after
@@ -5677,7 +5627,7 @@ fn test_datum_gps_gap_warning_is_ignorable() {
     );
 }
 
-/// The issue #737 survey (a two-section loop closed B:3-A:2) plus a closure
+/// The issue #737 survey (a two-line loop closed B:3-A:2) plus a closure
 /// across the one shot A:1-A:2, planted as a file written before the
 /// creation-time refusal can carry it. Returns `(project, a, closure id)`.
 fn project_with_closure_across_one_shot() -> (Project, u32, u64) {
@@ -5689,13 +5639,13 @@ fn project_with_closure_across_one_shot() -> (Project, u32, u64) {
     };
     let mut project = Project::new("AcrossOneShot".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![azimuth(90.0, 10.0), azimuth(90.0, 10.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 azimuth(0.0, 10.0),
                 azimuth(90.0, 20.5),
@@ -5746,13 +5696,13 @@ fn test_closure_across_one_shot_warning_is_never_suppressible() {
         .find(|w| w.code == crate::models::CLOSURE_ACROSS_ONE_SHOT)
         .expect("a closure across one shot must raise a warning");
     assert_eq!(warning.closure_id, Some(id));
-    assert_eq!((warning.section_id, warning.shot_index), (a, 1));
+    assert_eq!((warning.line_id, warning.shot_index), (a, 1));
     assert!(!warning.is_resolved);
 
     // The Ignore command quietly declines to persist anything for an error.
     validation::resolve_warning_impl(
         state(&app).inner(),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code.clone(),
         None,
@@ -5762,7 +5712,7 @@ fn test_closure_across_one_shot_warning_is_never_suppressible() {
     state(&app)
         .inner()
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
-            section_id: warning.section_id,
+            line_id: warning.line_id,
             shot_id: warning.shot_id,
             warning_code: warning.code.clone(),
             resolved_at: chrono::Utc::now(),
@@ -5798,13 +5748,13 @@ fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
     // on which view was last open - and an Ignore on its shot is honoured.
     let mut project = Project::new("FailedSolve".to_string(), None);
     let x = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
         .id;
     let y = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
@@ -5847,7 +5797,7 @@ fn test_closure_adjustment_failure_warning_is_advisory_and_ignorable() {
     // Ignore persists and is honoured.
     validation::resolve_warning_impl(
         state(&app).inner(),
-        warning.section_id,
+        warning.line_id,
         warning.shot_id,
         warning.code,
         None,
@@ -5867,13 +5817,13 @@ fn test_get_adjustment_report_command() {
     // itself still answers a bare station list.
     let (mut project, a, id) = project_with_closure_across_one_shot();
     let x = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
         .id;
     let y = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
@@ -5904,7 +5854,7 @@ fn test_get_adjustment_report_command() {
         tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
     assert_eq!(report.skipped_closures.len(), 1);
     assert_eq!(report.skipped_closures[0].closure_id, id);
-    assert_eq!(report.skipped_closures[0].shot_section_id, a);
+    assert_eq!(report.skipped_closures[0].shot_line_id, a);
     assert_eq!(report.skipped_closures[0].shot_index, 1);
     assert!(report.failures.is_empty(), "no solve yet");
 
@@ -5915,7 +5865,7 @@ fn test_get_adjustment_report_command() {
     let report =
         tauri::async_runtime::block_on(project::get_adjustment_report(app.handle().clone()));
     assert_eq!(report.failures.len(), 1, "{report:?}");
-    assert!(report.failures[0].section_ids.contains(&x));
+    assert!(report.failures[0].line_ids.contains(&x));
     assert!(report.failures[0]
         .reason
         .starts_with("loop closures tie two zero datums"));
@@ -5938,7 +5888,7 @@ fn test_get_project_warnings_detects_invalid_azimuth() {
     create_project(&app);
     let mut shot = shot_data(1.0);
     shot.azimuth_in = -1.0;
-    create_section_with_shots(&app, vec![shot]);
+    create_line_with_shots(&app, vec![shot]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 }
@@ -5949,7 +5899,7 @@ fn test_get_project_warnings_detects_negative_lrud() {
     create_project(&app);
     let mut shot = shot_data(1.0);
     shot.left = Some(-1.0);
-    create_section_with_shots(&app, vec![shot]);
+    create_line_with_shots(&app, vec![shot]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 }
@@ -5961,7 +5911,7 @@ fn test_get_project_warnings_detects_azimuth_deviation() {
     let mut shot = shot_data(5.0);
     shot.azimuth_in = 0.0;
     shot.azimuth_out = 45.0; // 45° difference exceeds 10° threshold
-    create_section_with_shots(&app, vec![shot]);
+    create_line_with_shots(&app, vec![shot]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 }
@@ -5969,11 +5919,11 @@ fn test_get_project_warnings_detects_azimuth_deviation() {
 // === Misc command coverage ===
 
 #[test]
-fn test_create_section_with_date_roundtrip() {
+fn test_create_line_with_date_roundtrip() {
     let app = app_with_state();
     create_project(&app);
     let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let result = section::create_section(
+    let result = line::create_line(
         state(&app),
         Some("Dated".to_string()),
         None,
@@ -5981,17 +5931,18 @@ fn test_create_section_with_date_roundtrip() {
         "#4ecdc4".to_string(),
         Some(SurveyDirection::Out),
         vec![shot_data(1.0)],
+        None,
     );
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
-    assert_eq!(section.first_survey_date(), Some(date));
-    assert_eq!(section.direction, SurveyDirection::Out);
+    let line = get_line(state(&app), result.line_id.unwrap()).unwrap();
+    assert_eq!(line.first_survey_date(), Some(date));
+    assert_eq!(line.direction, SurveyDirection::Out);
 }
 
 #[test]
-fn test_create_section_and_merge_fails_without_project() {
+fn test_create_line_and_merge_fails_without_project() {
     let app = app_with_state();
-    let result = section::create_section_and_merge(
+    let result = line::create_line_and_merge(
         state(&app),
         Some("Imported".to_string()),
         None,
@@ -6002,17 +5953,18 @@ fn test_create_section_and_merge_fails_without_project() {
         0,
         StationRef::new(0, 0),
         ClosureStrategy::Batch,
+        None,
     );
     assert_failure_contains(&result, "No project open");
 }
 
 #[test]
-fn test_create_section_and_merge_success() {
+fn test_create_line_and_merge_success() {
     let app = app_with_state();
     create_project(&app);
-    let existing_section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let existing_line_id = create_line_with_shots(&app, vec![shot_data(1.0)]);
 
-    let result = section::create_section_and_merge(
+    let result = line::create_line_and_merge(
         state(&app),
         Some("Imported".to_string()),
         None,
@@ -6021,20 +5973,21 @@ fn test_create_section_and_merge_success() {
         Some(SurveyDirection::In),
         vec![shot_data(2.0)],
         0,
-        StationRef::new(existing_section_id, 0),
+        StationRef::new(existing_line_id, 0),
         ClosureStrategy::Batch,
+        None,
     );
 
     assert_success(&result);
-    let new_section_id = result.section_id.expect("new section id");
+    let new_line_id = result.line_id.expect("new line id");
     let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.sections.len(), 2);
+    assert_eq!(project_state.project.lines.len(), 2);
     assert_eq!(project_state.project.station_merges.len(), 1);
 
     let merge = &project_state.project.station_merges[0];
-    let merged_sections = [merge.station_a.section_id, merge.station_b.section_id];
-    assert!(merged_sections.contains(&existing_section_id));
-    assert!(merged_sections.contains(&new_section_id));
+    let merged_lines = [merge.station_a.line_id, merge.station_b.line_id];
+    assert!(merged_lines.contains(&existing_line_id));
+    assert!(merged_lines.contains(&new_line_id));
 }
 
 #[test]
@@ -6057,7 +6010,7 @@ fn test_merge_projects_requires_sources() {
 #[test]
 fn test_merge_projects_requires_two_sources() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(1.0)]);
+    let project = project_with_line(vec![shot_data(1.0)]);
     let (db, _database) = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
@@ -6076,7 +6029,7 @@ fn test_merge_projects_requires_two_sources() {
 #[test]
 fn test_merge_projects_fails_when_output_exists() {
     let app = app_with_state();
-    let project = project_with_section(vec![shot_data(1.0)]);
+    let project = project_with_line(vec![shot_data(1.0)]);
     let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
     let (db_b, _database_b) = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
@@ -6097,8 +6050,8 @@ fn test_merge_projects_fails_when_output_exists() {
 #[test]
 fn test_merge_projects_success_creates_output() {
     let app = app_with_state();
-    let project_a = project_with_section(vec![shot_data(1.0)]);
-    let project_b = project_with_section(vec![shot_data(2.0)]);
+    let project_a = project_with_line(vec![shot_data(1.0)]);
+    let project_b = project_with_line(vec![shot_data(2.0)]);
     let (db_a, _database_a) = TestDb::with_project(&project_a).unwrap();
     let (db_b, _database_b) = TestDb::with_project(&project_b).unwrap();
     let output_dir = TempDir::new().unwrap();
@@ -6167,33 +6120,33 @@ fn test_reload_config_syncs_undo_history_limit() {
 #[test]
 fn test_get_segment_geometry_no_project_errors() {
     let app = app_with_state();
-    let result = section::get_segment_geometry_impl(state(&app).inner(), 0);
+    let result = line::get_segment_geometry_impl(state(&app).inner(), 0);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("No project open"));
 }
 
 #[test]
-fn test_get_segment_geometry_invalid_section_errors() {
+fn test_get_segment_geometry_invalid_line_errors() {
     let app = app_with_state();
     create_project(&app);
-    let result = section::get_segment_geometry_impl(state(&app).inner(), 999);
+    let result = line::get_segment_geometry_impl(state(&app).inner(), 999);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().contains("That line no longer exists."));
 }
 
 #[test]
-fn test_get_segment_geometry_single_section() {
+fn test_get_segment_geometry_single_line() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(&app, vec![shot_data(5.0), shot_data(3.0)]);
+    let id = create_line_with_shots(&app, vec![shot_data(5.0), shot_data(3.0)]);
 
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id).unwrap();
-    assert_eq!(geom.sections.len(), 1);
-    assert_eq!(geom.sections[0].section_id, id);
+    let geom = line::get_segment_geometry_impl(state(&app).inner(), id).unwrap();
+    assert_eq!(geom.lines.len(), 1);
+    assert_eq!(geom.lines[0].line_id, id);
     // 2 shots → 2 shot lines (station 0→1, station 1→2)
-    assert_eq!(geom.sections[0].shot_lines.len(), 2);
+    assert_eq!(geom.lines[0].shot_lines.len(), 2);
     // First station is the anchor, so first shot line starts at (0, 0)
-    let first_line = &geom.sections[0].shot_lines[0];
+    let first_line = &geom.lines[0].shot_lines[0];
     assert!(
         (first_line[0][0]).abs() < 1e-6,
         "First station X should be 0 (anchor)"
@@ -6205,76 +6158,72 @@ fn test_get_segment_geometry_single_section() {
 }
 
 #[test]
-fn test_get_segment_geometry_connected_sections() {
+fn test_get_segment_geometry_connected_lines() {
     let app = app_with_state();
     create_project(&app);
-    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
-    let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+    let id_a = create_line_with_shots(&app, vec![shot_data(5.0)]);
+    let id_b = create_line_with_shots(&app, vec![shot_data(3.0)]);
 
-    // Merge section A station 1 with section B station 0
+    // Merge line A station 1 with line B station 0
     assert_success(&station::merge_stations(
         state(&app),
         StationRef::new(id_a, 1),
         StationRef::new(id_b, 0),
     ));
 
-    // Query segment from section A
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    // Query segment from line A
+    let geom = line::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
     assert_eq!(
-        geom.sections.len(),
+        geom.lines.len(),
         2,
-        "Both connected sections should be in the segment"
+        "Both connected lines should be in the segment"
     );
 
-    // Both sections should have shot lines
-    let section_ids: Vec<u32> = geom.sections.iter().map(|s| s.section_id).collect();
-    assert!(section_ids.contains(&id_a));
-    assert!(section_ids.contains(&id_b));
+    // Both lines should have shot lines
+    let line_ids: Vec<u32> = geom.lines.iter().map(|s| s.line_id).collect();
+    assert!(line_ids.contains(&id_a));
+    assert!(line_ids.contains(&id_b));
 
-    // Section A should have 1 shot line, section B should have 1 shot line
-    for s in &geom.sections {
-        assert_eq!(
-            s.shot_lines.len(),
-            1,
-            "Each section has 1 shot → 1 shot line"
-        );
+    // Line A should have 1 shot line, line B should have 1 shot line
+    for s in &geom.lines {
+        assert_eq!(s.shot_lines.len(), 1, "Each line has 1 shot → 1 shot line");
     }
 
-    // Coordinates should be relative to section A station 0 (the anchor)
-    let sec_a = geom.sections.iter().find(|s| s.section_id == id_a).unwrap();
+    // Coordinates should be relative to line A station 0 (the anchor)
+    let sec_a = geom.lines.iter().find(|s| s.line_id == id_a).unwrap();
     assert!(
         (sec_a.shot_lines[0][0][0]).abs() < 1e-6,
-        "Section A starts at anchor origin"
+        "Line A starts at anchor origin"
     );
     assert!(
         (sec_a.shot_lines[0][0][1]).abs() < 1e-6,
-        "Section A starts at anchor origin"
+        "Line A starts at anchor origin"
     );
 }
 
 #[test]
-fn test_get_segment_geometry_unconnected_section_excluded() {
+fn test_get_segment_geometry_unconnected_line_excluded() {
     let app = app_with_state();
     create_project(&app);
-    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
-    let _id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+    let id_a = create_line_with_shots(&app, vec![shot_data(5.0)]);
+    let _id_b = create_line_with_shots(&app, vec![shot_data(3.0)]);
 
-    // No merge - sections are disconnected
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    // No merge - lines are disconnected
+    let geom = line::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
     assert_eq!(
-        geom.sections.len(),
+        geom.lines.len(),
         1,
-        "Only the queried section should be returned"
+        "Only the queried line should be returned"
     );
-    assert_eq!(geom.sections[0].section_id, id_a);
+    assert_eq!(geom.lines[0].line_id, id_a);
 }
 
 #[test]
 fn test_get_segment_geometry_queried_from_either_end() {
     let app = app_with_state();
     create_project(&app);
-    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
-    let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+    let id_a = create_line_with_shots(&app, vec![shot_data(5.0)]);
+    let id_b = create_line_with_shots(&app, vec![shot_data(3.0)]);
 
     assert_success(&station::merge_stations(
         state(&app),
@@ -6282,19 +6231,19 @@ fn test_get_segment_geometry_queried_from_either_end() {
         StationRef::new(id_b, 0),
     ));
 
-    // Query from section B - should still include both sections
-    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_b).unwrap();
-    assert_eq!(geom.sections.len(), 2);
+    // Query from line B - should still include both lines
+    let geom = line::get_segment_geometry_impl(state(&app).inner(), id_b).unwrap();
+    assert_eq!(geom.lines.len(), 2);
 
-    // Coordinates should now be relative to section B station 0
-    let sec_b = geom.sections.iter().find(|s| s.section_id == id_b).unwrap();
+    // Coordinates should now be relative to line B station 0
+    let sec_b = geom.lines.iter().find(|s| s.line_id == id_b).unwrap();
     assert!(
         (sec_b.shot_lines[0][0][0]).abs() < 1e-6,
-        "Section B starts at anchor origin"
+        "Line B starts at anchor origin"
     );
     assert!(
         (sec_b.shot_lines[0][0][1]).abs() < 1e-6,
-        "Section B starts at anchor origin"
+        "Line B starts at anchor origin"
     );
 }
 
@@ -6302,7 +6251,7 @@ fn test_get_segment_geometry_queried_from_either_end() {
 
 #[test]
 fn test_get_raw_table_names_lists_project_tables() {
-    let project = project_with_section(vec![shot_data(5.0)]);
+    let project = project_with_line(vec![shot_data(5.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -6318,7 +6267,7 @@ fn test_get_raw_table_names_lists_project_tables() {
 
 #[test]
 fn test_get_raw_table_row_shape_and_total() {
-    let project = project_with_section(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
+    let project = project_with_line(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -6334,7 +6283,7 @@ fn test_get_raw_table_row_shape_and_total() {
 
 #[test]
 fn test_get_raw_table_offset_paging() {
-    let project = project_with_section(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
+    let project = project_with_line(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -6352,7 +6301,7 @@ fn test_get_raw_table_offset_paging() {
 
 #[test]
 fn test_get_raw_table_rejects_injection_names() {
-    let project = project_with_section(vec![shot_data(5.0)]);
+    let project = project_with_line(vec![shot_data(5.0)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 

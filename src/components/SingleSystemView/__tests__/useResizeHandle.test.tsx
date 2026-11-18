@@ -91,7 +91,7 @@ describe('useResizeHandle - whole-pixel rounding', () => {
 
 /**
  * If the handle element unmounts while a drag is active (view/project switch, a
- * section-focus collapse that hides the panel), no pointerup reaches the captured
+ * line-focus collapse that hides the panel), no pointerup reaches the captured
  * node - the in-progress size must still be persisted exactly once via the
  * unmount cleanup, and a completed drag must NOT persist a second time on unmount.
  */

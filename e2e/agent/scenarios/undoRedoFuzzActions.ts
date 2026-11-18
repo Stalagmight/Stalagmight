@@ -4,8 +4,8 @@
  * targets ids read back out of the live project, so a (seed, iterations) pair
  * replays exactly.
  *
- * Arg shapes mirror the generated IPC types in `src/types/ipc/` (SectionData,
- * ShotData, ShotUpdates, SectionUpdates, StationRef, GpsCoordinates,
+ * Arg shapes mirror the generated IPC types in `src/types/ipc/` (LineData,
+ * ShotData, ShotUpdates, LineUpdates, StationRef, GpsCoordinates,
  * Coordinates, ClosureStrategy) and the `projectStore` action signatures. They
  * are restated structurally rather than imported: nothing else under `e2e/`
  * reaches into `src/`, and `tsconfig.agent.json` deliberately roots only the
@@ -76,12 +76,12 @@ const P_BOUNDARY = 0.15;
  * Largest magnitude a boundary value that FEEDS COORDINATE ARITHMETIC may take.
  *
  * Not arbitrary - measured. A station move of 1e6 m puts coordinates in a regime
- * where re-deriving `section_offsets` loses about 4.6e-12 RELATIVE precision
+ * where re-deriving `line_offsets` loses about 4.6e-12 RELATIVE precision
  * (roughly 2e4 ULPs through the summation and trig chain), which is 4.6e-6 m
  * ABSOLUTE. That is 3 orders above the oracle's 1e-9 floor, so it reads as a
  * roundtrip failure when it is really catastrophic cancellation in the injected
  * input. The scaling was verified at the same step of the same seed
- * (fractal seed 12 x40, `undo` at depth 3, `project.section_offsets.8[0]`):
+ * (fractal seed 12 x40, `undo` at depth 3, `project.line_offsets.8[0]`):
  *
  *     injected z    drift
  *     1e6           4.56e-6 m
@@ -103,7 +103,7 @@ const GEOMETRY_EXTREME = 1e3;
 
 /** Mirrors `src/types/ipc/StationRef.ts` - the arg shape the store actions take. */
 export interface StationRef {
-  section_id: number;
+  line_id: number;
   station_index: number;
 }
 
@@ -122,8 +122,8 @@ import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import type { GeneratedFileSpec } from '../lib/surveyFileSpecs';
 export type { TargetingDigest };
 
-/** `[sectionId, [shotId, ...]]`, one entry of the digest's section list. */
-type DigestSection = [number, number[]];
+/** `[lineId, [shotId, ...]]`, one entry of the digest's line list. */
+type DigestLine = [number, number[]];
 
 /** One drawn mutation: a `projectStore` action plus its args. */
 export interface FuzzAction {
@@ -189,7 +189,7 @@ export function roundedFloat(ctx: ScenarioContext, min: number, max: number, dec
 /**
  * Values that have historically been where the bugs are: exact zero, negatives,
  * very large and very small magnitudes. Bug 3 was literally "append the first
- * shot into an EMPTY section", so the shapes at the edges of a range get
+ * shot into an EMPTY line", so the shapes at the edges of a range get
  * deliberate weight rather than being left to a uniform draw to stumble on.
  *
  * In v1 this is `roundedFloat` and consumes exactly one draw, so the legacy
@@ -235,39 +235,39 @@ function pickDistinct<T>(ctx: ScenarioContext, items: readonly T[], count: numbe
   return out;
 }
 
-/** Sections by ascending id, so the draw does not depend on Vec order. */
-export function sortedSections(state: TargetingDigest): DigestSection[] {
+/** Lines by ascending id, so the draw does not depend on Vec order. */
+export function sortedLines(state: TargetingDigest): DigestLine[] {
   return [...state.s].sort((a, b) => a[0] - b[0]);
 }
 
-export function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
-  const sections = sortedSections(state);
-  return sections.length > 0 ? ctx.pick(sections) : null;
+export function pickLine(ctx: ScenarioContext, state: TargetingDigest): DigestLine | null {
+  const lines = sortedLines(state);
+  return lines.length > 0 ? ctx.pick(lines) : null;
 }
 
 /**
- * Like `pickSection`, but biased toward EMPTY and single-shot sections. Bug 3 is
- * "append the first shot into an empty section", and a uniform pick over 30+
- * sections reaches that shape rarely. v2 only.
+ * Like `pickLine`, but biased toward EMPTY and single-shot lines. Bug 3 is
+ * "append the first shot into an empty line", and a uniform pick over 30+
+ * lines reaches that shape rarely. v2 only.
  */
-function pickSmallSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
-  if (!streamV2()) return pickSection(ctx, state);
-  const sections = sortedSections(state);
-  if (sections.length === 0) return null;
-  const small = sections.filter((section) => section[1].length <= 1);
+function pickSmallLine(ctx: ScenarioContext, state: TargetingDigest): DigestLine | null {
+  if (!streamV2()) return pickLine(ctx, state);
+  const lines = sortedLines(state);
+  if (lines.length === 0) return null;
+  const small = lines.filter((line) => line[1].length <= 1);
   if (small.length > 0 && ctx.rng() < 0.5) return ctx.pick(small);
-  return ctx.pick(sections);
+  return ctx.pick(lines);
 }
 
 export function pickShot(
   ctx: ScenarioContext,
   state: TargetingDigest,
-): { sectionId: number; shotId: number } | null {
-  const populated = sortedSections(state).filter((section) => section[1].length > 0);
+): { lineId: number; shotId: number } | null {
+  const populated = sortedLines(state).filter((line) => line[1].length > 0);
   if (populated.length === 0) return null;
-  const section = ctx.pick(populated);
-  const shotIds = [...section[1]].sort((a, b) => a - b);
-  return { sectionId: section[0], shotId: ctx.pick(shotIds) };
+  const line = ctx.pick(populated);
+  const shotIds = [...line[1]].sort((a, b) => a - b);
+  return { lineId: line[0], shotId: ctx.pick(shotIds) };
 }
 
 export function sortedStationRefs(state: TargetingDigest): [number, number][] {
@@ -280,32 +280,32 @@ export function pickStationRef(ctx: ScenarioContext, state: TargetingDigest): [n
 }
 
 /**
- * Two stations in DIFFERENT sections. Merging or closing a loop within one
- * section is rejected up front (`command_station.rs`), so cross-section pairs
+ * Two stations in DIFFERENT lines. Merging or closing a loop within one
+ * line is rejected up front (`command_station.rs`), so cross-line pairs
  * are the ones that can actually exercise the undo path.
  */
-function pickCrossSectionPair(
+function pickCrossLinePair(
   ctx: ScenarioContext,
   state: TargetingDigest,
 ): [[number, number], [number, number]] | null {
-  const bySection = new Map<number, [number, number][]>();
+  const byLine = new Map<number, [number, number][]>();
   for (const ref of sortedStationRefs(state)) {
-    const bucket = bySection.get(ref[0]);
+    const bucket = byLine.get(ref[0]);
     if (bucket) bucket.push(ref);
-    else bySection.set(ref[0], [ref]);
+    else byLine.set(ref[0], [ref]);
   }
-  const sectionIds = [...bySection.keys()].sort((a, b) => a - b);
-  if (sectionIds.length < 2) return null;
-  const [idA, idB] = pickDistinct(ctx, sectionIds, 2);
+  const lineIds = [...byLine.keys()].sort((a, b) => a - b);
+  if (lineIds.length < 2) return null;
+  const [idA, idB] = pickDistinct(ctx, lineIds, 2);
   if (idA === undefined || idB === undefined) return null;
-  const a = ctx.pick(bySection.get(idA) ?? []);
-  const b = ctx.pick(bySection.get(idB) ?? []);
+  const a = ctx.pick(byLine.get(idA) ?? []);
+  const b = ctx.pick(byLine.get(idB) ?? []);
   return a && b ? [a, b] : null;
 }
 
 /** Digest tuple -> the `StationRef` shape the store actions and IPC expect. */
 export function toRef(ref: [number, number]): StationRef {
-  return { section_id: ref[0], station_index: ref[1] };
+  return { line_id: ref[0], station_index: ref[1] };
 }
 
 export function refLabel(ref: [number, number]): string {
@@ -336,8 +336,8 @@ export function randomShotData(ctx: ScenarioContext): Record<string, unknown> {
   };
 }
 
-/** A valid `SectionData` with 1-4 shots. */
-export function randomSectionData(ctx: ScenarioContext): Record<string, unknown> {
+/** A valid `LineData` with 1-4 shots. */
+export function randomLineData(ctx: ScenarioContext): Record<string, unknown> {
   const shotCount = ctx.randInt(1, 4);
   const shots: Record<string, unknown>[] = [];
   for (let i = 0; i < shotCount; i++) shots.push(randomShotData(ctx));
@@ -377,7 +377,7 @@ const SHOT_PATCH_FIELDS: readonly PatchField[] = [
   { key: 'temperature', nullable: true, gen: (c) => roundedFloat(c, 4, 30, 1) },
 ];
 
-const SECTION_PATCH_FIELDS: readonly PatchField[] = [
+const LINE_PATCH_FIELDS: readonly PatchField[] = [
   { key: 'name', nullable: true, gen: (c) => biasedText(c, `fuzz-renamed-${c.randInt(0, 9999)}`) },
   { key: 'surveyor', nullable: true, gen: (c) => biasedText(c, `fuzz-surveyor-${c.randInt(1, 9)}`) },
   {
@@ -423,21 +423,21 @@ function randomOffset(ctx: ScenarioContext): Record<string, number> {
 }
 
 
-/** A contiguous shot range within one section, for the range-delete family. */
+/** A contiguous shot range within one line, for the range-delete family. */
 function pickShotRange(
   ctx: ScenarioContext,
   state: TargetingDigest,
-): { sectionId: number; startShotId: number; endShotId: number } | null {
-  const populated = sortedSections(state).filter((section) => section[1].length >= 2);
+): { lineId: number; startShotId: number; endShotId: number } | null {
+  const populated = sortedLines(state).filter((line) => line[1].length >= 2);
   if (populated.length === 0) return null;
-  const section = ctx.pick(populated);
-  const shotIds = [...section[1]].sort((a, b) => a - b);
+  const line = ctx.pick(populated);
+  const shotIds = [...line[1]].sort((a, b) => a - b);
   const first = ctx.randInt(0, shotIds.length - 1);
   const second = ctx.randInt(0, shotIds.length - 1);
   const lo = Math.min(first, second);
   const hi = Math.max(first, second);
   return {
-    sectionId: section[0],
+    lineId: line[0],
     startShotId: shotIds[lo] as number,
     endShotId: shotIds[hi] as number,
   };
@@ -456,8 +456,8 @@ function pickCommentHolder(
   const target = pickShot(ctx, state);
   if (!target) return null;
   return {
-    holder: { type: 'shot', section_id: target.sectionId, shot_id: target.shotId },
-    label: `sh:${target.sectionId}/${target.shotId}`,
+    holder: { type: 'shot', line_id: target.lineId, shot_id: target.shotId },
+    label: `sh:${target.lineId}/${target.shotId}`,
   };
 }
 
@@ -487,9 +487,9 @@ export function buildBatch(
   }
   if (commands.length === 0) return null;
   if (chance(ctx, P_BATCH_POISON)) {
-    // A move_section against a section id that cannot exist: the sub-command
+    // A move_line against a line id that cannot exist: the sub-command
     // fails, so execute_batch must roll the whole batch back.
-    commands.push({ type: 'move_section', section_id: 999999, offset: { x: 1, y: 1, z: 1 } });
+    commands.push({ type: 'move_line', line_id: 999999, offset: { x: 1, y: 1, z: 1 } });
     parts.push('POISON');
   }
   return { commands, label: parts.join('+') };
@@ -503,9 +503,9 @@ function buildBatchCommand(
   const kind = ctx.pick([
     'update_shot',
     'move_station',
-    'move_section',
-    'reverse_section',
-    'create_section',
+    'move_line',
+    'reverse_line',
+    'create_line',
     'merge_stations',
   ] as const);
   if (kind === 'update_shot') {
@@ -513,7 +513,7 @@ function buildBatchCommand(
     if (!target) return null;
     const { patch } = buildPatch(ctx, SHOT_PATCH_FIELDS, ctx.randInt(1, 3));
     return {
-      command: { type: 'update_shot', section_id: target.sectionId, shot_id: target.shotId, updates: patch },
+      command: { type: 'update_shot', line_id: target.lineId, shot_id: target.shotId, updates: patch },
       label: 'updShot',
     };
   }
@@ -522,31 +522,31 @@ function buildBatchCommand(
     if (!ref) return null;
     return { command: { type: 'move_station', station_ref: toRef(ref), offset: randomOffset(ctx) }, label: 'mvSt' };
   }
-  if (kind === 'move_section') {
-    const section = pickSection(ctx, state);
-    if (!section) return null;
-    return { command: { type: 'move_section', section_id: section[0], offset: randomOffset(ctx) }, label: 'mvSec' };
+  if (kind === 'move_line') {
+    const line = pickLine(ctx, state);
+    if (!line) return null;
+    return { command: { type: 'move_line', line_id: line[0], offset: randomOffset(ctx) }, label: 'mvSec' };
   }
-  if (kind === 'reverse_section') {
-    const section = pickSection(ctx, state);
-    if (!section) return null;
+  if (kind === 'reverse_line') {
+    const line = pickLine(ctx, state);
+    if (!line) return null;
     return {
-      command: { type: 'reverse_section', section_id: section[0], swap_left_right: chance(ctx, 0.5) },
+      command: { type: 'reverse_line', line_id: line[0], swap_left_right: chance(ctx, 0.5) },
       label: 'revSec',
     };
   }
   if (kind === 'merge_stations') {
-    const pair = pickCrossSectionPair(ctx, state);
+    const pair = pickCrossLinePair(ctx, state);
     if (!pair) return null;
     return {
       command: { type: 'merge_stations', station_a: toRef(pair[0]), station_b: toRef(pair[1]) },
       label: 'merge',
     };
   }
-  const data = randomSectionData(ctx);
+  const data = randomLineData(ctx);
   return {
     command: {
-      type: 'create_section',
+      type: 'create_line',
       name: data.name,
       surveyor: data.surveyor,
       date: data.date,
@@ -583,17 +583,17 @@ const SWARM_PROFILES: readonly { name: string; boost: Record<string, number> }[]
     name: 'delete-heavy',
     boost: {
       deleteShot: 4,
-      deleteSection: 4,
+      deleteLine: 4,
       deleteShotAndSplit: 5,
       deleteShotRangeSplit: 5,
       deleteShotRangeShift: 5,
-      deleteLastShotAndSection: 5,
+      deleteLastShotAndLine: 5,
     },
   },
-  { name: 'batch-heavy', boost: { executeBatch: 8, importSections: 4, createSectionAndMerge: 4 } },
+  { name: 'batch-heavy', boost: { executeBatch: 8, importLines: 4, createLineAndMerge: 4 } },
   { name: 'split-heavy', boost: { splitShotAtDistance: 8, deleteShotAndSplit: 4, createShot: 3 } },
-  { name: 'move-heavy', boost: { moveStation: 5, moveSection: 5, moveSegment: 5, moveComment: 4, reverseSection: 3 } },
-  { name: 'metadata-heavy', boost: { updateShot: 4, updateSection: 4, updateStationComment: 5, setShotKind: 4, moveComment: 3 } },
+  { name: 'move-heavy', boost: { moveStation: 5, moveLine: 5, moveSegment: 5, moveComment: 4, reverseLine: 3 } },
+  { name: 'metadata-heavy', boost: { updateShot: 4, updateLine: 4, updateStationComment: 5, setShotKind: 4, moveComment: 3 } },
 ];
 
 /**
@@ -608,9 +608,9 @@ const SWARM_PROFILES: readonly { name: string; boost: Record<string, number> }[]
 const IMPORT_HEAVY_PROFILE: { name: string; boost: Record<string, number> } = {
   name: 'import-heavy',
   boost: {
-    importSectionsSynthetic: 4,
-    importSectionsWithOverlap: 4,
-    importSectionsNonFinite: 3,
+    importLinesSynthetic: 4,
+    importLinesWithOverlap: 4,
+    importLinesNonFinite: 3,
     importTmlFile: 2,
     importCompassFile: 2,
     importWallsFile: 2,
@@ -635,33 +635,33 @@ export function swarmProfileFor(seed: number): SwarmProfile {
  */
 export const ACTION_GENERATORS: readonly ActionGenerator[] = [
   {
-    name: 'createSection',
+    name: 'createLine',
     weight: 6,
     build(ctx) {
-      const data = randomSectionData(ctx);
+      const data = randomLineData(ctx);
       const shots = data.shots as unknown[];
-      return { action: 'createSection', args: [data], label: `createSection(shots=${shots.length})` };
+      return { action: 'createLine', args: [data], label: `createLine(shots=${shots.length})` };
     },
   },
   {
     name: 'createShot',
     weight: 12,
     build(ctx, state) {
-      const section = pickSection(ctx, state);
-      if (!section) return null;
+      const line = pickLine(ctx, state);
+      if (!line) return null;
       const shot = randomShotData(ctx);
-      const shotIds = [...section[1]].sort((a, b) => a - b);
-      // The PRE-insert shot count is in every label: appending into a section
+      const shotIds = [...line[1]].sort((a, b) => a - b);
+      // The PRE-insert shot count is in every label: appending into a line
       // that currently has none takes a different backend path from appending
       // onto a populated one, and that distinction has already been the
-      // difference between a clean roundtrip and a displaced section.
-      const where = `s=${section[0]},n=${shotIds.length}`;
+      // difference between a clean roundtrip and a displaced line.
+      const where = `s=${line[0]},n=${shotIds.length}`;
       const mode = shotIds.length === 0 ? 'append' : ctx.pick(['append', 'after', 'before'] as const);
       if (mode === 'after') {
         const afterId = ctx.pick(shotIds);
         return {
           action: 'createShot',
-          args: [section[0], shot, afterId],
+          args: [line[0], shot, afterId],
           label: `createShot(${where},after=${afterId})`,
         };
       }
@@ -669,11 +669,11 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
         const beforeId = ctx.pick(shotIds);
         return {
           action: 'createShot',
-          args: [section[0], shot, null, beforeId],
+          args: [line[0], shot, null, beforeId],
           label: `createShot(${where},before=${beforeId})`,
         };
       }
-      return { action: 'createShot', args: [section[0], shot], label: `createShot(${where},append)` };
+      return { action: 'createShot', args: [line[0], shot], label: `createShot(${where},append)` };
     },
   },
   {
@@ -685,8 +685,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const { patch, label } = buildPatch(ctx, SHOT_PATCH_FIELDS, ctx.randInt(1, 4));
       return {
         action: 'updateShot',
-        args: [target.sectionId, target.shotId, patch],
-        label: `updateShot(s=${target.sectionId},shot=${target.shotId},{${label}})`,
+        args: [target.lineId, target.shotId, patch],
+        label: `updateShot(s=${target.lineId},shot=${target.shotId},{${label}})`,
       };
     },
   },
@@ -698,47 +698,47 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!target) return null;
       return {
         action: 'deleteShot',
-        args: [target.sectionId, target.shotId],
-        label: `deleteShot(s=${target.sectionId},shot=${target.shotId})`,
+        args: [target.lineId, target.shotId],
+        label: `deleteShot(s=${target.lineId},shot=${target.shotId})`,
       };
     },
   },
   {
-    name: 'deleteSection',
+    name: 'deleteLine',
     weight: 3,
     build(ctx, state) {
-      // Keep at least two sections so cross-section merges stay reachable.
+      // Keep at least two lines so cross-line merges stay reachable.
       if (state.s.length <= 2) return null;
-      const section = pickSection(ctx, state);
-      if (!section) return null;
-      return { action: 'deleteSection', args: [section[0]], label: `deleteSection(s=${section[0]})` };
+      const line = pickLine(ctx, state);
+      if (!line) return null;
+      return { action: 'deleteLine', args: [line[0]], label: `deleteLine(s=${line[0]})` };
     },
   },
   {
-    name: 'updateSection',
+    name: 'updateLine',
     weight: 8,
     build(ctx, state) {
-      const section = pickSection(ctx, state);
-      if (!section) return null;
-      const { patch, label } = buildPatch(ctx, SECTION_PATCH_FIELDS, ctx.randInt(1, 3));
+      const line = pickLine(ctx, state);
+      if (!line) return null;
+      const { patch, label } = buildPatch(ctx, LINE_PATCH_FIELDS, ctx.randInt(1, 3));
       return {
-        action: 'updateSection',
-        args: [section[0], patch],
-        label: `updateSection(s=${section[0]},{${label}})`,
+        action: 'updateLine',
+        args: [line[0], patch],
+        label: `updateLine(s=${line[0]},{${label}})`,
       };
     },
   },
   {
-    name: 'reverseSection',
+    name: 'reverseLine',
     weight: 4,
     build(ctx, state) {
-      const section = pickSection(ctx, state);
-      if (!section) return null;
+      const line = pickLine(ctx, state);
+      if (!line) return null;
       const swap = chance(ctx, 0.5);
       return {
-        action: 'reverseSection',
-        args: [section[0], swap],
-        label: `reverseSection(s=${section[0]},swapLR=${swap})`,
+        action: 'reverseLine',
+        args: [line[0], swap],
+        label: `reverseLine(s=${line[0]},swapLR=${swap})`,
       };
     },
   },
@@ -751,8 +751,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const kind = ctx.pick(SHOT_KINDS);
       return {
         action: 'setShotKind',
-        args: [target.sectionId, target.shotId, kind],
-        label: `setShotKind(s=${target.sectionId},shot=${target.shotId},${kind})`,
+        args: [target.lineId, target.shotId, kind],
+        label: `setShotKind(s=${target.lineId},shot=${target.shotId},${kind})`,
       };
     },
   },
@@ -787,16 +787,16 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     },
   },
   {
-    name: 'moveSection',
+    name: 'moveLine',
     weight: 5,
     build(ctx, state) {
-      const section = pickSection(ctx, state);
-      if (!section) return null;
+      const line = pickLine(ctx, state);
+      if (!line) return null;
       const offset = randomOffset(ctx);
       return {
-        action: 'moveSection',
-        args: [section[0], offset],
-        label: `moveSection(s=${section[0]},d=${offset.x}/${offset.y}/${offset.z})`,
+        action: 'moveLine',
+        args: [line[0], offset],
+        label: `moveLine(s=${line[0]},d=${offset.x}/${offset.y}/${offset.z})`,
       };
     },
   },
@@ -804,13 +804,13 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'moveSegment',
     weight: 5,
     build(ctx, state) {
-      const section = pickSection(ctx, state);
-      if (!section) return null;
+      const line = pickLine(ctx, state);
+      if (!line) return null;
       const offset = randomOffset(ctx);
       return {
         action: 'moveSegment',
-        args: [section[0], offset],
-        label: `moveSegment(s=${section[0]},d=${offset.x}/${offset.y}/${offset.z})`,
+        args: [line[0], offset],
+        label: `moveSegment(s=${line[0]},d=${offset.x}/${offset.y}/${offset.z})`,
       };
     },
   },
@@ -818,7 +818,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'mergeStations',
     weight: 6,
     build(ctx, state) {
-      const pair = pickCrossSectionPair(ctx, state);
+      const pair = pickCrossLinePair(ctx, state);
       if (!pair) return null;
       return {
         action: 'mergeStations',
@@ -882,7 +882,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'createLoopClosure',
     weight: 3,
     build(ctx, state) {
-      const pair = pickCrossSectionPair(ctx, state);
+      const pair = pickCrossLinePair(ctx, state);
       if (!pair) return null;
       const strategy = ctx.pick(CLOSURE_STRATEGIES);
       return {
@@ -910,8 +910,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const distance = biasedFloat(ctx, 0.1, 8, 3, [0, 1e-9, GEOMETRY_EXTREME, -1]);
       return {
         action: 'splitShotAtDistance',
-        args: [target.sectionId, target.shotId, distance],
-        label: `splitShotAtDistance(s=${target.sectionId},shot=${target.shotId},d=${distance})`,
+        args: [target.lineId, target.shotId, distance],
+        label: `splitShotAtDistance(s=${target.lineId},shot=${target.shotId},d=${distance})`,
       };
     },
   },
@@ -926,26 +926,26 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const nameB = biasedText(ctx, `split-b-${ctx.randInt(0, 999)}`);
       return {
         action: 'deleteShotAndSplit',
-        args: [target.sectionId, target.shotId, nameA, nameB],
-        label: `deleteShotAndSplit(s=${target.sectionId},shot=${target.shotId})`,
+        args: [target.lineId, target.shotId, nameA, nameB],
+        label: `deleteShotAndSplit(s=${target.lineId},shot=${target.shotId})`,
       };
     },
   },
   {
-    name: 'deleteLastShotAndSection',
+    name: 'deleteLastShotAndLine',
     weight: 3,
     since: 'v2',
     build(ctx, state) {
-      // Meaningful only on a single-shot section, which is exactly the shape
-      // pickSmallSection is biased toward.
-      const section = pickSmallSection(ctx, state);
-      if (!section || section[1].length === 0) return null;
-      const shotIds = [...section[1]].sort((a, b) => a - b);
+      // Meaningful only on a single-shot line, which is exactly the shape
+      // pickSmallLine is biased toward.
+      const line = pickSmallLine(ctx, state);
+      if (!line || line[1].length === 0) return null;
+      const shotIds = [...line[1]].sort((a, b) => a - b);
       const shotId = ctx.pick(shotIds);
       return {
-        action: 'deleteLastShotAndSection',
-        args: [section[0], shotId],
-        label: `deleteLastShotAndSection(s=${section[0]},n=${shotIds.length},shot=${shotId})`,
+        action: 'deleteLastShotAndLine',
+        args: [line[0], shotId],
+        label: `deleteLastShotAndLine(s=${line[0]},n=${shotIds.length},shot=${shotId})`,
       };
     },
   },
@@ -960,8 +960,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const nameB = biasedText(ctx, `range-b-${ctx.randInt(0, 999)}`);
       return {
         action: 'deleteShotRangeSplit',
-        args: [range.sectionId, range.startShotId, range.endShotId, nameA, nameB],
-        label: `deleteShotRangeSplit(s=${range.sectionId},${range.startShotId}..${range.endShotId})`,
+        args: [range.lineId, range.startShotId, range.endShotId, nameA, nameB],
+        label: `deleteShotRangeSplit(s=${range.lineId},${range.startShotId}..${range.endShotId})`,
       };
     },
   },
@@ -974,8 +974,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!range) return null;
       return {
         action: 'deleteShotRangeShift',
-        args: [range.sectionId, range.startShotId, range.endShotId],
-        label: `deleteShotRangeShift(s=${range.sectionId},${range.startShotId}..${range.endShotId})`,
+        args: [range.lineId, range.startShotId, range.endShotId],
+        label: `deleteShotRangeShift(s=${range.lineId},${range.startShotId}..${range.endShotId})`,
       };
     },
   },
@@ -996,34 +996,34 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     },
   },
   {
-    name: 'createSectionAndMerge',
+    name: 'createLineAndMerge',
     weight: 3,
     since: 'v2',
     build(ctx, state) {
       const ref = pickStationRef(ctx, state);
       if (!ref) return null;
-      const data = randomSectionData(ctx);
+      const data = randomLineData(ctx);
       const shots = data.shots as unknown[];
       // An out-of-range import station index is a deliberate rejection case.
       const importStationIndex = streamV2() && chance(ctx, 0.15) ? ctx.randInt(50, 99) : ctx.randInt(0, shots.length);
       const strategy = ctx.pick(CLOSURE_STRATEGIES);
       return {
-        action: 'createSectionAndMerge',
+        action: 'createLineAndMerge',
         args: [data, importStationIndex, toRef(ref), strategy],
-        label: `createSectionAndMerge(shots=${shots.length},i=${importStationIndex},->${refLabel(ref)})`,
+        label: `createLineAndMerge(shots=${shots.length},i=${importStationIndex},->${refLabel(ref)})`,
       };
     },
   },
   {
-    name: 'importSections',
+    name: 'importLines',
     weight: 2,
     since: 'v2',
     build(ctx) {
       // FULLY SYNTHETIC: shots are generated here, never taken from a fixture.
-      const data = randomSectionData(ctx);
+      const data = randomLineData(ctx);
       const shots = data.shots as unknown[];
       const config = {
-        section_index: 0,
+        line_index: 0,
         name: data.name,
         surveyor: data.surveyor,
         date: data.date,
@@ -1036,9 +1036,9 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
         reverse: chance(ctx, 0.3),
       };
       return {
-        action: 'importSections',
+        action: 'importLines',
         args: [[config], null, null, ctx.pick(['Auto', 'AllJumps', 'AllReferences'] as const), null],
-        label: `importSections(shots=${shots.length})`,
+        label: `importLines(shots=${shots.length})`,
       };
     },
   },
@@ -1124,7 +1124,7 @@ export function weightedNamesFor(profile: SwarmProfile): string[] {
 /**
  * Draw a mutation the current project actually has a target for. Retries a
  * bounded number of times (a generator returns null when, say, there are no
- * loop closures to remove), then falls back to `createSection`, which is always
+ * loop closures to remove), then falls back to `createLine`, which is always
  * buildable.
  */
 export function drawAction(
@@ -1138,7 +1138,7 @@ export function drawAction(
     const action = generator?.build(ctx, state);
     if (action) return action;
   }
-  const data = randomSectionData(ctx);
+  const data = randomLineData(ctx);
   const shots = data.shots as unknown[];
-  return { action: 'createSection', args: [data], label: `createSection(shots=${shots.length})` };
+  return { action: 'createLine', args: [data], label: `createLine(shots=${shots.length})` };
 }

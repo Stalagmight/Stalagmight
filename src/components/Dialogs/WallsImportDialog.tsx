@@ -168,9 +168,9 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         return;
       }
 
-      // `section_ids` was omitted from the IPC payload when empty until #441
+      // `line_ids` was omitted from the IPC payload when empty until #441
       // made the backend always send it; this default is now defensive only.
-      const sectionIds = result.section_ids ?? [];
+      const lineIds = result.line_ids ?? [];
 
       // Nothing was imported - most commonly a `.wpj` whose `.srv` files aren't
       // next to it on disk. Tell the user why instead of silently "succeeding".
@@ -180,7 +180,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       // specific, actionable cause to name (missing sibling files), so it
       // routes to the error dialog and DISCARDS `result.import_receipt` -
       // including any converter warnings it carries. Change this knowingly.
-      if (sectionIds.length === 0) {
+      if (lineIds.length === 0) {
         surfaceImportFailure('walls-import', importUi, {
           phase: 'empty',
           message:
@@ -202,7 +202,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       try {
         suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
           'suggest_orphan_placements',
-          { newlyImportedSectionIds: sectionIds },
+          { newlyImportedLineIds: lineIds },
           { purpose: 'suggest orphan placements after Walls import' }
         );
       } catch {
@@ -213,7 +213,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
         return;
       }
-      await finishImportWithoutOrphanSuggestions('walls-import', importUi, sectionIds, result.import_receipt);
+      await finishImportWithoutOrphanSuggestions('walls-import', importUi, lineIds, result.import_receipt);
     } catch (e) {
       resetLoading();
       setIsImporting(false);

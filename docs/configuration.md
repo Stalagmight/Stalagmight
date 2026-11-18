@@ -112,7 +112,10 @@ font_color = "#f5f5f5"              # Map label color
 measure_path_color = "#22d3ee"      # Along-line tint for the measure tool's path
 
 [section_colors]
-# Colors handed to new sections, in order; wraps around when all are used
+# Colors handed to new lines, in order; wraps around when all are used.
+# The file keeps the pre-rename key names (`line_colors` in code, and
+# `toggle_section_labels`, `new_section_*` / `edit_section_*` and the
+# `section_id` column key below); see src-tauri/crates/core/src/config/toml_names.rs
 palette = ["#4ecdc4", "#ff6b6b", "#95e1d3", "#f38181",
            "#aa96da", "#fcbad3", "#a8d8ea", "#ffcb77"]
 
@@ -130,11 +133,13 @@ preset = "default"                  # "default", "deuteranopia", "protanopia", "
 # Per-preset, per-role color overrides (sparse; only customized colors are stored).
 # Roles: segment, section, shot, station, comment, delete, move,
 #        select, measure, merge, pan, zoom
+# (`section` is the line role, `line` in code; the file keeps the old name,
+# see toml_names.rs)
 # [syntactic_highlighting.overrides.default]
 # station = "#36b96a"
 
 [import]
-# Which data wins where an imported section overlaps existing shots:
+# Which data wins where an imported line overlaps existing shots:
 #   "import_data" (use the orphan's), "existing_data" (use the target's),
 #   "interpolate" (average), "keep_both" (mark the duplicate as reference)
 overlap_mode = "import_data"
@@ -441,11 +446,11 @@ toggle_data_table = ["Ctrl+3"]
 | | `toggle_satellite` | `B` | Toggle satellite imagery |
 | | `toggle_station_labels` | `L` | Toggle station name labels |
 | | `toggle_shot_labels` | `Shift+L` | Toggle shot distance labels |
-| | `toggle_section_labels` | `Ctrl+L` | Toggle section name labels |
+| | `toggle_section_labels` | `Ctrl+L` | Toggle line name labels |
 | | `fit_to_bounds` | `F` | Fit map to survey bounds |
 | | `zoom_in` | `=`, `+` | Zoom in on map |
 | | `zoom_out` | `-` | Zoom out on map |
-| **Panels** | `toggle_sections_panel` | `Ctrl+1` | Toggle sections panel |
+| **Panels** | `toggle_sections_panel` | `Ctrl+1` | Toggle Sections panel |
 | | `toggle_detail_panel` | `Ctrl+2` | Toggle detail panel |
 | | `toggle_data_table` | `Ctrl+3` | Toggle data table |
 

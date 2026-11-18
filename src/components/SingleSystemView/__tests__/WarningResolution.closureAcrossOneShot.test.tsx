@@ -17,9 +17,9 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import type { ProjectWarning } from '../../../types/commands';
-import type { Section, Shot } from '../../../types/project';
+import type { Line, Shot } from '../../../types/project';
 
-const section = { id: 0, name: 'A', shots: [] } as unknown as Section;
+const line = { id: 0, name: 'A', shots: [] } as unknown as Line;
 const shot = {
   id: 2,
   length: 10,
@@ -39,9 +39,9 @@ const shot = {
 const acrossOneShot = {
   code: 'CLOSURE_ACROSS_ONE_SHOT',
   message:
-    'Shot 0:2 has both ends joined by loop closure 0:1 to 0:2, which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
+    'Shot Main Line: A1 \u2192 A2 has both ends joined by loop closure Main Line / A1 to Main Line / A2, which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
   severity: 'error',
-  sectionId: 0,
+  lineId: 0,
   shotId: 2,
   shotIndex: 1,
   isResolved: false,
@@ -50,8 +50,8 @@ const acrossOneShot = {
 
 const closure = (id: number, a: number, b: number) => ({
   id,
-  station_a: { section_id: 0, station_index: a },
-  station_b: { section_id: 0, station_index: b },
+  station_a: { line_id: 0, station_index: a },
+  station_b: { line_id: 0, station_index: b },
   path_length: 10,
   misclosure_distance: 0,
   error_percentage: 0,
@@ -65,7 +65,7 @@ function renderResolution(warning: ProjectWarning, onResolved = vi.fn()) {
   render(
     <WarningResolution
       warning={warning}
-      section={section}
+      line={line}
       shot={shot}
       onExit={vi.fn()}
       onResolved={onResolved}
@@ -81,11 +81,21 @@ describe('WarningResolution - closures across one shot (#737)', () => {
 
   beforeEach(() => {
     removeLoopClosure.mockReset();
-    removeLoopClosure.mockResolvedValue({ success: true, warnings: [], section_ids: [] });
+    removeLoopClosure.mockResolvedValue({ success: true, warnings: [], line_ids: [] });
     setSelection.mockReset();
     useProjectStore.setState({
       removeLoopClosure,
-      project: { loop_closures: [closure(4, 1, 2), closure(9, 3, 4)], sections: [] },
+      surveyData: null,
+      // Station names that differ from the positions, so a positional label shows.
+      stations: [
+        { station_ref: { line_id: 0, station_index: 1 }, name: 'A1', id: 11 },
+        { station_ref: { line_id: 0, station_index: 2 }, name: 'A2', id: 12 },
+        { station_ref: { line_id: 0, station_index: 3 }, name: 'A2a', id: 13 },
+      ],
+      project: {
+        loop_closures: [closure(4, 1, 2), closure(9, 3, 4)],
+        lines: [{ id: 0, name: 'Main Line', shots: [] }],
+      },
     } as never);
     useUIStore.setState({ geometryMode: 'measured', appMode: 'survey', setSelection } as never);
     // A confirmed-local project (the read-only gate fails closed on 'unknown').
@@ -98,9 +108,17 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     expect(remove).toBeEnabled();
     expect(remove).toBeChecked();
     expect(screen.getByText('Remove this loop closure')).toBeInTheDocument();
-    // The station of closure 9 (the warning's), not of closure 4 on the same shot.
-    expect(screen.getByText('Go to closure station 0:3')).toBeInTheDocument();
+    // The station of closure 9 (the warning's), not of closure 4 on the same
+    // shot - by name with its line, never by its positional handle.
+    expect(screen.getByText('Go to closure station Main Line / A2a')).toBeInTheDocument();
+    expect(screen.queryByText(/0:3/)).not.toBeInTheDocument();
     expect(screen.queryByText(/ignore/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the backend's message, which names the shot by its line and stations", () => {
+    renderResolution(acrossOneShot);
+    const message = screen.getByTestId('warning-resolution-message');
+    expect(message.textContent).toMatch(/^Shot Main Line: A1 \u2192 A2 has both ends joined/);
   });
 
   it('removes exactly the closure the warning names', async () => {
@@ -112,7 +130,7 @@ describe('WarningResolution - closures across one shot (#737)', () => {
   });
 
   it('does not count a refused removal as resolved', async () => {
-    removeLoopClosure.mockResolvedValue({ success: false, error: 'no', warnings: [], section_ids: [] });
+    removeLoopClosure.mockResolvedValue({ success: false, error: 'no', warnings: [], line_ids: [] });
     const onResolved = renderResolution(acrossOneShot);
     await userEvent.click(screen.getByTestId('warning-resolution-apply'));
     await waitFor(() => expect(removeLoopClosure).toHaveBeenCalled());
@@ -134,7 +152,7 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     await waitFor(() =>
       expect(setSelection).toHaveBeenCalledWith({
         type: 'station',
-        stationRef: { section_id: 0, station_index: 3 },
+        stationRef: { line_id: 0, station_index: 3 },
       })
     );
     expect(removeLoopClosure).not.toHaveBeenCalled();

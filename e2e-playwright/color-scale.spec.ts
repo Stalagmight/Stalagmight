@@ -1,13 +1,13 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   getShotScreenPositions,
   getStationScreenPositions,
   waitForDrawnStations,
   readCanvasPixel,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -26,7 +26,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sections: SectionSeed[] = [
+const lines: LineSeed[] = [
   {
     name: 'Scale A',
     direction: 'in',
@@ -71,7 +71,7 @@ async function stationFills(page: Page): Promise<string> {
   const out: string[] = [];
   for (const st of await getStationScreenPositions(page)) {
     const px: PixelRgba = await readCanvasPixel(page, st.x, st.y);
-    out.push(`${st.sectionId}:${st.stationIndex}=${px.slice(0, 3).join(',')}`);
+    out.push(`${st.lineId}:${st.stationIndex}=${px.slice(0, 3).join(',')}`);
   }
   return out.sort().join(' ');
 }
@@ -87,7 +87,7 @@ async function shotMids(page: Page): Promise<string> {
       shot.from.x + (shot.to.x - shot.from.x) * 0.5,
       shot.from.y + (shot.to.y - shot.from.y) * 0.5,
     );
-    out.push(`${shot.sectionId}:${shot.shotId}=${px.slice(0, 3).join(',')}`);
+    out.push(`${shot.lineId}:${shot.shotId}=${px.slice(0, 3).join(',')}`);
   }
   return out.sort().join(' ');
 }
@@ -102,7 +102,7 @@ test.describe('Colour scale', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Colour Scale Test');
-    await seedProjectWithSections(page, sections);
+    await seedProjectWithLines(page, lines);
     await waitForMapLoaded(page);
     await enableDepth(page);
     await zoomIn(page);

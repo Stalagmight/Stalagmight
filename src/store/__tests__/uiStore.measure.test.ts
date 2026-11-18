@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useUIStore, type MeasureEndpoint } from '../uiStore';
 
-const station = (section_id: number, station_index: number): MeasureEndpoint => ({
+const station = (line_id: number, station_index: number): MeasureEndpoint => ({
   kind: 'station',
-  section_id,
+  line_id,
   station_index,
   coords: { x: 0, y: 0, z: 0 },
 });
@@ -24,9 +24,9 @@ describe('uiStore measure reset funnels (#26)', () => {
     s.setMeasureStart(station(1, 0));
     s.setMeasureEnd(station(1, 1));
     s.setMeasureDirect({ distance: 5, depthDiff: 0 });
-    s.setMeasureAlongLine({ alongLine: 5, pathShots: [{ section_id: 1, shot_id: 0 }], pathStations: [{ section_id: 1, station_index: 0 }] });
+    s.setMeasureAlongLine({ alongLine: 5, pathShots: [{ line_id: 1, shot_id: 0 }], pathStations: [{ line_id: 1, station_index: 0 }] });
     s.setMeasureAlongLinePending(true);
-    s.setMeasureSnapShot({ section_id: 1, shot_id: 0, t: 0.5 });
+    s.setMeasureSnapShot({ line_id: 1, shot_id: 0, t: 0.5 });
 
     useUIStore.getState().clearMeasure();
 

@@ -1,6 +1,6 @@
 import { useProjectStore } from '../../store/projectStore';
 import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
-import { LockIcon, SectionsIcon } from '../common/icons';
+import { LockIcon, LinesIcon } from '../common/icons';
 import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 
 /**
@@ -25,7 +25,7 @@ export function useSpeleoTabState(): SpeleoTabState {
 const ICON_SIZE = 16;
 
 export function SectionsTabIcon() {
-  return <SectionsIcon size={ICON_SIZE} data-testid="workspace-tab-sections-icon" />;
+  return <LinesIcon size={ICON_SIZE} data-testid="workspace-tab-sections-icon" />;
 }
 
 /**

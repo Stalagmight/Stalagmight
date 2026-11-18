@@ -22,8 +22,8 @@ function seed(roles: Array<'Placement' | 'GpsFix'>) {
   useProjectStore.setState({
     project: {
       loop_closures: [],
-      zero_datums: roles.map((role, i) => ({ station_ref: { section_id: 1, station_index: i }, gps: GPS, role })),
-      sections: [],
+      zero_datums: roles.map((role, i) => ({ station_ref: { line_id: 1, station_index: i }, gps: GPS, role })),
+      lines: [],
     },
     stations: [],
     surveyData: null,
@@ -46,7 +46,7 @@ describe('loadAdjustedGeometry with GPS fixes (#741)', () => {
   it('flags the fix station on the computed geometry, from the wire role', async () => {
     seed(['Placement', 'GpsFix']);
     const station = (station_index: number) => ({
-      station_ref: { section_id: 1, station_index },
+      station_ref: { line_id: 1, station_index },
       coordinates: { x: 0, y: station_index, z: 0 },
       is_zero_datum: true,
       gps_coordinates: GPS,

@@ -10,7 +10,7 @@
  * Kept free of React/store imports so it is unit-testable in the node vitest env.
  */
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
-import type { Shot, ShotUpdates, SectionId } from '../../types/project';
+import type { Shot, ShotUpdates, LineId } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import type { CreditEdit, Person } from '../../types/ipc.generated';
@@ -131,7 +131,7 @@ export function buildShotUpdates(
 export function buildShotUpdateBatch(
   edits: CellEdit[],
   shots: Shot[],
-  sectionId: SectionId,
+  lineId: LineId,
 ): BatchCommand[] {
   const byRow = new Map<number, CellEdit[]>();
   for (const e of edits) {
@@ -146,13 +146,13 @@ export function buildShotUpdateBatch(
     // Credit cells go through the credit command, one per shot, in the same batch.
     const credit = creditEditForCells(shot, allEdits.filter((e) => CREDIT_KEYS.has(e.colKey)));
     if (credit) {
-      commands.push({ type: 'edit_shot_credit', targets: { type: 'shots', shots: [[sectionId, shot.id]] }, edit: credit });
+      commands.push({ type: 'edit_shot_credit', targets: { type: 'shots', shots: [[lineId, shot.id]] }, edit: credit });
     }
     const rowEdits = allEdits.filter((e) => !CREDIT_KEYS.has(e.colKey));
     if (rowEdits.length === 0) continue;
     const updates = buildShotUpdates(shot, rowEdits);
     if (Object.keys(updates).length === 0) continue;
-    commands.push({ type: 'update_shot', section_id: sectionId, shot_id: shot.id, updates });
+    commands.push({ type: 'update_shot', line_id: lineId, shot_id: shot.id, updates });
   }
   return commands;
 }

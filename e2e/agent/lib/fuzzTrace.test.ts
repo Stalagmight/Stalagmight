@@ -34,18 +34,18 @@ const FINDING_12 = [
   'undo did not restore the state recorded at depth 16 (the entry it consumed was set_shot_kind)',
   '  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed 1 --iterations 1 --release',
   '  iteration=1 fixture=fractal_plant_iter3.stalx depth=16 top=18 saves=1 reloads=1',
-  '  at project.sections[32].shots[0].kind',
+  '  at project.lines[32].shots[0].kind',
   '    expected: "Normal"',
   '    actual:   "Jump"',
   '  KNOWN OPEN APP BUG [stale-id-writes-to-the-wrong-shot]: Finding 12: after a save/reload...',
 ].join('\n');
 
-/** The same defect one shrink step later: shallower depth, different section. */
+/** The same defect one shrink step later: shallower depth, different line. */
 const FINDING_12_SHRUNK = [
   'undo did not restore the state recorded at depth 4 (the entry it consumed was set_shot_kind)',
   '  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed 1 --iterations 1 --release',
   '  iteration=1 fixture=fractal_plant_iter3.stalx depth=4 top=5 saves=1 reloads=1',
-  '  at project.sections[7].shots[0].kind',
+  '  at project.lines[7].shots[0].kind',
   '    expected: "Normal"',
   '    actual:   "Jump"',
   '  KNOWN OPEN APP BUG [stale-id-writes-to-the-wrong-shot]: Finding 12: after a save/reload...',
@@ -54,10 +54,10 @@ const FINDING_12_SHRUNK = [
 /** A genuinely different bug, reachable from a smaller trace (bug 1). */
 const BUG_1 = [
   'redo did not restore the state recorded at depth 2',
-  '  at project.sections[32].gauge_neighbour_uuid',
+  '  at project.lines[32].gauge_neighbour_uuid',
   '    expected: "4f600456-db5e-498c-b774-7ece755fc7ab"',
   '    actual:   null',
-  '  KNOWN OPEN APP BUG [create-section-redo-drops-gauge-anchors]: The SAME root cause...',
+  '  KNOWN OPEN APP BUG [create-line-redo-drops-gauge-anchors]: The SAME root cause...',
 ].join('\n');
 
 /**
@@ -96,7 +96,7 @@ describe('failureSignature', () => {
   });
 
   it('keeps the field at the end of the diff path', () => {
-    expect(failureSignature(FINDING_12).path).toBe('project.sections[*].shots[*].kind');
+    expect(failureSignature(FINDING_12).path).toBe('project.lines[*].shots[*].kind');
   });
 
   it('separates two failures that name different classifiers', () => {
@@ -111,32 +111,32 @@ describe('failureSignature', () => {
   it('separates a roundtrip failure from a move that failed outright', () => {
     const wedge = [
       'undo at depth 14 failed outright (entry create_shot)',
-      '  error: Shot 3200004 not found in section 32',
+      '  error: Shot 3200004 not found in line 32',
     ].join('\n');
     const sig = failureSignature(wedge);
-    expect(sig.error).toBe('Shot N not found in section N');
+    expect(sig.error).toBe('Shot N not found in line N');
     expect(sig.path).toBeNull();
     expect(sameSignature(sig, failureSignature(FINDING_12))).toBe(false);
   });
 
   it('treats the same wedge at a different id as the same defect', () => {
-    const a = 'undo at depth 14 failed outright\n  error: Shot 3200004 not found in section 32';
-    const b = 'undo at depth 3 failed outright\n  error: Shot 7 not found in section 0';
+    const a = 'undo at depth 14 failed outright\n  error: Shot 3200004 not found in line 32';
+    const b = 'undo at depth 3 failed outright\n  error: Shot 7 not found in line 0';
     expect(sameSignature(failureSignature(a), failureSignature(b))).toBe(true);
   });
 
   it('uses an absolute-invariant breach as the identity when there is no diff path', () => {
     const invariant = [
       'project invariant(s) violated after undo',
-      '  INVARIANT: section 3 has two shots with id 300004',
+      '  INVARIANT: line 3 has two shots with id 300004',
     ].join('\n');
-    expect(failureSignature(invariant).path).toBe('INVARIANT:section N has two shots with id N');
+    expect(failureSignature(invariant).path).toBe('INVARIANT:line N has two shots with id N');
   });
 
   it('collects every classifier the message named, sorted and deduped', () => {
     const many = [
       'undo did not restore the state recorded at depth 9',
-      '  at project.sections[1].shots[0].length',
+      '  at project.lines[1].shots[0].length',
       '  KNOWN OPEN APP BUG [stale-id-writes-to-the-wrong-shot]: ...',
       '  KNOWN OPEN APP BUG [bug-8-wrong-shot-delete]: ...',
       '  ATTRIBUTED [save-captures-missing-gauge-anchors]: ...',
@@ -158,7 +158,7 @@ describe('failureSignature', () => {
 describe('TraceRecorder', () => {
   it('records in order and round trips through the file', () => {
     const recorder = new TraceRecorder();
-    recorder.record({ kind: 'mutate', action: 'createSection', args: [{ name: 'a' }], label: 'createSection' });
+    recorder.record({ kind: 'mutate', action: 'createLine', args: [{ name: 'a' }], label: 'createLine' });
     recorder.record({ kind: 'undo' });
     recorder.record({ kind: 'undoTo', steps: 3 });
     recorder.record({ kind: 'save' });
@@ -506,12 +506,12 @@ describe('schema v2 steps', () => {
       accepts({ kind: 'mutate', action, args: [`fuzz-files/a.dmp`, null], label: action });
     }
     // A mutation that does NOT take a path is untouched: its args are values.
-    accepts({ kind: 'mutate', action: 'createSection', args: ['/not/a/path'], label: 'createSection' });
+    accepts({ kind: 'mutate', action: 'createLine', args: ['/not/a/path'], label: 'createLine' });
   });
 
   it('still validates every v1 step kind - only the FILE version moved', () => {
     const v1Steps: TraceStep[] = [
-      { kind: 'mutate', action: 'createSection', args: [{}], label: 'createSection' },
+      { kind: 'mutate', action: 'createLine', args: [{}], label: 'createLine' },
       { kind: 'undo' },
       { kind: 'redo' },
       { kind: 'undoTo', steps: 2 },

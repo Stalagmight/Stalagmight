@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
 import type { DmpShot } from '../../types/commands';
-import type { ImportState, SectionConfig } from '../useImportState';
+import type { ImportState, LineConfig } from '../useImportState';
 import { convertToEditableShots, importReducer } from '../useImportState';
 
 const baseShot: EditableShot = {
@@ -21,9 +21,9 @@ const baseShot: EditableShot = {
   kind: 'Normal' as const,
 };
 
-const baseConfig: SectionConfig = {
-  sectionIndex: 0,
-  name: 'Test Section',
+const baseConfig: LineConfig = {
+  lineIndex: 0,
+  name: 'Test Line',
   surveyors: [],
   explorers: [],
   date: null,
@@ -42,9 +42,9 @@ const secondShot: EditableShot = {
   length: 2,
 };
 
-const secondConfig: SectionConfig = {
-  sectionIndex: 1,
-  name: 'Second Section',
+const secondConfig: LineConfig = {
+  lineIndex: 1,
+  name: 'Second Line',
   surveyors: [],
   explorers: [],
   date: null,
@@ -57,11 +57,11 @@ const secondConfig: SectionConfig = {
 
 function buildState(overrides?: Partial<ImportState>): ImportState {
   return {
-    sectionConfigs: new Map([[0, { ...baseConfig, shots: [{ ...baseShot }] }]]),
-    currentSectionIndex: 0,
+    lineConfigs: new Map([[0, { ...baseConfig, shots: [{ ...baseShot }] }]]),
+    currentLineIndex: 0,
     nextTempId: 1,
-    placedSections: new Set(),
-    excludedSections: new Set(),
+    placedLines: new Set(),
+    excludedLines: new Set(),
     undoStacks: new Map(),
     redoStacks: new Map(),
     originalValues: new Map([[0, baseConfig]]),
@@ -69,9 +69,9 @@ function buildState(overrides?: Partial<ImportState>): ImportState {
   };
 }
 
-function buildMultiSectionState(): ImportState {
+function buildMultiLineState(): ImportState {
   return buildState({
-    sectionConfigs: new Map([
+    lineConfigs: new Map([
       [0, { ...baseConfig, shots: [{ ...baseShot }] }],
       [1, { ...secondConfig, shots: [{ ...secondShot }] }],
     ]),
@@ -82,8 +82,8 @@ function buildMultiSectionState(): ImportState {
   });
 }
 
-function getShots(state: ImportState, section = 0): EditableShot[] {
-  return state.sectionConfigs.get(section)?.shots ?? [];
+function getShots(state: ImportState, line = 0): EditableShot[] {
+  return state.lineConfigs.get(line)?.shots ?? [];
 }
 
 function makeDmpShot(overrides?: Partial<DmpShot>): DmpShot {
@@ -118,7 +118,7 @@ describe('useImportState reducer', () => {
     const state1 = importReducer(buildState(), { type: 'ADD_SHOT' });
     const state2 = importReducer(state1, { type: 'ADD_SHOT' });
 
-    const shots = state2.sectionConfigs.get(0)?.shots ?? [];
+    const shots = state2.lineConfigs.get(0)?.shots ?? [];
     const firstNew = shots[1];
     const secondNew = shots[2];
 
@@ -138,24 +138,24 @@ describe('useImportState reducer', () => {
   // NAVIGATE
   // -----------------------------------------------------------------------
 
-  it('NAVIGATE changes currentSectionIndex', () => {
-    const state = buildMultiSectionState();
-    const next = importReducer(state, { type: 'NAVIGATE', sectionIndex: 1 });
-    expect(next.currentSectionIndex).toBe(1);
+  it('NAVIGATE changes currentLineIndex', () => {
+    const state = buildMultiLineState();
+    const next = importReducer(state, { type: 'NAVIGATE', lineIndex: 1 });
+    expect(next.currentLineIndex).toBe(1);
   });
 
   // -----------------------------------------------------------------------
   // UPDATE_FIELD
   // -----------------------------------------------------------------------
 
-  it('UPDATE_FIELD changes a section metadata field', () => {
+  it('UPDATE_FIELD changes a line metadata field', () => {
     const state = buildState();
     const next = importReducer(state, {
       type: 'UPDATE_FIELD',
       field: 'name',
       value: 'Renamed',
     });
-    expect(next.sectionConfigs.get(0)?.name).toBe('Renamed');
+    expect(next.lineConfigs.get(0)?.name).toBe('Renamed');
   });
 
   it('UPDATE_FIELD pushes undo entry and clears redo', () => {
@@ -244,41 +244,41 @@ describe('useImportState reducer', () => {
       type: 'SET_PLACEMENT',
       placement: { type: 'zeroDatum', coordinates: { latitude: 1, longitude: 2, depth_reference: 0 }, stationIndex: 0 },
     });
-    expect(next.sectionConfigs.get(0)?.placement.type).toBe('zeroDatum');
-    expect(next.placedSections.has(0)).toBe(false);
+    expect(next.lineConfigs.get(0)?.placement.type).toBe('zeroDatum');
+    expect(next.placedLines.has(0)).toBe(false);
   });
 
   // -----------------------------------------------------------------------
   // MARK_PLACED / UNMARK_PLACED
   // -----------------------------------------------------------------------
 
-  it('MARK_PLACED adds section to placedSections', () => {
+  it('MARK_PLACED adds line to placedLines', () => {
     const state = buildState();
-    const next = importReducer(state, { type: 'MARK_PLACED', sectionIndex: 0 });
-    expect(next.placedSections.has(0)).toBe(true);
+    const next = importReducer(state, { type: 'MARK_PLACED', lineIndex: 0 });
+    expect(next.placedLines.has(0)).toBe(true);
   });
 
-  it('UNMARK_PLACED removes section from placedSections', () => {
-    const state = buildState({ placedSections: new Set([0]) });
-    const next = importReducer(state, { type: 'UNMARK_PLACED', sectionIndex: 0 });
-    expect(next.placedSections.has(0)).toBe(false);
+  it('UNMARK_PLACED removes line from placedLines', () => {
+    const state = buildState({ placedLines: new Set([0]) });
+    const next = importReducer(state, { type: 'UNMARK_PLACED', lineIndex: 0 });
+    expect(next.placedLines.has(0)).toBe(false);
   });
 
   // -----------------------------------------------------------------------
-  // EXCLUDE_SECTION / INCLUDE_SECTION
+  // EXCLUDE_LINE / INCLUDE_LINE
   // -----------------------------------------------------------------------
 
-  it('EXCLUDE_SECTION adds to excluded and removes from placed', () => {
-    const state = buildState({ placedSections: new Set([0]) });
-    const next = importReducer(state, { type: 'EXCLUDE_SECTION', sectionIndex: 0 });
-    expect(next.excludedSections.has(0)).toBe(true);
-    expect(next.placedSections.has(0)).toBe(false);
+  it('EXCLUDE_LINE adds to excluded and removes from placed', () => {
+    const state = buildState({ placedLines: new Set([0]) });
+    const next = importReducer(state, { type: 'EXCLUDE_LINE', lineIndex: 0 });
+    expect(next.excludedLines.has(0)).toBe(true);
+    expect(next.placedLines.has(0)).toBe(false);
   });
 
-  it('INCLUDE_SECTION removes from excluded', () => {
-    const state = buildState({ excludedSections: new Set([0]) });
-    const next = importReducer(state, { type: 'INCLUDE_SECTION', sectionIndex: 0 });
-    expect(next.excludedSections.has(0)).toBe(false);
+  it('INCLUDE_LINE removes from excluded', () => {
+    const state = buildState({ excludedLines: new Set([0]) });
+    const next = importReducer(state, { type: 'INCLUDE_LINE', lineIndex: 0 });
+    expect(next.excludedLines.has(0)).toBe(false);
   });
 
   // -----------------------------------------------------------------------
@@ -288,10 +288,10 @@ describe('useImportState reducer', () => {
   it('UNDO restores previous field value', () => {
     let state = buildState();
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'name', value: 'Changed' });
-    expect(state.sectionConfigs.get(0)?.name).toBe('Changed');
+    expect(state.lineConfigs.get(0)?.name).toBe('Changed');
 
     state = importReducer(state, { type: 'UNDO' });
-    expect(state.sectionConfigs.get(0)?.name).toBe('Test Section');
+    expect(state.lineConfigs.get(0)?.name).toBe('Test Line');
   });
 
   it('UNDO pushes to redo stack', () => {
@@ -306,10 +306,10 @@ describe('useImportState reducer', () => {
     let state = buildState();
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'name', value: 'Changed' });
     state = importReducer(state, { type: 'UNDO' });
-    expect(state.sectionConfigs.get(0)?.name).toBe('Test Section');
+    expect(state.lineConfigs.get(0)?.name).toBe('Test Line');
 
     state = importReducer(state, { type: 'REDO' });
-    expect(state.sectionConfigs.get(0)?.name).toBe('Changed');
+    expect(state.lineConfigs.get(0)?.name).toBe('Changed');
   });
 
   it('REDO is no-op when redo stack is empty', () => {
@@ -349,20 +349,20 @@ describe('useImportState reducer', () => {
   });
 
   // -----------------------------------------------------------------------
-  // RESET_SECTION
+  // RESET_LINE
   // -----------------------------------------------------------------------
 
-  it('RESET_SECTION restores original values and clears undo/redo', () => {
+  it('RESET_LINE restores original values and clears undo/redo', () => {
     let state = buildState();
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'name', value: 'Changed' });
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'color', value: '#000000' });
-    state = importReducer(state, { type: 'MARK_PLACED', sectionIndex: 0 });
+    state = importReducer(state, { type: 'MARK_PLACED', lineIndex: 0 });
 
-    state = importReducer(state, { type: 'RESET_SECTION' });
-    expect(state.sectionConfigs.get(0)?.name).toBe('Test Section');
-    expect(state.sectionConfigs.get(0)?.color).toBe('#ffffff');
-    expect(state.sectionConfigs.get(0)?.placement.type).toBe('origin');
-    expect(state.placedSections.has(0)).toBe(false);
+    state = importReducer(state, { type: 'RESET_LINE' });
+    expect(state.lineConfigs.get(0)?.name).toBe('Test Line');
+    expect(state.lineConfigs.get(0)?.color).toBe('#ffffff');
+    expect(state.lineConfigs.get(0)?.placement.type).toBe('origin');
+    expect(state.placedLines.has(0)).toBe(false);
     expect(state.undoStacks.get(0)?.length).toBe(0);
     expect(state.redoStacks.get(0)?.length).toBe(0);
   });
@@ -376,35 +376,35 @@ describe('useImportState reducer', () => {
     const newConfigs = new Map([[1, secondConfig]]);
     const next = importReducer(state, {
       type: 'RESTORE_STATE',
-      sectionConfigs: newConfigs,
-      placedSections: new Set([1]),
-      excludedSections: new Set(),
-      currentSectionIndex: 1,
+      lineConfigs: newConfigs,
+      placedLines: new Set([1]),
+      excludedLines: new Set(),
+      currentLineIndex: 1,
     });
-    expect(next.currentSectionIndex).toBe(1);
-    expect(next.sectionConfigs.has(1)).toBe(true);
-    expect(next.placedSections.has(1)).toBe(true);
+    expect(next.currentLineIndex).toBe(1);
+    expect(next.lineConfigs.has(1)).toBe(true);
+    expect(next.placedLines.has(1)).toBe(true);
   });
 
   // -----------------------------------------------------------------------
-  // Undo stack is per-section
+  // Undo stack is per-line
   // -----------------------------------------------------------------------
 
-  it('undo stacks are independent per section', () => {
-    let state = buildMultiSectionState();
+  it('undo stacks are independent per line', () => {
+    let state = buildMultiLineState();
 
-    // Edit section 0
+    // Edit line 0
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'name', value: 'Changed 0' });
-    // Navigate to section 1
-    state = importReducer(state, { type: 'NAVIGATE', sectionIndex: 1 });
-    // Edit section 1
+    // Navigate to line 1
+    state = importReducer(state, { type: 'NAVIGATE', lineIndex: 1 });
+    // Edit line 1
     state = importReducer(state, { type: 'UPDATE_FIELD', field: 'name', value: 'Changed 1' });
 
-    // Undo on section 1
+    // Undo on line 1
     state = importReducer(state, { type: 'UNDO' });
-    expect(state.sectionConfigs.get(1)?.name).toBe('Second Section');
-    // Section 0 should still be changed
-    expect(state.sectionConfigs.get(0)?.name).toBe('Changed 0');
+    expect(state.lineConfigs.get(1)?.name).toBe('Second Line');
+    // Line 0 should still be changed
+    expect(state.lineConfigs.get(0)?.name).toBe('Changed 0');
   });
 });
 

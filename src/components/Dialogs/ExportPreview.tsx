@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';
-import { exportScaleInputsFrom, withColorScales } from '../../utils/exportOptions';
+import { exportScaleInputsFrom, withColorScales, withHiddenLines } from '../../utils/exportOptions';
 import { useColorScaleStore } from '../../store/colorScaleStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -43,6 +43,8 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
   const exportScale = useColorScaleStore((s) => s.exportScale);
   // A Survey Issues palette preview never reaches the export: ignore it here.
   const palettePreview = useColorScaleStore((s) => (s.palettePreview?.kind === 'issues' ? null : s.palettePreview));
+  // Hiding a Section leaves its lines out of the export, so the preview too.
+  const hiddenSections = useUIStore((state) => state.hiddenSections);
 
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +84,12 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       // preview matches what the chosen format will actually write - including
       // the live theme's depth endpoints, which the backend cannot resolve and
       // which the export path stamps on the same way (#360).
-      invokeIpc<string>('preview_svg_export', { options: withColorScales(options, exportScaleInputsFrom(mapPalette, { exportScale, palettePreview })) }, {
+      const previewOptions = withHiddenLines(
+        withColorScales(options, exportScaleInputsFrom(mapPalette, { exportScale, palettePreview })),
+        project.lines,
+        hiddenSections,
+      );
+      invokeIpc<string>('preview_svg_export', { options: previewOptions }, {
         purpose: 'render export preview',
       })
         .then((markup) => {
@@ -107,7 +114,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
     };
     // `resolvedTheme` is a dependency for the depth endpoints `withThemeDepthRamp`
     // reads off the document, not for anything in `options` - see above.
-  }, [project, options, resolvedTheme, mapPalette, exportScale, palettePreview]);
+  }, [project, options, resolvedTheme, mapPalette, exportScale, palettePreview, hiddenSections]);
 
   return (
     <div

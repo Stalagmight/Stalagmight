@@ -3,7 +3,7 @@
  * has to agree with it.
  *
  * Dropping wholly blank new rows from the payloads created two pictures of a
- * section: the one on screen, which counts a blank row, and the one sent to the
+ * line: the one on screen, which counts a blank row, and the one sent to the
  * backend, which does not. Every place that turns a station the user PICKED into
  * a station the backend will see had to be updated to the second picture, and
  * three were missed - zero-datum reanchoring and both DMP placement paths - each
@@ -54,8 +54,8 @@ export function visibleShotCount(shots: readonly EditableShot[]): number {
 
 /**
  * A station index the user picked - counted over the rows they can SEE, blanks
- * included - expressed in the emitted section's numbering. Clamped, so a pick
- * past the end of the shortened section lands on its last station rather than
+ * included - expressed in the emitted line's numbering. Clamped, so a pick
+ * past the end of the shortened line lands on its last station rather than
  * out of range.
  */
 export function toEmittedStationIndex(
@@ -83,7 +83,7 @@ export function toEmittedStationIndex(
  * arrives numbered in emitted space while the pick is stored, listed and
  * re-anchored in visible space. Where several visible stations map to one drawn
  * station - a blank row occupies no distance - this answers with the first of
- * them, so a section with no blanks answers with the index it was handed.
+ * them, so a line with no blanks answers with the index it was handed.
  */
 export function fromEmittedStationIndex(
   shots: readonly EditableShot[],

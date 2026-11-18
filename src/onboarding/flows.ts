@@ -311,7 +311,7 @@ const placementModeFlow: OnboardingFlowDefinition = {
       placement: 'top',
       interaction: 'locked',
       // Renders pan/zoom plus fit-to-view, zoom and scale-bar guidance - all of
-      // which are what you actually need while positioning a section.
+      // which are what you actually need while positioning a line.
       illustration: 'map-with-pan-zoom',
     },
   ],

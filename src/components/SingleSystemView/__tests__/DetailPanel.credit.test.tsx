@@ -1,6 +1,6 @@
 /**
  * The Detail panel's survey credit: one shot edits that shot, several selected
- * shots edit all of them at once (union, partial pills, promote), a section
+ * shots edit all of them at once (union, partial pills, promote), a line
  * edits every shot of it - each change ONE editShotCredit - and read-only
  * modes show the pills without any way to change them.
  */
@@ -14,7 +14,7 @@ import DetailPanel from '../DetailPanel';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
-import type { Project, Section, Shot } from '../../../types/project';
+import type { Project, Line, Shot } from '../../../types/project';
 import type { CommandResult, CreditEdit, CreditTargets, SurveyCredit } from '../../../types/ipc.generated';
 
 const tid = (id: string) => screen.getByTestId(id);
@@ -46,7 +46,7 @@ const ann = { name: 'Ann Diver' };
 const bo = { name: 'Bo Lead', email: 'bo@caves.example' };
 
 function project(): Project {
-  const section = {
+  const line = {
     id: 1,
     name: 'Main',
     color: '#336699',
@@ -58,11 +58,11 @@ function project(): Project {
       shot(102, { surveyors: [ann, bo], explorers: [], date: '2026-03-02' }),
       shot(103, { surveyors: [], explorers: [bo], date: '2026-04-11' }),
     ],
-  } as unknown as Section;
-  return { sections: [section], station_merges: [], zero_datums: [], loop_closures: [] } as unknown as Project;
+  } as unknown as Line;
+  return { lines: [line], station_merges: [], zero_datums: [], loop_closures: [] } as unknown as Project;
 }
 
-const editShotCredit = vi.fn(async (_targets: CreditTargets, _edit: CreditEdit) => ({ success: true, warnings: [], error: null, section_ids: [1] }) as CommandResult);
+const editShotCredit = vi.fn(async (_targets: CreditTargets, _edit: CreditEdit) => ({ success: true, warnings: [], error: null, line_ids: [1] }) as CommandResult);
 
 function pillByLabel(field: 'surveyors' | 'explorers', label: string): HTMLElement {
   const pills = [...document.querySelectorAll<HTMLElement>(`[data-testid^="detail-credit-${field}-pill-"][data-testid$="-label"]`)];
@@ -86,7 +86,7 @@ beforeEach(() => {
 
 describe('Detail panel survey credit - one shot', () => {
   beforeEach(() => {
-    useUIStore.getState().setSelection({ type: 'shot', sectionId: 1, shotId: 102 });
+    useUIStore.getState().setSelection({ type: 'shot', lineId: 1, shotId: 102 });
   });
 
   it('shows the shot people and date', () => {
@@ -181,19 +181,19 @@ describe('Detail panel survey credit - one shot', () => {
 describe('Detail panel survey credit - an undated shot', () => {
   beforeEach(() => {
     const project = useProjectStore.getState().project!;
-    const section = project.sections[0]!;
+    const line = project.lines[0]!;
     useProjectStore.setState({
       project: {
         ...project,
-        sections: [
+        lines: [
           {
-            ...section,
-            shots: section.shots.map((s) => (s.id === 101 ? { ...s, credit: { ...s.credit!, date: null } } : s)),
+            ...line,
+            shots: line.shots.map((s) => (s.id === 101 ? { ...s, credit: { ...s.credit!, date: null } } : s)),
           },
         ],
       },
     });
-    useUIStore.getState().setSelection({ type: 'shot', sectionId: 1, shotId: 101 });
+    useUIStore.getState().setSelection({ type: 'shot', lineId: 1, shotId: 101 });
   });
 
   // WebKitGTK paints an empty native date input as TODAY's date, so an undated
@@ -226,9 +226,9 @@ describe('Detail panel survey credit - an undated shot', () => {
 describe('Detail panel survey credit - several shots', () => {
   beforeEach(() => {
     const ui = useUIStore.getState();
-    ui.setSelection({ type: 'shot', sectionId: 1, shotId: 101 });
-    ui.addToSelection({ type: 'shot', sectionId: 1, shotId: 102 });
-    ui.addToSelection({ type: 'shot', sectionId: 1, shotId: 103 });
+    ui.setSelection({ type: 'shot', lineId: 1, shotId: 101 });
+    ui.addToSelection({ type: 'shot', lineId: 1, shotId: 102 });
+    ui.addToSelection({ type: 'shot', lineId: 1, shotId: 103 });
   });
 
   it('shows the union with partial pills and the date range', () => {
@@ -264,14 +264,14 @@ describe('Detail panel survey credit - several shots', () => {
     // now come second.
     act(() => {
       const project = useProjectStore.getState().project!;
-      const section = project.sections[0]!;
+      const line = project.lines[0]!;
       useProjectStore.setState({
         project: {
           ...project,
-          sections: [
+          lines: [
             {
-              ...section,
-              shots: section.shots.map((s) => ({
+              ...line,
+              shots: line.shots.map((s) => ({
                 ...s,
                 credit: { ...s.credit!, surveyors: [...s.credit!.surveyors, { name: 'Cy Cave' }] },
               })),
@@ -308,21 +308,21 @@ describe('Detail panel survey credit - several shots', () => {
   });
 });
 
-describe('Detail panel survey credit - a section', () => {
-  it('has no hint while the section has shots', () => {
-    useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
+describe('Detail panel survey credit - a line', () => {
+  it('has no hint while the line has shots', () => {
+    useUIStore.getState().setSelection({ type: 'line', lineId: 1 });
     render(<DetailPanel />);
     expect(qid('detail-credit-no-shots')).toBeNull();
     expect(qid('detail-credit-surveyors-input')).not.toBeNull();
   });
 
-  // Credit lives on shots: a section with none has nowhere to record it, so
+  // Credit lives on shots: a line with none has nowhere to record it, so
   // the fields take no input (it would be dropped) and say why.
-  it('disables the credit of a section with no shots, with a hint', () => {
+  it('disables the credit of a line with no shots, with a hint', () => {
     const empty = project();
-    empty.sections[0] = { ...empty.sections[0]!, shots: [] };
+    empty.lines[0] = { ...empty.lines[0]!, shots: [] };
     useProjectStore.setState({ project: empty });
-    useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
+    useUIStore.getState().setSelection({ type: 'line', lineId: 1 });
     render(<DetailPanel />);
     expect(tid('detail-credit-no-shots')).toHaveTextContent('Add a shot to record who surveyed it.');
     expect(qid('detail-credit-surveyors-input')).toBeNull();
@@ -330,13 +330,13 @@ describe('Detail panel survey credit - a section', () => {
     expect(editShotCredit).not.toHaveBeenCalled();
   });
 
-  it('edits every shot of the section through the section target', () => {
-    useUIStore.getState().setSelection({ type: 'section', sectionId: 1 });
+  it('edits every shot of the line through the line target', () => {
+    useUIStore.getState().setSelection({ type: 'line', lineId: 1 });
     render(<DetailPanel />);
-    expect(tid('detail-credit').dataset.scope).toBe('section');
+    expect(tid('detail-credit').dataset.scope).toBe('line');
     fireEvent.click(tid('detail-credit-explorers-pill-0-remove'));
     expect(editShotCredit).toHaveBeenCalledWith(
-      { type: 'section', section_id: 1 },
+      { type: 'line', line_id: 1 },
       { remove_explorers: [{ name: 'Bo Lead', email: 'bo@caves.example' }] },
     );
   });

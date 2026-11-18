@@ -81,7 +81,7 @@ describe('MapAttribution', () => {
 
   it('shares one call between surfaces mounted together', async () => {
     // The only thing the in-flight map is for: the survey map, Global View and
-    // a Section Preview opening at once must not each pay for the same string.
+    // a Line Preview opening at once must not each pay for the same string.
     render(
       <>
         <MapAttribution visible />
@@ -243,7 +243,7 @@ describe('MapAttribution', () => {
     });
 
     it('is forced regardless of width for small surfaces', async () => {
-      // The Section Preview passes variant="compact": it is a few hundred pixels
+      // The Line Preview passes variant="compact": it is a few hundred pixels
       // square and exists to show the geometry underneath.
       setHostWidth(1200);
       render(<MapAttribution visible variant="compact" />);

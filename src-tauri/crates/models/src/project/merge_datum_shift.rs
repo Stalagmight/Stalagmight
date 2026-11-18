@@ -9,14 +9,14 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{Project, SectionId, StationRef};
+use super::{LineId, Project, StationRef};
 
 /// The piece a merge of two placed pieces moves, and how far.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "bindings/MergeDatumShift.ts")]
 pub struct MergeDatumShift {
-    /// Every section of the piece that moves, ascending.
-    pub moving_section_ids: Vec<SectionId>,
+    /// Every line of the piece that moves, ascending.
+    pub moving_line_ids: Vec<LineId>,
     /// How far it moves, horizontal metres.
     pub shift_m: f64,
     /// The station of its placement datum, which becomes a GPS fix.
@@ -32,8 +32,8 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Option<MergeDatumShift> {
-        let index_a = self.placement_datum_index(station_a.section_id)?;
-        let index_b = self.placement_datum_index(station_b.section_id)?;
+        let index_a = self.placement_datum_index(station_a.line_id)?;
+        let index_b = self.placement_datum_index(station_b.line_id)?;
         if index_a == index_b {
             return None;
         }
@@ -45,13 +45,13 @@ impl Project {
         let (anchor_x, anchor_y) = self.compute_station_raw_xy(anchor)?;
         let (moving_x, moving_y) = self.compute_station_raw_xy(moving)?;
         let datum_station = self.resolve_key(&self.zero_datums.get(moving_index)?.station_ref)?;
-        let mut moving_section_ids: Vec<SectionId> = self
-            .get_merged_section_ids(moving.section_id)
+        let mut moving_line_ids: Vec<LineId> = self
+            .get_merged_line_ids(moving.line_id)
             .into_iter()
             .collect();
-        moving_section_ids.sort_unstable();
+        moving_line_ids.sort_unstable();
         Some(MergeDatumShift {
-            moving_section_ids,
+            moving_line_ids,
             shift_m: (anchor_x - moving_x).hypot(anchor_y - moving_y),
             datum_station,
         })

@@ -22,7 +22,7 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   show_station_labels: false,
   // Station names instead of IDs; exclusive with the IDs (setStationLabelOption).
   show_station_names: false,
-  show_section_names: false,
+  show_line_names: false,
   show_station_comments: false,
   show_shot_comments: false,
   show_shot_data: false,

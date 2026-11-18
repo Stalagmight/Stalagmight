@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { Scenario } from './framework';
-import { ensureProjectLoaded, makeSection } from './common';
+import { ensureProjectLoaded, makeLine } from './common';
 
 export const saveUnderChurn: Scenario = {
   name: 'save-under-churn',
@@ -29,12 +29,12 @@ export const saveUnderChurn: Scenario = {
       }
 
       for (let i = 0; i < iterations; i++) {
-        const created = (await ctx.callAction('project', 'createSection', [makeSection(i)])) as {
+        const created = (await ctx.callAction('project', 'createLine', [makeLine(i)])) as {
           ok: boolean;
           result?: { success?: boolean; error?: string };
         };
         if (!created.ok || created.result?.success === false) {
-          throw new Error(`createSection ${i} failed: ${created.result?.error ?? 'unknown'}`);
+          throw new Error(`createLine ${i} failed: ${created.result?.error ?? 'unknown'}`);
         }
         const saved = (await ctx.callAction('project', 'saveProject', [savePath])) as {
           ok: boolean;

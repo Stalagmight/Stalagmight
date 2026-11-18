@@ -134,11 +134,11 @@ impl IntBuffer {
 pub struct DmpFile {
     /// File format version (2-5)
     pub version: u8,
-    /// Sections in the file
-    pub sections: Vec<DmpSection>,
+    /// Lines in the file
+    pub lines: Vec<DmpSection>,
 }
 
-/// A section from a DMP file
+/// A section from a DMP file (one survey line in the project)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpSection {
     /// DMP version for this section
@@ -150,9 +150,9 @@ pub struct DmpSection {
     /// Survey date and time
     #[ts(type = "string")]
     pub date: NaiveDateTime,
-    /// Shots in this section
+    /// Shots in this line
     pub shots: Vec<DmpShot>,
-    /// Deterministic content hash (SHA256 of section name + direction + standard shot measurements).
+    /// Deterministic content hash (SHA256 of line name + direction + standard shot measurements).
     /// Excludes date/time so duplicate detection works across device exports.
     pub content_hash: String,
 }
@@ -209,7 +209,7 @@ impl TryFrom<u8> for DmpShotType {
 ///
 /// Every field is what the MNemo wrote, decoded, with one deliberate
 /// reinterpretation: `pitch_in` / `pitch_out` are flipped from the device's
-/// positive-UP frame to the model's positive-DOWN one by `parse_section`, so a
+/// positive-UP frame to the model's positive-DOWN one by `parse_line`, so a
 /// `DmpShot` that has left the parser is already in the same frame as
 /// `ShotData` and as the `depth_in` / `depth_out` beside it.  That single
 /// normalisation point is what keeps the TypeScript import dialog, the overlap
@@ -217,7 +217,7 @@ impl TryFrom<u8> for DmpShotType {
 /// disagreeing about the sign.
 ///
 /// [`compute_section_hash`] runs *before* the flip, over the device's own
-/// bytes, so re-import deduplication still recognises sections imported before
+/// bytes, so re-import deduplication still recognises lines imported before
 /// issue #296.  See `docs/inclination.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpShot {
@@ -279,14 +279,14 @@ fn negate_pitch(pitch: f64) -> f64 {
 
 /// Compute a deterministic content hash for a DMP section.
 ///
-/// Hashes section name, direction, and each Standard shot's measurements
+/// Hashes line name, direction, and each Standard shot's measurements
 /// (heading_in/out, length, depth_in/out, pitch_in/out, LRUD, temperature,
-/// marker_index).  Date/time is deliberately excluded so the same section
+/// marker_index).  Date/time is deliberately excluded so the same line
 /// exported at different times produces an identical hash.
 fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) -> String {
     let mut hasher = Sha256::new();
 
-    // Section identity
+    // Line identity
     hasher.update(name.as_bytes());
     hasher.update(&[match direction {
         DmpDirection::In => 0u8,
@@ -329,12 +329,12 @@ fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
 
     let pattern_len = patterns[0].len();
 
-    // If data is shorter than pattern, no sections can be found
+    // If data is shorter than pattern, no lines can be found
     if data.len() < pattern_len {
         return vec![];
     }
 
-    let mut sections = Vec::new();
+    let mut lines = Vec::new();
     let mut start_idx = 0;
 
     for current_idx in 0..=data.len() - pattern_len {
@@ -343,12 +343,12 @@ fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
         // Check if window matches any end pattern
         if patterns.iter().any(|p| p.as_slice() == window) {
             let end_idx = current_idx + pattern_len;
-            sections.push(data[start_idx..end_idx].to_vec());
+            lines.push(data[start_idx..end_idx].to_vec());
             start_idx = end_idx;
         }
     }
 
-    sections
+    lines
 }
 
 /// Parse a shot from buffer based on version
@@ -516,7 +516,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // project shots, and `to_shot_data` alike.  This runs *after*
     // `compute_section_hash` deliberately, so the hash keeps being taken over
     // the device's own bytes and re-import deduplication still recognises
-    // sections imported before issue #296.
+    // lines imported before issue #296.
     for shot in &mut shots {
         shot.pitch_in = negate_pitch(shot.pitch_in);
         shot.pitch_out = negate_pitch(shot.pitch_out);
@@ -603,14 +603,14 @@ pub fn to_dmp_text(data: &[u8]) -> String {
 }
 
 /// What [`parse_dmp_bytes`] read past without importing, so a caller can tell the user
-/// instead of silently showing fewer sections.
+/// instead of silently showing fewer lines.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DmpReadLoss {
-    /// Sections found between end markers that failed to parse (a bad date, bad magic,
+    /// Lines found between end markers that failed to parse (a bad date, bad magic,
     /// or no shots).
-    pub skipped_sections: usize,
-    /// Bytes after the last complete section, other than zero padding and the device's
-    /// `MN2Over` reply trailer. Non-zero means a final section with no end marker.
+    pub skipped_lines: usize,
+    /// Bytes after the last complete line, other than zero padding and the device's
+    /// `MN2Over` reply trailer. Non-zero means a final line with no end marker.
     pub unread_trailing_bytes: usize,
 }
 
@@ -626,59 +626,59 @@ pub fn parse_dmp_bytes(data: &[u8]) -> Result<(DmpFile, DmpReadLoss)> {
         bail!("Unsupported DMP version: {version}. Supported: {SUPPORTED_VERSIONS:?}");
     }
 
-    // Split into sections
-    let section_data = split_into_sections(data, version);
-    if section_data.is_empty() {
-        bail!("No sections found in DMP file");
+    // Split into lines
+    let line_data = split_into_sections(data, version);
+    if line_data.is_empty() {
+        bail!("No lines found in DMP file");
     }
 
-    let consumed: usize = section_data.iter().map(Vec::len).sum();
+    let consumed: usize = line_data.iter().map(Vec::len).sum();
     let mut loss = DmpReadLoss {
-        skipped_sections: 0,
+        skipped_lines: 0,
         unread_trailing_bytes: unread_tail_len(&data[consumed..]),
     };
 
-    // Parse each section
-    let mut sections = Vec::new();
-    for (i, section_bytes) in section_data.into_iter().enumerate() {
-        match parse_section(section_bytes) {
-            Ok(section) => {
+    // Parse each line
+    let mut lines = Vec::new();
+    for (i, line_bytes) in line_data.into_iter().enumerate() {
+        match parse_section(line_bytes) {
+            Ok(line) => {
                 tracing::debug!(
-                    section_index = i,
-                    section_name = %section.name,
-                    shot_count = section.shots.len(),
+                    line_index = i,
+                    line_name = ?line.name,
+                    shot_count = line.shots.len(),
                     purpose = "build import preview",
-                    "Parsed section for import preview"
+                    "Parsed line for import preview"
                 );
-                sections.push(section);
+                lines.push(line);
             }
             Err(e) => {
-                loss.skipped_sections += 1;
+                loss.skipped_lines += 1;
                 tracing::warn!(
-                    section_index = i,
+                    line_index = i,
                     purpose = "build import preview",
                     reason = %e,
-                    "Failed to parse section for import preview"
+                    "Failed to parse line for import preview"
                 );
             }
         }
     }
 
-    if sections.is_empty() {
-        bail!("No valid sections found in DMP file");
+    if lines.is_empty() {
+        bail!("No valid lines found in DMP file");
     }
 
     tracing::info!(
         version = version,
-        section_count = sections.len(),
-        total_shots = sections.iter().map(|s| s.shots.len()).sum::<usize>(),
-        skipped_sections = loss.skipped_sections,
+        line_count = lines.len(),
+        total_shots = lines.iter().map(|s| s.shots.len()).sum::<usize>(),
+        skipped_lines = loss.skipped_lines,
         unread_trailing_bytes = loss.unread_trailing_bytes,
         purpose = "complete import preview",
         "DMP file parsed for import preview"
     );
 
-    Ok((DmpFile { version, sections }, loss))
+    Ok((DmpFile { version, lines }, loss))
 }
 
 /// Length of `tail` once zero padding and a `MN2Over` trailer are dropped from its end.
@@ -702,7 +702,7 @@ fn unread_tail_len(tail: &[u8]) -> usize {
 impl DmpShot {
     /// Convert to our internal `ShotData` format.
     ///
-    /// Pitch is copied straight across: `parse_section` already normalised it
+    /// Pitch is copied straight across: `parse_line` already normalised it
     /// to the model's positive-DOWN frame, so there is nothing left to flip
     /// here.  See `docs/inclination.md`.
     ///
@@ -754,9 +754,9 @@ impl DmpDirection {
 }
 
 impl DmpSection {
-    /// Convert to our internal SectionData format
-    pub fn to_section_data(&self, color: String) -> crate::models::SectionData {
-        crate::models::SectionData {
+    /// Convert to our internal LineData format
+    pub fn to_line_data(&self, color: String) -> crate::models::LineData {
+        crate::models::LineData {
             name: Some(self.name.clone()),
             surveyor: None,
             date: Some(self.date.date()),
@@ -944,13 +944,13 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_v2() {
-        // Create minimal v2 section data with end-of-section marker
+        // Create minimal v2 line data with end-of-line marker
         let mut data = vec![2]; // version
         data.extend(vec![0u8; 20]); // padding/header
         data.extend(vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // end marker
 
-        let sections = split_into_sections(&data, 2);
-        assert_eq!(sections.len(), 1);
+        let lines = split_into_sections(&data, 2);
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]
@@ -1042,33 +1042,30 @@ mod tests {
 
         let dmp = result.unwrap();
         assert_eq!(dmp.version, 2);
-        assert!(!dmp.sections.is_empty(), "No sections found");
+        assert!(!dmp.lines.is_empty(), "No lines found");
 
-        // Check first section has shots
-        let first_section = &dmp.sections[0];
-        assert!(
-            !first_section.shots.is_empty(),
-            "First section has no shots"
-        );
+        // Check first line has shots
+        let first_line = &dmp.lines[0];
+        assert!(!first_line.shots.is_empty(), "First line has no shots");
 
         // Print summary for debugging
         println!(
-            "v2 DMP: {} sections, {} total shots",
-            dmp.sections.len(),
-            dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
+            "v2 DMP: {} lines, {} total shots",
+            dmp.lines.len(),
+            dmp.lines.iter().map(|s| s.shots.len()).sum::<usize>()
         );
-        for (i, section) in dmp.sections.iter().enumerate() {
-            let standard_shots = section
+        for (i, line) in dmp.lines.iter().enumerate() {
+            let standard_shots = line
                 .shots
                 .iter()
                 .filter(|s| s.shot_type == DmpShotType::Standard)
                 .count();
             println!(
-                "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
+                "  Line {}: name='{}', dir={:?}, shots={} (standard={})",
                 i,
-                section.name,
-                section.direction,
-                section.shots.len(),
+                line.name,
+                line.direction,
+                line.shots.len(),
                 standard_shots
             );
         }
@@ -1089,41 +1086,38 @@ mod tests {
 
         let dmp = result.unwrap();
         assert_eq!(dmp.version, 5);
-        assert!(!dmp.sections.is_empty(), "No sections found");
+        assert!(!dmp.lines.is_empty(), "No lines found");
 
-        // Check first section has shots
-        let first_section = &dmp.sections[0];
-        assert!(
-            !first_section.shots.is_empty(),
-            "First section has no shots"
-        );
+        // Check first line has shots
+        let first_line = &dmp.lines[0];
+        assert!(!first_line.shots.is_empty(), "First line has no shots");
 
         // Print summary for debugging
         println!(
-            "v5 DMP: {} sections, {} total shots",
-            dmp.sections.len(),
-            dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
+            "v5 DMP: {} lines, {} total shots",
+            dmp.lines.len(),
+            dmp.lines.iter().map(|s| s.shots.len()).sum::<usize>()
         );
-        for (i, section) in dmp.sections.iter().enumerate() {
-            let standard_shots = section
+        for (i, line) in dmp.lines.iter().enumerate() {
+            let standard_shots = line
                 .shots
                 .iter()
                 .filter(|s| s.shot_type == DmpShotType::Standard)
                 .count();
             println!(
-                "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
+                "  Line {}: name='{}', dir={:?}, shots={} (standard={})",
                 i,
-                section.name,
-                section.direction,
-                section.shots.len(),
+                line.name,
+                line.direction,
+                line.shots.len(),
                 standard_shots
             );
         }
     }
 
     /// Ported from the WDIO `dmp-integration` spec (#120): the v5 parser must be
-    /// resilient to malformed end-of-section markers (the `_buggy_EOS` fixture)
-    /// and still recover sections instead of bailing out.
+    /// resilient to malformed end-of-line markers (the `_buggy_EOS` fixture)
+    /// and still recover lines instead of bailing out.
     #[test]
     fn test_parse_v5_dmp_buggy_eos_is_resilient() {
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1137,8 +1131,8 @@ mod tests {
         let dmp =
             parse_dmp(&test_file).expect("v5 DMP with malformed EOS markers should still parse");
         assert!(
-            !dmp.sections.is_empty(),
-            "buggy-EOS DMP should still yield sections"
+            !dmp.lines.is_empty(),
+            "buggy-EOS DMP should still yield lines"
         );
     }
 
@@ -1173,15 +1167,15 @@ mod tests {
         (file, path)
     }
 
-    /// Helper to build v3 format section data as semicolon-separated string
+    /// Helper to build v3 format line data as semicolon-separated string
     /// V3 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(21 bytes each) + EOS marker
-    fn build_v3_section_data() -> String {
+    fn build_v3_line_data() -> String {
         let mut values: Vec<i32> = Vec::new();
 
         // Version 3
         values.push(3);
 
-        // Section magic (version > 2)
+        // Line magic (version > 2)
         values.extend(&[68, 89, 101]);
 
         // Date: year offset from 2000 (24 = 2024), month, day, hour, minute
@@ -1208,7 +1202,7 @@ mod tests {
         values.extend(&[0, 0]); // pitch_out 0
         values.push(1); // marker_index
 
-        // End-of-section marker for v3 (type=3 followed by zeros, total 21 bytes)
+        // End-of-line marker for v3 (type=3 followed by zeros, total 21 bytes)
         values.push(3); // EOS type
         values.extend(vec![0; 20]); // zeros to complete 21-byte shot
 
@@ -1219,15 +1213,15 @@ mod tests {
             .join(";")
     }
 
-    /// Helper to build v4 format section data as semicolon-separated string
+    /// Helper to build v4 format line data as semicolon-separated string
     /// V4 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(29 bytes each) + EOS marker
-    fn build_v4_section_data() -> String {
+    fn build_v4_line_data() -> String {
         let mut values: Vec<i32> = Vec::new();
 
         // Version 4
         values.push(4);
 
-        // Section magic (version > 2)
+        // Line magic (version > 2)
         values.extend(&[68, 89, 101]);
 
         // Date: year offset from 2000 (24 = 2024), month, day, hour, minute
@@ -1273,7 +1267,7 @@ mod tests {
         // Marker index
         values.push(2);
 
-        // End-of-section marker for v4 (type=3 followed by zeros, total 29 bytes)
+        // End-of-line marker for v4 (type=3 followed by zeros, total 29 bytes)
         values.push(3); // EOS type
         values.extend(vec![0; 28]); // zeros to complete 29-byte shot
 
@@ -1287,7 +1281,7 @@ mod tests {
     /// Test 4.1: Verify DMP version 3 files (21-byte shots) are correctly parsed without LRUD data
     #[test]
     fn test_parse_dmp_v3_format() {
-        let content = build_v3_section_data();
+        let content = build_v3_line_data();
         let (_file, path) = create_dmp_file(&content);
 
         let result = parse_dmp(&path);
@@ -1297,27 +1291,23 @@ mod tests {
 
         let dmp = result.unwrap();
         assert_eq!(dmp.version, 3, "Version should be 3");
-        assert_eq!(dmp.sections.len(), 1, "Should have 1 section");
+        assert_eq!(dmp.lines.len(), 1, "Should have 1 line");
 
-        let section = &dmp.sections[0];
-        assert_eq!(section.version, 3, "Section version should be 3");
-        assert_eq!(section.name, "TST", "Section name should be TST");
-        assert_eq!(
-            section.direction,
-            DmpDirection::In,
-            "Direction should be In"
-        );
+        let line = &dmp.lines[0];
+        assert_eq!(line.version, 3, "Line version should be 3");
+        assert_eq!(line.name, "TST", "Line name should be TST");
+        assert_eq!(line.direction, DmpDirection::In, "Direction should be In");
 
         // Check date parsing
-        assert_eq!(section.date.year(), 2024, "Year should be 2024");
-        assert_eq!(section.date.month(), 6, "Month should be 6");
-        assert_eq!(section.date.day(), 15, "Day should be 15");
+        assert_eq!(line.date.year(), 2024, "Year should be 2024");
+        assert_eq!(line.date.month(), 6, "Month should be 6");
+        assert_eq!(line.date.day(), 15, "Day should be 15");
 
         // Should have at least one shot (excluding EOS)
-        assert!(!section.shots.is_empty(), "Should have shots");
+        assert!(!line.shots.is_empty(), "Should have shots");
 
         // V3 does not have LRUD data - check that LRUD values are zero
-        let shot = &section.shots[0];
+        let shot = &line.shots[0];
         assert_eq!(shot.left, 0.0, "V3 should have no left LRUD");
         assert_eq!(shot.right, 0.0, "V3 should have no right LRUD");
         assert_eq!(shot.up, 0.0, "V3 should have no up LRUD");
@@ -1333,7 +1323,7 @@ mod tests {
     /// through a Windows text editor fails to import at all.
     #[test]
     fn a_utf8_bom_does_not_break_a_dmp_file() {
-        let content = build_v3_section_data();
+        let content = build_v3_line_data();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bom.dmp");
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
@@ -1342,14 +1332,14 @@ mod tests {
 
         let dmp = parse_dmp(&path).expect("a marked DMP must import like an unmarked one");
         assert_eq!(dmp.version, 3);
-        assert_eq!(dmp.sections.len(), 1);
-        assert_eq!(dmp.sections[0].name, "TST");
+        assert_eq!(dmp.lines.len(), 1);
+        assert_eq!(dmp.lines[0].name, "TST");
     }
 
     /// Test 4.2: Verify DMP version 4 files (29-byte shots) correctly extract LRUD data and direction field
     #[test]
     fn test_parse_dmp_v4_with_lrud() {
-        let content = build_v4_section_data();
+        let content = build_v4_line_data();
         let (_file, path) = create_dmp_file(&content);
 
         let result = parse_dmp(&path);
@@ -1359,26 +1349,22 @@ mod tests {
 
         let dmp = result.unwrap();
         assert_eq!(dmp.version, 4, "Version should be 4");
-        assert_eq!(dmp.sections.len(), 1, "Should have 1 section");
+        assert_eq!(dmp.lines.len(), 1, "Should have 1 line");
 
-        let section = &dmp.sections[0];
-        assert_eq!(section.version, 4, "Section version should be 4");
-        assert_eq!(section.name, "V4S", "Section name should be V4S");
-        assert_eq!(
-            section.direction,
-            DmpDirection::Out,
-            "Direction should be Out"
-        );
+        let line = &dmp.lines[0];
+        assert_eq!(line.version, 4, "Line version should be 4");
+        assert_eq!(line.name, "V4S", "Line name should be V4S");
+        assert_eq!(line.direction, DmpDirection::Out, "Direction should be Out");
 
         // Check date parsing
-        assert_eq!(section.date.year(), 2024, "Year should be 2024");
-        assert_eq!(section.date.month(), 8, "Month should be 8");
-        assert_eq!(section.date.day(), 20, "Day should be 20");
+        assert_eq!(line.date.year(), 2024, "Year should be 2024");
+        assert_eq!(line.date.month(), 8, "Month should be 8");
+        assert_eq!(line.date.day(), 20, "Day should be 20");
 
         // Should have at least one shot
-        assert!(!section.shots.is_empty(), "Should have shots");
+        assert!(!line.shots.is_empty(), "Should have shots");
 
-        let shot = &section.shots[0];
+        let shot = &line.shots[0];
 
         // V4 should have LRUD data
         assert_eq!(shot.left, 1.0, "Left LRUD should be 1.0m");
@@ -1433,8 +1419,8 @@ mod tests {
         assert!(result1.is_err(), "Should fail with wrong magic bytes");
         let err_msg = result1.unwrap_err().to_string();
         assert!(
-            err_msg.contains("magic") || err_msg.contains("section"),
-            "Error should mention magic or section issue: {err_msg}"
+            err_msg.contains("magic") || err_msg.contains("line"),
+            "Error should mention magic or line issue: {err_msg}"
         );
 
         // Test case 2: Truncated magic (not enough bytes)
@@ -1467,7 +1453,7 @@ mod tests {
         assert!(result4.is_err(), "Should fail with version 0");
     }
 
-    /// Test 4.4: Verify graceful handling when file ends unexpectedly mid-section or mid-shot
+    /// Test 4.4: Verify graceful handling when file ends unexpectedly mid-line or mid-shot
     #[test]
     fn test_parse_dmp_truncated_file() {
         // Test case 1: Mid-header truncation (version present but header incomplete)
@@ -1496,8 +1482,8 @@ mod tests {
         let result2 = parse_dmp(&path2);
         std::fs::remove_file(&path2).ok();
 
-        // Should fail because no sections found (no EOS marker to split on)
-        assert!(result2.is_err(), "Should fail with no sections/shots");
+        // Should fail because no lines found (no EOS marker to split on)
+        assert!(result2.is_err(), "Should fail with no lines/shots");
 
         // Test case 3: Mid-shot truncation (partial shot data)
         let mut values3: Vec<i32> = Vec::new();
@@ -1527,13 +1513,13 @@ mod tests {
 
     /// Test 4.5: Verify no panic and graceful handling when date fields contain invalid values
     ///
-    /// Note: The parser catches section-level errors and logs them as warnings, then continues.
-    /// If all sections fail to parse (due to invalid dates), the overall parse fails with
-    /// "No valid sections found". The key requirement is that invalid dates don't cause panics.
+    /// Note: The parser catches line-level errors and logs them as warnings, then continues.
+    /// If all lines fail to parse (due to invalid dates), the overall parse fails with
+    /// "No valid lines found". The key requirement is that invalid dates don't cause panics.
     #[test]
     fn test_parse_dmp_invalid_date_values() {
-        // Helper to create section data with specific date values
-        fn make_section_with_date(
+        // Helper to create line data with specific date values
+        fn make_line_with_date(
             year_offset: i32,
             month: i32,
             day: i32,
@@ -1561,17 +1547,17 @@ mod tests {
         }
 
         // Test case 1: Month 13 (invalid)
-        let content1 = make_section_with_date(24, 13, 15, 10, 30);
+        let content1 = make_line_with_date(24, 13, 15, 10, 30);
         let (_file1, path1) = create_dmp_file(&content1);
         let result1 = parse_dmp(&path1);
         std::fs::remove_file(&path1).ok();
 
-        // Should not panic, and should return error (either specific or "no valid sections")
+        // Should not panic, and should return error (either specific or "no valid lines")
         assert!(result1.is_err(), "Should fail with month 13");
         // Just verify we got an error without panicking - the actual message depends on implementation
 
         // Test case 2: Day 32 (invalid for any month)
-        let content2 = make_section_with_date(24, 6, 32, 10, 30);
+        let content2 = make_line_with_date(24, 6, 32, 10, 30);
         let (_file2, path2) = create_dmp_file(&content2);
         let result2 = parse_dmp(&path2);
         std::fs::remove_file(&path2).ok();
@@ -1579,7 +1565,7 @@ mod tests {
         assert!(result2.is_err(), "Should fail with day 32");
 
         // Test case 3: February 30 (invalid - Feb never has 30 days)
-        let content3 = make_section_with_date(24, 2, 30, 10, 30);
+        let content3 = make_line_with_date(24, 2, 30, 10, 30);
         let (_file3, path3) = create_dmp_file(&content3);
         let result3 = parse_dmp(&path3);
         std::fs::remove_file(&path3).ok();
@@ -1587,7 +1573,7 @@ mod tests {
         assert!(result3.is_err(), "Should fail with Feb 30");
 
         // Test case 4: Year offset 200 = year 2200, which is outside 2000-2100 range
-        let content4 = make_section_with_date(200, 6, 15, 10, 30); // year 2200 - after 2099
+        let content4 = make_line_with_date(200, 6, 15, 10, 30); // year 2200 - after 2099
         let (_file4, path4) = create_dmp_file(&content4);
         let result4 = parse_dmp(&path4);
         std::fs::remove_file(&path4).ok();
@@ -1598,7 +1584,7 @@ mod tests {
         );
 
         // Test case 5: Hour 25 (invalid)
-        let content5 = make_section_with_date(24, 6, 15, 25, 30);
+        let content5 = make_line_with_date(24, 6, 15, 25, 30);
         let (_file5, path5) = create_dmp_file(&content5);
         let result5 = parse_dmp(&path5);
         std::fs::remove_file(&path5).ok();
@@ -1606,7 +1592,7 @@ mod tests {
         assert!(result5.is_err(), "Should fail with hour 25");
 
         // Test case 6: Minute 60 (invalid)
-        let content6 = make_section_with_date(24, 6, 15, 10, 60);
+        let content6 = make_line_with_date(24, 6, 15, 10, 60);
         let (_file6, path6) = create_dmp_file(&content6);
         let result6 = parse_dmp(&path6);
         std::fs::remove_file(&path6).ok();
@@ -1649,7 +1635,7 @@ mod tests {
         let (_file, path) = create_dmp_file(content);
         let result = parse_dmp(&path);
         std::fs::remove_file(&path).ok();
-        assert!(result.is_err(), "single byte should fail (no sections)");
+        assert!(result.is_err(), "single byte should fail (no lines)");
     }
 
     #[test]
@@ -1677,23 +1663,20 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_empty_data() {
-        let sections = split_into_sections(&[], 2);
-        assert!(sections.is_empty());
+        let lines = split_into_sections(&[], 2);
+        assert!(lines.is_empty());
     }
 
     #[test]
     fn test_split_into_sections_data_shorter_than_pattern() {
-        let sections = split_into_sections(&[2, 0, 0], 2);
-        assert!(
-            sections.is_empty(),
-            "data shorter than pattern = no sections"
-        );
+        let lines = split_into_sections(&[2, 0, 0], 2);
+        assert!(lines.is_empty(), "data shorter than pattern = no lines");
     }
 
     #[test]
     fn test_split_into_sections_unsupported_version() {
-        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99);
-        assert!(sections.is_empty(), "unsupported version = no patterns");
+        let lines = split_into_sections(&[1, 0, 0, 0, 0], 99);
+        assert!(lines.is_empty(), "unsupported version = no patterns");
     }
 
     #[test]
@@ -1713,7 +1696,7 @@ mod tests {
     /// The MNemo records inclination positive-UP, but `depth_in` / `depth_out`
     /// are positive-DOWN.  Left unreconciled the two disagree, and every
     /// downstream consumer has to guess which frame a pitch is in.
-    /// `parse_section` normalises the device frame once, so a `DmpShot` that has
+    /// `parse_line` normalises the device frame once, so a `DmpShot` that has
     /// left the parser is already +down and `to_shot_data` must carry that sign
     /// through untouched: the pitch that comes out has to agree in sign with the
     /// depth change that came out beside it.  A stray second flip here would
@@ -1723,7 +1706,7 @@ mod tests {
         // Real shot from 9_20260522-naharon.dmp: a 12.50 m slope descending
         // 3.64 m, which the depth fields already describe as +16.9° in the
         // +down frame.  The device wrote -16.9° (+up); this is the shot as
-        // `parse_section` hands it on.
+        // `parse_line` hands it on.
         let dmp_shot = DmpShot {
             shot_type: DmpShotType::Standard,
             heading_in: 0.0,
@@ -1798,7 +1781,7 @@ mod tests {
         assert_eq!(shot_data.length, 10.0);
         assert_eq!(shot_data.depth_in, 2.0);
         assert_eq!(shot_data.depth_out, 3.0);
-        // Pitch is copied straight across: `parse_section` already normalised
+        // Pitch is copied straight across: `parse_line` already normalised
         // the device's +up reading, so this boundary must not flip it again.
         assert_eq!(shot_data.pitch_in, Some(5.0));
         assert_eq!(shot_data.pitch_out, Some(-5.0));
@@ -1877,7 +1860,7 @@ mod tests {
             },
         ];
         let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
-        let section = DmpSection {
+        let line = DmpSection {
             version: 4,
             name: "TST".to_string(),
             direction: DmpDirection::Out,
@@ -1889,17 +1872,17 @@ mod tests {
             content_hash: hash,
         };
 
-        let section_data = section.to_section_data("#ff0000".to_string());
+        let line_data = line.to_line_data("#ff0000".to_string());
         // Only Standard shots should be included
         assert_eq!(
-            section_data.shots.len(),
+            line_data.shots.len(),
             1,
             "only Standard shots should be included"
         );
-        assert_eq!(section_data.shots[0].length, 5.0);
-        assert_eq!(section_data.name.as_deref(), Some("TST"));
+        assert_eq!(line_data.shots[0].length, 5.0);
+        assert_eq!(line_data.name.as_deref(), Some("TST"));
         assert_eq!(
-            section_data.direction,
+            line_data.direction,
             Some(crate::models::SurveyDirection::Out)
         );
     }
@@ -1933,8 +1916,8 @@ mod tests {
     }
 
     #[test]
-    fn test_section_data_filters_non_standard_shots_via_to_section_data() {
-        // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
+    fn test_line_data_filters_non_standard_shots_via_to_line_data() {
+        // A DmpSection with only EOS/CsA shots should produce empty shot list in LineData
         let shots = vec![
             DmpShot {
                 shot_type: DmpShotType::EndOfSurvey,
@@ -1978,7 +1961,7 @@ mod tests {
             },
         ];
         let hash = compute_section_hash("TST", DmpDirection::In, &shots);
-        let section = DmpSection {
+        let line = DmpSection {
             version: 3,
             name: "TST".to_string(),
             direction: DmpDirection::In,
@@ -1990,9 +1973,9 @@ mod tests {
             content_hash: hash,
         };
 
-        let section_data = section.to_section_data("#ff0000".to_string());
+        let line_data = line.to_line_data("#ff0000".to_string());
         assert!(
-            section_data.shots.is_empty(),
+            line_data.shots.is_empty(),
             "only non-Standard shots → empty shot list"
         );
     }
@@ -2141,7 +2124,7 @@ mod tests {
     // kb5.dmp regression tests (skip by default - requires fixture file)
     // ========================================================================
 
-    /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
+    /// Parse kb5.dmp and validate line structure, shot counts, and key shot data.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -2158,27 +2141,27 @@ mod tests {
         // Version
         assert_eq!(dmp.version, 5);
 
-        // Section count
-        assert_eq!(dmp.sections.len(), 5, "expected 5 sections");
+        // Line count
+        assert_eq!(dmp.lines.len(), 5, "expected 5 lines");
 
-        // Section names and directions
-        let names: Vec<&str> = dmp.sections.iter().map(|s| s.name.as_str()).collect();
+        // Line names and directions
+        let names: Vec<&str> = dmp.lines.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["001", "002", "003", "004", "005"]);
-        for section in &dmp.sections {
+        for line in &dmp.lines {
             assert_eq!(
-                section.direction,
+                line.direction,
                 DmpDirection::In,
-                "all sections should be direction In"
+                "all lines should be direction In"
             );
         }
 
         // DMP shot counts (all shot types)
-        let dmp_shot_counts: Vec<usize> = dmp.sections.iter().map(|s| s.shots.len()).collect();
+        let dmp_shot_counts: Vec<usize> = dmp.lines.iter().map(|s| s.shots.len()).collect();
         assert_eq!(dmp_shot_counts, vec![108, 365, 30, 5, 8]);
 
         // Standard shot counts (after filtering non-Standard types)
         let standard_counts: Vec<usize> = dmp
-            .sections
+            .lines
             .iter()
             .map(|s| {
                 s.shots
@@ -2189,15 +2172,15 @@ mod tests {
             .collect();
         assert_eq!(standard_counts, vec![107, 364, 29, 4, 7]);
 
-        // Validate key shot data for each section (first and last standard shots)
-        let assert_shot = |section_idx: usize,
+        // Validate key shot data for each line (first and last standard shots)
+        let assert_shot = |line_idx: usize,
                            shot_idx: usize,
                            az_in: f64,
                            az_out: f64,
                            len: f64,
                            d_in: f64,
                            d_out: f64| {
-            let standard: Vec<&DmpShot> = dmp.sections[section_idx]
+            let standard: Vec<&DmpShot> = dmp.lines[line_idx]
                 .shots
                 .iter()
                 .filter(|s| s.shot_type == DmpShotType::Standard)
@@ -2205,77 +2188,77 @@ mod tests {
             let shot = standard[shot_idx];
             assert!(
                 (shot.heading_in - az_in).abs() < 0.05,
-                "section[{}] shot[{}] az_in: {} != {}",
-                section_idx,
+                "line[{}] shot[{}] az_in: {} != {}",
+                line_idx,
                 shot_idx,
                 shot.heading_in,
                 az_in
             );
             assert!(
                 (shot.heading_out - az_out).abs() < 0.05,
-                "section[{}] shot[{}] az_out: {} != {}",
-                section_idx,
+                "line[{}] shot[{}] az_out: {} != {}",
+                line_idx,
                 shot_idx,
                 shot.heading_out,
                 az_out
             );
             assert!(
                 (shot.length - len).abs() < 0.005,
-                "section[{}] shot[{}] length: {} != {}",
-                section_idx,
+                "line[{}] shot[{}] length: {} != {}",
+                line_idx,
                 shot_idx,
                 shot.length,
                 len
             );
             assert!(
                 (shot.depth_in - d_in).abs() < 0.005,
-                "section[{}] shot[{}] depth_in: {} != {}",
-                section_idx,
+                "line[{}] shot[{}] depth_in: {} != {}",
+                line_idx,
                 shot_idx,
                 shot.depth_in,
                 d_in
             );
             assert!(
                 (shot.depth_out - d_out).abs() < 0.005,
-                "section[{}] shot[{}] depth_out: {} != {}",
-                section_idx,
+                "line[{}] shot[{}] depth_out: {} != {}",
+                line_idx,
                 shot_idx,
                 shot.depth_out,
                 d_out
             );
         };
 
-        // Section 001: first, last standard shots
+        // Line 001: first, last standard shots
         assert_shot(0, 0, 209.7, 209.7, 11.360, 8.45, 8.55);
         assert_shot(0, 106, 343.7, 343.7, 12.040, 8.03, 7.89);
 
-        // Section 002: first, last standard shots
+        // Line 002: first, last standard shots
         assert_shot(1, 0, 23.2, 23.2, 3.580, 9.22, 9.12);
         assert_shot(1, 363, 258.1, 258.1, 9.120, 7.42, 7.49);
 
-        // Section 003: first, last standard shots
+        // Line 003: first, last standard shots
         assert_shot(2, 0, 229.9, 229.9, 5.210, 9.55, 9.44);
         assert_shot(2, 28, 59.0, 59.0, 5.480, 7.21, 7.11);
 
-        // Section 004: all 4 standard shots
+        // Line 004: all 4 standard shots
         assert_shot(3, 0, 45.6, 45.6, 5.090, 9.35, 9.40);
         assert_shot(3, 1, 352.0, 352.0, 3.760, 9.30, 9.35);
         assert_shot(3, 2, 33.7, 33.7, 5.080, 9.48, 9.49);
         assert_shot(3, 3, 9.5, 9.5, 5.710, 9.49, 9.39);
 
-        // Section 005: first, last standard shots
+        // Line 005: first, last standard shots
         assert_shot(4, 0, 256.4, 256.4, 14.010, 8.30, 8.40);
         assert_shot(4, 6, 299.0, 299.0, 13.360, 9.36, 9.16);
     }
 
-    /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
+    /// Run cross-line suggestions on kb5.dmp lines (with 002 as existing)
     /// and validate the overlap detection results.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
     #[test]
     #[ignore]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
+            suggest_all_placements, ExistingLine, ImportLineForSuggestion, MatchDirection,
             TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
@@ -2289,9 +2272,9 @@ mod tests {
 
         let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
 
-        // Build section 002 as the "existing" project section (simulates it being already imported)
-        let section_002 = &dmp.sections[1]; // index 1 = "002"
-        let existing_shots: Vec<Shot> = section_002
+        // Build line 002 as the "existing" project line (simulates it being already imported)
+        let line_002 = &dmp.lines[1]; // index 1 = "002"
+        let existing_shots: Vec<Shot> = line_002
             .shots
             .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
@@ -2318,19 +2301,19 @@ mod tests {
             })
             .collect();
 
-        let existing_sections = vec![ExistingSection {
+        let existing_lines = vec![ExistingLine {
             id: 0,
             name: "002".to_string(),
             shots: existing_shots,
             azimuth_reference: crate::models::AzimuthReference::default(),
         }];
 
-        // Build import sections (all 5 from DMP, including 002)
-        let import_sections: Vec<ImportSectionForSuggestion> = dmp
-            .sections
+        // Build import lines (all 5 from DMP, including 002)
+        let import_lines: Vec<ImportLineForSuggestion> = dmp
+            .lines
             .iter()
             .enumerate()
-            .map(|(i, s)| ImportSectionForSuggestion {
+            .map(|(i, s)| ImportLineForSuggestion {
                 index: i as u32,
                 name: s.name.clone(),
                 shots: s
@@ -2348,9 +2331,9 @@ mod tests {
             .collect();
 
         let suggestions = suggest_all_placements(
-            &import_sections,
+            &import_lines,
             crate::models::AzimuthReference::default(),
-            &existing_sections,
+            &existing_lines,
             &crate::models::config::PlacementSuggestionConfig::default(),
         );
 
@@ -2358,10 +2341,10 @@ mod tests {
         for (i, s) in suggestions.iter().enumerate() {
             println!(
                 "  suggestion[{}]: import={} '{}' impStn={} → target={} '{}' exStn={} matched={} dir={:?} score={:.3} conf={:?} partial={}",
-                i, s.import_section_index, s.import_section_name,
+                i, s.import_line_index, s.import_line_name,
                 s.import_station_index,
-                match s.target_type { TargetType::Existing => format!("existing:{}", s.existing_section_id.unwrap_or(0)), TargetType::Importing => format!("importing:{}", s.target_import_index.unwrap_or(0)) },
-                s.existing_section_name,
+                match s.target_type { TargetType::Existing => format!("existing:{}", s.existing_line_id.unwrap_or(0)), TargetType::Importing => format!("importing:{}", s.target_import_index.unwrap_or(0)) },
+                s.existing_line_name,
                 s.existing_station_index,
                 s.matched_shots, s.direction, s.score, s.confidence, s.is_partial,
             );
@@ -2377,9 +2360,9 @@ mod tests {
 
         // Verify the import→existing suggestion exists: 001 → 002
         let s001_to_002 = suggestions.iter().find(|s| {
-            s.import_section_index == 0
+            s.import_line_index == 0
                 && s.target_type == TargetType::Existing
-                && s.existing_section_id == Some(0)
+                && s.existing_line_id == Some(0)
         });
         assert!(
             s001_to_002.is_some(),
@@ -2398,7 +2381,7 @@ mod tests {
         // 005 → 001
         let s005_to_001 = suggestions.iter().find(
             |s| {
-                s.import_section_index == 4
+                s.import_line_index == 4
                     && s.target_type == TargetType::Importing
                     && s.target_import_index == Some(0)
                     && s.import_station_index == 7
@@ -2418,7 +2401,7 @@ mod tests {
         // 004 → 001 (front of 004 connects to station 28 of 001)
         let s004_to_001 = suggestions.iter().find(
             |s| {
-                s.import_section_index == 3
+                s.import_line_index == 3
                     && s.target_type == TargetType::Importing
                     && s.target_import_index == Some(0)
                     && s.import_station_index == 0
@@ -2438,7 +2421,7 @@ mod tests {
         // 003 → 001 (front of 003 connects to station 27 of 001)
         let s003_to_001 = suggestions.iter().find(
             |s| {
-                s.import_section_index == 2
+                s.import_line_index == 2
                     && s.target_type == TargetType::Importing
                     && s.target_import_index == Some(0)
                     && s.import_station_index == 0
@@ -2455,17 +2438,17 @@ mod tests {
             "003 connects to 001 station 27"
         );
 
-        // Verify section 004 also has an overlap against existing 002
+        // Verify line 004 also has an overlap against existing 002
         // (This was the source of the double-treatment bug)
         let s004_to_existing = suggestions.iter().find(
             |s| {
-                s.import_section_index == 3
+                s.import_line_index == 3
                     && s.target_type == TargetType::Existing
                     && s.import_station_index == 4
             }, // back of 004
         );
         assert!(s004_to_existing.is_some(),
-            "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
+            "line 004 should have a back-end overlap with existing 002 (double-treatment regression)");
         let s = s004_to_existing.unwrap();
         assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
         assert_eq!(
@@ -2476,23 +2459,23 @@ mod tests {
 
     /// Simulate overlap treatment for kb5.dmp and validate post-import shot counts.
     ///
-    /// Scenario: section 002 is already imported as existing (zero datum).
-    /// Sections 001, 003, 004, 005 are imported via the wizard with all default
+    /// Scenario: line 002 is already imported as existing (zero datum).
+    /// Lines 001, 003, 004, 005 are imported via the wizard with all default
     /// suggestions and `interpolate` overlap mode.
     ///
     /// The treatment rules (matching the TypeScript `applyAllOverlapTreatments`):
     /// - Import-to-import (targetType=Importing): import overlap shots are DELETED
     /// - Import-to-existing (targetType=Existing): import overlap shots are INTERPOLATED (kept alive)
     /// - treatedShots guard: a shot already treated by a prior suggestion is skipped
-    /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
+    /// - Suggestions targeting importing:1 (line 002) are skipped (002 is existing, not imported)
     ///
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
     #[test]
     #[ignore]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, CrossSectionSuggestion, ExistingSection,
-            ImportSectionForSuggestion, TargetType,
+            suggest_all_placements, CrossLineSuggestion, ExistingLine, ImportLineForSuggestion,
+            TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
         use std::collections::{HashMap, HashSet};
@@ -2502,7 +2485,7 @@ mod tests {
 
         // Raw standard shot counts (pre-treatment)
         let raw_counts: Vec<usize> = dmp
-            .sections
+            .lines
             .iter()
             .map(|s| {
                 s.shots
@@ -2516,8 +2499,8 @@ mod tests {
         assert_eq!(raw_counts[4], 7, "005 raw standard shots");
 
         // Build 002 as existing, all 5 as imports (same setup as suggestions test)
-        let section_002 = &dmp.sections[1];
-        let existing_shots: Vec<Shot> = section_002
+        let line_002 = &dmp.lines[1];
+        let existing_shots: Vec<Shot> = line_002
             .shots
             .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
@@ -2543,17 +2526,17 @@ mod tests {
                 credit: None,
             })
             .collect();
-        let existing_sections = vec![ExistingSection {
+        let existing_lines = vec![ExistingLine {
             id: 0,
             name: "002".to_string(),
             shots: existing_shots,
             azimuth_reference: crate::models::AzimuthReference::default(),
         }];
-        let import_sections: Vec<ImportSectionForSuggestion> = dmp
-            .sections
+        let import_lines: Vec<ImportLineForSuggestion> = dmp
+            .lines
             .iter()
             .enumerate()
-            .map(|(i, s)| ImportSectionForSuggestion {
+            .map(|(i, s)| ImportLineForSuggestion {
                 index: i as u32,
                 name: s.name.clone(),
                 shots: s
@@ -2571,24 +2554,24 @@ mod tests {
             .collect();
 
         let suggestions = suggest_all_placements(
-            &import_sections,
+            &import_lines,
             crate::models::AzimuthReference::default(),
-            &existing_sections,
+            &existing_lines,
             &crate::models::config::PlacementSuggestionConfig::default(),
         );
 
         // Simulate applyAllOverlapTreatments import-side logic.
-        // deleted_shots: section_index → set of shot IDs marked deleted.
-        // treated_shots: "section_index:shot_id" → already processed.
+        // deleted_shots: line_index → set of shot IDs marked deleted.
+        // treated_shots: "line_index:shot_id" → already processed.
         //
-        // The wizard confirms one suggestion per import section (the highest-scoring one).
+        // The wizard confirms one suggestion per import line (the highest-scoring one).
         // Confirmed import-to-existing suggestions delete overlap shots (the existing
-        // section already has the data). Unconfirmed import-to-existing suggestions
+        // line already has the data). Unconfirmed import-to-existing suggestions
         // only interpolate (they may be false positives from the pool).
-        let mut confirmed_sections: HashSet<u32> = HashSet::new();
+        let mut confirmed_lines: HashSet<u32> = HashSet::new();
         let mut confirmed_suggestions: HashSet<usize> = HashSet::new();
         for (i, s) in suggestions.iter().enumerate() {
-            if s.import_section_index == 1 {
+            if s.import_line_index == 1 {
                 continue;
             }
             if s.target_type == TargetType::Importing && s.target_import_index == Some(1) {
@@ -2597,8 +2580,8 @@ mod tests {
             if s.matched_shots == 0 {
                 continue;
             }
-            // First (highest-scoring) suggestion per section is the confirmed one
-            if confirmed_sections.insert(s.import_section_index) {
+            // First (highest-scoring) suggestion per line is the confirmed one
+            if confirmed_lines.insert(s.import_line_index) {
                 confirmed_suggestions.insert(i);
             }
         }
@@ -2607,7 +2590,7 @@ mod tests {
         let mut treated_shots: HashSet<String> = HashSet::new();
 
         for (i, s) in suggestions.iter().enumerate() {
-            if s.import_section_index == 1 {
+            if s.import_line_index == 1 {
                 continue;
             }
             if s.target_type == TargetType::Importing && s.target_import_index == Some(1) {
@@ -2628,17 +2611,17 @@ mod tests {
             };
 
             for &shot_id in &overlap_ids {
-                let key = format!("{}:{}", s.import_section_index, shot_id);
+                let key = format!("{}:{}", s.import_line_index, shot_id);
                 if treated_shots.contains(&key) {
                     continue;
                 }
                 treated_shots.insert(key);
 
-                // Import-to-import: always delete (target section keeps the overlap).
+                // Import-to-import: always delete (target line keeps the overlap).
                 // Confirmed import-to-existing: delete (target gets interpolated values).
                 if s.target_type == TargetType::Importing || is_confirmed {
                     deleted_shots
-                        .entry(s.import_section_index)
+                        .entry(s.import_line_index)
                         .or_default()
                         .insert(shot_id);
                 }
@@ -2646,9 +2629,9 @@ mod tests {
         }
 
         // Compute post-treatment alive counts
-        let alive = |section_idx: u32| -> usize {
-            let raw = raw_counts[section_idx as usize];
-            let deleted = deleted_shots.get(&section_idx).map_or(0, |s| s.len());
+        let alive = |line_idx: u32| -> usize {
+            let raw = raw_counts[line_idx as usize];
+            let deleted = deleted_shots.get(&line_idx).map_or(0, |s| s.len());
             raw - deleted
         };
 
@@ -2658,25 +2641,25 @@ mod tests {
         let alive_005 = alive(4);
 
         println!(
-            "Section 001: raw={}, deleted={:?}, alive={}",
+            "Line 001: raw={}, deleted={:?}, alive={}",
             raw_counts[0],
             deleted_shots.get(&0),
             alive_001
         );
         println!(
-            "Section 003: raw={}, deleted={:?}, alive={}",
+            "Line 003: raw={}, deleted={:?}, alive={}",
             raw_counts[2],
             deleted_shots.get(&2),
             alive_003
         );
         println!(
-            "Section 004: raw={}, deleted={:?}, alive={}",
+            "Line 004: raw={}, deleted={:?}, alive={}",
             raw_counts[3],
             deleted_shots.get(&3),
             alive_004
         );
         println!(
-            "Section 005: raw={}, deleted={:?}, alive={}",
+            "Line 005: raw={}, deleted={:?}, alive={}",
             raw_counts[4],
             deleted_shots.get(&4),
             alive_005
@@ -2699,20 +2682,18 @@ mod tests {
             "003: 29 raw - 2 deleted (front overlap with 001) = 27"
         );
 
-        // Verify attachment stations: all three sections connect to 001
-        let find_primary = |import_idx: u32| -> &CrossSectionSuggestion {
+        // Verify attachment stations: all three lines connect to 001
+        let find_primary = |import_idx: u32| -> &CrossLineSuggestion {
             suggestions
                 .iter()
                 .find(
                     |s| {
-                        s.import_section_index == import_idx
+                        s.import_line_index == import_idx
                             && s.target_type == TargetType::Importing
                             && s.target_import_index == Some(0)
                     }, // 001
                 )
-                .unwrap_or_else(|| {
-                    panic!("no importing suggestion for section index {}", import_idx)
-                })
+                .unwrap_or_else(|| panic!("no importing suggestion for line index {}", import_idx))
         };
 
         let s005 = find_primary(4);
@@ -2737,9 +2718,9 @@ mod tests {
         let s001 = suggestions
             .iter()
             .find(|s| {
-                s.import_section_index == 0
+                s.import_line_index == 0
                     && s.target_type == TargetType::Existing
-                    && s.existing_section_id == Some(0)
+                    && s.existing_line_id == Some(0)
             })
             .expect("001 should have an existing suggestion to 002");
         assert_eq!(
@@ -2753,15 +2734,15 @@ mod tests {
 
         // Overlap shot raw data for 001→002 connection.
         // Import overlap shots 105, 106 are deleted from 001.
-        // Target shots 180, 181 on existing section 002 get interpolated values.
+        // Target shots 180, 181 on existing line 002 get interpolated values.
         // Post-import interpolated values are verified in the integration test
         // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
-        let std_001: Vec<_> = dmp.sections[0]
+        let std_001: Vec<_> = dmp.lines[0]
             .shots
             .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .collect();
-        let std_002: Vec<_> = dmp.sections[1]
+        let std_002: Vec<_> = dmp.lines[1]
             .shots
             .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
@@ -2784,9 +2765,9 @@ mod tests {
     // Signed int16 / negative pitch tests
     // ============================================================================
 
-    /// Helper: build a v4 DMP section from field-level values (as signed i16).
+    /// Helper: build a v4 DMP line from field-level values (as signed i16).
     /// Encodes each i16 as two unsigned bytes [hi, lo] matching the on-disk format.
-    fn build_v4_shot_section(
+    fn build_v4_shot_line(
         name: [u8; 3],
         heading_in: i16,
         heading_out: i16,
@@ -2846,7 +2827,7 @@ mod tests {
     /// Full integration test: negative pitch values parsed through the entire DMP pipeline.
     #[test]
     fn test_parse_dmp_negative_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"NEG", 900,  // heading_in 90.0°
             910,  // heading_out 91.0°
             500,  // length 5.00m
@@ -2859,7 +2840,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse DMP with negative pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         assert_eq!(shot.heading_in, 90.0);
         assert_eq!(shot.heading_out, 91.0);
         assert_eq!(shot.length, 5.0);
@@ -2880,7 +2861,7 @@ mod tests {
     /// Steep downward pitch near the device's -90° limit.
     #[test]
     fn test_parse_dmp_steep_negative_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"STP", 1800, // heading_in 180.0°
             1810, // heading_out 181.0°
             200,  // length 2.00m
@@ -2893,7 +2874,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse steep negative pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         // Device wrote -850 / -900 tenths (-85.0° / -90.0°, +up).
         assert_eq!(shot.pitch_in, 85.0, "Steep downward pitch_in (+down)");
         assert_eq!(shot.pitch_out, 90.0, "Vertical downward pitch_out (+down)");
@@ -2903,7 +2884,7 @@ mod tests {
     /// as negative in the model's +down frame.
     #[test]
     fn test_parse_dmp_positive_device_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"UPP", 450,  // heading_in 45.0°
             460,  // heading_out 46.0°
             1000, // length 10.00m
@@ -2916,7 +2897,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse positive pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         // Device wrote +450 / +300 tenths (+45.0° / +30.0°, +up = ascending);
         // depth decreases 2.00m -> 1.00m on the same shot, so +down is negative.
         assert_eq!(shot.pitch_in, -45.0, "Ascending pitch_in (+down)");
@@ -2926,7 +2907,7 @@ mod tests {
     /// Zero pitch (horizontal passage).
     #[test]
     fn test_parse_dmp_zero_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"ZRO", 2700, 2710, 300, 100, 100, 0, // pitch_in 0.0°
             0, // pitch_out 0.0°
         );
@@ -2934,7 +2915,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse zero pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         assert_eq!(shot.pitch_in, 0.0);
         assert_eq!(shot.pitch_out, 0.0);
     }
@@ -2942,7 +2923,7 @@ mod tests {
     /// Mixed positive/negative pitch within a single shot.
     #[test]
     fn test_parse_dmp_mixed_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"MIX", 900, 910, 500, 200, 300, 50,  // pitch_in +5.0°
             -50, // pitch_out -5.0°
         );
@@ -2950,7 +2931,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse mixed pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         // Device wrote +50 / -50 tenths (+5.0° / -5.0°, +up); both signs flip.
         assert_eq!(shot.pitch_in, -5.0, "Ascending pitch_in (+down)");
         assert_eq!(shot.pitch_out, 5.0, "Descending pitch_out (+down)");
@@ -2959,7 +2940,7 @@ mod tests {
     /// Small negative device pitch values (-0.1° to -0.9°) that sit near zero.
     #[test]
     fn test_parse_dmp_small_negative_pitch() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"SML", 900, 910, 500, 100, 100, -1, // pitch_in -0.1°
             -9, // pitch_out -0.9°
         );
@@ -2967,7 +2948,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse small negative pitch");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         // Device wrote -1 / -9 tenths (-0.1° / -0.9°, +up).
         assert!(
             (shot.pitch_in - 0.1).abs() < 1e-9,
@@ -2986,7 +2967,7 @@ mod tests {
     /// sit below i16::MAX -- e.g. heading 350.0° = 3500 = 0x0DAC, positive).
     #[test]
     fn test_parse_dmp_large_positive_heading() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"HDG", 3500, // heading_in 350.0°
             3590, // heading_out 359.0°
             500, 100, 100, 0, 0,
@@ -2995,7 +2976,7 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse large headings");
         std::fs::remove_file(&path).ok();
 
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         assert_eq!(shot.heading_in, 350.0);
         assert_eq!(shot.heading_out, 359.0);
     }
@@ -3006,7 +2987,7 @@ mod tests {
     /// happens exactly once: `DmpShot` and `ShotData` agree.
     #[test]
     fn test_negative_device_pitch_through_to_shot_data() {
-        let content = build_v4_shot_section(
+        let content = build_v4_shot_line(
             *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0° (device, +up)
             -350, // pitch_out -35.0° (device, +up)
         );
@@ -3015,13 +2996,13 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         // The parser is where the device frame is normalised...
-        let shot = &dmp.sections[0].shots[0];
+        let shot = &dmp.lines[0].shots[0];
         assert_eq!(shot.pitch_in, 20.0, "DmpShot leaves the parser in +down");
         assert_eq!(shot.pitch_out, 35.0, "DmpShot leaves the parser in +down");
 
         // ...and the conversion boundary passes it through unchanged.
-        let section_data = dmp.sections[0].to_section_data(String::new());
-        let shot_data = &section_data.shots[0];
+        let line_data = dmp.lines[0].to_line_data(String::new());
+        let shot_data = &line_data.shots[0];
         assert_eq!(shot_data.pitch_in, Some(20.0), "ShotData pitch_in");
         assert_eq!(shot_data.pitch_out, Some(35.0), "ShotData pitch_out");
     }
@@ -3039,12 +3020,12 @@ mod tests {
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
 
-        // Section 0 ("BAS"), shot 0:
+        // Line 0 ("BAS"), shot 0:
         // File bytes for pitch: -1;-17 and -1;-18
         // Python: (-1*256)+(-17&0xFF) = -17, (-1*256)+(-18&0xFF) = -18
         // Device wrote -1.7° / -1.8° (+up); parser normalises to +1.7° / +1.8°.
-        let s0 = &dmp.sections[0];
-        assert_eq!(s0.name, "BAS", "First section name");
+        let s0 = &dmp.lines[0];
+        assert_eq!(s0.name, "BAS", "First line name");
         let shot0 = &s0.shots[0];
         assert!(
             (shot0.pitch_in - 1.7).abs() < 0.01,
@@ -3059,13 +3040,13 @@ mod tests {
     }
 
     /// `compute_section_hash` is taken over the device's own bytes, *before*
-    /// `parse_section` flips pitch into the +down frame.  That ordering is what
+    /// `parse_line` flips pitch into the +down frame.  That ordering is what
     /// lets a project imported before issue #296 still recognise a re-imported
-    /// section as the same content, so the hash must not have moved.  The
+    /// line as the same content, so the hash must not have moved.  The
     /// expected digest is pinned from a real fixture parse: reordering the flip
     /// ahead of the hash changes it and fails here.
     #[test]
-    fn section_hash_is_unchanged_by_the_pitch_normalisation() {
+    fn line_hash_is_unchanged_by_the_pitch_normalisation() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
         if !test_file.exists() {
@@ -3074,8 +3055,8 @@ mod tests {
         }
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
-        let s0 = &dmp.sections[0];
-        assert_eq!(s0.name, "BAS", "First section name");
+        let s0 = &dmp.lines[0];
+        assert_eq!(s0.name, "BAS", "First line name");
         assert_eq!(
             s0.content_hash, "b97987346709cd1089186517af06997c817fbaed0625259f5e12609b8bb66a89",
             "content_hash moved; is compute_section_hash still running before the pitch flip?"
@@ -3104,10 +3085,10 @@ mod tests {
 
         let dmp = parse_dmp(&test_file).expect("should parse v2 fixture");
 
-        let s0 = &dmp.sections[0];
-        assert_eq!(s0.name, "BAS", "First section name");
+        let s0 = &dmp.lines[0];
+        assert_eq!(s0.name, "BAS", "First line name");
 
-        // V2 section 0, shot 0: file bytes for pitch_in are 0;-123 and pitch_out is 0;14
+        // V2 line 0, shot 0: file bytes for pitch_in are 0;-123 and pitch_out is 0;14
         // Python: (0*256)+(-123&0xFF) = 133, (0*256)+(14&0xFF) = 14
         // Device wrote +13.3° / +1.4° (+up); parser normalises to -13.3° / -1.4°.
         let shot0 = &s0.shots[0];
@@ -3150,19 +3131,19 @@ mod tests {
             }
 
             let dmp = parse_dmp(&test_file).expect("should parse fixture");
-            for (si, section) in dmp.sections.iter().enumerate() {
-                for (shi, shot) in section.shots.iter().enumerate() {
+            for (si, line) in dmp.lines.iter().enumerate() {
+                for (shi, shot) in line.shots.iter().enumerate() {
                     if shot.shot_type != DmpShotType::Standard {
                         continue;
                     }
                     assert!(
                         (-90.0..=90.0).contains(&shot.pitch_in),
-                        "{fixture} section {si} shot {shi}: pitch_in={} out of [-90,90] range",
+                        "{fixture} line {si} shot {shi}: pitch_in={} out of [-90,90] range",
                         shot.pitch_in,
                     );
                     assert!(
                         (-90.0..=90.0).contains(&shot.pitch_out),
-                        "{fixture} section {si} shot {shi}: pitch_out={} out of [-90,90] range",
+                        "{fixture} line {si} shot {shi}: pitch_out={} out of [-90,90] range",
                         shot.pitch_out,
                     );
                 }
@@ -3250,9 +3231,9 @@ mod tests {
     // parse_dmp_bytes, the text form, and DmpReadLoss (#725)
     // ------------------------------------------------------------------------
 
-    /// One synthetic v3 section (with its end-of-section shot) as bytes.
-    fn v3_section_bytes() -> Vec<u8> {
-        parse_dmp_text(&build_v3_section_data()).unwrap()
+    /// One synthetic v3 line (with its end-of-line shot) as bytes.
+    fn v3_line_bytes() -> Vec<u8> {
+        parse_dmp_text(&build_v3_line_data()).unwrap()
     }
 
     #[test]
@@ -3269,9 +3250,9 @@ mod tests {
     }
 
     #[test]
-    fn bytes_and_file_parse_to_the_same_sections() {
-        let mut data = v3_section_bytes();
-        data.extend(v3_section_bytes());
+    fn bytes_and_file_parse_to_the_same_lines() {
+        let mut data = v3_line_bytes();
+        data.extend(v3_line_bytes());
         let (from_bytes, loss) = parse_dmp_bytes(&data).unwrap();
         assert_eq!(loss, DmpReadLoss::default());
 
@@ -3280,22 +3261,22 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let hashes = |f: &DmpFile| -> Vec<String> {
-            f.sections.iter().map(|s| s.content_hash.clone()).collect()
+            f.lines.iter().map(|s| s.content_hash.clone()).collect()
         };
-        assert_eq!(from_bytes.sections.len(), 2);
+        assert_eq!(from_bytes.lines.len(), 2);
         assert_eq!(hashes(&from_bytes), hashes(&from_file));
     }
 
     #[test]
-    fn loss_counts_a_section_that_fails_to_parse() {
-        let mut bad_date = v3_section_bytes();
+    fn loss_counts_a_line_that_fails_to_parse() {
+        let mut bad_date = v3_line_bytes();
         bad_date[5] = 13; // month byte: version(1) + magic(3) + year(1), then month
-        let mut data = v3_section_bytes();
+        let mut data = v3_line_bytes();
         data.extend(bad_date);
 
         let (file, loss) = parse_dmp_bytes(&data).unwrap();
-        assert_eq!(file.sections.len(), 1);
-        assert_eq!(loss.skipped_sections, 1);
+        assert_eq!(file.lines.len(), 1);
+        assert_eq!(loss.skipped_lines, 1);
         assert_eq!(loss.unread_trailing_bytes, 0);
     }
 
@@ -3306,7 +3287,7 @@ mod tests {
             REPLY_TRAILER,
             &[0, 0, 77, 78, 50, 79, 118, 101, 114, 0][..],
         ] {
-            let mut data = v3_section_bytes();
+            let mut data = v3_line_bytes();
             data.extend_from_slice(tail);
             let (_, loss) = parse_dmp_bytes(&data).unwrap();
             assert_eq!(loss.unread_trailing_bytes, 0, "tail {tail:?}");
@@ -3314,14 +3295,14 @@ mod tests {
     }
 
     #[test]
-    fn loss_counts_a_final_section_with_no_end_marker() {
-        let section = v3_section_bytes();
-        let unterminated = &section[..section.len() - shot_size(3)];
-        let mut data = section.clone();
+    fn loss_counts_a_final_line_with_no_end_marker() {
+        let line = v3_line_bytes();
+        let unterminated = &line[..line.len() - shot_size(3)];
+        let mut data = line.clone();
         data.extend_from_slice(unterminated);
 
         let (file, loss) = parse_dmp_bytes(&data).unwrap();
-        assert_eq!(file.sections.len(), 1);
+        assert_eq!(file.lines.len(), 1);
         assert_eq!(loss.unread_trailing_bytes, unterminated.len());
     }
 
@@ -3329,9 +3310,9 @@ mod tests {
     fn parse_dmp_bytes_refuses_empty_and_unknown_versions() {
         let empty = parse_dmp_bytes(&[]).unwrap_err().to_string();
         assert!(empty.contains("empty"), "{empty}");
-        // Checked by message: an unknown version also finds no sections, so a
+        // Checked by message: an unknown version also finds no lines, so a
         // bare is_err() would pass with the version check removed.
-        let mut data = v3_section_bytes();
+        let mut data = v3_line_bytes();
         data[0] = 9;
         let unknown = parse_dmp_bytes(&data).unwrap_err().to_string();
         assert!(unknown.contains("Unsupported DMP version"), "{unknown}");

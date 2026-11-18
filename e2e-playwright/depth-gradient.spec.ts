@@ -1,14 +1,14 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   getShotScreenPositions,
   getStationScreenPositions,
   waitForDrawnShots,
   waitForDrawnStations,
   readCanvasPixel,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
   type ShotScreenPos,
 } from './helpers/app';
 
@@ -18,7 +18,7 @@ import {
  */
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project with mock lines/stations
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
@@ -29,7 +29,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Depth Gradient A',
     direction: 'in',
@@ -70,7 +70,7 @@ async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
 async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
   const colorKeys = ['showDepthGradient', 'showDistanceGradient', 'showIssueSeverity'];
   const currentState = await isToggleOn(page, toggleKey);
-  // Color modes are single-select: turn one OFF by selecting Section, not by re-clicking the pill.
+  // Color modes are single-select: turn one OFF by selecting Line, not by re-clicking the pill.
   if (currentState && colorKeys.includes(toggleKey)) {
     await page.locator('[data-testid="display-color-section"]').click();
   } else {
@@ -145,7 +145,7 @@ async function zoomIn(page: Page, delta = 4, minSpanPx = 40): Promise<void> {
 
 /** Stable key for a shot's identity (`getShotScreenPositions` order is not). */
 function shotKey(shot: ShotScreenPos): string {
-  return `${shot.sectionId}:${shot.shotId}`;
+  return `${shot.lineId}:${shot.shotId}`;
 }
 
 /**
@@ -182,11 +182,11 @@ function isBetween(mid: PixelRgba, a: PixelRgba, b: PixelRgba, slack = 6): boole
   return true;
 }
 
-/** Painted fill of every drawn station, keyed `sectionId:stationIndex`. */
+/** Painted fill of every drawn station, keyed `lineId:stationIndex`. */
 async function stationFills(page: Page): Promise<Record<string, PixelRgba>> {
   const out: Record<string, PixelRgba> = {};
   for (const st of await getStationScreenPositions(page)) {
-    out[`${st.sectionId}:${st.stationIndex}`] = await readCanvasPixel(page, st.x, st.y);
+    out[`${st.lineId}:${st.stationIndex}`] = await readCanvasPixel(page, st.x, st.y);
   }
   return out;
 }
@@ -196,7 +196,7 @@ test.describe('Depth Gradient', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Depth Gradient Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapLoaded(page);
   });
 
@@ -241,7 +241,7 @@ test.describe('Depth Gradient', () => {
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
 
     // Poll for the painted station fills to change after enabling depth gradient.
-    // Every station moves off the flat section color onto its depth-ramp color, so
+    // Every station moves off the flat line color onto its depth-ramp color, so
     // require all of them to repaint (not just one).
     await expect.poll(async () => {
       const colorsAfter = await stationFills(page);
@@ -308,7 +308,7 @@ test.describe('Depth Gradient', () => {
     }, { timeout: 2000 }).toBe(true);
 
     // Wait for the depth build to land on the canvas: every shot repaints away
-    // from its flat section color.
+    // from its flat line color.
     await expect.poll(async () => {
       const now = await getShotScreenPositions(page);
       if (now.length !== shots.length) return false;
@@ -339,11 +339,11 @@ test.describe('Depth Gradient', () => {
 
     // ...and shots at different depths are painted different colors from each other.
     // Only shots that occupy DISTINCT screen geometry are comparable: the e2e mock
-    // lays every section's stations out on the same synthetic line (`x: i * 10,
-    // y: 0` in mocks/tauri-ipc.ts, azimuth/length ignored), so a second section's
-    // first leg is drawn exactly on top of the first section's and a pixel there
+    // lays every line's stations out on the same synthetic line (`x: i * 10,
+    // y: 0` in mocks/tauri-ipc.ts, azimuth/length ignored), so a second line's
+    // first leg is drawn exactly on top of the first line's and a pixel there
     // cannot be attributed to either. Deduping by screen slot keeps the real
-    // comparison (the same section's consecutive shots, which sit at different
+    // comparison (the same line's consecutive shots, which sit at different
     // depths) while dropping the pairs the mock made unobservable.
     const bySlot = new Map<string, { shot: string; mid: string }>();
     for (const s of samples) if (!bySlot.has(s.slot)) bySlot.set(s.slot, s);
@@ -522,7 +522,7 @@ test.describe('Depth Gradient with Menu Interactions', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Depth Gradient Menu Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapLoaded(page);
   });
 

@@ -24,12 +24,12 @@ import {
 } from '../survey-data';
 import type { Shot } from '../ipc/Shot';
 import type { Station } from '../ipc/Station';
-import type { Section } from '../ipc/Section';
+import type { Line } from '../ipc/Line';
 
-/** Minimal fixture: 2 sections, 3 shots, 4 stations.
+/** Minimal fixture: 2 lines, 3 shots, 4 stations.
  *  Covers nullable fields, reference shots, comments. */
-function fixture(): { sections: Section[]; stations: Station[] } {
-  const sections: Section[] = [
+function fixture(): { lines: Line[]; stations: Station[] } {
+  const lines: Line[] = [
     {
       id: 1,
       name: 'Main',
@@ -110,41 +110,41 @@ function fixture(): { sections: Section[]; stations: Station[] } {
 
   const stations: Station[] = [
     {
-      station_ref: { section_id: 1, station_index: 0 },
+      station_ref: { line_id: 1, station_index: 0 },
       coordinates: { x: 0, y: 0, z: 0 },
       is_zero_datum: true,
       gps_coordinates: { latitude: 20.5, longitude: -87.3, depth_reference: 0 },
-      merged_with: [],
+      merged_with: [], id: 0, name: '',
       closures_with: [],
     },
     {
-      station_ref: { section_id: 1, station_index: 1 },
+      station_ref: { line_id: 1, station_index: 1 },
       coordinates: { x: 10, y: 0, z: -1 },
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [{ section_id: 2, station_index: 0 }],
+      merged_with: [{ line_id: 2, station_index: 0 }], id: 0, name: '',
       closures_with: [],
       comment: 'junction',
     },
     {
-      station_ref: { section_id: 1, station_index: 2 },
+      station_ref: { line_id: 1, station_index: 2 },
       coordinates: { x: 10, y: 5, z: -2 },
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [],
+      merged_with: [], id: 0, name: '',
       closures_with: [],
     },
     {
-      station_ref: { section_id: 2, station_index: 0 },
-      coordinates: { x: 10, y: 0, z: -1 },  // merged with section 1, index 1
+      station_ref: { line_id: 2, station_index: 0 },
+      coordinates: { x: 10, y: 0, z: -1 },  // merged with line 1, index 1
       is_zero_datum: false,
       gps_coordinates: null,
-      merged_with: [{ section_id: 1, station_index: 1 }],
+      merged_with: [{ line_id: 1, station_index: 1 }], id: 0, name: '',
       closures_with: [],
     },
   ];
 
-  return { sections, stations };
+  return { lines, stations };
 }
 
 describe('SurveyData', () => {
@@ -155,7 +155,7 @@ describe('SurveyData', () => {
       expect(data.stationCount).toBe(0);
       expect(data.shotIds.length).toBe(0);
       expect(data.stationCoords.length).toBe(0);
-      expect(data.sections).toEqual([]);
+      expect(data.lines).toEqual([]);
       expect(data.shotComments.size).toBe(0);
     });
 
@@ -176,8 +176,8 @@ describe('SurveyData', () => {
 
   describe('soaFromLegacy + getShot round-trip', () => {
     it('preserves every shot field through the round trip', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
 
       /** Compare two shots field-by-field. Numeric fields are checked
        *  with f32-precision tolerance (the SoA stores doubles as f32). */
@@ -213,8 +213,8 @@ describe('SurveyData', () => {
 
       // Iterate over every shot in declaration order and compare.
       let cursor = 0;
-      for (const section of sections) {
-        for (const original of section.shots) {
+      for (const line of lines) {
+        for (const original of line.shots) {
           const viewed = getShot(data, cursor);
           // `comment` of empty string → null in SoA (we don't store empties).
           const expected: Shot = {
@@ -228,27 +228,27 @@ describe('SurveyData', () => {
       expect(cursor).toBe(data.shotCount);
     });
 
-    it('shotSectionIds matches the declaring section', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
-      // shot 0..1 → section 1; shot 2 → section 2
-      expect(Array.from(data.shotSectionIds)).toEqual([1, 1, 2]);
+    it('shotLineIds matches the declaring line', () => {
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
+      // shot 0..1 → line 1; shot 2 → line 2
+      expect(Array.from(data.shotLineIds)).toEqual([1, 1, 2]);
     });
 
-    it('section metadata records correct shotOffset/shotCount', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
-      expect(data.sections[0]!.shotOffset).toBe(0);
-      expect(data.sections[0]!.shotCount).toBe(2);
-      expect(data.sections[1]!.shotOffset).toBe(2);
-      expect(data.sections[1]!.shotCount).toBe(1);
+    it('line metadata records correct shotOffset/shotCount', () => {
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
+      expect(data.lines[0]!.shotOffset).toBe(0);
+      expect(data.lines[0]!.shotCount).toBe(2);
+      expect(data.lines[1]!.shotOffset).toBe(2);
+      expect(data.lines[1]!.shotCount).toBe(1);
     });
   });
 
   describe('getStation round-trip', () => {
     it('preserves coordinates, refs, flags, GPS, merges, comments', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
 
       stations.forEach((expected, i) => {
         const viewed = getStation(data, i);
@@ -274,8 +274,8 @@ describe('SurveyData', () => {
     //
     // Turns red if `getStation` goes back to defaulting the field.
     it('omits closures_with entirely for a station that has none', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
 
       const bare = stations.findIndex((s) => (s.closures_with ?? []).length === 0);
       expect(bare).toBeGreaterThanOrEqual(0);
@@ -288,8 +288,8 @@ describe('SurveyData', () => {
 
   describe('lazyStationArray', () => {
     it('is array-like: length, indexing, iteration match the eager stations', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       const lazy = lazyStationArray(data);
 
       // Reports as a real array so `.map`/`.filter`/`.slice` stay array-typed.
@@ -310,19 +310,19 @@ describe('SurveyData', () => {
     });
 
     it('supports the read-only array methods consumers use', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       const lazy = lazyStationArray(data);
 
       // `.find` (tool origin lookups)
       const found = lazy.find(
-        (s) => s.station_ref.section_id === 2 && s.station_ref.station_index === 0,
+        (s) => s.station_ref.line_id === 2 && s.station_ref.station_index === 0,
       );
       expect(found).toEqual(getStation(data, 3));
 
-      // `.filter` (fitToSection)
-      const section1 = lazy.filter((s) => s.station_ref.section_id === 1);
-      expect(section1.length).toBe(3);
+      // `.filter` (fitToLine)
+      const line1 = lazy.filter((s) => s.station_ref.line_id === 1);
+      expect(line1.length).toBe(3);
 
       // `.map` (fit-to-bounds coordinate extraction) returns a real array
       const coords = lazy.map((s) => s.coordinates);
@@ -334,8 +334,8 @@ describe('SurveyData', () => {
     });
 
     it('out-of-range index reads undefined; empty data yields an empty view', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       const lazy = lazyStationArray(data);
       expect(lazy[data.stationCount]).toBeUndefined();
 
@@ -345,8 +345,8 @@ describe('SurveyData', () => {
     });
 
     it('throws on writes/deletes instead of silently no-opping (read-only view)', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       const lazy = lazyStationArray(data);
       // A write against the empty backing target would silently vanish and
       // desync from the SoA; the traps must surface it as a TypeError.
@@ -366,34 +366,34 @@ describe('SurveyData', () => {
   });
 
   describe('findShotGlobalIndex', () => {
-    it('finds shots by (section_id, shot_id)', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+    it('finds shots by (line_id, shot_id)', () => {
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       expect(findShotGlobalIndex(data, 1, 101)).toBe(0);
       expect(findShotGlobalIndex(data, 1, 102)).toBe(1);
       expect(findShotGlobalIndex(data, 2, 201)).toBe(2);
     });
 
-    it('returns null for nonexistent shot or section', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+    it('returns null for nonexistent shot or line', () => {
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       expect(findShotGlobalIndex(data, 999, 1)).toBeNull();
       expect(findShotGlobalIndex(data, 1, 999)).toBeNull();
     });
   });
 
   describe('findStationGlobalIndex', () => {
-    it('finds stations by (section_id, station_index)', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+    it('finds stations by (line_id, station_index)', () => {
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       expect(findStationGlobalIndex(data, 1, 0)).toBe(0);
       expect(findStationGlobalIndex(data, 1, 1)).toBe(1);
       expect(findStationGlobalIndex(data, 2, 0)).toBe(3);
     });
 
     it('returns null for nonexistent station', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       expect(findStationGlobalIndex(data, 99, 0)).toBeNull();
       expect(findStationGlobalIndex(data, 1, 99)).toBeNull();
     });
@@ -401,8 +401,8 @@ describe('SurveyData', () => {
 
   describe('null sentinel encoding', () => {
     it('NaN in the float arrays maps back to null', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       // shot 1 (the reference shot) has all nullable floats == null
       expect(Number.isNaN(data.shotPitchIn[1]!)).toBe(true);
       const shot1 = getShot(data, 1);
@@ -416,8 +416,8 @@ describe('SurveyData', () => {
     });
 
     it('marker_index = -1 maps back to null', () => {
-      const { sections, stations } = fixture();
-      const data = soaFromLegacy(sections, stations);
+      const { lines, stations } = fixture();
+      const data = soaFromLegacy(lines, stations);
       expect(data.shotMarkerIndex[1]).toBe(SHOT_MARKER_NULL);
       expect(getShot(data, 1).marker_index).toBeNull();
       // shot 0 has marker_index = 1
@@ -426,32 +426,32 @@ describe('SurveyData', () => {
     });
   });
 
-  // #555. Rust mints shot ids as `section_id * 100_000 + sequence_order` in
+  // #555. Rust mints shot ids as `line_id * 100_000 + sequence_order` in
   // u32, so the id space runs up to 4_294_899_999 at the highest permitted
-  // section id (42_948) - well past i32's 2_147_483_647. The SoA used to keep
+  // line id (42_948) - well past i32's 2_147_483_647. The SoA used to keep
   // those in an `Int32Array`, which wrapped every id from 2^31 up to a NEGATIVE
-  // number, while the very same id read off `section.shots[j].id` (the legacy /
+  // number, while the very same id read off `line.shots[j].id` (the legacy /
   // lazy object path), off `ProjectWarning.shotId`, and off the map's feature
   // ids stayed unsigned. Consumers that compare the two sides - the immovable
-  // shot set (MapCanvas builds it from `section.shots[i].id`, controller.ts
+  // shot set (MapCanvas builds it from `line.shots[i].id`, controller.ts
   // tests membership with `surveyData.shotIds[...]`), the severity map
   // (severity.ts keys by `data.shotIds[i]`, looks up by `warning.shotId`) -
-  // then silently never matched for those sections.
-  describe('u32 shot ids at high section ids (#555)', () => {
-    /** Highest section id the backend can mint (42_949 sections, 0-based). */
-    const MAX_SECTION_ID = 42_948;
+  // then silently never matched for those lines.
+  describe('u32 shot ids at high line ids (#555)', () => {
+    /** Highest line id the backend can mint (42_949 lines, 0-based). */
+    const MAX_LINE_ID = 42_948;
     /** Mirror of Rust's shot-id stride. */
     const SHOT_ID_STRIDE = 100_000;
     const I32_MAX = 2_147_483_647;
 
-    /** One section at `sectionId` whose shots carry the real minted ids for
+    /** One line at `lineId` whose shots carry the real minted ids for
      *  `seqs`, plus its `seqs.length + 1` stations. */
     function highIdFixture(
-      sectionId: number,
+      lineId: number,
       seqs: number[],
-    ): { sections: Section[]; stations: Station[] } {
+    ): { lines: Line[]; stations: Station[] } {
       const shots: Shot[] = seqs.map((seq) => ({
-        id: sectionId * SHOT_ID_STRIDE + seq,
+        id: lineId * SHOT_ID_STRIDE + seq,
         azimuth_in: 0,
         azimuth_out: 0,
         length: 1,
@@ -468,95 +468,95 @@ describe('SurveyData', () => {
         marker_index: null,
         temperature: null,
       }));
-      const sections: Section[] = [
+      const lines: Line[] = [
         {
-          id: sectionId,
+          id: lineId,
           name: 'Deep',
           color: '#0000ff',
           direction: 'in',
           quality: 1.0,
-          next_shot_id: sectionId * SHOT_ID_STRIDE + seqs.length,
+          next_shot_id: lineId * SHOT_ID_STRIDE + seqs.length,
           reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
           shots,
         },
       ];
       const stations: Station[] = shots.map((_, i) => ({
-        station_ref: { section_id: sectionId, station_index: i },
+        station_ref: { line_id: lineId, station_index: i },
         coordinates: { x: i, y: 0, z: -i },
         is_zero_datum: i === 0,
         gps_coordinates: null,
-        merged_with: [],
+        merged_with: [], id: 0, name: '',
         closures_with: [],
       }));
       stations.push({
-        station_ref: { section_id: sectionId, station_index: shots.length },
+        station_ref: { line_id: lineId, station_index: shots.length },
         coordinates: { x: shots.length, y: 0, z: -shots.length },
         is_zero_datum: false,
         gps_coordinates: null,
-        merged_with: [],
+        merged_with: [], id: 0, name: '',
         closures_with: [],
       });
-      return { sections, stations };
+      return { lines, stations };
     }
 
     // 2_147_483_648 is exactly 2^31: the first id an Int32Array turns into
-    // -2_147_483_648. 4_294_899_999 is the largest id the section bound allows.
-    const CASES: Array<{ label: string; sectionId: number; seqs: number[] }> = [
-      { label: 'first id past i32 (section 21_474)', sectionId: 21_474, seqs: [83_648, 83_649] },
-      { label: 'highest permitted section (42_948)', sectionId: MAX_SECTION_ID, seqs: [0, 1, 99_999] },
+    // -2_147_483_648. 4_294_899_999 is the largest id the line bound allows.
+    const CASES: Array<{ label: string; lineId: number; seqs: number[] }> = [
+      { label: 'first id past i32 (line 21_474)', lineId: 21_474, seqs: [83_648, 83_649] },
+      { label: 'highest permitted line (42_948)', lineId: MAX_LINE_ID, seqs: [0, 1, 99_999] },
     ];
 
-    for (const { label, sectionId, seqs } of CASES) {
+    for (const { label, lineId, seqs } of CASES) {
       it(`round-trips shot ids exactly - ${label}`, () => {
-        const { sections, stations } = highIdFixture(sectionId, seqs);
-        const data = soaFromLegacy(sections, stations);
-        const section = sections[0]!;
+        const { lines, stations } = highIdFixture(lineId, seqs);
+        const data = soaFromLegacy(lines, stations);
+        const line = lines[0]!;
 
         // Guard the fixture itself: if these ids ever stop exceeding i32 the
         // test would keep passing while proving nothing.
-        for (const shot of section.shots) expect(shot.id).toBeGreaterThan(I32_MAX);
+        for (const shot of line.shots) expect(shot.id).toBeGreaterThan(I32_MAX);
 
-        section.shots.forEach((shot, j) => {
+        line.shots.forEach((shot, j) => {
           // The SoA column and the legacy object are the same id, exactly.
           expect(data.shotIds[j]).toBe(shot.id);
           expect(data.shotIds[j]).toBeGreaterThan(I32_MAX);
           // The materializer agrees with the column it reads from.
           expect(getShot(data, j).id).toBe(shot.id);
-          expect(data.shotSectionIds[j]).toBe(sectionId);
+          expect(data.shotLineIds[j]).toBe(lineId);
         });
         // No slot wrapped negative (the exact i32 failure mode).
         expect(Array.from(data.shotIds).filter((id) => id < 0)).toEqual([]);
-        expect(Array.from(data.shotSectionIds).filter((id) => id < 0)).toEqual([]);
+        expect(Array.from(data.shotLineIds).filter((id) => id < 0)).toEqual([]);
       });
 
-      it(`finds high-id shots by (section_id, shot_id) - ${label}`, () => {
-        const { sections, stations } = highIdFixture(sectionId, seqs);
-        const data = soaFromLegacy(sections, stations);
-        sections[0]!.shots.forEach((shot, j) => {
-          expect(findShotGlobalIndex(data, sectionId, shot.id)).toBe(j);
+      it(`finds high-id shots by (line_id, shot_id) - ${label}`, () => {
+        const { lines, stations } = highIdFixture(lineId, seqs);
+        const data = soaFromLegacy(lines, stations);
+        lines[0]!.shots.forEach((shot, j) => {
+          expect(findShotGlobalIndex(data, lineId, shot.id)).toBe(j);
         });
       });
 
       it(`SoA-keyed lookups hit when probed with the unsigned id - ${label}`, () => {
-        const { sections, stations } = highIdFixture(sectionId, seqs);
-        const data = soaFromLegacy(sections, stations);
+        const { lines, stations } = highIdFixture(lineId, seqs);
+        const data = soaFromLegacy(lines, stations);
         // Mirrors surveyLayer/severity.ts: the index is keyed by the SoA
         // column, then probed with the id a ProjectWarning / feature carries.
         const byShotId = new Map<number, number>();
         for (let i = 0; i < data.shotCount; i++) byShotId.set(data.shotIds[i]!, i);
-        sections[0]!.shots.forEach((shot, j) => {
+        lines[0]!.shots.forEach((shot, j) => {
           expect(byShotId.get(shot.id)).toBe(j);
         });
       });
     }
 
-    it('station section ids survive the highest permitted section id', () => {
-      const { sections, stations } = highIdFixture(MAX_SECTION_ID, [0, 1]);
-      const data = soaFromLegacy(sections, stations);
+    it('station line ids survive the highest permitted line id', () => {
+      const { lines, stations } = highIdFixture(MAX_LINE_ID, [0, 1]);
+      const data = soaFromLegacy(lines, stations);
       for (let g = 0; g < data.stationCount; g++) {
-        expect(data.stationSectionIds[g]).toBe(MAX_SECTION_ID);
-        expect(getStation(data, g).station_ref.section_id).toBe(MAX_SECTION_ID);
-        expect(findStationGlobalIndex(data, MAX_SECTION_ID, g)).toBe(g);
+        expect(data.stationLineIds[g]).toBe(MAX_LINE_ID);
+        expect(getStation(data, g).station_ref.line_id).toBe(MAX_LINE_ID);
+        expect(findStationGlobalIndex(data, MAX_LINE_ID, g)).toBe(g);
       }
     });
   });

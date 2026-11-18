@@ -53,7 +53,7 @@ export interface CorruptedFileSpec {
  *
  * `MAX_DMP_FILE_SIZE` in the parser is 50 MB, and the point of this entry is to
  * exercise a big-but-accepted file (the loader's streaming, the preview table's
- * virtualization, the section-list rendering), not to hit the cap - a run that
+ * virtualization, the line-list rendering), not to hit the cap - a run that
  * writes 50 MB per iteration spends its whole budget on I/O. 2 MB is roughly
  * 40x a real device dump and still finishes in milliseconds.
  */
@@ -65,31 +65,31 @@ const MAX_OVERSIZED_BYTES = 2 * 1024 * 1024;
 
 type DmpCorruption = { id: string; applies?: (spec: DmpSpec) => boolean; apply: (rng: Rng, spec: DmpSpec) => DmpSpec };
 
-function replaceSection(
+function replaceLine(
   spec: DmpSpec,
   index: number,
   change: Partial<DmpSectionSpec>,
 ): DmpSpec {
-  const sections = spec.sections.map((section, at) => (at === index ? { ...section, ...change } : section));
-  return { ...spec, sections };
+  const lines = spec.lines.map((line, at) => (at === index ? { ...line, ...change } : line));
+  return { ...spec, lines };
 }
 
-function withRandomSection(rng: Rng, spec: DmpSpec, change: Partial<DmpSectionSpec>): DmpSpec {
-  if (spec.sections.length === 0) return spec;
-  return replaceSection(spec, randInt(rng, 0, spec.sections.length - 1), change);
+function withRandomLine(rng: Rng, spec: DmpSpec, change: Partial<DmpSectionSpec>): DmpSpec {
+  if (spec.lines.length === 0) return spec;
+  return replaceLine(spec, randInt(rng, 0, spec.lines.length - 1), change);
 }
 
 function withRandomShot(rng: Rng, spec: DmpSpec, change: Partial<DmpShotSpec>): DmpSpec {
-  // Only sections that HAVE a shot are candidates, so the returned spec really
+  // Only lines that HAVE a shot are candidates, so the returned spec really
   // carries the corruption its id names rather than silently being the clean one.
-  const candidates = spec.sections
-    .map((section, index) => ({ section, index }))
-    .filter((entry) => entry.section.shots.length > 0);
+  const candidates = spec.lines
+    .map((line, index) => ({ line, index }))
+    .filter((entry) => entry.line.shots.length > 0);
   if (candidates.length === 0) return spec;
   const chosen = pick(rng, candidates);
-  const shotIndex = randInt(rng, 0, chosen.section.shots.length - 1);
-  return replaceSection(spec, chosen.index, {
-    shots: chosen.section.shots.map((shot, at) => (at === shotIndex ? { ...shot, ...change } : shot)),
+  const shotIndex = randInt(rng, 0, chosen.line.shots.length - 1);
+  return replaceLine(spec, chosen.index, {
+    shots: chosen.line.shots.map((shot, at) => (at === shotIndex ? { ...shot, ...change } : shot)),
   });
 }
 
@@ -107,9 +107,9 @@ const DMP_CORRUPTIONS: readonly DmpCorruption[] = [
   // Header and framing.
   { id: 'unsupported-version', apply: (rng, spec) => ({ ...spec, version: pick(rng, [0, 1, 6, 7, 255]) }) },
   {
-    id: 'bad-section-magic',
+    id: 'bad-line-magic',
     applies: (spec) => spec.version > 2,
-    apply: (rng, spec) => withRandomSection(rng, spec, { sectionMagic: [99, 99, 99] }),
+    apply: (rng, spec) => withRandomLine(rng, spec, { lineMagic: [99, 99, 99] }),
   },
   {
     id: 'bad-shot-start-magic',
@@ -123,31 +123,31 @@ const DMP_CORRUPTIONS: readonly DmpCorruption[] = [
   },
 
   // Date validation, one entry per `bail!` in `parse_section`.
-  { id: 'month-0', apply: (rng, spec) => withRandomSection(rng, spec, { month: 0 }) },
-  { id: 'month-13', apply: (rng, spec) => withRandomSection(rng, spec, { month: 13 }) },
-  { id: 'day-0', apply: (rng, spec) => withRandomSection(rng, spec, { day: 0 }) },
-  { id: 'day-32', apply: (rng, spec) => withRandomSection(rng, spec, { day: 32 }) },
+  { id: 'month-0', apply: (rng, spec) => withRandomLine(rng, spec, { month: 0 }) },
+  { id: 'month-13', apply: (rng, spec) => withRandomLine(rng, spec, { month: 13 }) },
+  { id: 'day-0', apply: (rng, spec) => withRandomLine(rng, spec, { day: 0 }) },
+  { id: 'day-32', apply: (rng, spec) => withRandomLine(rng, spec, { day: 32 }) },
   // Day 31 of a 30-day month is accepted by every range check and then rejected
   // by `NaiveDate::from_ymd_opt` - a different branch from `day-32`.
-  { id: 'day-31-of-april', apply: (rng, spec) => withRandomSection(rng, spec, { month: 4, day: 31 }) },
-  { id: 'hour-24', apply: (rng, spec) => withRandomSection(rng, spec, { hour: 24 }) },
-  { id: 'minute-60', apply: (rng, spec) => withRandomSection(rng, spec, { minute: 60 }) },
+  { id: 'day-31-of-april', apply: (rng, spec) => withRandomLine(rng, spec, { month: 4, day: 31 }) },
+  { id: 'hour-24', apply: (rng, spec) => withRandomLine(rng, spec, { hour: 24 }) },
+  { id: 'minute-60', apply: (rng, spec) => withRandomLine(rng, spec, { minute: 60 }) },
   // The year byte is an offset from 2000 and the check is `2000..2100`, so 100
   // is the first rejected value.
-  { id: 'year-2100', apply: (rng, spec) => withRandomSection(rng, spec, { year: 100 }) },
-  { id: 'bad-direction', apply: (rng, spec) => withRandomSection(rng, spec, { direction: randInt(rng, 2, 255) }) },
+  { id: 'year-2100', apply: (rng, spec) => withRandomLine(rng, spec, { year: 100 }) },
+  { id: 'bad-direction', apply: (rng, spec) => withRandomLine(rng, spec, { direction: randInt(rng, 2, 255) }) },
 
   // Shot-level.
   { id: 'bad-shot-type', apply: (rng, spec) => withRandomShot(rng, spec, { shotType: randInt(rng, 4, 255) }) },
   { id: 'truncated-mid-shot', apply: (rng, spec) => withRandomShot(rng, spec, { truncateAfter: randInt(rng, 1, 12) }) },
-  { id: 'zero-shot-section', apply: (rng, spec) => withRandomSection(rng, spec, { shots: [] }) },
+  { id: 'zero-shot-line', apply: (rng, spec) => withRandomLine(rng, spec, { shots: [] }) },
 
-  // Section termination.
-  { id: 'missing-end-of-section', apply: (rng, spec) => withRandomSection(rng, spec, { endOfSection: 'none' }) },
+  // Line termination.
+  { id: 'missing-end-of-line', apply: (rng, spec) => withRandomLine(rng, spec, { endOfLine: 'none' }) },
   {
     id: 'buggy-eos',
     applies: (spec) => spec.version === 5,
-    apply: (rng, spec) => withRandomSection(rng, spec, { endOfSection: 'buggy' }),
+    apply: (rng, spec) => withRandomLine(rng, spec, { endOfLine: 'buggy' }),
   },
 
   // Token stream. `parse_dmp` trims, drops empty tokens and casts i32 to u8, so
@@ -178,18 +178,18 @@ const DMP_CORRUPTIONS: readonly DmpCorruption[] = [
   { id: 'oversized', apply: (_rng, spec) => oversize(spec) },
 ];
 
-/** Repeat the section list until the rendered file is near `MAX_OVERSIZED_BYTES`. */
+/** Repeat the line list until the rendered file is near `MAX_OVERSIZED_BYTES`. */
 function oversize(spec: DmpSpec): DmpSpec {
   const unit = writeDmpText(spec).length;
   if (unit === 0) return spec;
   const copies = Math.min(20000, Math.max(2, Math.floor(MAX_OVERSIZED_BYTES / unit)));
-  const sections: DmpSectionSpec[] = [];
+  const lines: DmpSectionSpec[] = [];
   for (let copy = 0; copy < copies; copy++) {
-    // `sameContentAs` indices are section-local, so they are dropped rather than
+    // `sameContentAs` indices are line-local, so they are dropped rather than
     // left pointing into a previous copy.
-    for (const section of spec.sections) sections.push({ ...section, sameContentAs: undefined });
+    for (const line of spec.lines) lines.push({ ...line, sameContentAs: undefined });
   }
-  return { ...spec, sections };
+  return { ...spec, lines };
 }
 
 // ---------------------------------------------------------------------------

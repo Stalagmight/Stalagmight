@@ -3,7 +3,7 @@
  * color attribute (#customRender).
  *
  * The survey build resolves every shot / station color as a CSS string (hex
- * `#rrggbb` from section metadata / theme tokens, occasionally an `rgb()` /
+ * `#rrggbb` from line metadata / theme tokens, occasionally an `rgb()` /
  * `rgba()`). The custom WebGL layer wants those as four normalized `u8`
  * channels in a vertex attribute, so this module parses the common CSS forms
  * without a DOM canvas (keeps it pure + unit-testable in the `node` vitest

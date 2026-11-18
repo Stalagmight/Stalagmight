@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -6,7 +6,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -16,7 +16,8 @@ import type { ClosurePreview, BatchCommand } from '../../types/commands';
 export default function ClosureDialog() {
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { createLoopClosure, executeBatch, project } = useProjectStore();
+  const { createLoopClosure, executeBatch } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -30,16 +31,6 @@ export default function ClosureDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Get section names
-  const sectionAName = useMemo(() => {
-    if (!stationA) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationA.section_id)?.name ?? `Section ${stationA.section_id}`;
-  }, [stationA, project]);
-
-  const sectionBName = useMemo(() => {
-    if (!stationB) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationB.section_id)?.name ?? `Section ${stationB.section_id}`;
-  }, [stationB, project]);
 
   // Optional callbacks from snap-to-merge drag flow
   const onBeforeConfirm = dialogData.onBeforeConfirm as (() => Promise<void>) | undefined;
@@ -112,15 +103,13 @@ export default function ClosureDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionAName}</EntityBlob>
+              <EntityBlob entity="station">{labels.station(stationA, true)}</EntityBlob>
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionBName}</EntityBlob>
+              <EntityBlob entity="station">{labels.station(stationB, true)}</EntityBlob>
             </span>
           </div>
         </div>

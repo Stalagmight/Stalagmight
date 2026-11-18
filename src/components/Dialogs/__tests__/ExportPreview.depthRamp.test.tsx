@@ -39,7 +39,7 @@ describe('ExportPreview depth endpoints (#360)', () => {
     document.documentElement.style.setProperty('--cc-depth-shallow', '#14487f');
     document.documentElement.style.setProperty('--cc-depth-deep', '#a52a1a');
     // The preview only fires for an open project.
-    useProjectStore.setState({ project: { name: 'T', sections: [] } as never });
+    useProjectStore.setState({ project: { name: 'T', lines: [] } as never });
   });
 
   it('asks the backend for the LIVE theme ramp, matching what export writes', async () => {
@@ -77,5 +77,32 @@ describe('ExportPreview depth endpoints (#360)', () => {
 
     await waitFor(() => expect(previewOptions().depth_shallow).toBe('#0050a0'));
     expect(previewOptions().depth_deep).toBe('#cc0000');
+  });
+});
+
+/** #327: the preview leaves the hidden Sections' lines out exactly as the
+ *  file will, and re-asks when a Section is hidden or shown. */
+describe('ExportPreview hidden Sections (#327)', () => {
+  const previewOptions = (): ExportImageOptions => {
+    const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'preview_svg_export');
+    return (calls[calls.length - 1]![1] as { options: ExportImageOptions }).options;
+  };
+
+  beforeEach(() => {
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockResolvedValue('<svg></svg>');
+    useProjectStore.setState({
+      project: { name: 'T', lines: [{ id: 5, cave_section_id: 2 }, { id: 6 }] } as never,
+    });
+    useUIStore.setState({ hiddenSections: [] });
+  });
+
+  it('passes the lines of the hidden Sections', async () => {
+    render(<ExportPreview options={DEFAULT_IMAGE_OPTIONS} />);
+    await waitFor(() => expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'preview_svg_export')).toBe(true));
+    expect(previewOptions().hidden_line_ids).toBeUndefined();
+
+    useUIStore.setState({ hiddenSections: [2] });
+    await waitFor(() => expect(previewOptions().hidden_line_ids).toEqual([5]));
   });
 });

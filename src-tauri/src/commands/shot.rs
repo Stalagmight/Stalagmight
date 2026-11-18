@@ -2,31 +2,25 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData,
-    ShotId, ShotKind, ShotUpdates, SplitAt, SplitPreview, SplitSectionOptions,
+    CreditEdit, CreditTargets, DeleteShotImpact, DeleteShotRangeImpact, LineId, ShotData, ShotId,
+    ShotKind, ShotUpdates, SplitAt, SplitLineOptions, SplitPreview,
 };
 
 /// Create a new shot
 #[tauri::command]
 pub fn create_shot(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot: ShotData,
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
 ) -> CommandResult {
-    create_shot_impl(
-        state.inner(),
-        section_id,
-        shot,
-        after_shot_id,
-        before_shot_id,
-    )
+    create_shot_impl(state.inner(), line_id, shot, after_shot_id, before_shot_id)
 }
 
 pub(crate) fn create_shot_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     mut shot: ShotData,
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
@@ -36,7 +30,7 @@ pub(crate) fn create_shot_impl(
     // shots from their data; it is NOT an input to "create a shot here".
     //
     // Left through, a caller could name an EXISTING shot's uuid and insert the
-    // new shot BEFORE it. The first-wins repairs (`Section::new` and the
+    // new shot BEFORE it. The first-wins repairs (`Line::new` and the
     // pre-save `ensure_unique_shot_uuids`) keep the first OCCURRENCE, which is
     // now the injected record, and re-mint the original - moving every
     // `AfterShot` anchor on it (merges, closures, zero datums, resolved-warning
@@ -57,16 +51,16 @@ pub(crate) fn create_shot_impl(
     // core/state/command_shot.rs) - a wrapper-only clear held only by grace of
     // the batch allowlist refusing `CreateShot` (pre-PR review, #423); the
     // executor holds it for every constructor of the command. This one stays
-    // as documentation-plus-belt. `Command::CreateSection` IS batch-allowed
+    // as documentation-plus-belt. `Command::CreateLine` IS batch-allowed
     // and is stripped at its two dispatch arms instead (core/state/commands.rs,
     // undo_restore.rs) - its executor is shared with the importers, whose
     // identities our own parser legitimately adopted. That leaves
-    // `import_sections` and `create_section_and_merge` as the doors that may
+    // `import_lines` and `create_line_and_merge` as the doors that may
     // carry identities; both rename any the project already holds
     // (`Project::reassign_repeated_shot_uuids`).
     shot.uuid = None;
     state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot,
         after_shot_id,
         before_shot_id,
@@ -77,21 +71,21 @@ pub(crate) fn create_shot_impl(
 #[tauri::command]
 pub fn update_shot(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     updates: ShotUpdates,
 ) -> CommandResult {
-    update_shot_impl(state.inner(), section_id, shot_id, updates)
+    update_shot_impl(state.inner(), line_id, shot_id, updates)
 }
 
 pub(crate) fn update_shot_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     updates: ShotUpdates,
 ) -> CommandResult {
     state.execute(Command::UpdateShot {
-        section_id,
+        line_id,
         shot_id,
         updates,
     })
@@ -101,162 +95,155 @@ pub(crate) fn update_shot_impl(
 #[tauri::command]
 pub fn preview_delete_shot(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
 ) -> Result<DeleteShotImpact, String> {
-    preview_delete_shot_impl(state.inner(), section_id, shot_id)
+    preview_delete_shot_impl(state.inner(), line_id, shot_id)
 }
 
 pub(crate) fn preview_delete_shot_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
 ) -> Result<DeleteShotImpact, String> {
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    project.preview_delete_shot(section_id, shot_id)
+    project.preview_delete_shot(line_id, shot_id)
 }
 
 /// Delete a shot
 #[tauri::command]
-pub fn delete_shot(
-    state: State<AppState>,
-    section_id: SectionId,
-    shot_id: ShotId,
-) -> CommandResult {
-    delete_shot_impl(state.inner(), section_id, shot_id)
+pub fn delete_shot(state: State<AppState>, line_id: LineId, shot_id: ShotId) -> CommandResult {
+    delete_shot_impl(state.inner(), line_id, shot_id)
 }
 
 pub(crate) fn delete_shot_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
 ) -> CommandResult {
-    state.execute(Command::DeleteShot {
-        section_id,
-        shot_id,
-    })
+    state.execute(Command::DeleteShot { line_id, shot_id })
 }
 
-/// Delete a mid-section shot and split the section into two named sections
+/// Delete a mid-line shot and split the line into two named lines
 #[tauri::command]
 pub fn delete_shot_and_split(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     name_a: String,
     name_b: String,
 ) -> CommandResult {
-    delete_shot_and_split_impl(state.inner(), section_id, shot_id, name_a, name_b)
+    delete_shot_and_split_impl(state.inner(), line_id, shot_id, name_a, name_b)
 }
 
 pub(crate) fn delete_shot_and_split_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     name_a: String,
     name_b: String,
 ) -> CommandResult {
-    state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
+    state.execute_delete_shot_and_split(line_id, shot_id, name_a, name_b)
 }
 
-/// Split a section in two at a mid-section station or a point along a shot,
+/// Split a line in two at a mid-line station or a point along a shot,
 /// deleting nothing (#335).
 #[tauri::command]
-pub fn split_section(
+pub fn split_line(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     at: SplitAt,
-    options: SplitSectionOptions,
+    options: SplitLineOptions,
 ) -> CommandResult {
-    split_section_impl(state.inner(), section_id, at, options)
+    split_line_impl(state.inner(), line_id, at, options)
 }
 
-pub(crate) fn split_section_impl(
+pub(crate) fn split_line_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     at: SplitAt,
-    options: SplitSectionOptions,
+    options: SplitLineOptions,
 ) -> CommandResult {
-    state.execute_split_section(section_id, at, options)
+    state.execute_split_line(line_id, at, options)
 }
 
-/// What Split Section Here would do beyond the cut, without doing it: how many
+/// What Split Line Here would do beyond the cut, without doing it: how many
 /// loop closures it would turn into merges, and how far that moves a half. The
 /// dialog shows it before the user confirms; a refused split returns its
 /// reason.
 #[tauri::command]
-pub fn split_section_preview(
+pub fn split_line_preview(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     at: SplitAt,
-    options: SplitSectionOptions,
+    options: SplitLineOptions,
 ) -> Result<SplitPreview, String> {
-    split_section_preview_impl(state.inner(), section_id, at, &options)
+    split_line_preview_impl(state.inner(), line_id, at, &options)
 }
 
-pub(crate) fn split_section_preview_impl(
+pub(crate) fn split_line_preview_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     at: SplitAt,
-    options: &SplitSectionOptions,
+    options: &SplitLineOptions,
 ) -> Result<SplitPreview, String> {
-    state.split_section_preview(section_id, at, options)
+    state.split_line_preview(line_id, at, options)
 }
 
 /// Insert a station mid-shot by splitting a shot at a given distance
 #[tauri::command]
 pub fn split_shot_at_distance(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     distance: f64,
 ) -> CommandResult {
-    split_shot_at_distance_impl(state.inner(), section_id, shot_id, distance)
+    split_shot_at_distance_impl(state.inner(), line_id, shot_id, distance)
 }
 
 pub(crate) fn split_shot_at_distance_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     distance: f64,
 ) -> CommandResult {
-    state.execute_split_shot_at_distance(section_id, shot_id, distance)
+    state.execute_split_shot_at_distance(line_id, shot_id, distance)
 }
 
-/// Delete the last remaining shot in a section and remove the section
+/// Delete the last remaining shot in a line and remove the line
 #[tauri::command]
-pub fn delete_last_shot_and_section(
+pub fn delete_last_shot_and_line(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
 ) -> CommandResult {
-    delete_last_shot_and_section_impl(state.inner(), section_id, shot_id)
+    delete_last_shot_and_line_impl(state.inner(), line_id, shot_id)
 }
 
-pub(crate) fn delete_last_shot_and_section_impl(
+pub(crate) fn delete_last_shot_and_line_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
 ) -> CommandResult {
-    state.execute_delete_last_shot_and_section(section_id, shot_id)
+    state.execute_delete_last_shot_and_line(line_id, shot_id)
 }
 
 /// Preview impacts of deleting a contiguous range of shots (read-only)
 #[tauri::command]
 pub fn preview_delete_shot_range(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
 ) -> Result<DeleteShotRangeImpact, String> {
-    preview_delete_shot_range_impl(state.inner(), section_id, start_shot_id, end_shot_id)
+    preview_delete_shot_range_impl(state.inner(), line_id, start_shot_id, end_shot_id)
 }
 
 pub(crate) fn preview_delete_shot_range_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
 ) -> Result<DeleteShotRangeImpact, String> {
@@ -265,14 +252,14 @@ pub(crate) fn preview_delete_shot_range_impl(
         .ok_or_else(|| "No project open".to_string())?;
     // The clone above is ours: the gap-close prediction runs on it rather than
     // cloning the project a second time (#737).
-    project.into_preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
+    project.into_preview_delete_shot_range(line_id, start_shot_id, end_shot_id)
 }
 
-/// Delete a contiguous interior range of shots and split the section into two
+/// Delete a contiguous interior range of shots and split the line into two
 #[tauri::command]
 pub fn delete_shot_range_split(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
     name_a: String,
@@ -280,7 +267,7 @@ pub fn delete_shot_range_split(
 ) -> CommandResult {
     delete_shot_range_split_impl(
         state.inner(),
-        section_id,
+        line_id,
         start_shot_id,
         end_shot_id,
         name_a,
@@ -290,60 +277,60 @@ pub fn delete_shot_range_split(
 
 pub(crate) fn delete_shot_range_split_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
     name_a: String,
     name_b: String,
 ) -> CommandResult {
-    state.execute_delete_shot_range_split(section_id, start_shot_id, end_shot_id, name_a, name_b)
+    state.execute_delete_shot_range_split(line_id, start_shot_id, end_shot_id, name_a, name_b)
 }
 
 /// Delete a contiguous range of shots by gap-closing (shift geometry)
 #[tauri::command]
 pub fn delete_shot_range_shift(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
 ) -> CommandResult {
-    delete_shot_range_shift_impl(state.inner(), section_id, start_shot_id, end_shot_id)
+    delete_shot_range_shift_impl(state.inner(), line_id, start_shot_id, end_shot_id)
 }
 
 pub(crate) fn delete_shot_range_shift_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
 ) -> CommandResult {
-    state.execute_delete_shot_range_shift(section_id, start_shot_id, end_shot_id)
+    state.execute_delete_shot_range_shift(line_id, start_shot_id, end_shot_id)
 }
 
 /// Set a shot's kind: permanent, jump, or reference (#27).
 #[tauri::command]
 pub fn set_shot_kind(
     state: State<AppState>,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     kind: ShotKind,
 ) -> CommandResult {
-    set_shot_kind_impl(state.inner(), section_id, shot_id, kind)
+    set_shot_kind_impl(state.inner(), line_id, shot_id, kind)
 }
 
 pub(crate) fn set_shot_kind_impl(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     shot_id: ShotId,
     kind: ShotKind,
 ) -> CommandResult {
     state.execute(Command::SetShotKind {
-        section_id,
+        line_id,
         shot_id,
         kind,
     })
 }
 
-/// Edit the survey credit (surveyors, explorers, date) of a whole section or of
+/// Edit the survey credit (surveyors, explorers, date) of a whole line or of
 /// explicit shots, as ONE undo step however many shots it touches.
 #[tauri::command]
 pub fn edit_shot_credit(

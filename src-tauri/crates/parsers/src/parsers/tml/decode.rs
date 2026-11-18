@@ -341,7 +341,7 @@ mod tests {
 
         let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
         assert_eq!(tml.cave_name, "Grotte de la Rivi\u{e8}re");
-        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.lines.len(), 1);
 
         let warning = tml.encoding_warning.clone().unwrap();
         assert!(
@@ -498,7 +498,7 @@ mod tests {
 
         let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
         assert_eq!(tml.cave_name, "Test Cave");
-        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.lines.len(), 1);
         assert!(tml.encoding_warning.is_none());
     }
 
@@ -534,7 +534,7 @@ mod tests {
         write_tml_archive(&path, "data.XML", xml.as_bytes());
 
         let tml = parse_tml(&path).unwrap();
-        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.lines.len(), 1);
     }
 
     /// The decompressed entry is capped, so a crafted archive cannot make the

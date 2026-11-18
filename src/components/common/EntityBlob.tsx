@@ -1,7 +1,7 @@
 /**
  * EntityBlob - the entity "pill" used for ids in the data table. Same style as
  * the detail-panel link pills (entity symbol + tinted background + dim
- * entity-colored border), but with just the id text (`SectionID:ID`) - no
+ * entity-colored border), but with just the id text (`LineID:ID`) - no
  * divider and no separate suffix.
  *
  * Renders the pill only when the highlighting level is "full"; otherwise it

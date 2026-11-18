@@ -15,7 +15,7 @@
  * `setStockLabelVisibility` restore path survives only for the non-fatal
  * `destroy()` teardown (a later stage deletes the stock label layers).
  *
- * SCOPE (Phase 3): ALL FIVE kinds - shot labels, station labels, section names,
+ * SCOPE (Phase 3): ALL FIVE kinds - shot labels, station labels, line names,
  * station comments, shot comments. It builds every kind's descriptors, hides the
  * five stock text layers while active, and drives each kind's visibility via a
  * shader uniform (the `setShow*` setters). Reference-shot hiding and the
@@ -26,7 +26,7 @@
  * (`labelReveal.ts`) that folds the screen-space declutter AND the zoom-band
  * decimation into one float per label - the min live zoom at which it draws.
  * Only anchors inside the padded viewport build; below the label-build zoom
- * (13.5/13 hysteresis) only the cheap section names build (down to their own
+ * (13.5/13 hysteresis) only the cheap line names build (down to their own
  * minzoom 10), below 10 nothing. The reveal pass runs synchronously on every
  * `sync()` (edits stay immediate - the whole point of this project); labels are
  * emitted up to `buildZoom + EMIT_SLACK` so a modest zoom-in needs no rebuild at
@@ -127,10 +127,10 @@ function rectContains(outer: ViewportRel, inner: ViewportRel): boolean {
  *  the band those kinds build NOTHING. */
 const LABEL_BUILD_ZOOM = 13.5;
 const LABEL_DROP_ZOOM = 13;
-/** Section names are cheap (1 per section) and orienting, so they follow their
+/** Line names are cheap (1 per line) and orienting, so they follow their
  *  own `minzoom` (10, the stock `survey-labels` layer) rather than the expensive
  *  band - they still show at z10..13.5. Below 10 the shader hides them anyway. */
-const SECTION_NAME_MIN_ZOOM = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME].minzoom;
+const LINE_NAME_MIN_ZOOM = LABEL_KIND_STYLE[LABEL_KIND.LINE_NAME].minzoom;
 /** Padded-viewport margin as a fraction of the viewport span, applied to EACH
  *  side (0.5 → the build box is 2× the viewport per axis, a half-screen margin
  *  all round). Generous enough that a modest pan does not reach blank areas
@@ -141,18 +141,18 @@ const VIEWPORT_PADDING = 0.5;
  *  before the emitted set runs out). Only deep zoom-ins pay a rebuild. */
 const ZOOM_IN_SLACK_REBUILD = EMIT_SLACK / 2;
 
-/** Below the expensive band but at/above section minzoom: only section names. */
-const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_NAME]);
-/** Below section minzoom: nothing builds. */
+/** Below the expensive band but at/above line minzoom: only line names. */
+const LINE_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.LINE_NAME]);
+/** Below line minzoom: nothing builds. */
 const NO_KINDS: ReadonlySet<LabelKind> = new Set();
-/** The kinds the section-only build leaves out (only built past the band). */
+/** The kinds the line-only build leaves out (only built past the band). */
 const EXPENSIVE_KINDS: readonly LabelKind[] = Array.from(
   { length: LABEL_KIND_COUNT },
   (_, k) => k as LabelKind,
-).filter((k) => !SECTION_ONLY_KINDS.has(k));
+).filter((k) => !LINE_ONLY_KINDS.has(k));
 /** How far (CSS px at the expensive kinds' minzoom, where a label's reach in
- *  map units is largest) past a jump / reference section name's own box the
- *  section-only build looks for labels whose slots the name must leave free:
+ *  map units is largest) past a jump / reference line name's own box the
+ *  line-only build looks for labels whose slots the name must leave free:
  *  wide enough for a shot label (about 20 characters) or a station name or
  *  comment of about a hundred. A longer one anchored further out is missed, and
  *  the name could then still vanish at the band crossing. */
@@ -163,7 +163,7 @@ const RESERVE_REACH_PX = 600;
 /** Anchored / immovable dim set - the SAME shape the geometry controller takes
  *  ({@link CustomDimState}), so SurveyLayer pushes one state to both. */
 const EMPTY_DIM: CustomDimState = {
-  anchoredSectionIds: new Set<number>(),
+  anchoredLineIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
   immovableShotFeatureIds: new Set<number>(),
   gasDimStationFeatureIds: new Set<number>(),
@@ -176,12 +176,12 @@ const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
 /** The single comment picked up during `move_comment` (C3). `type` selects the
  *  comment kind; `id` is the station index (station comment) or shot id (shot
- *  comment) within `sectionId` - the exact identity SurveyLayer.setHiddenComment
+ *  comment) within `lineId` - the exact identity SurveyLayer.setHiddenComment
  *  receives. That one comment's label is collapsed (LABEL_FLAG.COMMENT_HIDE) so
  *  only the cursor-following tag shows during pickup. */
 export interface HiddenComment {
   type: 'station' | 'shot';
-  sectionId: number;
+  lineId: number;
   id: number;
 }
 
@@ -331,7 +331,7 @@ export class SurveyLabelController {
   /** Whether the last build materialized the expensive kinds (hysteresis latch
    *  snapshot), so a settle can detect a band crossing that changes the set. */
   private lastBuiltWantFull = false;
-  /** The labels the last section-only build reserved ({@link reserveNearVirtualNames}),
+  /** The labels the last line-only build reserved ({@link reserveNearVirtualNames}),
    *  replayed by the reveal-only rerun. */
   private lastReserved: RevealReservation | undefined;
   /** Shape cache shared across builds: a camera-driven re-scope re-projects +
@@ -342,7 +342,7 @@ export class SurveyLabelController {
    *  indexed by {@link LabelKind}. Held so a re-enable / stock restore reproduces
    *  it; drives `u_kind_visible` while active and each stock layer's restored
    *  visibility while inactive. Defaults mirror the stock layers' initial
-   *  `visibility`: section names visible, everything else hidden. */
+   *  `visibility`: line names visible, everything else hidden. */
   private kindVisible: boolean[] = [false, false, true, false, false, false, false];
   /** What station labels say (IDs or names). Their visibility is
    *  `kindVisible[STATION_LABEL]`; this is the text a build bakes in. */
@@ -350,7 +350,7 @@ export class SurveyLabelController {
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
   /** #27: jumps toggle separately. A shot's label carries its own kind's bit and
-   *  hides with that kind; a station / section label hides once every kind
+   *  hides with that kind; a station / line label hides once every kind
    *  touching it is hidden (the `ALL_JUMP` / `ALL_REFERENCE` pair), the same rule
    *  the circle shader uses. A label therefore never disappears while its own
    *  shot is still drawn. */
@@ -389,7 +389,7 @@ export class SurveyLabelController {
           // Building an INERT atlas would enable the layer while drawing ZERO
           // glyphs, so leave `this.atlas` null (sync() stays a no-op), latch fatal
           // so a later sync() bails, and SURFACE the failure - otherwise every
-          // section / station / shot / comment label silently disappears.
+          // line / station / shot / comment label silently disappears.
           console.warn('[customRender] label font unavailable; labels disabled this session');
           this.fatal = true;
           this.emitFatal('label-font-unavailable');
@@ -450,8 +450,8 @@ export class SurveyLabelController {
       this.pushStyle();
     }
   }
-  setSectionNamesVisible(visible: boolean): void {
-    this.setKindVisible(LABEL_KIND.SECTION_NAME, visible);
+  setLineNamesVisible(visible: boolean): void {
+    this.setKindVisible(LABEL_KIND.LINE_NAME, visible);
   }
   setStationCommentsVisible(visible: boolean): void {
     this.setKindVisible(LABEL_KIND.STATION_COMMENT, visible);
@@ -476,9 +476,9 @@ export class SurveyLabelController {
     // fakes / below-gate), leaving the pure-uniform flip.
     if (this.active) {
       this.pushStyle();
-      // A section-only build reserves the expensive kinds that are shown, so
+      // A line-only build reserves the expensive kinds that are shown, so
       // toggling one changes what it reserves: rebuild (cheap at that zoom).
-      if (this.builtSectionOnly() && EXPENSIVE_KINDS.includes(kind)) {
+      if (this.builtLineOnly() && EXPENSIVE_KINDS.includes(kind)) {
         this.rebuildViewport();
       } else {
         this.rerunReveal();
@@ -486,15 +486,15 @@ export class SurveyLabelController {
     }
   }
 
-  /** Whether the last build was the section-only one below the label band. */
-  private builtSectionOnly(): boolean {
-    return !this.lastBuiltWantFull && this.lastBuildZoom !== undefined && this.lastBuildZoom >= SECTION_NAME_MIN_ZOOM;
+  /** Whether the last build was the line-only one below the label band. */
+  private builtLineOnly(): boolean {
+    return !this.lastBuiltWantFull && this.lastBuildZoom !== undefined && this.lastBuildZoom >= LINE_NAME_MIN_ZOOM;
   }
 
   /**
-   * The labels a section-only build reserves (`labelReveal`'s `reserved`): those
+   * The labels a line-only build reserves (`labelReveal`'s `reserved`): those
    * of the shown expensive kinds whose anchor lies near a jump / reference
-   * section name, shaped. A full build would draw them, and a real-line label
+   * line name, shaped. A full build would draw them, and a real-line label
    * there outranks the name - so leaving their slots free now keeps the name
    * from showing below the band only to vanish when they are built. Undefined
    * when there is nothing to reserve (no such name, or no expensive kind shown -
@@ -514,13 +514,13 @@ export class SurveyLabelController {
     if (shown.length === 0) return undefined;
     const reserveZoom = Math.min(...shown.map((k) => LABEL_KIND_STYLE[k].minzoom));
     const wps = worldPixelScale * 2 ** (reserveZoom - zoom);
-    const nameStyle = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME];
+    const nameStyle = LABEL_KIND_STYLE[LABEL_KIND.LINE_NAME];
     const namePx = interpolateStops(reserveZoom, nameStyle.size);
     const rects: ViewportRel[] = [];
     for (let i = 0; i < names.length; i++) {
       const d = names[i]!;
       const e = nameExtents[i];
-      if (d.kind !== LABEL_KIND.SECTION_NAME || !e || labelVirtualRank(d) === VIRTUAL_RANK_REAL) continue;
+      if (d.kind !== LABEL_KIND.LINE_NAME || !e || labelVirtualRank(d) === VIRTUAL_RANK_REAL) continue;
       const own = Math.max(Math.abs(e.minX), Math.abs(e.maxX), Math.abs(e.minY), Math.abs(e.maxY)) * namePx;
       const half = (own + nameStyle.haloWidth + RESERVE_REACH_PX) / wps;
       rects.push({ minX: d.anchorX - half, maxX: d.anchorX + half, minY: d.anchorY - half, maxY: d.anchorY + half });
@@ -533,7 +533,7 @@ export class SurveyLabelController {
   /** Per-kind label hiding (#27). A label is dropped with the geometry of ITS
    *  OWN kind - a single both-off rule left one kind's shot-data and comment
    *  labels floating over the other kind's collapsed lines. The both-off case
-   *  still applies to ALL_REFERENCE station/section labels, and that rule lives
+   *  still applies to ALL_REFERENCE station/line labels, and that rule lives
    *  in the reveal pass + shader where the flag is read. */
   private hideReferenceLabels(): boolean {
     return !this.referenceShotsVisible;
@@ -583,7 +583,7 @@ export class SurveyLabelController {
 
   /**
    * Build the GPU-ready label buffers from SoA, VIEWPORT-SCOPED with the REVEAL
-   * ZOOM baked in. Below the expensive-kinds zoom band only section names build;
+   * ZOOM baked in. Below the expensive-kinds zoom band only line names build;
    * below their minzoom nothing does. Labels are shaped (through the shape cache),
    * their reveal zooms computed once (`labelReveal.ts`), then EMITTED up to
    * `buildZoom + EMIT_SLACK` so a modest zoom-in needs no rebuild. In a unit-test
@@ -624,11 +624,11 @@ export class SurveyLabelController {
     const tShape0 = performance.now();
     let shaped = shapeDescriptors(descriptors, this.atlas!, this.shapeCache);
     let extents = shaped.map(shapedExtent);
-    // Section-only build: the labels a full build would draw around a jump /
-    // reference section's name, so the name never shows here only to vanish at
+    // Line-only build: the labels a full build would draw around a jump /
+    // reference line's name, so the name never shows here only to vanish at
     // the band crossing (real-line labels outrank it there).
     const reserved =
-      kinds === SECTION_ONLY_KINDS && vpCtx !== null && zoom !== undefined
+      kinds === LINE_ONLY_KINDS && vpCtx !== null && zoom !== undefined
         ? this.reserveNearVirtualNames(params, anchorX, anchorY, buildCtx, descriptors, extents, vpCtx.worldPixelScale, zoom)
         : undefined;
 
@@ -660,10 +660,10 @@ export class SurveyLabelController {
         reserved,
       });
       // Emit only labels that clear within the horizon (finite reveal) - except
-      // in a section-only build that reserves slots: there a name hidden now may
+      // in a line-only build that reserves slots: there a name hidden now may
       // still hold a slot (labelReveal's held-back rule), so keep every name,
       // hidden ones at an unreachable reveal, and the reveal-only rerun replays
-      // it. Section names are few, so this costs nothing.
+      // it. Line names are few, so this costs nothing.
       const keptDesc: LabelDescriptor[] = [];
       const keptShaped: ShapedLabel[] = [];
       const keptExtents: (ExtentEm | null)[] = [];
@@ -723,7 +723,7 @@ export class SurveyLabelController {
   }
 
   /**
-   * The full per-label flag byte = STATIC bits (FIRST_IN_SECTION / REFERENCE /
+   * The full per-label flag byte = STATIC bits (FIRST_IN_LINE / REFERENCE /
    * ALL_REFERENCE, from the descriptor) OR the dynamic interaction bits: DIM
    * (anchored / immovable) and DRAG_HIDE (a move tool is dragging its feature).
    * Decluttering is NOT a flag anymore - it lives in the per-label reveal zoom -
@@ -742,13 +742,13 @@ export class SurveyLabelController {
   /**
    * Whether a label is the ONE comment picked up during move_comment
    * (setHiddenComment), keyed on the SAME identity the deleted stock
-   * hidden-comment filter used: a station comment matches by `sectionId` +
-   * `stationIndex`, a shot comment by `sectionId` + `shotId`. Only comment kinds
+   * hidden-comment filter used: a station comment matches by `lineId` +
+   * `stationIndex`, a shot comment by `lineId` + `shotId`. Only comment kinds
    * can match, so a station/shot LABEL sharing the anchor never hides. (C3)
    */
   private commentHideBitFor(desc: LabelDescriptor): boolean {
     const hidden = this.hiddenComment;
-    if (hidden === null || desc.sectionId !== hidden.sectionId) return false;
+    if (hidden === null || desc.lineId !== hidden.lineId) return false;
     if (hidden.type === 'station') {
       return desc.kind === LABEL_KIND.STATION_COMMENT && desc.stationIndex === hidden.id;
     }
@@ -762,11 +762,11 @@ export class SurveyLabelController {
    *    mirrors the geometry side's "every feature dims" (controller.ts
    *    `dimForStation`/`dimForShot`), so labels don't stay full-bright while the
    *    whole survey underneath them tints.
-   *  - shot label:    anchored(section) OR immovable-shot(section·STRIDE+shotId)
-   *                   OR gas-dim-shot(section·STRIDE+shotId) (#395)
-   *  - station label: anchored(section) OR immovable-station(section·STRIDE+idx)
-   *                   OR gas-dim-station(section·STRIDE+idx) (#395)
-   *  - section name:  anchored(section) only (never immovable- or gas-dimmed)
+   *  - shot label:    anchored(line) OR immovable-shot(line·STRIDE+shotId)
+   *                   OR gas-dim-shot(line·STRIDE+shotId) (#395)
+   *  - station label: anchored(line) OR immovable-station(line·STRIDE+idx)
+   *                   OR gas-dim-station(line·STRIDE+idx) (#395)
+   *  - line name:  anchored(line) only (never immovable- or gas-dimmed)
    *  - comments:      never (stock never dims comment layers), except under the
    *                   plan-idle tint above.
    *
@@ -776,17 +776,17 @@ export class SurveyLabelController {
    */
   private dimBitFor(desc: LabelDescriptor): boolean {
     const {
-      anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+      anchoredLineIds, immovableStationFeatureIds, immovableShotFeatureIds,
       gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
     } = this.dimState;
     if (planIdleDim) return true;
-    const sid = desc.sectionId;
+    const sid = desc.lineId;
     if (sid === undefined) return false;
-    const anchored = anchoredSectionIds.has(sid);
+    const anchored = anchoredLineIds.has(sid);
     switch (desc.kind) {
       case LABEL_KIND.CLOSURE_ERROR:
-        // Like the closure line: dim only once both ends' sections are anchored.
-        return anchored && desc.pairSectionId !== undefined && anchoredSectionIds.has(desc.pairSectionId);
+        // Like the closure line: dim only once both ends' lines are anchored.
+        return anchored && desc.pairLineId !== undefined && anchoredLineIds.has(desc.pairLineId);
       case LABEL_KIND.SHOT_LABEL:
       case LABEL_KIND.SHOT_ERROR:
         return (
@@ -806,7 +806,7 @@ export class SurveyLabelController {
               (gasDimStationFeatureIds.size > 0 &&
                 gasDimStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex))))
         );
-      case LABEL_KIND.SECTION_NAME:
+      case LABEL_KIND.LINE_NAME:
         return anchored;
       default:
         return false; // comments: stock leaves them at full opacity
@@ -816,28 +816,33 @@ export class SurveyLabelController {
   /**
    * Whether a label is drag-hidden, keyed on the SAME drag exclusion the geometry
    * controller + the stock drag filters use (excludedStationGlobals /
-   * excludedShotGlobals / whole-section drag): station-owned labels + comments
+   * excludedShotGlobals / whole-line drag): station-owned labels + comments
    * follow the station set, shot-owned follow the shot set, and either follows a
-   * whole-section exclusion.
+   * whole-line exclusion.
    *
-   * SECTION NAMES now drag-hide too, for every AFFECTED section - a DELIBERATE
+   * LINE NAMES now drag-hide too, for every AFFECTED line - a DELIBERATE
    * break from stock parity (stock left `survey-labels` out of the drag
-   * hide-layers, so a section name stayed pinned at the OLD anchor while the
-   * geometry moved, reading as stuck). A whole-section (segment) drag hides the
-   * name via `sectionIds`; a partial station / shot drag hides it via the
-   * `affectedSectionIds` set SurveyLayer threads in (the moved globals mapped
-   * back to their sections). The name reappears at the new anchor on the
+   * hide-layers, so a line name stayed pinned at the OLD anchor while the
+   * geometry moved, reading as stuck). A whole-line (segment) drag hides the
+   * name via `lineIds`; a partial station / shot drag hides it via the
+   * `affectedLineIds` set SurveyLayer threads in (the moved globals mapped
+   * back to their lines). The name reappears at the new anchor on the
    * synchronous commit / cancel rebuild.
    */
   private dragBitFor(desc: LabelDescriptor): boolean {
-    const { sectionIds, stationGlobalIndices, shotGlobalIndices, affectedSectionIds } = this.hideState;
-    const sid = desc.sectionId;
+    const { lineIds, stationGlobalIndices, shotGlobalIndices, affectedLineIds } = this.hideState;
+    const sid = desc.lineId;
     if (sid === undefined) return false;
-    // Whole-section (segment) drag: the entire section translates, so every label
-    // of the section hides - section name included.
-    if (sectionIds?.has(sid) === true) return true;
+    // Whole-line (segment) drag: the entire line translates, so every label
+    // of the line hides - line name included.
+    if (lineIds?.has(sid) === true) return true;
     switch (desc.kind) {
       case LABEL_KIND.STATION_LABEL:
+        // A merge group draws one label: it hides when any member is dragged.
+        if (desc.stationGroup !== undefined && stationGlobalIndices) {
+          return desc.stationGroup.some((g) => stationGlobalIndices.has(g));
+        }
+        return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
       case LABEL_KIND.STATION_COMMENT:
         return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
       case LABEL_KIND.SHOT_LABEL:
@@ -847,15 +852,15 @@ export class SurveyLabelController {
       case LABEL_KIND.CLOSURE_ERROR:
         // Either end moving moves the closure: hide it until the commit rebuild.
         return (
-          (desc.pairSectionId !== undefined &&
-            (sectionIds?.has(desc.pairSectionId) === true || affectedSectionIds?.has(desc.pairSectionId) === true)) ||
-          affectedSectionIds?.has(sid) === true ||
+          (desc.pairLineId !== undefined &&
+            (lineIds?.has(desc.pairLineId) === true || affectedLineIds?.has(desc.pairLineId) === true)) ||
+          affectedLineIds?.has(sid) === true ||
           (desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true) ||
           (desc.pairStationGlobal !== undefined && stationGlobalIndices?.has(desc.pairStationGlobal) === true)
         );
-      case LABEL_KIND.SECTION_NAME:
-        // Partial station / shot drag: hide the name of every affected section.
-        return affectedSectionIds?.has(sid) === true;
+      case LABEL_KIND.LINE_NAME:
+        // Partial station / shot drag: hide the name of every affected line.
+        return affectedLineIds?.has(sid) === true;
       default:
         return false;
     }
@@ -989,16 +994,16 @@ export class SurveyLabelController {
 
   /**
    * Which kinds to build at `zoom` (§4). The expensive kinds (shot/station
-   * labels + comments) follow the 13.5/13 hysteresis; section names follow their
+   * labels + comments) follow the 13.5/13 hysteresis; line names follow their
    * own minzoom (10) so they still show at z10..13.5. Returns `undefined` (=
-   * every kind) once past the band, a section-only set in [10, band), or an
+   * every kind) once past the band, a line-only set in [10, band), or an
    * empty set below 10. Also latches {@link fullLabelsBuilt} for the hysteresis.
    */
   private kindsToBuild(zoom: number, hasData: boolean): ReadonlySet<LabelKind> | undefined {
     const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
     this.fullLabelsBuilt = wantFull && hasData;
     if (wantFull) return undefined;
-    if (zoom >= SECTION_NAME_MIN_ZOOM) return SECTION_ONLY_KINDS;
+    if (zoom >= LINE_NAME_MIN_ZOOM) return LINE_ONLY_KINDS;
     return NO_KINDS;
   }
 
@@ -1090,20 +1095,20 @@ export class SurveyLabelController {
     ) {
       return true;
     }
-    // 3. Expensive-kinds hysteresis band crossing (section-only ⇆ full).
+    // 3. Expensive-kinds hysteresis band crossing (line-only ⇆ full).
     const hasData = (this.pendingParams?.surveyData.stationCount ?? 0) > 0;
     const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
     if ((wantFull && hasData) !== this.lastBuiltWantFull) return true;
-    // 4. Section-name minzoom crossing (nothing ⇆ section-only). A build below 10
-    //    emits NO section names (empty set); the padded low-zoom viewport still
+    // 4. Line-name minzoom crossing (nothing ⇆ line-only). A build below 10
+    //    emits NO line names (empty set); the padded low-zoom viewport still
     //    covers a zoom-in into [10, band), and wantFull is false on both sides of
-    //    10, so checks 1-3 all miss it. Without this, section names stay absent
+    //    10, so checks 1-3 all miss it. Without this, line names stay absent
     //    until 13.5 / an edit / a large pan. Compare the last build's zoom band
     //    against the live one (last build's zoom is undefined only before any
     //    build, handled by the earlier guards).
     if (
       this.lastBuildZoom !== undefined &&
-      zoom >= SECTION_NAME_MIN_ZOOM !== this.lastBuildZoom >= SECTION_NAME_MIN_ZOOM
+      zoom >= LINE_NAME_MIN_ZOOM !== this.lastBuildZoom >= LINE_NAME_MIN_ZOOM
     ) {
       return true;
     }

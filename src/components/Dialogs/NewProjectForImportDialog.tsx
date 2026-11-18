@@ -146,7 +146,7 @@ export default function NewProjectForImportDialog() {
     try {
       // Capture the entry-point source before createProject: its setView('single')
       // clears the pending project-action source, but the follow-up import command
-      // in THIS same flow (import_sections / execute*Import) peeks the SAME source.
+      // in THIS same flow (import_lines / execute*Import) peeks the SAME source.
       // Re-arm it after the project is created so the import is attributed to the
       // same entry point as create_project_full (the import command clears it).
       const importSource = peekProjectActionSource();
@@ -163,8 +163,8 @@ export default function NewProjectForImportDialog() {
       //
       // It does NOT make the whole wizard transactional, and does not claim to.
       // Once the eager anchor import lands, the file is real; cancelling after
-      // that removes the sections and saves the emptied project through
-      // (`withdrawImportedSections`), and the file stays where the user asked
+      // that removes the lines and saves the emptied project through
+      // (`withdrawImportedLines`), and the file stays where the user asked
       // for it - see docs/dmp-import.md.
       const result = await createProject(
         name.trim(),
@@ -242,10 +242,10 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.dmp')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.sections', { count: dmpFile.sections.length })}
+              {t('dialogs.newProjectForImport.summary.sections', { count: dmpFile.lines.length })}
               {t('dialogs.newProjectForImport.summary.separator')}
               {t('dialogs.newProjectForImport.summary.shots', {
-                count: dmpFile.sections.reduce(
+                count: dmpFile.lines.reduce(
                   (acc, s) => acc + s.shots.filter((sh) => sh.shot_type === 'Standard').length,
                   0
                 ),
@@ -257,7 +257,7 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.tml')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.sections', { count: tmlStats.totalSections })}
+              {t('dialogs.newProjectForImport.summary.sections', { count: tmlStats.totalLines })}
               {t('dialogs.newProjectForImport.summary.separator')}
               {t('dialogs.newProjectForImport.summary.shots', { count: tmlStats.totalShots })}
               {tmlFile.cave_name

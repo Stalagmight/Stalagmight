@@ -18,7 +18,7 @@ async function openMnemoDialog(page: Page): Promise<void> {
 async function readMnemo(page: Page): Promise<void> {
   await expect(page.getByTestId('mnemo-port-select')).toHaveValue('/dev/cu.usbmodem101');
   await page.getByTestId('mnemo-download').click();
-  await expect(page.getByTestId('mnemo-result-summary')).toContainText('2 sections, 14 shots');
+  await expect(page.getByTestId('mnemo-result-summary')).toContainText('2 lines, 14 shots');
 }
 
 function pullCalls(page: Page): Promise<unknown> {
@@ -54,7 +54,7 @@ test.describe('Import from MNemo', () => {
     await expect(newProject.getByTestId('project-name-input')).toHaveValue('MNemo-2026-11-13_143005');
   });
 
-  test('in a project, a pull continues into the DMP section choice', async ({ page }) => {
+  test('in a project, a pull continues into the DMP line choice', async ({ page }) => {
     await createProject(page, 'MNemo Import Test');
     await openMnemoDialog(page);
     await readMnemo(page);
@@ -62,7 +62,7 @@ test.describe('Import from MNemo', () => {
     await page.getByTestId('mnemo-continue').click();
     const selection = page.getByTestId('dmp-selection-dialog');
     await expect(selection).toBeVisible({ timeout: 5000 });
-    await expect(selection.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(selection.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
   });
 
   test('in a read-only mode, the saved file meets the same import guard as any .dmp', async ({ page }) => {

@@ -1,5 +1,5 @@
 /**
- * #567 item 2: the suggestion phase's section-metadata form starts collapsed
+ * #567 item 2: the suggestion phase's line-metadata form starts collapsed
  * behind a disclosure so it stops crowding the connection card + confidence
  * badge above it. `editState` lives in the parent dialog, not in this
  * component, so collapsing it must never lose in-progress edits.
@@ -8,16 +8,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SuggestionSectionSettings } from '../SuggestionSectionSettings';
-import type { SectionEditState } from '../../../utils/batchImportHelpers';
-import { listPeopleProps } from '../../common/SectionMetadataForm';
+import type { LineEditState } from '../../../utils/batchImportHelpers';
+import { listPeopleProps } from '../../common/LineMetadataForm';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-const editState = (overrides: Partial<SectionEditState> = {}): SectionEditState => ({
-  name: 'Section A',
+const editState = (overrides: Partial<LineEditState> = {}): LineEditState => ({
+  name: 'Line A',
   surveyors: [{ name: 'Alice' }],
   date: '2026-01-01',
   color: '#ffffff',
@@ -35,19 +35,19 @@ describe('SuggestionSectionSettings', () => {
   it('opens on a keyboard Enter, not just a mouse click', async () => {
     // Injection: revert Panel's collapsible header to a div[role=button] with
     // no keyboard handling (the pre-fix shape) -> Tab focuses it but Enter
-    // dispatches no click, section-name-input never appears, and this goes red.
+    // dispatches no click, line-name-input never appears, and this goes red.
     const user = userEvent.setup();
     render(<SuggestionSectionSettings editState={editState()} people={people()} onMetadataChange={vi.fn()} />);
 
-    expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('line-name-input')).not.toBeInTheDocument();
 
     await user.tab();
     expect(screen.getByTestId('wizard-suggestion-section-settings-header')).toHaveFocus();
     // Focus alone must not open it.
-    expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('line-name-input')).not.toBeInTheDocument();
 
     await user.keyboard('{Enter}');
-    expect(screen.getByTestId('section-name-input')).toBeInTheDocument();
+    expect(screen.getByTestId('line-name-input')).toBeInTheDocument();
   });
 
   it('exposes aria-expanded on the header, tracking open state', () => {
@@ -61,24 +61,24 @@ describe('SuggestionSectionSettings', () => {
     expect(header).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('starts collapsed, hiding the section-name input', () => {
+  it('starts collapsed, hiding the line-name input', () => {
     // Injection: drop `defaultOpen={false}` (or flip it) on the wrapping
     // Panel -> the input renders on first paint and this goes red.
     render(<SuggestionSectionSettings editState={editState()} people={people()} onMetadataChange={vi.fn()} />);
 
-    expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('line-name-input')).not.toBeInTheDocument();
   });
 
   it('expanding the disclosure reveals the form with the current values', () => {
     // Injection: render the form unconditionally regardless of open state,
     // or wire the header click to something other than toggling open -> the
     // header click stops revealing the input and this goes red.
-    render(<SuggestionSectionSettings editState={editState({ name: 'Section B' })} people={people()} onMetadataChange={vi.fn()} />);
+    render(<SuggestionSectionSettings editState={editState({ name: 'Line B' })} people={people()} onMetadataChange={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
 
-    const nameInput = screen.getByTestId('section-name-input') as HTMLInputElement;
-    expect(nameInput.value).toBe('Section B');
+    const nameInput = screen.getByTestId('line-name-input') as HTMLInputElement;
+    expect(nameInput.value).toBe('Line B');
   });
 
   it('collapsing again does not wipe values held by the parent', () => {
@@ -89,64 +89,64 @@ describe('SuggestionSectionSettings', () => {
     // expand (e.g. hard-coding a value on remount) this test goes red.
     const onMetadataChange = vi.fn();
     const { rerender } = render(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} people={people()} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Line C' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
-    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'Section C edited' } });
-    expect(onMetadataChange).toHaveBeenCalledWith('name', 'Section C edited');
+    fireEvent.change(screen.getByTestId('line-name-input'), { target: { value: 'Line C edited' } });
+    expect(onMetadataChange).toHaveBeenCalledWith('name', 'Line C edited');
 
     // Simulate the parent committing the edit into editState, then collapse.
     rerender(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C edited' })} people={people()} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Line C edited' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
-    expect(screen.queryByTestId('section-name-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('line-name-input')).not.toBeInTheDocument();
 
     // Expand again - the parent-held value survived the collapse.
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
-    expect((screen.getByTestId('section-name-input') as HTMLInputElement).value).toBe('Section C edited');
+    expect((screen.getByTestId('line-name-input') as HTMLInputElement).value).toBe('Line C edited');
   });
 
   it('reflects a parent-driven value the child never typed, across a collapse', () => {
     // Strengthens the test above: a component that ignored `editState` and
     // kept its own internal input state would still pass the previous test
     // (it echoes back the value the child itself typed), but would fail
-    // this one, since 'Section D' never passes through the input's onChange
+    // this one, since 'Line D' never passes through the input's onChange
     // here - it can only appear by reading `editState.name` on every render.
     // Injection: cache the initial `editState.name` in local state on mount
     // (e.g. `useState(editState.name)`) instead of reading the prop directly
-    // -> the input keeps showing 'Section C' after the parent renames it,
+    // -> the input keeps showing 'Line C' after the parent renames it,
     // and this goes red.
     const onMetadataChange = vi.fn();
     const { rerender } = render(
-      <SuggestionSectionSettings editState={editState({ name: 'Section C' })} people={people()} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Line C' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
-    expect((screen.getByTestId('section-name-input') as HTMLInputElement).value).toBe('Section C');
+    expect((screen.getByTestId('line-name-input') as HTMLInputElement).value).toBe('Line C');
 
-    // Collapse, then the parent renames the section from elsewhere (not
+    // Collapse, then the parent renames the line from elsewhere (not
     // through this component's own input).
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
     rerender(
-      <SuggestionSectionSettings editState={editState({ name: 'Section D' })} people={people()} onMetadataChange={onMetadataChange} />,
+      <SuggestionSectionSettings editState={editState({ name: 'Line D' })} people={people()} onMetadataChange={onMetadataChange} />,
     );
 
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
-    expect((screen.getByTestId('section-name-input') as HTMLInputElement).value).toBe('Section D');
+    expect((screen.getByTestId('line-name-input') as HTMLInputElement).value).toBe('Line D');
   });
 
-  it('shows the section people as pills and hands an added name to the host', async () => {
-    // Injection: drop `people={people}` from the SectionMetadataForm inside ->
+  it('shows the line people as pills and hands an added name to the host', async () => {
+    // Injection: drop `people={people}` from the LineMetadataForm inside ->
     // no pill renders and the update is never called, and this goes red.
     const user = userEvent.setup();
     const update = vi.fn();
     render(<SuggestionSectionSettings editState={editState()} people={people(update)} onMetadataChange={vi.fn()} />);
     fireEvent.click(screen.getByTestId('wizard-suggestion-section-settings-header'));
 
-    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('Alice');
-    await user.type(screen.getByTestId('section-explorers-input'), 'Bob{Enter}');
+    expect(screen.getByTestId('line-surveyors-pill-0-label')).toHaveTextContent('Alice');
+    await user.type(screen.getByTestId('line-explorers-input'), 'Bob{Enter}');
     expect(update).toHaveBeenCalledWith('explorers', expect.any(Function));
     const reducer = update.mock.calls[0]![1] as (prev: Array<{ name: string }>) => Array<{ name: string }>;
     expect(reducer([])).toEqual([{ name: 'Bob' }]);

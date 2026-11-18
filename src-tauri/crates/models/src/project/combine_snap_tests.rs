@@ -1,25 +1,25 @@
-//! Combine Sections and snapped closures (#756). A snap from the side that
+//! Combine Lines and snapped closures (#756). A snap from the side that
 //! moves into a part a zero datum holds tears because that datum keeps the
 //! part where it is, and the plan says so (the zero-datum reason, so the
-//! dialog names the section that stays) where it used to give the loop
+//! dialog names the line that stays) where it used to give the loop
 //! reason. And why the issue's own
 //! survey, a snapped part held to the rest by loop closures alone, is no
 //! survey the app leaves: a reopen settles it before any combine can see it.
 
 use super::combine_closure_tests::{add, check_combined, dist, options, shot, xy};
 use crate::{
-    ClosureStrategy, CombineJoinEnds, CombinePlan, GpsCoordinates, LoopClosure, Project,
-    SectionEnd, SectionId, StationRef, TornTieKind, TornTieReason, ZeroDatum,
+    ClosureStrategy, CombineJoinEnds, CombinePlan, GpsCoordinates, LineEnd, LineId, LoopClosure,
+    Project, StationRef, TornTieKind, TornTieReason, ZeroDatum,
 };
 
 /// Move `id` so its station `index` sits exactly on `target`.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, StationRef::new(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
-/// A one-shot section from `from` to `to`, placed on `from`.
-fn bridge(project: &mut Project, name: &str, from: StationRef, to: StationRef) -> SectionId {
+/// A one-shot line from `from` to `to`, placed on `from`.
+fn bridge(project: &mut Project, name: &str, from: StationRef, to: StationRef) -> LineId {
     let (a, b) = (xy(project, from), xy(project, to));
     let azimuth = (b.0 - a.0).atan2(b.1 - a.1).to_degrees().rem_euclid(360.0);
     let id = add(project, name, vec![shot(azimuth, dist(a, b))]);
@@ -90,7 +90,7 @@ fn issue_shape() -> Project {
     let m = add(&mut project, "M", vec![shot(90.0, 3.0)]);
     let z = add(&mut project, "Z", vec![shot(180.0, 5.0)]);
     let w = add(&mut project, "W", vec![shot(90.0, 4.0)]);
-    project.set_section_offset(k, (100.0, -40.0));
+    project.set_line_offset(k, (100.0, -40.0));
     let k2 = xy(&project, StationRef::new(k, 2));
     place(&mut project, o, 0, (k2.0 + 0.004, k2.1 - 0.003));
     let k0 = xy(&project, StationRef::new(k, 0));
@@ -164,7 +164,7 @@ fn the_issue_survey_is_one_a_reopen_already_settles() {
 
 /// The torn ties of `plan`, as (kind, ends sorted, reason, held end), merges
 /// first. The held end is the one the dialog names for a tie torn for a zero
-/// datum: the end on a section that does not move.
+/// datum: the end on a line that does not move.
 fn torn(
     plan: &CombinePlan,
 ) -> Vec<(
@@ -178,12 +178,12 @@ fn torn(
         .iter()
         .map(|t| {
             let mut ends = [t.station_a, t.station_b];
-            ends.sort_by_key(|at| (at.section_id, at.station_index));
+            ends.sort_by_key(|at| (at.line_id, at.station_index));
             let held = (t.reason == TornTieReason::ZeroDatum)
                 .then(|| {
                     [t.station_a, t.station_b]
                         .into_iter()
-                        .find(|at| !plan.moved_sections.contains(&at.section_id))
+                        .find(|at| !plan.moved_lines.contains(&at.line_id))
                 })
                 .flatten();
             (t.kind, ends, t.reason, held)
@@ -199,7 +199,7 @@ fn torn(
 /// snapped there. Keeping K, O moves: it tears its merge to D for D's datum,
 /// and the snap from O into D's part tears too. It tears because D's datum
 /// holds that part where it is, so its reason is the datum and the dialog
-/// names D as the section that stays; it used to give the loop reason, and
+/// names D as the line that stays; it used to give the loop reason, and
 /// the dialog then said the loop's misclosure moves to it. Keeping O, K moves
 /// and tears its merge to N; the snap stays inside O's side.
 #[test]
@@ -208,7 +208,7 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
     let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
     let o = add(&mut project, "O", vec![shot(0.0, 4.0), shot(300.0, 6.0)]);
     let n = add(&mut project, "N", vec![shot(0.0, 3.0)]);
-    project.set_section_offset(k, (100.0, -40.0));
+    project.set_line_offset(k, (100.0, -40.0));
     let k2 = xy(&project, StationRef::new(k, 2));
     place(&mut project, o, 0, (k2.0 + 0.004, k2.1 - 0.003));
     let k0 = xy(&project, StationRef::new(k, 0));
@@ -255,20 +255,20 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
     assert!(reopen_settles_nothing(&project), "a survey the app leaves");
 
     let keep_k = CombineJoinEnds {
-        kept: SectionEnd::End,
-        other: SectionEnd::Start,
+        kept: LineEnd::End,
+        other: LineEnd::Start,
     };
     let c = project
         .combine_candidate_joining(k, o, Some(keep_k))
         .unwrap();
     assert_eq!(c.blocked_reason, None);
-    let plan = if c.section_a == k {
+    let plan = if c.line_a == k {
         &c.plan_keeping_a
     } else {
         &c.plan_keeping_b
     };
-    assert_eq!(plan.moving_section, Some(o));
-    assert_eq!(plan.moved_sections, vec![o]);
+    assert_eq!(plan.moving_line, Some(o));
+    assert_eq!(plan.moved_lines, vec![o]);
     assert_eq!(
         torn(plan),
         vec![
@@ -287,25 +287,23 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
         ]
     );
     let mut after = project.clone();
-    after
-        .combine_sections(k, o, &options(Some(keep_k)))
-        .unwrap();
+    after.combine_lines(k, o, &options(Some(keep_k))).unwrap();
     check_combined(&project, &after, &c, k, "keep K", &[]);
     assert!(reopen_settles_nothing(&after), "a reopen settles nothing");
 
     let keep_o = CombineJoinEnds {
-        kept: SectionEnd::Start,
-        other: SectionEnd::End,
+        kept: LineEnd::Start,
+        other: LineEnd::End,
     };
     let c = project
         .combine_candidate_joining(o, k, Some(keep_o))
         .unwrap();
-    let plan = if c.section_a == o {
+    let plan = if c.line_a == o {
         &c.plan_keeping_a
     } else {
         &c.plan_keeping_b
     };
-    assert_eq!(plan.moving_section, Some(k));
+    assert_eq!(plan.moving_line, Some(k));
     assert_eq!(
         torn(plan),
         vec![(
@@ -316,8 +314,6 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum() {
         )]
     );
     let mut after = project.clone();
-    after
-        .combine_sections(o, k, &options(Some(keep_o)))
-        .unwrap();
+    after.combine_lines(o, k, &options(Some(keep_o))).unwrap();
     check_combined(&project, &after, &c, o, "keep O", &[]);
 }

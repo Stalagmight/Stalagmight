@@ -17,7 +17,7 @@ import { normalizeAzimuth } from './azimuth';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-/** A shot-like shape from a target section (existing project or another import). */
+/** A shot-like shape from a target line (existing project or another import). */
 export interface TargetShotLike {
   azimuth_in: number;
   azimuth_out: number;
@@ -115,7 +115,7 @@ export function computeOverlapIds(
  *
  * The DMP wizard trims these shots from the not-yet-committed import; the
  * orphan-placement dialog resolves the same shots through `computeOverlapPairs`
- * (#681). Either way, acting past the merge station would cut the section off.
+ * (#681). Either way, acting past the merge station would cut the line off.
  *
  * Front: shots 0..mergeImportStation-1
  * Back:  shots mergeImportStation..(importStationIndex-1)
@@ -141,10 +141,10 @@ export function computeActionableIds(
 }
 
 /**
- * Map an overlap shot ID to the corresponding target section shot index.
+ * Map an overlap shot ID to the corresponding target line shot index.
  *
  * The mapping depends on whether the overlap is at the Front or Back of the
- * import section, and whether the direction is forward or reverse:
+ * import line, and whether the direction is forward or reverse:
  *
  * Front + forward:  existingStationIndex + k
  * Front + reverse:  (existingStationIndex - 1) - k
@@ -174,7 +174,7 @@ export function computeTargetShotIndex(
   }
 }
 
-/** One repeated shot: the new section's copy and the existing shot it repeats. */
+/** One repeated shot: the new line's copy and the existing shot it repeats. */
 export interface OverlapPair {
   orphanShotIndex: number;
   targetShotIndex: number;
@@ -182,13 +182,13 @@ export interface OverlapPair {
 
 /**
  * The repeated shots a placement resolves, each paired with the existing shot it
- * repeats, in new-section shot order (#681).
+ * repeats, in new-line shot order (#681).
  *
  * The "Merge at" station decides how long the repeat is: only the shots on the
  * dangling side of it count (Front: before it, Back: after it). Shots past it
- * are new survey carrying the section on, and must stay Normal - a Reference leg
+ * are new survey carrying the line on, and must stay Normal - a Reference leg
  * costs infinity in Plan mode by default, so marking them would cut the rest of
- * the section off. The dialog's default, the end of the repeat, takes it all.
+ * the line off. The dialog's default, the end of the repeat, takes it all.
  */
 export function computeOverlapPairs(params: OverlapParams, mergeImportStation: number): OverlapPair[] {
   return [...computeActionableIds(params.importStationIndex, params.matchedShots, mergeImportStation)]
@@ -256,7 +256,7 @@ export function avgNullable(a: number | null, b: number | null): number | null {
  *
  * Mirrors `reverse_shots` in `src-tauri/src/models/project/reverse.rs` step for
  * step, because the two placements must agree: this runs on the import preview
- * and the backend runs on the committed section.
+ * and the backend runs on the committed line.
  *
  * Two things the naive `(x + 180) % 360` got wrong:
  *

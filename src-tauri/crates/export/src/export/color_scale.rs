@@ -344,7 +344,7 @@ mod tests {
 
     fn sloping_project() -> Project {
         let mut project = Project::new("Scale".to_string(), None);
-        project.add_section(crate::models::SectionData {
+        project.add_line(crate::models::LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![shot(10.0, 0.0, 10.0), shot(10.0, 10.0, 20.0)],

@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    ClosureRef, ClosureStrategy, Coordinates, LoopClosure, Section, SectionId, Station, StationRef,
+    ClosureRef, ClosureStrategy, Coordinates, Line, LineId, LoopClosure, Station, StationRef,
 };
 
 use super::{AdjustedStations, AdjustmentFailure, Project};
@@ -80,7 +80,7 @@ impl Project {
             colocated
         } else {
             let mut group = colocated.to_vec();
-            group.sort_unstable_by_key(|sr| (sr.section_id, sr.station_index));
+            group.sort_unstable_by_key(|sr| (sr.line_id, sr.station_index));
             sorted_group = group;
             &sorted_group
         };
@@ -89,19 +89,19 @@ impl Project {
 
         for &sr in colocated {
             // O(1) cache lookup; legacy linear scan was the hot path -
-            // 79 k groups × O(N sections) per `compute_station_coordinates`
+            // 79 k groups × O(N lines) per `compute_station_coordinates`
             // call dominated load time for large projects.
-            if let Some(section) = self.get_section(sr.section_id) {
+            if let Some(line) = self.get_line(sr.line_id) {
                 let idx = sr.station_index as usize;
 
                 // Incoming shot: shot at index station_index - 1 → use depth_out
-                if idx > 0 && idx - 1 < section.shots.len() {
-                    depths.push(section.shots[idx - 1].depth_out);
+                if idx > 0 && idx - 1 < line.shots.len() {
+                    depths.push(line.shots[idx - 1].depth_out);
                 }
 
                 // Outgoing shot: shot at index station_index → use depth_in
-                if idx < section.shots.len() {
-                    depths.push(section.shots[idx].depth_in);
+                if idx < line.shots.len() {
+                    depths.push(line.shots[idx].depth_in);
                 }
             }
         }
@@ -115,24 +115,24 @@ impl Project {
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
     pub fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
-        let section = self.get_section(station_ref.section_id)?;
+        let line = self.get_line(station_ref.line_id)?;
 
-        // Get section offset
+        // Get line offset
         let (offset_x, offset_y) = self
-            .section_offsets
-            .get(&section.id)
+            .line_offsets
+            .get(&line.id)
             .copied()
             .unwrap_or((0.0, 0.0));
         let mut coords = Coordinates::new(offset_x, offset_y, 0.0);
-        // Per-section constant (#438): resolved once, added per shot.
-        let azimuth_reference = self.azimuth_reference_for(section);
+        // Per-line constant (#438): resolved once, added per shot.
+        let azimuth_reference = self.azimuth_reference_for(line);
 
         // Walk through shots to reach the station (X, Y only)
         for i in 0..station_ref.station_index as usize {
-            if i >= section.shots.len() {
+            if i >= line.shots.len() {
                 return None;
             }
-            let shot = &section.shots[i];
+            let shot = &line.shots[i];
             let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let horizontal = shot.horizontal_length();
             let dx = horizontal * azimuth_rad.sin();
@@ -162,16 +162,16 @@ impl Project {
     /// avoids an O(group × merges) traversal per call - the dominant cost when
     /// merging the thousands of stations of a large import.
     pub fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
-        let section = self.get_section(station_ref.section_id)?;
+        let line = self.get_line(station_ref.line_id)?;
         let (offset_x, offset_y) = self
-            .section_offsets
-            .get(&section.id)
+            .line_offsets
+            .get(&line.id)
             .copied()
             .unwrap_or((0.0, 0.0));
         let (mut x, mut y) = (offset_x, offset_y);
-        let azimuth_reference = self.azimuth_reference_for(section);
+        let azimuth_reference = self.azimuth_reference_for(line);
         for i in 0..station_ref.station_index as usize {
-            let shot = section.shots.get(i)?;
+            let shot = line.shots.get(i)?;
             let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let horizontal = shot.horizontal_length();
             x += horizontal * azimuth_rad.sin();
@@ -194,14 +194,14 @@ impl Project {
     /// (b) `O(closures × stations)` from rebuilding the `merged_with`/`closures_with`
     /// metadata the solver never reads. Merges and aligned closures only connect
     /// stations within one connected component (see
-    /// [`Self::get_connected_section_ids`]), so scoping the colocated depth grouping
+    /// [`Self::get_connected_line_ids`]), so scoping the colocated depth grouping
     /// to `component` is exact.
     pub(super) fn compute_component_raw_coords(
         &self,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
     ) -> HashMap<StationRef, Coordinates> {
         let station_list: Vec<StationRef> = self
-            .sections
+            .lines
             .iter()
             .filter(|s| component.contains(&s.id))
             .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
@@ -236,8 +236,8 @@ impl Project {
             }
         };
         for merge in &self.station_merges {
-            if component.contains(&merge.station_a.section_id)
-                && component.contains(&merge.station_b.section_id)
+            if component.contains(&merge.station_a.line_id)
+                && component.contains(&merge.station_b.line_id)
             {
                 if let (Some(a), Some(b)) = (
                     self.resolve_key(&merge.station_a),
@@ -251,8 +251,8 @@ impl Project {
             if !closure.is_aligned {
                 continue;
             }
-            if component.contains(&closure.station_a.section_id)
-                && component.contains(&closure.station_b.section_id)
+            if component.contains(&closure.station_a.line_id)
+                && component.contains(&closure.station_b.line_id)
             {
                 if let (Some(a), Some(b)) = (
                     self.resolve_key(&closure.station_a),
@@ -275,25 +275,25 @@ impl Project {
             }
         }
 
-        // Per-section XY walk + individual station offsets.
+        // Per-line XY walk + individual station offsets.
         let mut out: HashMap<StationRef, Coordinates> = HashMap::with_capacity(station_list.len());
-        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+        for line in self.lines.iter().filter(|s| component.contains(&s.id)) {
             let (offset_x, offset_y) = self
-                .section_offsets
-                .get(&section.id)
+                .line_offsets
+                .get(&line.id)
                 .copied()
                 .unwrap_or((0.0, 0.0));
             let mut cur = (offset_x, offset_y);
-            let azimuth_reference = self.azimuth_reference_for(section);
-            for idx in 0..=section.shots.len() {
+            let azimuth_reference = self.azimuth_reference_for(line);
+            for idx in 0..=line.shots.len() {
                 if idx > 0 {
-                    let shot = &section.shots[idx - 1];
+                    let shot = &line.shots[idx - 1];
                     let az = shot.average_azimuth_true_rad(azimuth_reference);
                     let h = shot.horizontal_length();
                     cur.0 += h * az.sin();
                     cur.1 += h * az.cos();
                 }
-                let sr = StationRef::new(section.id, idx as u32);
+                let sr = StationRef::new(line.id, idx as u32);
                 let z = depth.get(&sr).copied().unwrap_or(0.0);
                 let mut coords = Coordinates::new(cur.0, cur.1, z);
                 if let Some((ox, oy, oz)) = self.station_offset_for_ref(sr) {
@@ -326,23 +326,23 @@ impl Project {
     /// Either way the pin has to land on the same PHYSICAL station every time, or
     /// the adjusted view jumps.
     ///
-    /// Picking the lex-min `(section_id, station_index)` did not do that. A
-    /// section id survives every edit, but a station INDEX does not: reversing a
-    /// section renumbers station `i` to `N - i`, so `(S, 0)` becomes the far
+    /// Picking the lex-min `(line_id, station_index)` did not do that. A
+    /// line id survives every edit, but a station INDEX does not: reversing a
+    /// line renumbers station `i` to `N - i`, so `(S, 0)` becomes the far
     /// physical end and the whole adjusted component translates by the adjustment
     /// residual - breaking the reverse's "every station keeps its position"
     /// guarantee exactly where closure-adjusted geometry is forced (Plan/Export).
     ///
     /// So the station is named the way the plan anchors name one: by the SHOTS it sits
     /// between, not by an index. The pair is captured once - on the first save that sees the
-    /// section - and travels with the records, so it is unaffected by a reverse, which carries
-    /// both shots together, and by the section being extended at either end, which moves
-    /// neither relative to the other. Capturing records the station the section is ALREADY
+    /// line - and travels with the records, so it is unaffected by a reverse, which carries
+    /// both shots together, and by the line being extended at either end, which moves
+    /// neither relative to the other. Capturing records the station the line is ALREADY
     /// using, so it never moves anybody's coordinates.
     ///
-    /// **Residual.** A single-shot section has no second shot to face away from, so its side
-    /// comes from [`Section::reverse_parity`] instead - exact, because a reverse is the only
-    /// thing that swaps such a section's two ends. Losing the captured neighbour degrades to
+    /// **Residual.** A single-shot line has no second shot to face away from, so its side
+    /// comes from [`Line::reverse_parity`] instead - exact, because a reverse is the only
+    /// thing that swaps such a line's two ends. Losing the captured neighbour degrades to
     /// the same rule, and losing the captured shot outright falls back to the legacy index,
     /// which is the pre-capture behaviour.
     ///
@@ -351,72 +351,71 @@ impl Project {
     ///
     /// A station an edit held for the component ([`Self::held_gauges`]) comes
     /// first: a split, combine or delete-and-split that left the component's
-    /// station outside its lowest-id section records it there, so the edit
+    /// station outside its lowest-id line records it there, so the edit
     /// does not move the adjusted component (`project/gauge.rs`).
     pub(super) fn default_anchor_for_component(
         &self,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
     ) -> Option<StationRef> {
         if let Some(at) = self
             .held_gauges
             .iter()
-            .filter(|held| component.contains(&held.section_id))
+            .filter(|held| component.contains(&held.line_id))
             .find_map(|held| self.resolve_held_gauge(held))
         {
             return Some(at);
         }
-        let section = self
-            .sections
+        let line = self
+            .lines
             .iter()
             .filter(|s| component.contains(&s.id))
             .min_by_key(|s| s.id)?;
-        let index = Self::gauge_index(section);
-        Some(StationRef::new(section.id, index as u32))
+        let index = Self::gauge_index(line);
+        Some(StationRef::new(line.id, index as u32))
     }
 
-    /// Where the gauge sits in `section` right now.
+    /// Where the gauge sits in `line` right now.
     ///
-    /// Prefers the captured pair (see [`Section::gauge_shot_uuid`]): the station is the end of
+    /// Prefers the captured pair (see [`Line::gauge_shot_uuid`]): the station is the end of
     /// that shot facing AWAY from its recorded neighbour, worked out from their current
-    /// positions. Neither moves relative to the other when the section is extended, and a
+    /// positions. Neither moves relative to the other when the line is extended, and a
     /// reverse carries both, so the same junction is named throughout.
     ///
-    /// Falls back to the index rule for a section whose pair was never captured (nothing has
+    /// Falls back to the index rule for a line whose pair was never captured (nothing has
     /// been saved yet) or whose recorded shots are gone. That fallback is what an
     /// already-existing project uses until its first save, and it deliberately reproduces the
     /// legacy answer - station 0 - so upgrading moves nobody.
-    pub(super) fn gauge_index(section: &Section) -> usize {
+    pub(super) fn gauge_index(line: &Line) -> usize {
         let position_of = |uuid: &Option<String>| -> Option<usize> {
             let uuid = uuid.as_deref()?;
-            section
-                .shots
+            line.shots
                 .iter()
                 .position(|s| s.uuid.as_deref() == Some(uuid))
         };
         match (
-            position_of(&section.gauge_shot_uuid),
-            position_of(&section.gauge_neighbour_uuid),
+            position_of(&line.gauge_shot_uuid),
+            position_of(&line.gauge_neighbour_uuid),
         ) {
             // The neighbour is behind the gauge shot, so the gauge station is in front of it.
             (Some(px), Some(py)) if py < px => px + 1,
             (Some(px), Some(_)) => px,
-            // The captured shot survives but has no recorded neighbour - a single-shot section,
+            // The captured shot survives but has no recorded neighbour - a single-shot line,
             // or one whose neighbour was deleted. Position cannot decide the side: for a
-            // one-shot section BOTH ends touch that shot, and reversing it swaps them while
+            // one-shot line BOTH ends touch that shot, and reversing it swaps them while
             // leaving the shot at position 0. Read the side off the orientation instead, the
             // way the plan anchors do.
             //
             // The CURRENT parity is sufficient, and not because capture always happens with it
-            // false - it can just as well capture a section that is already reversed. It works
+            // false - it can just as well capture a line that is already reversed. It works
             // because capture picks the shot the parity rule already names (parity false takes
             // `shots[0]`, parity true takes the last), so the pair and the flag agree at
             // capture; and a reverse moves that shot to the opposite end AND flips the flag,
             // so they keep agreeing however many times it happens.
-            (Some(px), None) if section.reverse_parity => px + 1,
+            (Some(px), None) if line.reverse_parity => px + 1,
             (Some(px), None) => px,
             _ => {
-                if section.reverse_parity {
-                    section.shots.len()
+                if line.reverse_parity {
+                    line.shots.len()
                 } else {
                     0
                 }
@@ -424,21 +423,21 @@ impl Project {
         }
     }
 
-    /// Capture the gauge pair for every section that does not have one, so the choice becomes
+    /// Capture the gauge pair for every line that does not have one, so the choice becomes
     /// durable instead of being re-derived from an index on each solve. Called on save, where
     /// the project is already mutable.
     ///
-    /// Records the pair that names the gauge station the section has RIGHT NOW, so capturing
+    /// Records the pair that names the gauge station the line has RIGHT NOW, so capturing
     /// never moves it - an existing project is pinned to exactly the station it was already
     /// using.
     pub fn capture_missing_gauge_anchors(&mut self) {
-        for section in &mut self.sections {
-            if section.gauge_shot_uuid.is_some() || section.shots.is_empty() {
+        for line in &mut self.lines {
+            if line.gauge_shot_uuid.is_some() || line.shots.is_empty() {
                 continue;
             }
-            let last = section.shots.len() - 1;
-            let gauge = if section.reverse_parity {
-                section.shots.len()
+            let last = line.shots.len() - 1;
+            let gauge = if line.reverse_parity {
+                line.shots.len()
             } else {
                 0
             };
@@ -448,20 +447,20 @@ impl Project {
             } else {
                 (last, last.wrapping_sub(1))
             };
-            section.gauge_shot_uuid = section.shots.get(x).and_then(|s| s.uuid.clone());
-            section.gauge_neighbour_uuid = if x == y {
+            line.gauge_shot_uuid = line.shots.get(x).and_then(|s| s.uuid.clone());
+            line.gauge_neighbour_uuid = if x == y {
                 None
             } else {
-                section.shots.get(y).and_then(|s| s.uuid.clone())
+                line.shots.get(y).and_then(|s| s.uuid.clone())
             };
         }
     }
 
-    /// The gauge station `section_id`'s component would use, for tests that need to assert it
+    /// The gauge station `line_id`'s component would use, for tests that need to assert it
     /// survives a save/reload rather than only a reverse in memory.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
-        let component = self.get_connected_section_ids(section_id);
+    pub fn adjustment_anchor_for_tests(&self, line_id: LineId) -> Option<StationRef> {
+        let component = self.get_connected_line_ids(line_id);
         self.adjustment_anchor_of(&component)
     }
 
@@ -486,7 +485,7 @@ impl Project {
     /// connected to it.
     ///
     /// The Raw Data View holds every aligned closure rigid, whatever its
-    /// strategy ([`Self::get_rigid_connected_section_ids`], the offset
+    /// strategy ([`Self::get_rigid_connected_line_ids`], the offset
     /// cascade, depth co-location), so the Closures Computed View must keep
     /// its two stations on one point too, or the view pulls them apart. An
     /// aligned `Batch` / `LeastSquaresWeighted` closure (the destructive
@@ -519,32 +518,29 @@ impl Project {
     /// closure-adjusted view.
     pub(crate) fn component_has_eligible_closure(
         &self,
-        component: &HashSet<SectionId>,
+        component: &HashSet<LineId>,
         skipped: &HashSet<u64>,
     ) -> bool {
         self.loop_closures.iter().any(|lc| {
             Self::closure_is_eligible(lc.strategy)
                 && !skipped.contains(&lc.id)
-                && component.contains(&lc.station_a.section_id)
-                && component.contains(&lc.station_b.section_id)
+                && component.contains(&lc.station_a.line_id)
+                && component.contains(&lc.station_b.line_id)
         })
     }
 
     /// The station the closure-adjusted view holds `component` at: a placement
     /// zero datum in it when present, otherwise a deterministic default (the
-    /// component's held gauge, or the lowest section id's gauge station) so
+    /// component's held gauge, or the lowest line id's gauge station) so
     /// the gauge is reproducible across reloads. The one rule the solve
     /// ([`Self::plan_adjustment_anchors`]) and the edits that must not move
-    /// it (Combine Sections' choice of the side that moves) share.
-    pub(crate) fn adjustment_anchor_of(
-        &self,
-        component: &HashSet<SectionId>,
-    ) -> Option<StationRef> {
+    /// it (Combine Lines' choice of the side that moves) share.
+    pub(crate) fn adjustment_anchor_of(&self, component: &HashSet<LineId>) -> Option<StationRef> {
         // A PLACEMENT datum (#741): a GPS fix is pulled by the solve, never
         // held, so it cannot be the station the component is held at.
         self.placement_datum_refs()
             .into_iter()
-            .find(|sr| component.contains(&sr.section_id))
+            .find(|sr| component.contains(&sr.line_id))
             .or_else(|| self.default_anchor_for_component(component))
     }
 
@@ -571,12 +567,12 @@ impl Project {
     /// any adjustment mutates the working copy.
     fn plan_adjustment_anchors(&self, skipped: &HashSet<u64>) -> Vec<StationRef> {
         let mut anchors = Vec::new();
-        let mut visited: HashSet<SectionId> = HashSet::new();
-        for section in &self.sections {
-            if visited.contains(&section.id) {
+        let mut visited: HashSet<LineId> = HashSet::new();
+        for line in &self.lines {
+            if visited.contains(&line.id) {
                 continue;
             }
-            let component = self.get_connected_section_ids(section.id);
+            let component = self.get_connected_line_ids(line.id);
             for sid in &component {
                 visited.insert(*sid);
             }
@@ -633,8 +629,8 @@ impl Project {
     /// so a cache-miss solve clones the project `O(eligible components)` times.
     /// In practice that is one or two clones (most surveys are a single connected
     /// component), it only happens on a cache miss, and `adjust_least_squares`
-    /// rewrites `section.shots` in place - so a cheaper offsets-only snapshot would
-    /// be unsound. Revisit with a scoped {sections, offsets, closures} snapshot
+    /// rewrites `line.shots` in place - so a cheaper offsets-only snapshot would
+    /// be unsound. Revisit with a scoped {lines, offsets, closures} snapshot
     /// only if profiling large surveys shows the clones matter.
     pub fn into_adjusted_station_coordinates(
         self,
@@ -694,14 +690,14 @@ impl Project {
                     purpose = "derive closure-adjusted view",
                     "Skipping closure adjustment for component; showing measured geometry"
                 );
-                let mut section_ids: Vec<SectionId> = working
-                    .get_connected_section_ids(anchor.section_id)
+                let mut line_ids: Vec<LineId> = working
+                    .get_connected_line_ids(anchor.line_id)
                     .into_iter()
                     .collect();
-                section_ids.sort_unstable();
+                line_ids.sort_unstable();
                 failures.push(AdjustmentFailure {
                     anchor,
-                    section_ids,
+                    line_ids,
                     error: e,
                 });
             }
@@ -715,7 +711,7 @@ impl Project {
     /// Compute all station coordinates from shots with optional progress callback.
     ///
     /// The callback receives (current, total) station counts for progress reporting.
-    /// Total stations = shots + 1 per section (first station).
+    /// Total stations = shots + 1 per line (first station).
     pub fn compute_station_coordinates_with_progress(
         &self,
         on_progress: Option<&mut dyn FnMut(u32, u32)>,
@@ -743,7 +739,7 @@ impl Project {
         mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
     ) -> Vec<(StationRef, Coordinates)> {
         // Calculate total stations first for progress reporting
-        let total_stations: u32 = self.sections.iter().map(|s| s.shots.len() as u32 + 1).sum();
+        let total_stations: u32 = self.lines.iter().map(|s| s.shots.len() as u32 + 1).sum();
 
         // Pre-compute absolute station depths using colocated groups.
         // Each station's Z is the average of surrounding shot depths across
@@ -772,17 +768,17 @@ impl Project {
         let mut stations: Vec<(StationRef, Coordinates)> = Vec::new();
         let mut station_count = 0u32;
 
-        for section in &self.sections {
-            // Get section offset (from merges)
+        for line in &self.lines {
+            // Get line offset (from merges)
             let (offset_x, offset_y) = self
-                .section_offsets
-                .get(&section.id)
+                .line_offsets
+                .get(&line.id)
                 .copied()
                 .unwrap_or((0.0, 0.0));
             let mut current_xy = (offset_x, offset_y);
 
-            // First station of section
-            let first_station_ref = StationRef::new(section.id, 0);
+            // First station of line
+            let first_station_ref = StationRef::new(line.id, 0);
             let z = station_depths
                 .get(&first_station_ref)
                 .copied()
@@ -805,8 +801,8 @@ impl Project {
             }
 
             // Compute subsequent stations from shots (X, Y walk; Z from pre-computed depths)
-            let azimuth_reference = self.azimuth_reference_for(section);
-            for (i, shot) in section.shots.iter().enumerate() {
+            let azimuth_reference = self.azimuth_reference_for(line);
+            for (i, shot) in line.shots.iter().enumerate() {
                 let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let horizontal_length = shot.horizontal_length();
 
@@ -816,7 +812,7 @@ impl Project {
                 current_xy.0 += dx;
                 current_xy.1 += dy;
 
-                let station_ref = StationRef::new(section.id, (i + 1) as u32);
+                let station_ref = StationRef::new(line.id, (i + 1) as u32);
                 let z = station_depths.get(&station_ref).copied().unwrap_or(0.0);
                 let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
                 // Apply station offset if exists
@@ -838,7 +834,7 @@ impl Project {
         }
 
         // NOTE: Global zero datum subtraction removed (fn-19-mmx.2).
-        // Positioning is now controlled solely by section_offsets, which are
+        // Positioning is now controlled solely by line_offsets, which are
         // computed when set_zero_datum() is called.
         tracing::debug!(
             ms = t_phase.elapsed().as_millis() as u64,
@@ -1143,12 +1139,16 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
-        // Assign station comments and names through one ref -> position index.
-        // Names cover nearly every station of a DMP import, so the per-entry scan
-        // over all stations the comments used to do would be quadratic here
-        // (~8e9 comparisons on an 89k-station project). Stations are unique per
-        // ref - each section contributes `0..=shots.len()` once.
-        if !self.station_comments.is_empty() || !self.station_names.is_empty() {
+        // Assign station comments, names and ids through one ref -> position
+        // index. Names and ids cover every station once the project is
+        // normalized, so the per-entry scan over all stations the comments used
+        // to do would be quadratic here (~8e9 comparisons on an 89k-station
+        // project). Stations are unique per ref - each line contributes
+        // `0..=shots.len()` once.
+        if !self.station_comments.is_empty()
+            || !self.station_names.is_empty()
+            || !self.station_ids.is_empty()
+        {
             let position: HashMap<StationRef, usize> = stations
                 .iter()
                 .enumerate()
@@ -1161,13 +1161,18 @@ impl Project {
             }
             for (key, name) in &self.station_names {
                 if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
-                    stations[i].name = Some(name.clone());
+                    stations[i].name.clone_from(name);
+                }
+            }
+            for (key, id) in &self.station_ids {
+                if let Some(&i) = self.resolve_key(key).and_then(|sr| position.get(&sr)) {
+                    stations[i].id = *id;
                 }
             }
         }
         tracing::debug!(
             ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: station comments and names"
+            "compute_station_coordinates: station comments, names and ids"
         );
 
         *stations_out = stations;
@@ -1181,7 +1186,7 @@ impl Project {
 )]
 mod tests {
     use super::*;
-    use crate::{LoopClosure, SectionData, ShotData, StationMerge};
+    use crate::{LineData, LoopClosure, ShotData, StationMerge};
     use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -1193,9 +1198,9 @@ mod tests {
         }
     }
 
-    fn add_section(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+    fn add_line(project: &mut Project, shots: Vec<ShotData>) -> LineId {
         project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots,
                 ..Default::default()
             })
@@ -1203,13 +1208,13 @@ mod tests {
     }
 
     /// The station index [`Project::default_anchor_for_component`] picks for the
-    /// component `section_id` belongs to.
-    fn anchor_index(project: &Project, section_id: SectionId) -> u32 {
-        let component = project.get_connected_section_ids(section_id);
+    /// component `line_id` belongs to.
+    fn anchor_index(project: &Project, line_id: LineId) -> u32 {
+        let component = project.get_connected_line_ids(line_id);
         let anchor = project.default_anchor_for_component(&component).unwrap();
         assert_eq!(
-            anchor.section_id, section_id,
-            "fixture expects the anchor to come from section {section_id}"
+            anchor.line_id, line_id,
+            "fixture expects the anchor to come from line {line_id}"
         );
         anchor.station_index
     }
@@ -1222,19 +1227,19 @@ mod tests {
             .unwrap()
     }
 
-    /// One loop built from two SINGLE-shot sections: merged at their station 0,
+    /// One loop built from two SINGLE-shot lines: merged at their station 0,
     /// tied by an eligible closure at their station 1, 0.25 m of misclosure and
     /// no zero datum - so the component's translation is gauged by
     /// [`Project::default_anchor_for_component`] alone.
     ///
-    /// A 1-shot section is the shape the shot-UUID identity cannot separate on
-    /// its own (both stations sit between the same single shot and a section
+    /// A 1-shot line is the shape the shot-UUID identity cannot separate on
+    /// its own (both stations sit between the same single shot and a line
     /// end), so this is the fixture the incidence tie-break exists for.
-    fn project_with_a_one_shot_loop() -> (Project, SectionId, SectionId) {
+    fn project_with_a_one_shot_loop() -> (Project, LineId, LineId) {
         let mut project = Project::new("one-shot loop".to_string(), None);
-        let a = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let a = add_line(&mut project, vec![shot(0.0, 10.0)]);
         // 0.25 m longer, so the loop does not quite close.
-        let b = add_section(&mut project, vec![shot(0.0, 10.25)]);
+        let b = add_line(&mut project, vec![shot(0.0, 10.25)]);
         project.ensure_shot_uuids();
         project.station_merges.push(StationMerge {
             station_a: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
@@ -1258,22 +1263,22 @@ mod tests {
 
     /// The reverse promises every station keeps its world position, and Plan /
     /// Export mode FORCES the closure-adjusted view - so the promise has to hold
-    /// for the ADJUSTED coordinates of a section the user did not even touch.
+    /// for the ADJUSTED coordinates of a line the user did not even touch.
     ///
-    /// With every section in the component down to a single shot, the shot-UUID
+    /// With every line in the component down to a single shot, the shot-UUID
     /// identity is the same at both ends (station 0 is `(None, u0)`; station 1 is
     /// `(Some(u0), None)`, which the sort flips onto the same pair), so the pick
     /// fell through to the lowest index - the far physical end after a reverse.
     /// The gauge then re-pinned on the other end of the loop and the untouched
-    /// section slid by half the misclosure, 0.125 m.
+    /// line slid by half the misclosure, 0.125 m.
     #[test]
-    fn reverse_of_a_one_shot_anchor_section_does_not_move_the_component() {
+    fn reverse_of_a_one_shot_anchor_line_does_not_move_the_component() {
         let (project, a, b) = project_with_a_one_shot_loop();
         let config = ClosureAdjustmentConfig::default();
 
         let before = project.clone().into_adjusted_station_coordinates(&config);
         let mut project = project;
-        assert!(project.reverse_section(a, false));
+        assert!(project.reverse_line(a, false));
         let after = project.into_adjusted_station_coordinates(&config);
 
         // Precondition: the solve actually ran and fused the closure, so the
@@ -1287,7 +1292,7 @@ mod tests {
             "precondition: the closure should have been adjusted, got {fused_a:?} / {fused_b:?}"
         );
 
-        // Section `b` was not touched at all, so not one of its stations may move.
+        // Line `b` was not touched at all, so not one of its stations may move.
         for i in 0..=1 {
             let p = adjusted_xy(&before, StationRef::new(b, i));
             let q = adjusted_xy(&after, StationRef::new(b, i));
@@ -1309,7 +1314,7 @@ mod tests {
 
     /// UPGRADE REGRESSION: an existing project's gauge must not move.
     ///
-    /// The gauge has always been "station 0 of the lowest-id section in the component", and the
+    /// The gauge has always been "station 0 of the lowest-id line in the component", and the
     /// solve pins that station at its measured coordinates - so re-picking it on anything
     /// derived from current data (shot counts, UUID ordering, incidence) would shift Plan and
     /// Export output the moment someone upgraded, with no reverse performed, no action taken
@@ -1318,8 +1323,8 @@ mod tests {
     #[test]
     fn the_gauge_of_an_untouched_project_is_the_legacy_one() {
         let mut project = Project::new("mixed".to_string(), None);
-        let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
-        let three = add_section(
+        let one = add_line(&mut project, vec![shot(0.0, 10.0)]);
+        let three = add_line(
             &mut project,
             vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
         );
@@ -1329,29 +1334,29 @@ mod tests {
             station_b: project.key_for_ref(StationRef::new(three, 0)).unwrap(),
             merged_at: Utc::now(),
         });
-        assert!(one < three, "fixture: the 1-shot section owns the lower id");
+        assert!(one < three, "fixture: the 1-shot line owns the lower id");
 
-        let component = project.get_connected_section_ids(one);
+        let component = project.get_connected_line_ids(one);
         let anchor = project.default_anchor_for_component(&component).unwrap();
 
         assert_eq!(
-            (anchor.section_id, anchor.station_index),
+            (anchor.line_id, anchor.station_index),
             (one, 0),
-            "the gauge must stay where it has always been: station 0 of the lowest-id section"
+            "the gauge must stay where it has always been: station 0 of the lowest-id line"
         );
     }
 
-    /// THE reviewer's case: appending to an already-reversed section must not move the gauge.
+    /// THE reviewer's case: appending to an already-reversed line must not move the gauge.
     ///
     /// The old rule was "station 0, or `shots.len()` when reversed" - stable across the reverse
     /// itself, but `len` grows on the next append and walks the pin onto the newly created far
     /// station, translating the whole adjusted component by the adjustment residual. The
-    /// captured pair is immune: neither shot moves relative to the other when the section is
+    /// captured pair is immune: neither shot moves relative to the other when the line is
     /// extended.
     #[test]
-    fn appending_to_a_reversed_section_does_not_move_the_gauge() {
+    fn appending_to_a_reversed_line_does_not_move_the_gauge() {
         let mut project = Project::new("append".to_string(), None);
-        let s = add_section(
+        let s = add_line(
             &mut project,
             vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
         );
@@ -1360,7 +1365,7 @@ mod tests {
         project.capture_missing_gauge_anchors();
         assert_eq!(anchor_index(&project, s), 0);
 
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         assert_eq!(anchor_index(&project, s), 3, "station 0 is now station 3");
 
         // Extending the passage must not disturb it.
@@ -1368,46 +1373,46 @@ mod tests {
         assert_eq!(
             anchor_index(&project, s),
             3,
-            "the gauge must stay on the same physical station when the section grows"
+            "the gauge must stay on the same physical station when the line grows"
         );
     }
 
-    /// A ONE-SHOT section has no gauge neighbour, so position cannot decide the side: both of
+    /// A ONE-SHOT line has no gauge neighbour, so position cannot decide the side: both of
     /// its ends touch the same single shot, and reversing swaps them while leaving that shot at
     /// position 0. Reading the side off the orientation is what keeps the gauge on its physical
-    /// station - reachable whenever a one-shot, lowest-id section is wired into a closure
+    /// station - reachable whenever a one-shot, lowest-id line is wired into a closure
     /// component.
     #[test]
-    fn the_gauge_of_a_one_shot_section_follows_a_reverse() {
+    fn the_gauge_of_a_one_shot_line_follows_a_reverse() {
         let mut project = Project::new("one shot".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let s = add_line(&mut project, vec![shot(0.0, 10.0)]);
         project.ensure_shot_uuids();
         project.capture_missing_gauge_anchors();
         assert!(
-            project.sections[0].gauge_neighbour_uuid.is_none(),
-            "fixture: a one-shot section has no neighbour to face away from"
+            project.lines[0].gauge_neighbour_uuid.is_none(),
+            "fixture: a one-shot line has no neighbour to face away from"
         );
         assert_eq!(anchor_index(&project, s), 0);
 
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         assert_eq!(
             anchor_index(&project, s),
             1,
             "the original gauge station is now station 1, and the gauge must follow it"
         );
 
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         assert_eq!(anchor_index(&project, s), 0, "and back again");
     }
 
     /// A project that has never been saved has no captured pair, and must keep using the legacy
     /// station-0 answer - capturing is what makes it durable, not what chooses it.
     #[test]
-    fn an_uncaptured_section_still_uses_the_legacy_gauge() {
+    fn an_uncaptured_line_still_uses_the_legacy_gauge() {
         let mut project = Project::new("legacy".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+        let s = add_line(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
         project.ensure_shot_uuids();
-        assert!(project.sections[0].gauge_shot_uuid.is_none());
+        assert!(project.lines[0].gauge_shot_uuid.is_none());
         assert_eq!(anchor_index(&project, s), 0);
 
         // Capturing records exactly the station already in use.
@@ -1419,22 +1424,22 @@ mod tests {
     /// index. Station 0 becomes station N, and the parity marker is what says so.
     #[test]
     fn the_gauge_follows_its_physical_station_through_a_reverse() {
-        let mut project = Project::new("one section".to_string(), None);
-        let s = add_section(
+        let mut project = Project::new("one line".to_string(), None);
+        let s = add_line(
             &mut project,
             vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
         );
         project.ensure_shot_uuids();
 
         assert_eq!(anchor_index(&project, s), 0);
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         assert_eq!(
             anchor_index(&project, s),
             3,
             "station 0 is now station 3, and the gauge must be there - not on the new station 0"
         );
         // Reversing back returns it, because parity is a flip and not a count.
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         assert_eq!(anchor_index(&project, s), 0);
     }
 
@@ -1442,18 +1447,18 @@ mod tests {
     /// 1.22e-16, so a rule that ordered stations by their computed coordinates
     /// would pick a different end after the reverse turned every bearing around.
     /// A guard, not a regression - the shot-UUID identity already handles a
-    /// multi-shot section - kept so nobody reintroduces a coordinate rule.
+    /// multi-shot line - kept so nobody reintroduces a coordinate rule.
     #[test]
     fn anchor_identity_is_stable_across_a_due_north_reverse() {
         let mut project = Project::new("due north".to_string(), None);
-        let s = add_section(
+        let s = add_line(
             &mut project,
             vec![shot(0.0, 10.0), shot(0.0, 10.0), shot(0.0, 10.0)],
         );
         project.ensure_shot_uuids();
 
         let before = anchor_index(&project, s);
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         let after = anchor_index(&project, s);
 
         assert_eq!(
@@ -1463,18 +1468,18 @@ mod tests {
         );
     }
 
-    /// A lone one-shot section with no merge and no closure: its two ends are told apart by the
-    /// section's ORIENTATION, which a reverse flips.
+    /// A lone one-shot line with no merge and no closure: its two ends are told apart by the
+    /// line's ORIENTATION, which a reverse flips.
     ///
     /// The rationale this test used to give - that the ends are distinguished because a reverse
     /// swaps `depth_in`/`depth_out` bit-exactly - described a picker that no longer exists. The
     /// current one never reads depth, so the fixture's depths were inert and the assertion held
-    /// for any one-shot section rather than for the reason stated. Kept because the CASE still
+    /// for any one-shot line rather than for the reason stated. Kept because the CASE still
     /// matters; the reason is now the parity flag.
     #[test]
-    fn a_lone_one_shot_sections_gauge_follows_its_orientation() {
+    fn a_lone_one_shot_lines_gauge_follows_its_orientation() {
         let mut project = Project::new("depth".to_string(), None);
-        let s = add_section(
+        let s = add_line(
             &mut project,
             vec![ShotData {
                 azimuth_in: 0.0,
@@ -1488,7 +1493,7 @@ mod tests {
         project.ensure_shot_uuids();
 
         let before = anchor_index(&project, s);
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         let after = anchor_index(&project, s);
 
         assert_eq!(
@@ -1498,18 +1503,18 @@ mod tests {
         );
     }
 
-    /// `2 * pairs` one-shot sections whose start stations are merged in the order
+    /// `2 * pairs` one-shot lines whose start stations are merged in the order
     /// that made the old union quadratic: each new pair forms a small group, then
     /// joins the big one, and "move b into a" re-pointed the whole big group.
     fn adversarial_merge_order(pairs: usize) -> Project {
         use crate::station::{StationAnchor, StationKey};
         let mut project = Project::new("Big group".to_string(), None);
-        let ids: Vec<SectionId> = (0..2 * pairs)
-            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+        let ids: Vec<LineId> = (0..2 * pairs)
+            .map(|_| add_line(&mut project, vec![shot(90.0, 1.0)]))
             .collect();
-        let merge = |a: SectionId, b: SectionId| StationMerge {
-            station_a: StationKey::new(a, StationAnchor::SectionStart),
-            station_b: StationKey::new(b, StationAnchor::SectionStart),
+        let merge = |a: LineId, b: LineId| StationMerge {
+            station_a: StationKey::new(a, StationAnchor::LineStart),
+            station_b: StationKey::new(b, StationAnchor::LineStart),
             merged_at: Utc::now(),
         };
         project.station_merges.push(merge(ids[0], ids[1]));
@@ -1541,10 +1546,10 @@ mod tests {
     fn merge_groups_keep_the_first_groups_members_first() {
         use crate::station::{StationAnchor, StationKey};
         let mut project = Project::new("Order".to_string(), None);
-        let ids: Vec<SectionId> = (0..5)
-            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+        let ids: Vec<LineId> = (0..5)
+            .map(|_| add_line(&mut project, vec![shot(90.0, 1.0)]))
             .collect();
-        let key = |i: usize| StationKey::new(ids[i], StationAnchor::SectionStart);
+        let key = |i: usize| StationKey::new(ids[i], StationAnchor::LineStart);
         let merge = |a: usize, b: usize| StationMerge {
             station_a: key(a),
             station_b: key(b),

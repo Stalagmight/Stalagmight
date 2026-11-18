@@ -56,23 +56,23 @@
  *
  * FIXED - kept here because the surface stayed dark for 242 cells and the
  * reason was not a coverage gap. `App.tsx`'s DMP `onComplete` asks for orphan
- * placements only `if (newSectionIds?.length)`, and on any flow that used MAP
+ * placements only `if (newLineIds?.length)`, and on any flow that used MAP
  * PLACEMENT that array used to be empty by the time it was read:
  *
  *   - `importPlacedSegmentNow` imports the placed segment and pushes its ids
- *     into `importedSectionIdsRef` (`DmpNewImportDialog.tsx`);
+ *     into `importedLineIdsRef` (`DmpNewImportDialog.tsx`);
  *   - when the queue empties, `handlePlacementComplete` calls
  *     `openPlacementDialog([], ...)`, which re-opens `dmp-import-new` and
  *     therefore REMOUNTS the dialog;
  *   - `SavedManualPlacingState` carries twelve fields and neither
- *     `importedSectionIds` nor `importedReceipts`, and both refs initialise to
+ *     `importedLineIds` nor `importedReceipts`, and both refs initialise to
  *     `[]` on the new instance;
  *   - the restored instance finishes and calls `onComplete([], <empty receipt>)`.
  *
  * So the one import that reliably CREATES an orphan - a segment dropped on the
  * map, merged to nothing, in a component with no datum - is the one import that
  * can never report one. Verified by hand against a live app: two DMP files whose
- * sections share geometry, the first placed far from anything, the second
+ * lines share geometry, the first placed far from anything, the second
  * imported after it. The dialog did not open, and asking the backend the same
  * question `App.tsx` asks, with the same ids, returned ONE high-confidence
  * suggestion (4 matched shots, score 1.42, direction reverse). The data was
@@ -83,8 +83,8 @@
  * (6667269b, 2c2e6c72 - #487 residue, and what closes #523), and this branch's
  * `startPlacementMode` turns on the stations a placement needs, without which
  * every placement was cancelled before its first click (#518). The same
- * hand-driven sequence then raised the dialog - "Connect Orphaned Sections,
- * Section 1 of 2", one suggestion at High confidence, 5 shots matched - and the
+ * hand-driven sequence then raised the dialog - "Connect Orphaned Lines,
+ * Line 1 of 2", one suggestion at High confidence, 5 shots matched - and the
  * screenshot and log are kept under `.agent-artifacts/orphan-proof-20260811/`.
  *
  * The scenario never worked around either defect. `unanchoredComponents:*` still
@@ -105,7 +105,7 @@
  * the two generators that named it never ran.
  *
  * The options a user is actually offered when nothing was suggested are on
- * `manual_placing` - reuse a skipped suggestion, attach to an existing section,
+ * `manual_placing` - reuse a skipped suggestion, attach to an existing line,
  * place on the map by hand, or discard - together with a map placement and a
  * shot table. So the bridge's settle predicate WAITS through the frame and the
  * walk arrives at `wiz-manual`, where those live. The screen id, its digest
@@ -288,7 +288,7 @@
  *    otherwise. #477 was established by READING the code. The red that first
  *    drew attention to it was F2 asserting "a flow whose undo depth grew must
  *    end with a null context", and that premise is false: the DMP wizard commits
- *    EARLY and mid-flow, so a user can land sections and then walk back and
+ *    EARLY and mid-flow, so a user can land lines and then walk back and
  *    cancel, and a retained context on the cancel path is by design
  *    (`routeOpenedFile` resets it at the next flow's entry). Re-checked with the
  *    fix reverted, the corrected oracle does not fire - measured: no flow on
@@ -297,18 +297,18 @@
  *    `checkResidue` for the full argument.
  *
  * 3. FIXED (caaa1847), issue #478. A CLEARED DATE MADE THE WIZARD SEND
- *    `date: ""`, AND TAURI REJECTED THE WHOLE `import_sections` CALL.
+ *    `date: ""`, AND TAURI REJECTED THE WHOLE `import_lines` CALL.
  *
  *        pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
  *
  *    By hand: import a `.dmp`, continue, skip the zero datum, CLEAR the date
- *    field on the section being placed, and complete the placement. The call
- *    fails at Tauri's argument layer with `invalid args \`sections\` for command
- *    \`import_sections\`: premature end of input`, so the placement does not
+ *    field on the line being placed, and complete the placement. The call
+ *    fails at Tauri's argument layer with `invalid args \`lines\` for command
+ *    \`import_lines\`: premature end of input`, so the placement does not
  *    import and the wizard reopens showing serde's message.
  *
- *    `ImportSectionConfig.date` is `Option<NaiveDate>`
- *    (`src-tauri/src/models/section.rs:253`), and chrono parses `""` as
+ *    `ImportLineConfig.date` is `Option<NaiveDate>`
+ *    (`src-tauri/src/models/line.rs:253`), and chrono parses `""` as
  *    TOO_SHORT, whose Display is literally `premature end of input`.
  *    `buildBatchImport` normalised `surveyor` and not `date`, one line apart.
  *
@@ -511,7 +511,7 @@ const IDLE_CONFIRM_MS = 200;
  *
  * It is now a knob (`STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P`) because the other
  * end matters too, and could not be asked for: the DMP wizard's suggester scores
- * an import against the sections ALREADY in the project, so a campaign aimed at
+ * an import against the lines ALREADY in the project, so a campaign aimed at
  * the suggestion surface wants the fixture open every time. Zero is a legal
  * value and means exactly that. Every seed's trajectory depends on it, so a
  * repro line has to carry it - which the `STALAGMIGHT_FUZZ_` prefix rule in
@@ -653,10 +653,10 @@ const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
  *
  * Written from the dialog as OBSERVED, not from its source: a hand-driven run
  * (`.agent-artifacts/orphan-proof-20260811/`) raised it with two suggestions
- * queued - "Connect Orphaned Sections / Section 1 of 2", one suggested
+ * queued - "Connect Orphaned Lines / Line 1 of 2", one suggested
  * connection with a merge-station picker and an overlap mode (since #681, a
  * table of repeated shots with a choice per shot), and four enabled buttons.
- * Accepting joins the orphan to a newly imported section; skipping and closing
+ * Accepting joins the orphan to a newly imported line; skipping and closing
  * only move through the queue.
  */
 const ORPHAN_ACCEPTS: ReadonlySet<string> = new Set(['orphan-accept', 'orphan-accept-all']);
@@ -1326,8 +1326,8 @@ export const importDialogFuzz: Scenario = {
      * settle loop has already reported a stable, dialog-free screen - the settle
      * marker cannot see a promise. S4 then blames whatever move happened to be
      * next. Measured, on the corpus campaign's seed-70 cell: `import via
-     * toolbar-import-button` (a `.dmp` with no valid sections) came back at
-     * `idle`, and "Import Failed / No valid sections found in DMP file" was
+     * toolbar-import-button` (a `.dmp` with no valid lines) came back at
+     * `idle`, and "Import Failed / No valid lines found in DMP file" was
      * reported against the mode-switch interjection that followed it.
      *
      * One move of grace, because that is the whole observed lag and every extra
@@ -1376,7 +1376,7 @@ export const importDialogFuzz: Scenario = {
       // routed in) leaves it there, and every move after it - an undo, an
       // Escape, a click that missed - would otherwise be blamed for it.
       // Measured, on the seed-2 matrix cell: `import via router` produced "No
-      // valid sections found in DMP file", which is the app reporting a problem
+      // valid lines found in DMP file", which is the app reporting a problem
       // properly, and the NEXT interjection was reported as the defect.
       // ONE decision, two uses - see `s4WorkStarted`. A move that handed work to
       // something that can fail is not blamed for an error on its own step AND
@@ -1425,7 +1425,7 @@ export const importDialogFuzz: Scenario = {
       const fresh = await ctx.exclusive(() => logs.read('error'));
       guarded(() => checkIpcContract(fresh.newEntries, move.label));
 
-      // An import commits through `import_sections`, which pushes exactly one
+      // An import commits through `import_lines`, which pushes exactly one
       // undo entry per call - so a rise in depth is the cheap signal that
       // something landed, and the moment to pay for the structural check.
       if (digest.undo >= 0 && lastUndoDepth >= 0 && digest.undo > lastUndoDepth) {
@@ -1565,7 +1565,7 @@ export const importDialogFuzz: Scenario = {
       return {
         snapshot: await canonicalNow(digest.hasProject),
         undoDepth: digest.undo,
-        sections: digest.sections,
+        lines: digest.lines,
         shots: digest.shots,
         projectDir: leftovers.dir,
         leftovers: leftovers.names,
@@ -1590,7 +1590,7 @@ export const importDialogFuzz: Scenario = {
       if (mode === 'advance') {
         const route = ADVANCE_MOVE[digest.screen] ?? [];
         // A `*` entry is a PREFIX the model could not spell concretely (the
-        // zero-datum section cards carry an index). Expanded against the live
+        // zero-datum line cards carry an index). Expanded against the live
         // digest and resolved to the LOWEST actionable index, so a forced
         // advance is as deterministic as a literal one.
         const resolve = (candidate: string): string | undefined => {
@@ -1913,29 +1913,29 @@ export const importDialogFuzz: Scenario = {
         if (!core || typeof core.invoke !== 'function') return -1;
         const state = await core.invoke('get_project_state');
         const project = (state && state.project) || null;
-        if (!project || !Array.isArray(project.sections)) return -1;
+        if (!project || !Array.isArray(project.lines)) return -1;
         const parent = new Map();
         const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
-        for (const section of project.sections) parent.set(section.id, section.id);
+        for (const line of project.lines) parent.set(line.id, line.id);
         const union = (a, b) => {
           if (!parent.has(a) || !parent.has(b)) return;
           const ra = find(a); const rb = find(b);
           if (ra !== rb) parent.set(ra, rb);
         };
         for (const merge of (project.station_merges || [])) {
-          union(merge.station_a && merge.station_a.section_id, merge.station_b && merge.station_b.section_id);
+          union(merge.station_a && merge.station_a.line_id, merge.station_b && merge.station_b.line_id);
         }
         // \`ZeroDatumWire.station_ref\` - the field name matters, and getting it
         // wrong is silent: every component then reads as unanchored.
         const anchored = new Set();
         for (const datum of (project.zero_datums || [])) {
           const ref = datum && datum.station_ref;
-          const id = ref && ref.section_id;
+          const id = ref && ref.line_id;
           if (id !== undefined && parent.has(id)) anchored.add(find(id));
         }
         if (anchored.size === 0 && (project.zero_datums || []).length > 0) return -2;
         const roots = new Set();
-        for (const section of project.sections) roots.add(find(section.id));
+        for (const line of project.lines) roots.add(find(line.id));
         let count = 0;
         for (const root of roots) if (!anchored.has(root)) count += 1;
         return count;
@@ -2158,7 +2158,7 @@ export const importDialogFuzz: Scenario = {
             isOrphanRepeatControl(move.testid)
               ? move
               : null;
-          const sectionsBefore = before.sections;
+          const linesBefore = before.lines;
           const undoBefore = before.undo;
           const orphanMove =
             move.kind === 'ui' &&
@@ -2284,7 +2284,7 @@ export const importDialogFuzz: Scenario = {
           // the whole wizard until it is fixed.
           //
           // Armed on the TOAST rather than on a pre-move fact, because the digest
-          // cannot see what `findIncompleteSections` sees; and on a toast this
+          // cannot see what `findIncompleteLines` sees; and on a toast this
           // move RAISED, because the key is deduped and one from two moves ago
           // would otherwise blame whatever came next. A confirm that was allowed
           // through never raises it, so the arming cannot fire on the happy path.
@@ -2325,10 +2325,10 @@ export const importDialogFuzz: Scenario = {
           }
           if (wizardCommit && outcome.performed && !incompleteBefore && digest.toast.includes(TOAST_INCOMPLETE)) {
             ctx.metric('incompleteRefused');
-            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+            if (linesBefore >= 0 && digest.lines !== linesBefore) {
               fail(
-                'INCOMPLETE SHOTS: a refused wizard commit imported sections anyway',
-                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}`,
+                'INCOMPLETE SHOTS: a refused wizard commit imported lines anyway',
+                `  after: ${move.label}\n  lines ${linesBefore} -> ${digest.lines}`,
               );
             }
             if (undoBefore >= 0 && digest.undo > undoBefore) {
@@ -2339,7 +2339,7 @@ export const importDialogFuzz: Scenario = {
             }
             // The guard returns before any transition, so the wizard is still the
             // thing on screen - and a refusal that closed it would leave the user
-            // with a warning about a section they can no longer reach.
+            // with a warning about a line they can no longer reach.
             if (!digest.screen.startsWith('wiz-')) {
               fail(
                 'INCOMPLETE SHOTS: the refusal closed the wizard',
@@ -2347,19 +2347,19 @@ export const importDialogFuzz: Scenario = {
               );
             }
           }
-          // ORPHAN PLACEMENT. The dialog offers to connect a section that was
+          // ORPHAN PLACEMENT. The dialog offers to connect a line that was
           // left floating - no zero datum, merged to nothing - to something the
           // import just landed. Both of its answers are accountable.
           if (orphanMove !== null && outcome.performed) {
             ctx.metric(`orphanChoice:${orphanMove}`);
             const unanchoredAfter = digest.hasProject ? await countUnanchoredComponents() : -1;
-            // Neither answer creates or destroys a section. Accepting MERGES two
+            // Neither answer creates or destroys a line. Accepting MERGES two
             // that already exist; declining moves through the queue.
-            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+            if (linesBefore >= 0 && digest.lines !== linesBefore) {
               fail(
-                `ORPHAN PLACEMENT: "${orphanMove}" changed the section count`,
-                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}; ` +
-                  'the dialog connects sections that already exist, it does not import any',
+                `ORPHAN PLACEMENT: "${orphanMove}" changed the line count`,
+                `  after: ${move.label}\n  lines ${linesBefore} -> ${digest.lines}; ` +
+                  'the dialog connects lines that already exist, it does not import any',
               );
             }
             if (ORPHAN_DECLINES.has(orphanMove)) {
@@ -2697,7 +2697,7 @@ export const importDialogFuzz: Scenario = {
             // pass over the whole step list, so a recording that imported three
             // times replays as one flow and F3 compares the FIRST receipt's
             // claim against the delta of all three. Measured on such a trace:
-            // "1 section - 6 shots" against a project holding 5 sections and 34
+            // "1 line - 6 shots" against a project holding 5 lines and 34
             // shots. Same objection as the two skips below - a subtraction
             // between things that are not each other's pair.
             //
@@ -2795,7 +2795,7 @@ export const importDialogFuzz: Scenario = {
     // zero. This is the only place that notices.
     //
     // WARNED, not failed, on the same argument `corpusDirsTooDeep` makes: a
-    // suggestion needs sections to score against, and a run whose flows all
+    // suggestion needs lines to score against, and a run whose flows all
     // cancelled early legitimately never opens the wizard. Failing here would
     // red a cell for the walk being unlucky. The metric is what a summary
     // carries, and the log line is what a human reads.

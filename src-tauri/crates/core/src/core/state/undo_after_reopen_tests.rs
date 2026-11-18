@@ -1,9 +1,9 @@
 //! An undo after a save and a reopen lands on exactly the state it recorded
-//! when the undone command moved shots from one section to another (#732).
+//! when the undone command moved shots from one line to another (#732).
 //!
 //! The reopen translates the persisted history through the load's shot UUID
 //! heal (`undo/uuid_remap.rs`). A shot that a combine or a split moved is held
-//! by one section in an older entry (the one that created or added it) and by
+//! by one line in an older entry (the one that created or added it) and by
 //! another live: that is a move, not a repeat, and must keep its uuid. Each
 //! test records the project before the move, moves shots, saves, reopens,
 //! undoes, and compares the whole project, shot uuids and station keys
@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    CombinePick, CombineSectionsOptions, SectionId, ShotData, SplitAt, SplitSectionOptions,
-    SplitSide, StationRef,
+    CombineLinesOptions, CombinePick, LineId, ShotData, SplitAt, SplitLineOptions, SplitSide,
+    StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -29,17 +29,18 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
-    let created = state.execute(Command::CreateSection {
+fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
+    let created = state.execute(Command::CreateLine {
         name: Some(name.to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(created.success, "{:?}", created.error);
-    created.section_id.unwrap()
+    created.line_id.unwrap()
 }
 
 fn new_project(name: &str, path: &Path) -> AppState {
@@ -80,11 +81,11 @@ fn snapshot(state: &AppState) -> serde_json::Value {
     value
 }
 
-fn shot_uuids(state: &AppState) -> Vec<(SectionId, Vec<String>)> {
+fn shot_uuids(state: &AppState) -> Vec<(LineId, Vec<String>)> {
     state
         .get_project_state()
         .unwrap()
-        .sections
+        .lines
         .iter()
         .map(|s| {
             (
@@ -98,7 +99,7 @@ fn shot_uuids(state: &AppState) -> Vec<(SectionId, Vec<String>)> {
         .collect()
 }
 
-/// Run `moving` (which moves shots between sections), save, reopen, and check
+/// Run `moving` (which moves shots between lines), save, reopen, and check
 /// that undo and redo land exactly on the recorded states.
 fn assert_exact_undo_and_redo_after_reopen(
     state: &AppState,
@@ -134,8 +135,8 @@ fn assert_exact_undo_and_redo_after_reopen(
     assert_eq!(snapshot(state), after, "{what}: redo after a reopen");
 }
 
-fn split_options() -> SplitSectionOptions {
-    SplitSectionOptions {
+fn split_options() -> SplitLineOptions {
+    SplitLineOptions {
         name_a: "Main-A".to_string(),
         name_b: "Main-B".to_string(),
         color_a: "#111111".to_string(),
@@ -164,7 +165,7 @@ fn a_combine_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "combine", |state| {
-        let options = CombineSectionsOptions {
+        let options = CombineLinesOptions {
             name: "Joined".to_string(),
             color: "#abcdef".to_string(),
             swap_lr: false,
@@ -172,7 +173,7 @@ fn a_combine_undone_after_a_reopen_keeps_every_shot_uuid() {
             name_pick: CombinePick::Kept,
             join: None,
         };
-        let result = state.execute_combine_sections(k, o, options);
+        let result = state.execute_combine_lines(k, o, options);
         assert!(result.success, "{:?}", result.error);
     });
 }
@@ -201,18 +202,18 @@ fn a_combine_across_a_closure_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "closure combine", |state| {
-        let options = CombineSectionsOptions {
+        let options = CombineLinesOptions {
             name: "Joined".to_string(),
             color: "#abcdef".to_string(),
             swap_lr: false,
             comment_pick: CombinePick::Kept,
             name_pick: CombinePick::Kept,
             join: Some(crate::models::CombineJoinEnds {
-                kept: crate::models::SectionEnd::End,
-                other: crate::models::SectionEnd::Start,
+                kept: crate::models::LineEnd::End,
+                other: crate::models::LineEnd::Start,
             }),
         };
-        let result = state.execute_combine_sections(k, o, options);
+        let result = state.execute_combine_lines(k, o, options);
         assert!(result.success, "{:?}", result.error);
     });
 }
@@ -230,11 +231,8 @@ fn a_split_undone_after_a_reopen_keeps_every_shot_uuid() {
     save_close_reopen(&state, &path);
 
     assert_exact_undo_and_redo_after_reopen(&state, &path, "split", |state| {
-        let result = state.execute_split_section(
-            main,
-            SplitAt::Station { station_index: 1 },
-            split_options(),
-        );
+        let result =
+            state.execute_split_line(main, SplitAt::Station { station_index: 1 }, split_options());
         assert!(result.success, "{:?}", result.error);
     });
 }
@@ -258,7 +256,7 @@ fn a_delete_and_split_undone_after_a_reopen_keeps_every_shot_uuid() {
     let middle = state
         .get_project_state()
         .unwrap()
-        .get_section(main)
+        .get_line(main)
         .unwrap()
         .shots[1]
         .id;
@@ -270,10 +268,10 @@ fn a_delete_and_split_undone_after_a_reopen_keeps_every_shot_uuid() {
     });
 }
 
-/// The section a split moves shots out of came in through Add .stalx, whose
+/// The line a split moves shots out of came in through Add .stalx, whose
 /// undo entry reinstalls it whole.
 #[test]
-fn a_split_of_an_added_section_undone_after_a_reopen_keeps_every_shot_uuid() {
+fn a_split_of_an_added_line_undone_after_a_reopen_keeps_every_shot_uuid() {
     let dir = tempfile::TempDir::new().unwrap();
     let source_path = temp_path(&dir, "source.stalx");
     let source = new_project("Source", &source_path);
@@ -290,22 +288,19 @@ fn a_split_of_an_added_section_undone_after_a_reopen_keeps_every_shot_uuid() {
     create(&state, "Own", vec![shot(200.0, 6.0)]);
     let added = state.execute(Command::add_project_file(source_path));
     assert!(added.success, "{:?}", added.error);
-    let section = state
+    let line = state
         .get_project_state()
         .unwrap()
-        .sections
+        .lines
         .iter()
         .find(|s| s.name.as_deref() == Some("Added"))
         .unwrap()
         .id;
     save_close_reopen(&state, &path);
 
-    assert_exact_undo_and_redo_after_reopen(&state, &path, "split of an added section", |state| {
-        let result = state.execute_split_section(
-            section,
-            SplitAt::Station { station_index: 1 },
-            split_options(),
-        );
+    assert_exact_undo_and_redo_after_reopen(&state, &path, "split of an added line", |state| {
+        let result =
+            state.execute_split_line(line, SplitAt::Station { station_index: 1 }, split_options());
         assert!(result.success, "{:?}", result.error);
     });
 }

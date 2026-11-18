@@ -29,7 +29,7 @@ const createShot = vi.fn().mockResolvedValue({ success: true, shot_id: 99 });
 const closeDialog = vi.fn();
 const setSelection = vi.fn();
 
-const SECTION_ID = 1;
+const LINE_ID = 1;
 const FIRST_SHOT_ID = 10;
 
 /** Source shot the context menu copies geometry from: a bent, sloping leg. */
@@ -45,12 +45,12 @@ const SOURCE = {
 const dialogData: Record<string, unknown> = {};
 
 const project = {
-  sections: [
-    { id: SECTION_ID, name: 'Mainline', shots: [{ id: FIRST_SHOT_ID }] },
+  lines: [
+    { id: LINE_ID, name: 'Mainline', shots: [{ id: FIRST_SHOT_ID }] },
   ],
 };
 const stations = [
-  { station_ref: { section_id: SECTION_ID, station_index: 0 }, coordinates: { z: 0 } },
+  { station_ref: { line_id: LINE_ID, station_index: 0 }, coordinates: { z: 0 } },
 ];
 
 vi.mock('../../../store/uiStore', () => ({
@@ -83,7 +83,7 @@ import DrawShotDialog from '../DrawShotDialog';
 function openPrepend() {
   for (const k of Object.keys(dialogData)) delete dialogData[k];
   Object.assign(dialogData, {
-    fromStation: { section_id: SECTION_ID, station_index: 0 },
+    fromStation: { line_id: LINE_ID, station_index: 0 },
     prependMode: true,
     allowZeroLength: true,
     sourceGeometry: { ...SOURCE },
@@ -188,7 +188,7 @@ describe('DrawShotDialog azimuth frame', () => {
   it('offers the reverse checkbox outside prepend mode too', () => {
     for (const k of Object.keys(dialogData)) delete dialogData[k];
     Object.assign(dialogData, {
-      fromStation: { section_id: SECTION_ID, station_index: 1 },
+      fromStation: { line_id: LINE_ID, station_index: 1 },
       appendMode: true,
     });
 

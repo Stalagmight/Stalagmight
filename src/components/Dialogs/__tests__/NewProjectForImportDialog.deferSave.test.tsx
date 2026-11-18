@@ -20,7 +20,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const dialogData: {
-  dmpFile?: { sections: Array<{ shots: Array<{ shot_type: string }> }> };
+  dmpFile?: { lines: Array<{ shots: Array<{ shot_type: string }> }> };
   filePath?: string;
   importType?: string;
   defaultName?: string;
@@ -60,7 +60,7 @@ describe('NewProjectForImportDialog defers the first write (#394 F14)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createProject.mockResolvedValue({ success: true });
-    dialogData.dmpFile = { sections: [{ shots: [{ shot_type: 'Standard' }] }] };
+    dialogData.dmpFile = { lines: [{ shots: [{ shot_type: 'Standard' }] }] };
     dialogData.filePath = '/dives/cenote.dmp';
     dialogData.importType = 'dmp';
     dialogData.defaultName = 'Cenote';

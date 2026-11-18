@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -23,7 +23,7 @@ import {
  * specific pixel-derived number.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Long Shot',
     direction: 'in',
@@ -90,7 +90,7 @@ test.describe('Insert Station dialog', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Insert Station');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     // Zoom to the survey so the 100 m shot is more than a few pixels wide.

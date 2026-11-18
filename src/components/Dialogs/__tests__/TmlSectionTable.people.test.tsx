@@ -1,7 +1,7 @@
 /**
- * The Ariane import preview shows each section's people read-only: the union
+ * The Ariane import preview shows each line's people read-only: the union
  * of the importable shots' credit as compact pills (dashed "2/3" for a person
- * on only some shots), the shots' date or date range, and the legacy section
+ * on only some shots), the shots' date or date range, and the legacy line
  * text split into its roles only when no shot carries a credit.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -39,12 +39,12 @@ function shot(id: number, over: Partial<TmlShot> = {}): TmlShot {
     latitude: 0,
     longitude: 0,
     closure_to_id: -1n,
-    section: '',
+    line: '',
     ...over,
   };
 }
 
-function section(name: string, shots: TmlShot[], over: Partial<TmlSection> = {}): TmlSection {
+function line(name: string, shots: TmlShot[], over: Partial<TmlSection> = {}): TmlSection {
   return {
     name,
     shots,
@@ -65,7 +65,7 @@ const credit = (surveyors: string[], explorers: string[], date: string | null): 
   date,
 });
 
-const credited = section('Main', [
+const credited = line('Main', [
   shot(1, { credit: credit(['Ann', 'Bo'], ['Cy'], '2026-03-02') }),
   shot(2, { credit: credit(['Ann'], ['Cy'], '2026-04-11') }),
   shot(3, { credit: credit(['Ann', 'Bo'], [], '2026-03-02'), excluded: true }),
@@ -91,7 +91,7 @@ describe('tmlSectionCredit', () => {
   });
 
   it('falls back to the legacy text, split into roles, when no shot is credited', () => {
-    const legacy = section('Old', [shot(1), shot(2)], { surveyor: 'Eve / Fay; Gus', date: '2020-01-01' });
+    const legacy = line('Old', [shot(1), shot(2)], { surveyor: 'Eve / Fay; Gus', date: '2020-01-01' });
     const result = tmlSectionCredit(legacy, false);
     expect(result.explorers.map((p) => p.person.name)).toEqual(['Eve']);
     expect(result.surveyors.map((p) => [p.person.name, p.count, p.total])).toEqual([
@@ -103,7 +103,7 @@ describe('tmlSectionCredit', () => {
 });
 
 describe('TmlSectionTable people columns', () => {
-  const tmlFile = { sections: [credited, section('Empty', [shot(1)])] } as unknown as TmlFile;
+  const tmlFile = { lines: [credited, line('Empty', [shot(1)])] } as unknown as TmlFile;
 
   it('renders read-only pills, partial for a person on only some shots', () => {
     render(
@@ -126,7 +126,7 @@ describe('TmlSectionTable people columns', () => {
     expect(screen.queryByTestId('tml-section-0-surveyors-pill-0-remove')).not.toBeInTheDocument();
     expect(screen.queryByTestId('tml-section-0-surveyors-input')).not.toBeInTheDocument();
     expect(screen.getByTestId('tml-section-0-date')).toHaveTextContent('2026-03-02 - 2026-04-11');
-    // A section nobody is credited on says so.
+    // A line nobody is credited on says so.
     expect(screen.getByTestId('tml-section-1-surveyors-field')).toHaveTextContent('common.states.none');
     expect(screen.getByTestId('tml-section-1-date')).toHaveTextContent('dialogs.tmlImport.stats.none');
   });

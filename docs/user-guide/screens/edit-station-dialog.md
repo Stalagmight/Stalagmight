@@ -1,6 +1,6 @@
 ---
 title: Edit Station dialog
-description: "The Edit Station dialog: add a station comment or make the station a zero datum or GPS fix, with its accuracy, entrance flag and every GPS format it accepts."
+description: "The Edit Station dialog: rename a station, add a comment, or make it a zero datum or GPS fix, with its accuracy, entrance flag and the GPS formats it accepts."
 order: 7
 ---
 
@@ -21,6 +21,22 @@ Opened by **Edit Station** or **Set Zero Datum** in the
 6. **Cancel**: same as 1.
 7. **Save**: what moves depends on the zero datum's role, below.
 
+The picture is scrolled down. The dialog now starts with the **Name** field,
+then the read-only **Station ID**, **Line**, X, Y and depth, see below.
+
+## Name and Station ID
+
+- **Name**: the station's name, such as `17` or `4a`. Type a new one to rename
+  the station. An empty name, or one another station of the same line has, is
+  refused: the reason shows under the field (for example, that Main Line
+  already has a station named `5`) and **Save** stays off until it is fixed.
+  Names only need to be unique within a line, so another line can have a
+  station `5` too.
+- **Station ID**: the station's number, unique in the project. Read-only.
+  Renaming keeps it.
+- One **Undo** puts the old name back. See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
+
 ## Zero datum
 
 Under **GPS** (4), once the GPS reads, the dialog shows more than the
@@ -40,7 +56,7 @@ screenshot above:
 - **Entrance**: whether this zero datum is a way into the cave, which Plan
   mode and the **Distance** color start from. Always ticked, and greyed out,
   for the placement datum. For a GPS fix it starts ticked at the first or
-  last station of a section and unticked elsewhere.
+  last station of a line and unticked elsewhere.
 
 **Save** with a new GPS moves the station, and everything connected to it, to
 that position when it is the placement datum of its piece. For the first zero
@@ -66,5 +82,4 @@ fix moves nothing in the Raw Data View. See
 - Not supported: MGRS and What3words (recognised, but not converted), short
   Plus Codes, shortened links (`goo.gl`) and Apple Maps links.
 - For typed coordinates, the detected format is shown next to 4.
-- ID, section, X, Y and depth at the top of the dialog are read-only.
 - **Save** is unavailable in the Closures Computed View, Plan and Export.

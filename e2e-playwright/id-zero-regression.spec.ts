@@ -2,7 +2,7 @@
  * E2E tests for id=0 scenarios.
  *
  * These tests verify that dialogs and components work correctly when the
- * section or shot ID is 0 (the first element). This was a regression where
+ * line or shot ID is 0 (the first element). This was a regression where
  * JavaScript's falsy check (`if (!id)`) incorrectly treated id=0 as falsy.
  */
 import { test, expect, Page } from './fixtures/coverage';
@@ -21,11 +21,11 @@ async function createProject(page: Page, name: string) {
 }
 
 /**
- * Inject a fixture with section id=0 and shot id=0 into the project store.
- * This simulates the state after loading a project where the first section/shot
+ * Inject a fixture with line id=0 and shot id=0 into the project store.
+ * This simulates the state after loading a project where the first line/shot
  * has id=0 (as assigned by the Rust backend).
  *
- * We ADD the section to existing sections to avoid issues with React re-rendering.
+ * We ADD the line to existing lines to avoid issues with React re-rendering.
  */
 async function injectId0Fixture(page: Page) {
   // First wait for the project store to be ready with a project
@@ -35,10 +35,10 @@ async function injectId0Fixture(page: Page) {
   }, { timeout: 5000 });
 
   await page.evaluate(() => {
-    // The survey credit rides on each shot (a section keeps none of its own).
-    const testSection = {
+    // The survey credit rides on each shot (a line keeps none of its own).
+    const testLine = {
       id: 0,
-      name: 'Zero Section',
+      name: 'Zero Line',
       color: '#4ecdc4',
       direction: 'in' as const,
       shots: [{
@@ -69,27 +69,27 @@ async function injectId0Fixture(page: Page) {
       throw new Error('Project is null - cannot inject fixture');
     }
 
-    const existingSections = existingProject.sections ?? [];
+    const existingLines = existingProject.lines ?? [];
 
-    // Add section with id=0 to the BEGINNING of sections array
-    // (so it's the first section like it would be from Rust backend)
+    // Add line with id=0 to the BEGINNING of lines array
+    // (so it's the first line like it would be from Rust backend)
     const project = {
       ...existingProject,
-      sections: [testSection, ...existingSections]
+      lines: [testLine, ...existingLines]
     };
 
-    // Generate mock stations for section id=0
+    // Generate mock stations for line id=0
     const existingStations = store.stations ?? [];
     const newStations = [
       {
-        station_ref: { section_id: 0, station_index: 0 },
+        station_ref: { line_id: 0, station_index: 0 },
         coordinates: { x: -20, y: 0, z: 0 },
         is_zero_datum: true,
         gps_coordinates: null,
         merged_with: [],
       },
       {
-        station_ref: { section_id: 0, station_index: 1 },
+        station_ref: { line_id: 0, station_index: 1 },
         coordinates: { x: -10, y: 0, z: 0 },
         is_zero_datum: false,
         gps_coordinates: null,
@@ -113,11 +113,11 @@ async function injectId0Fixture(page: Page) {
   // Wait for React to re-render with the new state - use waitForFunction to be more reliable
   await page.waitForFunction(() => {
     const state = (window as any).__E2E_TEST__.projectStore.getState();
-    return state.project?.sections?.some((s: any) => s.id === 0 && s.name === 'Zero Section');
+    return state.project?.lines?.some((s: any) => s.id === 0 && s.name === 'Zero Line');
   }, { timeout: 5000 });
 
-  // Wait for the section to appear in the UI
-  await expect(page.locator('text=Zero Section')).toBeVisible({ timeout: 5000 });
+  // Wait for the line to appear in the UI
+  await expect(page.locator('text=Zero Line')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('ID=0 Bug Fixes', () => {
@@ -128,23 +128,23 @@ test.describe('ID=0 Bug Fixes', () => {
     await injectId0Fixture(page);
   });
 
-  test('Edit Section dialog opens, loads data, saves, and persists when sectionId === 0', async ({ page }) => {
-    // Open the Edit Section dialog via store
+  test('Edit Line dialog opens, loads data, saves, and persists when lineId === 0', async ({ page }) => {
+    // Open the Edit Line dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
 
     // Wait for dialog to appear
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Verify the dialog loads the correct section data (proves id=0 lookup works)
-    const nameInput = page.getByTestId('section-name-input');
-    await expect(nameInput).toHaveValue('Zero Section');
+    // Verify the dialog loads the correct line data (proves id=0 lookup works)
+    const nameInput = page.getByTestId('line-name-input');
+    await expect(nameInput).toHaveValue('Zero Line');
 
-    // Modify the section name
+    // Modify the line name
     await nameInput.clear();
-    await nameInput.fill('Modified Section Name');
+    await nameInput.fill('Modified Line Name');
 
     // Click Save button within the dialog
     await dialog.getByRole('button', { name: 'Save' }).click();
@@ -154,16 +154,16 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Verify persistence: re-open dialog and check the value persisted
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
-    await expect(nameInput).toHaveValue('Modified Section Name');
+    await expect(nameInput).toHaveValue('Modified Line Name');
   });
 
   test('Edit Shot dialog opens, loads data, saves, and persists when shotId === 0', async ({ page }) => {
     // Open the Edit Shot dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { lineId: 0, shotId: 0 });
     });
 
     // Wait for dialog to appear
@@ -188,7 +188,7 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Verify persistence: re-open dialog and check the value persisted
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { lineId: 0, shotId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the depth out field shows the new value
@@ -196,26 +196,26 @@ test.describe('ID=0 Bug Fixes', () => {
     expect(parseFloat(depthOutValue)).toBe(-2.5);
   });
 
-  test('Section Adjust dialog applies changes when sectionId === 0', async ({ page }) => {
-    // Verify the section exists before opening dialog
+  test('Line Adjust dialog applies changes when lineId === 0', async ({ page }) => {
+    // Verify the line exists before opening dialog
     await expect.poll(async () => {
       return page.evaluate(() => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project?.sections?.some((s: any) => s.id === 0);
+        return state.project?.lines?.some((s: any) => s.id === 0);
       });
     }, { timeout: 5000 }).toBe(true);
 
-    // Open the Section Adjust dialog via store
+    // Open the Line Adjust dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('line-adjust', { lineId: 0 });
     });
 
     // Wait for dialog to appear
-    const dialog = page.getByTestId('section-adjust-dialog');
+    const dialog = page.getByTestId('line-adjust-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Verify the dialog shows section name (proves id=0 lookup works)
-    await expect(dialog.locator('text=Zero Section')).toBeVisible({ timeout: 2000 });
+    // Verify the dialog shows line name (proves id=0 lookup works)
+    await expect(dialog.locator('text=Zero Line')).toBeVisible({ timeout: 2000 });
 
     // Enter dx value
     const dxInput = page.getByTestId('dx-input');
@@ -229,30 +229,30 @@ test.describe('ID=0 Bug Fixes', () => {
     await expect(applyButton).toBeVisible({ timeout: 2000 });
     await applyButton.click();
 
-    // Verify dialog closes (apply was successful - proves id=0 works with moveSection)
+    // Verify dialog closes (apply was successful - proves id=0 works with moveLine)
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
   });
 
-  test('Section Adjust dialog cancels correctly when sectionId === 0', async ({ page }) => {
-    // Verify the section exists before opening dialog
+  test('Line Adjust dialog cancels correctly when lineId === 0', async ({ page }) => {
+    // Verify the line exists before opening dialog
     await expect.poll(async () => {
       return page.evaluate(() => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        return state.project?.sections?.some((s: any) => s.id === 0);
+        return state.project?.lines?.some((s: any) => s.id === 0);
       });
     }, { timeout: 5000 }).toBe(true);
 
-    // Open the Section Adjust dialog via store
+    // Open the Line Adjust dialog via store
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('line-adjust', { lineId: 0 });
     });
 
     // Wait for dialog to appear
-    const dialog = page.getByTestId('section-adjust-dialog');
+    const dialog = page.getByTestId('line-adjust-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Verify the dialog shows section name (proves id=0 lookup works)
-    await expect(dialog.locator('text=Zero Section')).toBeVisible({ timeout: 2000 });
+    // Verify the dialog shows line name (proves id=0 lookup works)
+    await expect(dialog.locator('text=Zero Line')).toBeVisible({ timeout: 2000 });
 
     // Enter dx value (this triggers preview)
     const dxInput = page.getByTestId('dx-input');
@@ -270,12 +270,12 @@ test.describe('ID=0 Bug Fixes', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
   });
 
-  test('DataTable renders warnings for section with id=0', async ({ page }) => {
-    // Inject a warning for sectionId=0, shotId=0
+  test('DataTable renders warnings for line with id=0', async ({ page }) => {
+    // Inject a warning for lineId=0, shotId=0
     await page.evaluate(() => {
       (window as any).__E2E_TEST__.projectStore.setState({
         warnings: [{
-          sectionId: 0,
+          lineId: 0,
           shotId: 0,
           shotIndex: 0,
           code: 'TEST_WARNING',
@@ -294,34 +294,34 @@ test.describe('ID=0 Bug Fixes', () => {
     // Wait for DataTable to be visible
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 
-    // Add a second section (id=1) and park the table on it first, so that the
-    // subsequent switch to section id=0 is observable (the table auto-selects
-    // sections[0] = Zero Section, which would mask a broken id=0 selection).
+    // Add a second line (id=1) and park the table on it first, so that the
+    // subsequent switch to line id=0 is observable (the table auto-selects
+    // lines[0] = Zero Line, which would mask a broken id=0 selection).
     await page.evaluate(() => {
       const store = (window as any).__E2E_TEST__.projectStore;
       const project = store.getState().project;
-      const otherSection = {
+      const otherLine = {
         id: 1,
-        name: 'One Section',
+        name: 'One Line',
         color: '#ff6b6b',
         direction: 'in' as const,
         shots: [],
       };
-      store.setState({ project: { ...project, sections: [...project.sections, otherSection] } });
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 1 });
+      store.setState({ project: { ...project, lines: [...project.lines, otherLine] } });
+      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'line', lineId: 1 });
     });
-    await expect(page.getByTestId('data-table-section-pill')).toContainText('One Section', { timeout: 3000 });
+    await expect(page.getByTestId('data-table-line-pill')).toContainText('One Line', { timeout: 3000 });
 
-    // Select the section with id=0 via the app-wide selection (the table follows
-    // external selection; its header no longer has a section dropdown). This
-    // exercises the `selection.sectionId !== undefined` path with sectionId=0 -
-    // a falsy check would ignore the selection and leave the pill on 'One Section'.
+    // Select the line with id=0 via the app-wide selection (the table follows
+    // external selection; its header no longer has a line dropdown). This
+    // exercises the `selection.lineId !== undefined` path with lineId=0 -
+    // a falsy check would ignore the selection and leave the pill on 'One Line'.
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'line', lineId: 0 });
     });
 
-    // Header pill follows the selection - proves the id=0 section was resolved
-    await expect(page.getByTestId('data-table-section-pill')).toContainText('Zero Section', { timeout: 3000 });
+    // Header pill follows the selection - proves the id=0 line was resolved
+    await expect(page.getByTestId('data-table-line-pill')).toContainText('Zero Line', { timeout: 3000 });
 
     // Verify the warning indicator is visible with the correct data-testid
     await expect(page.getByTestId('warning-0-0')).toBeVisible({ timeout: 3000 });
@@ -336,22 +336,22 @@ test.describe('ID=0 Edge Cases', () => {
     await injectId0Fixture(page);
   });
 
-  test('Edit Section dialog handles save with surveyor change for id=0', async ({ page }) => {
-    // Open the Edit Section dialog
+  test('Edit Line dialog handles save with surveyor change for id=0', async ({ page }) => {
+    // Open the Edit Line dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
     // Verify dialog loaded correct data: the shot's surveyor as a pill
-    const firstPill = page.getByTestId('section-surveyors-pill-0-label');
+    const firstPill = page.getByTestId('line-surveyors-pill-0-label');
     await expect(firstPill).toHaveText('Test Surveyor');
 
     // Change the surveyor: x the old pill, add the new one
-    await page.getByTestId('section-surveyors-pill-0-remove').click();
-    const surveyorInput = page.getByTestId('section-surveyors-input');
+    await page.getByTestId('line-surveyors-pill-0-remove').click();
+    const surveyorInput = page.getByTestId('line-surveyors-input');
     await surveyorInput.fill('New Surveyor');
     await surveyorInput.press('Enter');
     await expect(firstPill).toHaveText('New Surveyor');
@@ -364,24 +364,24 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(firstPill).toHaveText('New Surveyor');
-    await expect(page.getByTestId('section-surveyors-pill-1')).toHaveCount(0);
+    await expect(page.getByTestId('line-surveyors-pill-1')).toHaveCount(0);
   });
 
-  test('Edit Section dialog handles save with color change for id=0', async ({ page }) => {
-    // Open the Edit Section dialog
+  test('Edit Line dialog handles save with color change for id=0', async ({ page }) => {
+    // Open the Edit Line dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
     // Verify dialog loaded correct data
-    const colorHexInput = page.getByTestId('section-color-hex-input');
+    const colorHexInput = page.getByTestId('line-color-hex-input');
     await expect(colorHexInput).toHaveValue('#4ecdc4');
 
     // Change the color via hex input
@@ -396,23 +396,23 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(colorHexInput).toHaveValue('#ff0000');
   });
 
-  test('Edit Section dialog handles save with direction change for id=0', async ({ page }) => {
-    // Open the Edit Section dialog
+  test('Edit Line dialog handles save with direction change for id=0', async ({ page }) => {
+    // Open the Edit Line dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
     // The Select component is custom - need to click to open dropdown, then select option
-    const directionSelect = page.getByTestId('section-direction-select');
+    const directionSelect = page.getByTestId('line-direction-select');
     // The test ID is attached directly to the trigger button.
     await directionSelect.click();
 
@@ -435,25 +435,25 @@ test.describe('ID=0 Edge Cases', () => {
 
     // Verify persistence: re-open and check direction changed
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the select shows "Out"
     await expect(directionSelect).toHaveText(/Out/i);
   });
 
-  test('Edit Section dialog handles save without changes for id=0', async ({ page }) => {
-    // Open the Edit Section dialog
+  test('Edit Line dialog handles save without changes for id=0', async ({ page }) => {
+    // Open the Edit Line dialog
     await page.evaluate(() => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-line', { lineId: 0 });
     });
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
     // Verify the dialog loaded correctly
-    const nameInput = page.getByTestId('section-name-input');
-    await expect(nameInput).toHaveValue('Zero Section');
+    const nameInput = page.getByTestId('line-name-input');
+    await expect(nameInput).toHaveValue('Zero Line');
 
     // Save without making any changes - scoped to dialog
     await dialog.getByRole('button', { name: 'Save' }).click();

@@ -22,10 +22,15 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Entrance elevation (parsed, used - see [Limitations](#limitations))
 - GPS reference (latitude, longitude, altitude) - extracted from the first shot with non-zero coordinates
 
-### Per-section
-- Section name (with `SectionDescription` suffix stripped)
+### Per-line
+
+Ariane names each shot's group in a `<Section>` element. The importer turns every
+Ariane section into one or more Stalagmight lines (branches and trip cuts can
+split it - see [Topology Reconstruction](#topology-reconstruction)).
+
+- Line name (the `<Section>` text, with any `<SectionDescription>` suffix stripped)
 - Explorers / surveyors and the survey date, read PER SHOT into the shot's
-  survey credit (#329); a section keeps none of its own. Ariane 26.3+'s
+  survey credit (#329); a line keeps none of its own. Ariane 26.3+'s
   `XMLExplorer` / `XMLSurveyor` elements win when either names somebody.
   Otherwise the legacy `Explorer` element is read, which is ONE field holding
   two roles in two encodings: an entity-escaped element pair
@@ -44,7 +49,7 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
   form (`"explorers / surveyors"`, `"explorers /"`, or the surveyors alone).
 
   One splitter (`credit::split_roles`, mirrored by `splitRoles` in
-  `src/utils/sectionCredit.ts`) reads every path; where the text comes from
+  `src/utils/lineCredit.ts`) reads every path; where the text comes from
   decides only how ONE role is cut:
 
   | Text | Source | Explorers | Surveyors |
@@ -66,11 +71,11 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
   surveyors alone as `Ann; Bo`, so they stay two people even after an older
   build's save.
 - Survey date, per shot (part of the credit above)
-- Section color (converted from Ariane's integer RGB format), taken from the section's first shot
+- Line color (converted from Ariane's integer RGB format), taken from the line's first shot
 
 Ariane records all three on EVERY shot row. The people and date are per-shot
 credit (#329) and import onto each shot as they are; the colour is the one value
-a section holds once, so it is the section's **trip** for sectioning - see
+a line holds once, so it is the line's **trip** for cutting runs into lines - see
 [The trip cut](#the-trip-cut) for what happens when it changes mid-chain.
 
 ### Per-shot
@@ -90,40 +95,40 @@ a section holds once, so it is the section's **trip** for sectioning - see
   sidecar consequence.
 
 ### Loop closures
-CLOSURE-type shots in Ariane encode loop closure metadata. During import these are resolved into Stalagmight loop closures linking two stations across sections.
+CLOSURE-type shots in Ariane encode loop closure metadata. During import these are resolved into Stalagmight loop closures linking two stations across lines.
 
 ## Import Workflow
 
-The Ariane import is a single dialog (not the DMP wizard's multi-step flow), but since #425 it reuses the wizard's pieces: the same resizable map column (`WizardMapPanel`, whose width is shared with the DMP wizard and persisted - see [#404 / `panels.wizard_map_panel_width`](configuration.md)), per-section toggles, and a placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
+The Ariane import is a single dialog (not the DMP wizard's multi-step flow), but since #425 it reuses the wizard's pieces: the same resizable map column (`WizardMapPanel`, whose width is shared with the DMP wizard and persisted - see [#404 / `panels.wizard_map_panel_width`](configuration.md)), per-line toggles, and a placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
 
 1. **Pick the file** - the unified-picker entry points (the hamburger's Open / Import row, Ctrl+O, drag-drop, and Ctrl+I with no project open) route through `routeOpenedFile`, which parses the file (`parse_tml`) and marks the flow as a new-project import. The in-project Import affordances (toolbar button, hamburger Import row, Ctrl+I) offer `.dmp` only, since a `.tml` cannot be imported into an open project (#508) - drag-drop still accepts one and offers to close the project first.
 2. **Name the project** - `NewProjectForImportDialog` creates the project BEFORE the import is confirmed. For a project created without an explicit save path the initial save is deferred, so nothing is on disk yet.
-3. **Confirm the import** - `TmlImportDialog` shows the file's cave name, a map preview of the file laid out as the import will build it, the sections table with a checkbox per section, and the counts that will actually import under the current selection and toggles (excluded shots, comment placement, virtual-shot classification). It then runs `execute_tml_import`.
-4. **Receipt** - a successful import opens the import receipt (sections, shots, loops, unit conversion, any converter warnings).
-5. **Orphan placement (optional)** - if the newly imported sections suggest connections to existing ones, the orphan-placement dialog opens INSTEAD of the receipt handoff, and the receipt follows it.
+3. **Confirm the import** - `TmlImportDialog` shows the file's cave name, a map preview of the file laid out as the import will build it, the table of lines (`TmlSectionTable`) with a checkbox per line, and the counts that will actually import under the current selection and toggles (excluded shots, comment placement, virtual-shot classification). It then runs `execute_tml_import`.
+4. **Receipt** - a successful import opens the import receipt (lines, shots, loops, unit conversion, any converter warnings).
+5. **Orphan placement (optional)** - if the newly imported lines suggest connections to existing ones, the orphan-placement dialog opens INSTEAD of the receipt handoff, and the receipt follows it.
 
 Cancelling the dialog - or a terminal failure - leaves the project created in step 2 behind, so the dialog asks whether to keep that empty project or discard it (discard closes a deferred project, or deletes the `.stalx` if one was written).
 
-### Section selection (#425)
+### Line selection (#425)
 
-Each section has a checkbox; the selection travels as `selected_sections: Option<Vec<u32>>` (indices into `TmlFile::sections`), `None` meaning "all", mirroring the Walls importer's `selected_surveys`. Filtering is by the ORIGINAL index - `ImportSectionConfig::section_index`, the `FromImporting` targets and the closure endpoints all address that numbering, and `execute_import_sections` resolves them through a map, so a sparse selection needs no renumbering.
+Each line has a checkbox; the selection travels as `selected_lines: Option<Vec<u32>>` (indices into `TmlFile::lines`), `None` meaning "all", mirroring the Walls importer's `selected_surveys`. Filtering is by the ORIGINAL index - `ImportLineConfig::line_index`, the `FromImporting` targets and the closure endpoints all address that numbering, and `execute_import_lines` resolves them through a map, so a sparse selection needs no renumbering.
 
 The topology rules, in `build_selection_index` / `determine_placement`
 (`crates/parsers/src/parsers/tml/import_options.rs`):
 
-- The Ariane-id index is built over the SELECTED sections only. A parent in a deselected section therefore resolves to nothing, so no surviving section can emit a `FromImporting` onto a section that is never created - which is a hard, whole-import rollback in `execute_import_sections`, not a skip.
-- The ROOT is the lowest SELECTED index (not "the first section that survived shot filtering" - promoting a successor would silently drop the disconnected-section warning that case has always produced).
-- A section that had a parent and lost it to the selection falls back to the origin with its own warning ("attached to a section you did not select"), kept distinct from the file-orphan warning ("was disconnected") so the receipt names the right cause.
-- A loop closure whose far endpoint is in a deselected section is skipped and counted separately from one whose endpoint was EXCLUDED - two different toggles, two different messages.
-- A deselected section produces no "no shots after filtering" warning: the user said no, which is not an anomaly to report back at them.
+- The Ariane-id index is built over the SELECTED lines only. A parent in a deselected line therefore resolves to nothing, so no surviving line can emit a `FromImporting` onto a line that is never created - which is a hard, whole-import rollback in `execute_import_lines`, not a skip.
+- The ROOT is the lowest SELECTED index (not "the first line that survived shot filtering" - promoting a successor would silently drop the disconnected-line warning that case has always produced).
+- A line that had a parent and lost it to the selection falls back to the origin with its own warning ("attached to a line you did not select"), kept distinct from the file-orphan warning ("was disconnected") so the receipt names the right cause.
+- A loop closure whose far endpoint is in a deselected line is skipped and counted separately from one whose endpoint was EXCLUDED - two different toggles, two different messages.
+- A deselected line produces no "no shots after filtering" warning: the user said no, which is not an anomaly to report back at them.
 
 ### Placement (#425)
 
-Placement of every section but the root is still decided by the file's topology: each attaches to the station its `FromID` chain resolves to in an already-imported section.
+Placement of every line but the root is still decided by the file's topology: each attaches to the station its `FromID` chain resolves to in an already-imported line.
 
 The ROOT is a user choice, taken in the dialog and sent as `root_placement: Option<TmlRootPlacement>` (`None` keeps the pre-#425 behaviour for callers with no user in front of them, e.g. the SpeleoDB adoption path):
 
-- **Use the position in the file** - offered when the root section's own first shot carries non-zero latitude/longitude (what the importer would have picked anyway, now visible), or when the file has a `geo_coding` on some OTHER section, which the importer otherwise ignores entirely.
+- **Use the position in the file** - offered when the root line's own first shot carries non-zero latitude/longitude (what the importer would have picked anyway, now visible), or when the file has a `geo_coding` on some OTHER line, which the importer otherwise ignores entirely.
 - **Place at the origin** - what a file with no georeference used to get in silence.
 - **Enter coordinates** - typed latitude/longitude, validated through `GpsCoordinates::new` in the converter, so a NaN or an out-of-range value fails the import rather than landing in a project.
 
@@ -136,9 +141,9 @@ Deliberately NOT the DMP wizard's manual-placement engine: this dialog only ever
 Ariane marks some shots as "excluded" (e.g. survey errors). By default these are filtered out during import. The import dialog provides a toggle to include them if desired, and the preview counts move with it.
 
 When excluded shots are filtered:
-- Sections that lose all shots are dropped entirely
+- Lines that lose all shots are dropped entirely
 - Branch names like "Main Line (branch 1)" are simplified back to "Main Line" when only one branch survives
-- Sections are topologically sorted so parent sections are always created before dependents
+- Lines are topologically sorted so parent lines are always created before dependents
 
 ## Shot Types
 
@@ -147,33 +152,33 @@ When excluded shots are filtered:
 | **Real** | Imported as regular survey shots |
 | **Virtual** | Imported as a virtual shot, then classified Jump or Reference by the #27 chain rule at import finalize (a run bounded by real survey on both ends is a Jump). Faded display, hidden by the "Jumps" / "References" toggles. The TML type string remains "VIRTUAL" for Ariane compatibility. |
 | **Start** | Marks the first station; not imported as a shot |
-| **Closure** | Not imported as a shot - used to create loop closures between sections |
+| **Closure** | Not imported as a shot - used to create loop closures between lines |
 
 ## Topology Reconstruction
 
-Ariane stores survey data as a flat list of shots with `FromID` linkage. The parser reconstructs section topology by:
+Ariane stores survey data as a flat list of shots with `FromID` linkage. The parser reconstructs line topology by:
 
 1. Building a graph of shot connectivity from `FromID` references
 2. Detecting branch points where multiple shots share the same `FromID`
-3. Splitting branches into separate sections with parent-child placement relationships
-4. Resolving cross-section connections via a shot ID → (section index, station index) mapping
+3. Splitting branches into separate lines with parent-child placement relationships
+4. Resolving cross-line connections via a shot ID → (line index, station index) mapping
 
 ### The trip cut
 
-A `Section` holds ONE colour; since #329 every `Shot` carries its own people
+A `Line` holds ONE colour; since #329 every `Shot` carries its own people
 and date (its survey credit). Ariane writes all three on every shot row, so a
 chain drawn in two colours used to import entirely in its FIRST shot's colour
 (#427). The credit survives per shot wherever it changes, so it never cuts a
 run; only a COLOUR change does. (Before per-shot credit the cut also fired on
-people and dates, which broke the round trip: one section with mixed per-shot
+people and dates, which broke the round trip: one line with mixed per-shot
 credit, exported to Ariane and imported again, came back as one `(trip N)`
-section per credit change.)
+line per credit change.)
 
 Each linearized run is therefore **cut where the colour changes between two
 adjacent stations**, and each part keeps its own colour; every shot keeps its
 own credit either way. The parts after the first are named
 `"<name> (trip N)"` - backend-owned English, the same as the `(branch N)` suffix
-beside it (`linearize.rs`, `format!("{section_name} (branch {branch_number})")`);
+beside it (`linearize.rs`, `format!("{line_name} (branch {branch_number})")`);
 the only translated string in this area is the wizard's `(branch)` BADGE, which
 is driven by `is_branch_split` and not by a name. Each part hangs off the
 station it was cut at (`FromImporting`), so the geometry is byte-for-byte what
@@ -188,27 +193,27 @@ the default import does not keep, and every shot it did keep then read as a
 collapsed colour change that never happened.
 
 Duplicate-import detection is unaffected: an Ariane import tracks the whole
-FILE's hash, not per-section hashes (those are the MNemo path's), so how a file
-is cut into sections does not change whether a re-import is recognised.
+FILE's hash, not per-line hashes (those are the MNemo path's), so how a file
+is cut into lines does not change whether a re-import is recognised.
 
 Three rules bound it, the first two mirroring the join:
 
 - **A cut needs a station on both sides.** A trip that changes across a CLOSURE
   or excluded shot is not cut, because that shot is not in the import's station
   index and the part after it would resolve to no parent - and whether it does
-  would depend on the include-excluded toggle, which sectioning must be
+  would depend on the include-excluded toggle, which the cut into lines must be
   invariant to. What cannot be cut keeps each shot's own credit; only a colour
-  that differs from its section's is lost, and that is counted and named on the
-  receipt ("N shots at K colour changes in M sections recorded a different
+  that differs from its line's is lost, and that is counted and named on the
+  receipt ("N shots at K colour changes in M lines recorded a different
   colour...").
 - **The cut runs AFTER the join.** A cut end is not a chain end - it has an
-  in-section successor by construction - and offering it to the join let an
+  in-line successor by construction - and offering it to the join let an
   unrelated branch at that junction splice onto the mainline's head. The cost,
-  pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
+  pinned by `a_chain_continuing_a_cut_tail_stays_its_own_line`, is that a
   chain continuing a cut tail under its own name is not absorbed into it.
 - **A cut budget, per run AND per file.** The colour is file-controlled and
   written on every row, so a file carrying a per-ROW colour - a crafted file -
-  would otherwise mint one section per shot from a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
+  would otherwise mint one line per shot from a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
   multi-trip surveys (about five years of WEEKLY survey days under one declared
   name; the largest real file measured cuts none at all) and far below
   degeneracy. It is not enough on its own, because a file chooses how many RUNS
@@ -218,76 +223,77 @@ Three rules bound it, the first two mirroring the join:
   the last part and are named on the receipt, so the bounds cost reporting, not
   data.
 
-#### Why sections are budgeted at all
+#### Why lines are budgeted at all
 
-A shot id is `section_id * FEATURE_ID_STRIDE + sequence_order` with a stride of
-100_000, in `u32`. The last shot of section `id` encodes as `id * 100_000 +
-99_999`, so the encode holds up to **42_949 sections** (ids `0..=42_948`); past
+A shot id is `line_id * FEATURE_ID_STRIDE + sequence_order` with a stride of
+100_000, in `u32`. The last shot of line `id` encodes as `id * 100_000 +
+99_999`, so the encode holds up to **42_949 lines** (ids `0..=42_948`); past
 that a site either panics (debug) or saturates, and saturating ALIASES distinct
 shots onto one id, which silently moves the station cross-references anchored on
 them. The cut's budget is therefore also clamped to `42_949 - (runs the file
 already has)`, so importing a file can never use the CUT to cross that line.
 
-The budget is `models::MAX_SECTIONS_IN_ID_SPACE` (42_949) with
-`models::MAX_SECTION_ID` (42_948) beside it - shared constants, so the TML cut
+The budget is `models::MAX_LINES_IN_ID_SPACE` (42_949) with
+`models::MAX_LINE_ID` (42_948) beside it - shared constants, so the TML cut
 budget (`parsers/tml/linearize.rs` `cut_budget`) and the mint-time refusals
 below are the same number by construction rather than by two copies agreeing.
 
 Reaching the boundary without the cut - by declaring tens of thousands of
-sections in the file - is refused where section ids are MINTED (#555), which is
+lines in the file - is refused where line ids are MINTED (#555), which is
 the only place that can see both the file and what the project has already
 spent:
 
-- **`core/state/command_import.rs` `execute_import_sections_inner`** - the batch
+- **`core/state/command_import.rs` `execute_import_lines_inner`** - the batch
   door every importer funnels through (Ariane TML/TMLU, Compass, Walls, GPX, the
   MNemo DMP wizard). Before any mutation it compares the configs it was handed
-  against `Project::next_section_id` and refuses the WHOLE import if the sum
-  crosses the limit, naming the file's section count, the ids already spent and
+  against `Project::next_line_id` and refuses the WHOLE import if the sum
+  crosses the limit, naming the file's line count, the ids already spent and
   the limit. Nothing is created, so there is no partial import to roll back.
-- **`core/state/command_section.rs` `create_section`** - the per-section door
-  (in-app section creation, and each section of an import). Refuses when
-  `next_section_id` is already past `MAX_SECTION_ID`, alongside the existing
-  max-shots-per-section check.
+- **`core/state/command_line.rs` `create_line`** - the per-line door
+  (in-app line creation, and each line of an import). Refuses when
+  `next_line_id` is already past `MAX_LINE_ID`, alongside the existing
+  max-shots-per-line check.
 - **`core/state/project_merge.rs` `merge_projects`** - refuses before appending
-  anything when the sources hold more sections between them than one project can
+  anything when the sources hold more lines between them than one project can
   address; no output file is written.
 - **`core/state/command_delete_split.rs`** `execute_delete_shot_and_split` and
-  `execute_delete_shot_range_split` - a delete that splits a section mints
-  section B through `Project::add_section` directly, bypassing `create_section`,
+  `execute_delete_shot_range_split` - a delete that splits a line mints
+  line B through `Project::add_line` directly, bypassing `create_line`,
   so both carry the same refusal with their other pre-checks. It has to sit
-  there and not at the mint: by then section A has been truncated (and, on the
-  range path, connectivity rewritten), so the shots section B is supposed to
+  there and not at the mint: by then line A has been truncated (and, on the
+  range path, connectivity rewritten), so the shots line B is supposed to
   carry are already gone.
 
 What each encode site does past the boundary, for the cases that come off disk
 rather than through those doors:
 
-| Site | Behaviour past 42_949 sections |
+| Site | Behaviour past 42_949 lines |
 |------|-------------------------------|
-| `models/section.rs` `Section::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the `.stalx` open refuses first, and the persisted-undo `restore_section` replay is bounded identically |
+| `models/line.rs` `Line::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the `.stalx` open refuses first, and the persisted-undo `restore_line` replay is bounded identically |
 | `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
-| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a section id with no `sections` row) still reaches this encode and saturates |
-| `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a section id the open-refusal never vetted |
+| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a `section_id` with no `sections` row) still reaches this encode and saturates |
+| `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a `section_id` the open-refusal never vetted |
 | `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
 | `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap. The SoA typed arrays feeding the renderer were widened from `Int32Array` to `Uint32Array` (#555), so the JS side is exact across the full `u32` range, not just the positive half of `i32` |
 
 The load half of the split is closed (#557): opening a `.stalx` that names a
-section id past `MAX_SECTION_ID` is refused outright (an O(1) `MAX(id)`
+line id past `MAX_LINE_ID` is refused outright (an O(1) `MAX(id)`
 precheck plus a per-row backstop), with a message naming the offending id and
 the bound - a pre-#556 file, another tool's output, or a hostile author cannot
 reach the unchecked encodes through the open path. The persisted-undo replay
-is bounded at both of its section-construction points: `restore_section`
-(legacy `SectionSnapshot` and `CreatedSectionSnapshot` entries) refuses an
+is bounded at both of its line-construction points: `restore_line`
+(legacy `LineSnapshot` and `CreatedLineSnapshot` entries, persisted under the
+old tags `SectionSnapshot` / `CreatedSectionSnapshot`) refuses an
 over-bound id, and `restore_snapshot_into` - the chokepoint the
 `ProjectSnapshotPair` arm current builds write goes through, where serde
-rebuilds sections without `Section::new` - refuses the whole snapshot. The
-counter rebuild (`next_section_id`) saturates as defense in depth.
-`resolved_warnings` rows whose section id cell does not coerce to a live id
+rebuilds lines without `Line::new` - refuses the whole snapshot. The
+counter rebuild (`next_line_id`) saturates as defense in depth.
+`resolved_warnings` rows whose `section_id` cell does not coerce to a live id
 are dropped-and-counted on read (post-#517, logged) - correct, because
-suppression is keyed by `(section_id, uuid)`, so such a row can never match a
+suppression is keyed by `(line_id, uuid)`, so such a row can never match a
 live shot.
 
-One accepted consequence: a file that genuinely carries over-bound section
+One accepted consequence: a file that genuinely carries over-bound line
 ids is refused, not salvaged - `repair.rs` recovers a project through
 `load_project`, so the salvage path refuses it too. Such a file can only come
 from a foreign writer or corruption (no shipped build could mint past the
@@ -296,19 +302,19 @@ loading data whose shot ids alias.
 
 The suffix can collide with a name the file itself declares (a file with both
 `A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the
-import resolves a section by name - grouping keys on the file's own `<Section>`
+import resolves a line by name - grouping keys on the file's own `<Section>`
 text before any suffix exists, placement and closures key on Ariane ids, and
 `simplify_lone_branch_names` only rewrites `(branch N)` names - so the result is
-two sections sharing a label, exactly as a file declaring one name twice has
+two lines sharing a label, exactly as a file declaring one name twice has
 always produced (`a_declared_name_that_collides_with_a_cut_suffix_is_accepted`).
 
 Measured on a large real-world survey (14 declared names): 17 configs, median 14
-shots - identical to the pre-cut numbers, because no declared section in it
+shots - identical to the pre-cut numbers, because no declared Ariane section in it
 changes trip mid-chain.
 
 ## Unit Conversion
 
-When the file specifies imperial units, lengths, LRUD values, depths, section start depths and the file's entrance elevation are converted from feet to meters during parsing. All data enters Stalagmight in metric.
+When the file specifies imperial units, lengths, LRUD values, depths, line start depths and the file's entrance elevation are converted from feet to meters during parsing. All data enters Stalagmight in metric.
 
 An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is handled silently. Anything else falls back to metric AND raises an import warning naming the unrecognised string, so a silent mis-scaling is visible on the receipt.
 
@@ -324,16 +330,16 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 
 | Component | File | Role |
 |-----------|------|------|
-| Parser | `src-tauri/crates/parsers/src/parsers/tml/` | XML parsing, section linearization, unit conversion |
+| Parser | `src-tauri/crates/parsers/src/parsers/tml/` | XML parsing, linearization into lines, unit conversion |
 | Import command | `src-tauri/src/commands/import.rs` | IPC handler, deduplication, undo support |
 | Import dialog | `src/components/Dialogs/TmlImportDialog.tsx` | Preview, import options, progress, failure/cancel handling |
 
 ## Azimuth convention (#438)
 
 Azimuths are copied **verbatim** - no per-shot arithmetic at import - and the
-file's `useMagneticAzimuth` becomes the section's declared north reference:
+file's `useMagneticAzimuth` becomes the line's declared north reference:
 
-| File says | Section records | Correction |
+| File says | Line records | Correction |
 |-----------|-----------------|------------|
 | `useMagneticAzimuth=false` | `north: true`, `source: file` | 0 |
 | `true` + `<GeoCoding>`, date in the IGRF range | `north: magnetic`, `source: igrf` with the epoch | the modelled declination at the file's lat/lon on its earliest survey date |
@@ -348,7 +354,7 @@ formats subtract a meridian convergence because their own output is
 grid-relative. Stalagmight's world frame is TRUE north - `gps_to_local` returns
 true-north ENU (`models/geo.rs:79-81`) and every georeferencing path places
 datums against it - so a survey walked in grid bearings would sit at an angle to
-its own GPS. The section correction is therefore the declination alone, and a
+its own GPS. The line's correction is therefore the declination alone, and a
 file that declares a convergence gets a receipt line saying it was dropped.
 Bearings then differ from that app's grid-relative display by the convergence
 angle, typically well under a degree.
@@ -365,7 +371,7 @@ Parsed but dropped:
   characters, no XML-unexportable character) and never coerces the value; `Shot::with_uuid`
   (`models/shot.rs:628`) lets the file's value win over the caller's fresh mint. So re-importing
   a file this app exported round-trips by ID. Importing the SAME file twice would hand two shots
-  the same foreign uuid, so the import renames the repeats in its new sections: the copy already
+  the same foreign uuid, so the import renames the repeats in its new lines: the copy already
   in the project keeps the file's ids, the new one gets derived ids (`reminted_shot_uuid`; see
   [Shot UUIDs](ariane-export.md#shot-uuids)). A uuid whose shape is rejected costs THAT SHOT its
   foreign identity and nothing else.
@@ -427,8 +433,8 @@ Parsed but dropped:
   U+200B shot-comment marker (not whitespace in Unicode terms), are unaffected. CSV export is
   lossless here by contrast; this is a property of the XML text format, not of the comment.
 - **Per-shot surveyor / date survive exactly; per-shot colour as far as the
-  section model allows.** People and dates are per-shot credit, so several
-  teams over several days arrive as one section with each shot's own credit. A
+  line model allows.** People and dates are per-shot credit, so several
+  teams over several days arrive as one line with each shot's own credit. A
   run is cut where the colour changes ([The trip cut](#the-trip-cut)); what a
   cut cannot express - a colour that changes across a CLOSURE or excluded shot,
   with no station seam to cut at - collapses to the run head's colour, and is
@@ -442,7 +448,7 @@ Parsed but dropped:
 
 Structural:
 
-- **The mainline fragments at branch points.** Which branch continues the section is decided by file order, not by which branch is the mainline, so a long trunk can arrive split into "(branch N)" sections ([#412](https://github.com/Stalagmight/Stalagmight/issues/412)).
+- **The mainline fragments at branch points.** Which branch continues the line is decided by file order, not by which branch is the mainline, so a long trunk can arrive split into "(branch N)" lines ([#412](https://github.com/Stalagmight/Stalagmight/issues/412)).
 - Ariane's shape/cross-section geometry (`Shape`/`SH` elements) is not imported.
 - The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention.
 - Only the first GPS coordinate found in the file is used as the project origin.

@@ -4,7 +4,7 @@
  * the user already focused inside the dialog - under jsdom's ~16ms rAF the
  * callback fired mid-userEvent.type(), blurred the input between the click
  * and the keystroke, and the typed text was lost (the flaky
- * SectionAdjustDialog "can clear a typed value" failure).
+ * LineAdjustDialog "can clear a typed value" failure).
  *
  * The rAF is stubbed and fired by hand so both orderings are deterministic
  * (prove-the-guard-via-injection): with focus on an inner control the

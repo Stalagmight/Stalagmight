@@ -383,7 +383,7 @@ describe('useOpenRemoteProject (#218)', () => {
     // guardQuit needs a project open to guard. No question is asked: the quit only
     // hands back a lock first, if the backend holds one (none is, read-only).
     useProjectStore.setState({ project: { name: 'Cave A' } as never, isDirty: false });
-    invokeIpcMock.mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
+    invokeIpcMock.mockResolvedValue({ success: true, warnings: [], error: null, line_ids: [] });
     guardQuit();
     await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_settle_open_lock', { releaseLock: true }, expect.anything()));
     expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();

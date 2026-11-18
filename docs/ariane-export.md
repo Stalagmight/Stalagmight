@@ -25,15 +25,15 @@ The user chooses between the two formats in the save dialog's file-type filter.
 |----------------|-------------|-------|
 | `project.name` | `caveName` | |
 | Always `"m"` | `unit` | Export is always metric (internal model is metric) |
-| Derived from the sections' north references | `useMagneticAzimuth` | See "Azimuth convention" below (#438) |
+| Derived from the lines' north references | `useMagneticAzimuth` | See "Azimuth convention" below (#438) |
 | `project.surface_elevation` | `firstStartAbsoluteElevation` | 0.0 if unknown |
 
 ### Azimuth convention (#438)
 
-The flag is file-level and the references are per section, so the exporter picks
+The flag is file-level and the references are per line, so the exporter picks
 one of three shapes:
 
-Only a section that DECLARES something votes. A section whose correction source
+Only a line that DECLARES something votes. A line whose correction source
 is `unknown` - every `.dmp`, and any `.tml` with no georeference - is raw
 magnetic with nothing on record; it constrains the document to be magnetic and
 otherwise abstains. Counting it as "correction 0" would make the ordinary case
@@ -42,10 +42,10 @@ every bearing and declaring true north about readings known to be magnetic.
 
 | Project | `useMagneticAzimuth` | Azimuths written |
 |---------|----------------------|------------------|
-| Nothing declared, or every declared section magnetic with one correction | `true` | exactly as stored - Ariane applies its own declination |
-| Every section true north | `false` | exactly as stored |
-| Declared corrections disagree, or any section is grid-referenced, AND every section has a correction on record | `false` | each section's correction applied, so the document is uniformly true north |
-| Any of those, but at least one section has NO correction on record | `true` | as stored, with an export note: a section whose offset from true north is unknown cannot be rotated into true north, so the rewrite is refused rather than shipping an unrotated bearing under a true-north flag |
+| Nothing declared, or every declared line magnetic with one correction | `true` | exactly as stored - Ariane applies its own declination |
+| Every line true north | `false` | exactly as stored |
+| Declared corrections disagree, or any line is grid-referenced, AND every line has a correction on record | `false` | each line's correction applied, so the document is uniformly true north |
+| Any of those, but at least one line has NO correction on record | `true` | as stored, with an export note: a line whose offset from true north is unknown cannot be rotated into true north, so the rewrite is refused rather than shipping an unrotated bearing under a true-north flag |
 
 The third case is the only one that changes a number on the way out, and it
 changes only the FILE: the project keeps its measured readings. The third and
@@ -54,7 +54,7 @@ per `AzimuthExport::note_code`, the copy is the frontend's) and log the long
 form.
 
 **Round-trip cost of that third case.** Re-importing such a file reads the
-rotated bearings as measured true-north ones, so the per-section corrections are
+rotated bearings as measured true-north ones, so the per-line corrections are
 gone and the export/re-import multiset of azimuths legitimately differs - the
 same class of documented lossiness as the LRUD zero/null collision below. The
 first two cases round-trip byte-identically.
@@ -76,23 +76,25 @@ self-contained, is the third case above and is lossy in the other direction. See
 the import side's [Azimuth convention](ariane-import.md#azimuth-convention-438)
 for where each correction comes from.
 
-### Section-level fields
+### Line-level fields
 
-These are written per-shot since Ariane stores section metadata on every shot row:
+Ariane has no separate line record: each Stalagmight line becomes an Ariane
+section, named in every row's `Section` / `SC` element, so the line's metadata
+is written per shot:
 
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
-| `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
+| `line.name` | `Section` / `SC` | Falls back to `"Line {id}"` if unnamed |
 | shot credit (#329) | `Explorer` / `EX` | Per ROW, from the shot's own surveyors and explorers. Always the entity-escaped element form `<Explorer>e1, e2</Explorer><Surveyor>s1, s2</Surveyor>` when anyone is credited, a role with nobody left empty (#719): a plain single value is read as a surveyor by this importer but shown as the explorer by Ariane and read as explorers by openspeleo-lib, so only the element form names the role for every reader. `"unknown"` when nobody is credited. Within a role names are joined with `", "`: the import reads every Ariane field as a name list, with no `Last, First` rule. `<` and `>` are dropped from exported names so no name can move people between roles. A `,` or `;` inside one name cannot round-trip (Ariane separates people with commas). The import reads every row back to the same people on the same shot. A START row takes the credit of the shot it leads into; a CLOSURE row takes the credit of the row it hangs off. |
 | shot credit date | `Date` / `DT` | Per row, the shot's own survey date; `"2000-01-01"` if unset. A CLOSURE row takes the date of the row it hangs off, see [Loop closures](#loop-closures) |
-| `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
+| `line.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields
 
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
-| Sequential integer | `ID` | Assigned starting from 0, incrementing across all sections |
-| Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a section; START has -1 |
+| Sequential integer | `ID` | Assigned starting from 0, incrementing across all lines |
+| Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a line; START has -1 |
 | `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
 | `shot.azimuth_out` | - | Not exported. Ariane does not encode backsight azimuth. |
 | `shot.length` | `Length` / `LG` | |
@@ -121,21 +123,21 @@ save).
 
 A shot UUID is unique across the whole project:
 
-- **Doors rename repeats.** An Ariane import, `create_section_and_merge`, project
+- **Doors rename repeats.** An Ariane import, `create_line_and_merge`, project
   merge and Add .stalx bring ids from outside. Each renames the ids its new
-  sections share with the project (`Project::reassign_repeated_shot_uuids`): the
+  lines share with the project (`Project::reassign_repeated_shot_uuids`): the
   project keeps its id, the newcomer gets a derived replacement
-  (`reminted_shot_uuid`, a v5 hash of the section and the old id re-stamped as a
+  (`reminted_shot_uuid`, a v5 hash of the line and the old id re-stamped as a
   v4, so the SpeleoDB sidecar keeps it). Importing the same file twice therefore
   gives the second copy derived ids, and only the first copy round-trips to the
   file's `<UUID>`s.
 - **The load heals older files.** A file saved before this can hold one id in
-  several sections. The load keeps it in the lowest section and gives the others
+  several lines. The load keeps it in the lowest line and gives the others
   the derived replacement (`Project::make_shot_uuids_project_unique`), and
   translates the persisted undo/redo history through the same renames (see
   [Undo/Redo](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
   Derived, so every open of an unsaved file agrees.
-- **The integrity check flags a repeat** (`duplicate_shot_uuid_across_sections`,
+- **The integrity check flags a repeat** (`duplicate_shot_uuid_across_lines`,
   Critical). The guard refuses only NEWLY introduced corruption, so on a project
   that is otherwise sound a door that forgot its rename is rolled back; on one
   that already holds a Critical violation (for example after undoing a Repair) it
@@ -152,7 +154,7 @@ Keys stored OUTSIDE the project against an id the load renamed - an ignored
 warning, a dive-plan point - still find their shot through the derived id
 (`live_shot_uuid_for_stored`), and the next save re-keys an ignore to it. They
 try the first derived candidate only. A replacement is stepped past it only when
-the file itself already holds that derived value on another shot of the section,
+the file itself already holds that derived value on another shot of the line,
 and then a key stored against the old id names that other shot - one the same
 file could have named directly.
 
@@ -169,9 +171,9 @@ guaranteed to be a v4 we minted. Two consequences follow: an empty element means
 "no identity" and gets a fresh mint, and a non-v4 value is dropped from the
 SpeleoDB sidecar by `speleodb_uuid`, costing that shot its GeoJSON feature id in
 the server preview (Ariane writes v4s, so this bites only hand-edited or
-third-party files). A file that repeats a `<UUID>` inside one section is
-repaired, not rejected: `Section::new` keeps the FIRST occurrence and mints a
-fresh id for the rest, restoring the in-section uniqueness `resolve_key` needs.
+third-party files). A file that repeats a `<UUID>` inside one line is
+repaired, not rejected: `Line::new` keeps the FIRST occurrence and mints a
+fresh id for the rest, restoring the in-line uniqueness `resolve_key` needs.
 
 Ariane 26.3.0's own Save fills any row missing `<UUID>` with a fresh v4
 (verified 2026-07-31), so the synthesized-shot gaps above do not survive a
@@ -188,7 +190,7 @@ per entrance, matching what Ariane itself writes for multi-entrance caves.
 
 ### START shots - one per entrance
 
-The **root section** and any section left parentless after link resolution (a
+The **root line** and any line left parentless after link resolution (a
 genuinely detached component) each get a synthesized START shot with
 `FromID = -1`. A START carries the GPS of the datum on its own station; the
 entrance split puts the START on that station. A START with no datum of its own
@@ -196,8 +198,8 @@ carries the GPS of where the raw survey puts its station, relative to the frame
 datum (see [no two STARTs on one point](#no-two-starts-on-one-point)). An
 unanchored START would land at lat/lon 0, and the view would open on the
 Atlantic. A component's
-entrance is a section holding a **placement** datum; a GPS fix never roots one.
-All other sections connect to their parent via `FromID` on their first
+entrance is a line holding a **placement** datum; a GPS fix never roots one.
+All other lines connect to their parent via `FromID` on their first
 real/reference shot.
 
 ### Every datum is written as a START (#741)
@@ -216,14 +218,14 @@ Stalagmight itself such a fix is not an entrance for Plan mode or penetration.
 
 
 - A datum on an entrance's station is written on that entrance's START.
-- A datum anywhere else - a GPS fix part-way through a section, or at a
-  section's first station that a merge aliases onto its parent - gets a
+- A datum anywhere else - a GPS fix part-way through a line, or at a
+  line's first station that a merge aliases onto its parent - gets a
   **zero-length START of its own at its GPS, tied to the fix station by a
   zero-length CLOSURE** (`FromID` = the fix station's row,
   `ClosureToID` = the new START). That is the shape Ariane's own files use for
   a loop that ends on an entrance, and it adds no station: the START is a leaf
   and the CLOSURE carries no length. Both are minted after every other row and
-  take the section name, colour, date and people of the row the tie hangs off
+  take the line name, colour, date and people of the row the tie hangs off
   (the row that ends at the fix station; for a station a merge aliases onto
   its parent, the parent's row). The START sits at that row's depth.
 
@@ -253,7 +255,7 @@ exempt. Writing the fixes would turn a file that drew into a blank one, or
 have the orphan guard refuse it over closures the user never made.
 
 On re-import, the in-repo importer drops START rows and skips a closure whose
-target is a START with no section hanging off it, so the fix rows come back as
+target is a START with no line hanging off it, so the fix rows come back as
 the same stations and legs. The fix's GPS is not read back as a datum. The
 import receipt carries up to two counted warnings, each one line for all the
 fixes together:
@@ -262,12 +264,12 @@ fixes together:
   the number of fixes. The tie's target is a START nothing hangs off, which
   the importer keeps no trace of, so it cannot tell it from a station the
   exclusion filter removed.
-- "N sections had no shots after filtering and were dropped", with `N` the
-  number of fixes part-way along a section. Such a tie hangs off a row the
+- "N lines had no shots after filtering and were dropped", with `N` the
+  number of fixes part-way along a line. Such a tie hangs off a row the
   next row also hangs off, which the parser reads as a branch: a one-row
-  section holding only the CLOSURE, dropped empty. Any loop closure from a
-  station part-way along a section does the same, fix or not. A fix at the
-  end of a section continues that section and raises no such line.
+  line holding only the CLOSURE, dropped empty. Any loop closure from a
+  station part-way along a line does the same, fix or not. A fix at the
+  end of a line continues that line and raises no such receipt entry.
 
 Both blame filtering the user never did. The importer would need to keep the
 file's START ids (`TmlFile` is an IPC type, so that is not a local change) to
@@ -315,28 +317,28 @@ invariant on the exporter alone:
   write an orphan root alongside closures (user profile), and warns when a
   file carries orphans without closures.
 
-### Section connectivity
+### Line connectivity
 
-Parent-child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
+Parent-child relationships are derived from `station_merges`. When line B's entry station merges with a station in line A, line B's first shot has its `FromID` set to the Ariane ID of the corresponding station in line A.
 
-When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
+When a root line is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
 
 ### Loop closures
 
 `loop_closures` are exported as CLOSURE-type shots with `ClosureToID` / `CID` pointing to the target station's Ariane ID. These encode the same loop-closure metadata that Ariane uses internally.
 
 A CLOSURE row carries the date and people of the row it hangs off (its
-`FromID`). A CLOSURE off a station part-way along a section re-imports as a
-one-row branch section of its own, and the importer evaluates the declination
-at the earliest section date in the file. Written undated, the row took the
+`FromID`). A CLOSURE off a station part-way along a line re-imports as a
+one-row branch line of its own, and the importer evaluates the declination
+at the earliest survey date in the file. Written undated, the row took the
 `2000-01-01` stand-in, which dragged that epoch back and turned the whole
 re-imported survey (1.8 degrees for a synthetic 2015 survey).
 
 ### ID assignment
 
 IDs are assigned sequentially starting from 0:
-- Root section: START (ID 0), then shots (ID 1, 2, …)
-- Subsequent sections: shots continue the global counter
+- Root line: START (ID 0), then shots (ID 1, 2, …)
+- Subsequent lines: shots continue the global counter
 - CLOSURE shots are appended at the end
 - Each GPS fix's START and its tying CLOSURE come last, one pair per fix
 
@@ -404,10 +406,10 @@ content is hardcoded) and CLOSURE (no `to` station in the create-station sense).
 Every station whose Ariane id **is** the START shot's therefore loses its comment
 on export. Three ways a station ends up there:
 
-- **Root station 0.** In an unsplit root section, station 0 *is* the START shot,
+- **Root station 0.** In an unsplit root line, station 0 *is* the START shot,
   so a comment on it is dropped. Add the note one shot downstream if you need it
   to survive.
-- **The primary zero datum's station.** When the root section is split at a
+- **The primary zero datum's station.** When the root line is split at a
   non-zero zero datum, the datum's own station is aliased onto the synthesized
   START shot, so a comment on that station is dropped too - even though a real
   shot of the project sits at that index.
@@ -419,20 +421,20 @@ on export. Three ways a station ends up there:
 Comments that survive but move:
 
 - **Stations before the zero-datum split index.** Those stations are emitted on
-  the reverse `"<Section> (pre-zero-datum)"` leg, so their comments are folded
+  the reverse `"<line name> (pre-zero-datum)"` leg, so their comments are folded
   onto that synthetic leg's shots. The text survives, but it re-imports onto a
-  *fabricated* section that never existed in the project - not onto the section
+  *fabricated* line that never existed in the project - not onto the line
   the surveyor wrote it in.
-- **Two StationRefs on one Ariane shot.** When a child section's station 0 is
+- **Two StationRefs on one Ariane shot.** When a child line's station 0 is
   merged into a parent station that *is* a real shot, both refs alias that shot
   id, so both station comments are concatenated into its exported Comment
-  (sorted by `(section_id, station_index)` for reproducibility).
+  (sorted by `(line_id, station_index)` for reproducibility).
 
 A fourth, rarer drop: a station the Ariane topology does not represent at all
 (nothing in the exporter's station-to-node map), which is what happens when the
 shape of a merge leaves a station with no node of its own.
 
-Every one of these drops emits a `tracing::debug!` naming the section id and
+Every one of these drops emits a `tracing::debug!` naming the line id and
 station index (plus the Ariane node id where there is one), so a lost comment is
 diagnosable from a debug-level log rather than silent. Which comments get dropped
 is deliberately unchanged - the logging exists so the loss is observable, not to
@@ -465,7 +467,7 @@ to the byte. The **sidecar** profile additionally:
 | Re-emits every `<Date>` as an ISO calendar date (`YYYY-MM-DD`), year clamped to `[1900, 2035]` | A missing, empty or non-ISO date fails the whole file; outside IGRF's range the declination silently becomes 0.0. Only `YYYY-MM-DD` is parsed - anything else, including a full ISO 8601 datetime, falls back to the placeholder and loses its real survey date |
 | Emits `<UUID>` only for a v4 not already used in the file | The field is typed `UUID4`; a repeat aliases two shots onto one GeoJSON feature (the model keeps shot UUIDs unique; this is the safety net) |
 | Nudges a zero latitude or longitude by a micro-degree, and clamps out-of-range ones | Both components must exceed `1e-7` or the map is skipped, so a survey on the equator or the prime meridian gets none. No datum still means no anchor |
-| Replaces U+220E in section and explorer names with a space | The server hashes the section-identity fields joined with that character |
+| Replaces U+220E in line and explorer names with a space | The server groups shots into lines by hashing the line-identity fields joined with that character |
 | Normalises `Azimut` for every shot type | Only REAL shots are normalised server-side |
 
 None of this touches the project: the transformations run on the export

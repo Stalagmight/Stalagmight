@@ -1,6 +1,6 @@
 ---
 title: Import Ariane Survey dialog
-description: "The Import Ariane Survey dialog: preview the survey, pick sections, and choose its position, how comments are kept and how virtual shots are read."
+description: "The Import Ariane Survey dialog: preview the survey, pick lines, and choose its position, how comments are kept and how virtual shots are read."
 order: 11
 ---
 
@@ -14,10 +14,10 @@ the [Create Project for Import dialog](create-project-for-import.md).
 1. **Close**: nothing imported.
 2. Outline of the survey.
 3. File and cave name.
-4. What will be imported: sections, shots, total length, depth range. Updates
-   as you pick sections.
+4. What will be imported: lines, shots, total length, depth range. Updates
+   as you pick lines.
 5. Select all or none.
-6. Tick the sections to import. Each row shows the section's color, shots,
+6. Tick the lines to import. Each row shows the line's color, shots,
    **Surveyors**, **Explorers** and date. (The screenshot shows older
    Surveyor and Color columns.)
 7. **Cancel**
@@ -49,17 +49,17 @@ them on the shots.
 - **All jumps**
 - **All references**
 
-## Where each section goes
+## Where each line goes
 
-- The position (9-11) applies to the first section imported, named above the
+- The position (9-11) applies to the first line imported, named above the
   options. With 9 or 11 it gets the project's first
   [zero datum](../concepts/zero-datums-and-gps-fixes.md).
-- Every other section follows its connection in the file.
-- A section that starts at another entrance with its own GPS position in the
+- Every other line follows its connection in the file.
+- A line that starts at another entrance with its own GPS position in the
   file is placed there, with a zero datum of its own. A cave with several
   GPS-tagged entrances so gets one zero datum per entrance, each placing its
   own piece of the survey.
-- A section marked **(moved to origin)** connects to nothing else being
+- A line marked **(moved to origin)** connects to nothing else being
   imported and has no GPS position, so it is placed at the origin. The import
   report lists it.
 
@@ -72,7 +72,7 @@ them on the shots.
   shots marked excluded.
 - **Keep comments on shots** appears only when the file has comments, and the
   virtual shots choice only when it has virtual shots.
-- **(branch)** marks a section split off at a branch.
+- **(branch)** marks a line split off at a branch.
 - Imperial files are converted to metric.
 - Cancelling, or an import that fails, leaves the new project empty. You are
   asked to **Keep empty project** or **Discard it**.

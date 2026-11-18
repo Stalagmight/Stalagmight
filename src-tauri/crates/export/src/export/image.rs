@@ -48,7 +48,11 @@ use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
 use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
-use crate::models::{Project, StationRef};
+#[cfg(test)]
+use super::image_labels::STATION_NAME_LABEL_MAX_CHARS;
+use super::image_labels::{point_representatives, station_name_label};
+use super::image_scope;
+use crate::models::{LineId, Project, StationRef};
 
 /// Output image format.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -68,7 +72,7 @@ fn default_true() -> bool {
 }
 
 /// Returns `color` when it is a safe CSS hex color (`#rgb` or `#rrggbb`),
-/// else `#000000`. Section colors are user data written verbatim into the
+/// else `#000000`. Line colors are user data written verbatim into the
 /// SVG attribute, so they must be validated to avoid attribute injection.
 fn sanitize_hex_color(color: &str) -> &str {
     let bytes = color.as_bytes();
@@ -82,7 +86,7 @@ fn sanitize_hex_color(color: &str) -> &str {
     }
 }
 
-/// Escapes the five XML metacharacters so user free-text (section names,
+/// Escapes the five XML metacharacters so user free-text (line names,
 /// station/shot comments) is safe to write into SVG `<text>` content. Without
 /// this, a comment containing `&`, `<`, or `>` (all legal, common free text)
 /// produces invalid XML that fails resvg/svg2pdf parsing on the PNG/PDF paths,
@@ -95,46 +99,9 @@ fn sanitize_hex_color(color: &str) -> &str {
 /// excluded from `[#xE000-#xFFFD]`). Surrogates and `> U+10FFFF` cannot occur in
 /// a `char`. Note the Unicode noncharacters `U+FDD0..=U+FDEF` are NOT dropped:
 /// XML 1.0 permits them (they sit inside `[#xE000-#xFFFD]`).
-fn is_xml_illegal_char(c: char) -> bool {
+pub(super) fn is_xml_illegal_char(c: char) -> bool {
     let u = c as u32;
     (u < 0x20 && c != '\t' && c != '\n' && c != '\r') || u == 0xFFFE || u == 0xFFFF
-}
-
-/// The longest station name the export draws whole; longer names are cut to
-/// one char less and end in an ellipsis. Matches the live map's cap.
-const STATION_NAME_LABEL_MAX_CHARS: usize = 24;
-
-/// A station name as the export draws it: control characters and bidi
-/// overrides dropped (names come from the file, so they are untrusted text),
-/// trimmed, and capped at [`STATION_NAME_LABEL_MAX_CHARS`]. `None` when nothing
-/// is left, so an unnamed station gets no label rather than its index.
-///
-/// Mirrors the live map's `formatStationNameLabel` (`labelText.ts`), so the
-/// preview and the file say the same thing: it also drops the Arabic letter
-/// mark (U+061C) that `sanitize_display_text` keeps and the XML-illegal
-/// U+FFFE/U+FFFF (a name of only those would otherwise reserve space for an
-/// empty `<text>`), and trims a byte-order mark (U+FEFF) the way JavaScript's
-/// `trim` does - at both ends and again at the cut.
-fn station_name_label(name: Option<&str>) -> Option<String> {
-    let blank = |c: char| c.is_whitespace() || c == '\u{feff}';
-    let clean: String = crate::models::sanitize_display_text(name?, usize::MAX)
-        .chars()
-        .filter(|&c| c != '\u{061c}' && !is_xml_illegal_char(c))
-        .collect();
-    let clean = clean.trim_matches(blank);
-    if clean.is_empty() {
-        return None;
-    }
-    if clean.chars().count() <= STATION_NAME_LABEL_MAX_CHARS {
-        return Some(clean.to_string());
-    }
-    let mut out: String = clean
-        .chars()
-        .take(STATION_NAME_LABEL_MAX_CHARS - 1)
-        .collect();
-    out.truncate(out.trim_end_matches(blank).len());
-    out.push('\u{2026}');
-    Some(out)
 }
 
 fn escape_xml_text(s: &str) -> String {
@@ -245,8 +212,8 @@ pub(super) fn depth_range(project: &Project, stations: &[crate::models::Station]
         min = min.min(s.coordinates.z);
         max = max.max(s.coordinates.z);
     }
-    for section in &project.sections {
-        for shot in &section.shots {
+    for line in &project.lines {
+        for shot in &line.shots {
             min = min.min(shot.depth_in).min(shot.depth_out);
             max = max.max(shot.depth_in).max(shot.depth_out);
         }
@@ -295,8 +262,8 @@ pub enum ColorMode {
     /// Monochrome black-on-white (the classic minimal stick map).
     #[default]
     None,
-    /// Each shot in its section's color.
-    Section,
+    /// Each shot in its line's color.
+    Line,
     /// Depth gradient (shallow teal → deep coral), matching the survey map.
     Depth,
     /// Along-cave distance-from-entrance gradient (gold → purple), matching the map.
@@ -324,32 +291,33 @@ pub struct ExportImageOptions {
     /// deepest reachable station. Defaults to `true` (the historical behavior).
     #[serde(default = "default_true")]
     pub show_penetration_labels: bool,
-    /// How to color the shots (section / depth / distance gradient), mirroring
+    /// How to color the shots (line / depth / distance gradient), mirroring
     /// the live survey map. Opt-in (default [`ColorMode::None`] = monochrome).
     /// **Raster-only**: SVG export is always monochrome regardless of this.
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// Whether to draw station-index labels at every station touched by at
-    /// least one drawn (non-reference) shot - i.e. all points on the drawn
+    /// Whether to draw Station ID labels (the project-unique integer
+    /// `Station::id`, never the positional index) at every station touched by
+    /// at least one drawn (non-reference) shot - i.e. all points on the drawn
     /// passage, deduped by colocation (station merges / aligned closures).
     /// Opt-in (default `false`); black text + white halo, same placement
     /// machinery as the penetration labels, so labels stay monochrome
     /// regardless of `color_mode`.
     #[serde(default)]
     pub show_station_labels: bool,
-    /// Whether to draw each station's name (e.g. the MNemo station number a
-    /// DMP import recorded) instead of its index, with the same points and
-    /// placement as `show_station_labels`. A point with no named station gets
-    /// no label - there is no fallback to the index. Opt-in (default `false`).
+    /// Whether to draw each station's name (unique within its line; every
+    /// station of a normalized project has one) instead of its Station ID,
+    /// with the same points and placement as `show_station_labels`. A point
+    /// whose name cleans to nothing gets no label. Opt-in (default `false`).
     /// The UI keeps it exclusive with `show_station_labels`; when both arrive
-    /// `true`, the index labels win, so a caller that predates this option
-    /// keeps the meaning it always had.
+    /// `true`, the Station ID labels win, so a caller that predates this
+    /// option keeps the meaning it always had.
     #[serde(default)]
     pub show_station_names: bool,
-    /// Whether to draw section-name labels at the centroid of each section's
+    /// Whether to draw line-name labels at the centroid of each line's
     /// drawn stations. Opt-in (default `false`); black text + white halo.
     #[serde(default)]
-    pub show_section_names: bool,
+    pub show_line_names: bool,
     /// Whether to draw a station's comment text at the station point, for
     /// every station with a comment that is on drawn geometry. Opt-in
     /// (default `false`); black text + white halo.
@@ -407,6 +375,15 @@ pub struct ExportImageOptions {
     #[serde(default)]
     #[ts(optional)]
     pub distance_scale: Option<ExportColorScale>,
+    /// Lines the export leaves out: the lines of the Sections the map hides
+    /// (display setting `hiddenSections`). Their shots, stations, labels,
+    /// comments and closures are not drawn and do not count toward the
+    /// picture's extent; distances (penetration labels, the distance ramp)
+    /// are still measured along the whole survey. Absent or empty = every
+    /// line, the export before Sections could be hidden.
+    #[serde(default)]
+    #[ts(optional)]
+    pub hidden_line_ids: Option<Vec<LineId>>,
 }
 
 impl Default for ExportImageOptions {
@@ -419,7 +396,7 @@ impl Default for ExportImageOptions {
             color_mode: ColorMode::None,
             show_station_labels: false,
             show_station_names: false,
-            show_section_names: false,
+            show_line_names: false,
             show_station_comments: false,
             show_shot_comments: false,
             show_shot_data: false,
@@ -428,6 +405,7 @@ impl Default for ExportImageOptions {
             depth_deep: None,
             depth_scale: None,
             distance_scale: None,
+            hidden_line_ids: None,
         }
     }
 }
@@ -611,6 +589,29 @@ pub fn generate_svg_string_with_stations(
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<String> {
+    // The hidden Sections' lines are left out (`image_scope`).
+    match image_scope::without_hidden_lines(project, options.hidden_line_ids.as_deref(), &stations)
+    {
+        None => Ok(render_svg(project, None, options, stations)),
+        Some((drawn, shown)) => Ok(render_svg(
+            &drawn,
+            Some((project, &stations)),
+            options,
+            shown,
+        )),
+    }
+}
+
+/// [`generate_svg_string_with_stations`] for the lines it draws: `project`
+/// and `stations` hold only what is drawn, and `whole` the whole survey
+/// (project and every station) when that is more, to measure distances
+/// along (`None` = `project` is the whole survey).
+fn render_svg(
+    project: &Project,
+    whole: image_scope::Whole<'_>,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> String {
     // ---- Bounds and scale ---------------------------------------------------
     // Bounds come from *rendered* geometry only - endpoints of non-reference
     // shots plus zero-datum stations. Reference shots aren't drawn, so a
@@ -632,13 +633,13 @@ pub fn generate_svg_string_with_stations(
         *mny = mny.min(c.y);
         *mxy = mxy.max(c.y);
     };
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
             if shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
+            let from = StationRef::new(line.id, i as u32);
+            let to = StationRef::new(line.id, (i + 1) as u32);
             if let Some(s) = station_by_ref.get(&from) {
                 extend(
                     &s.coordinates,
@@ -756,13 +757,13 @@ pub fn generate_svg_string_with_stations(
         }
     }
 
-    // Non-reference shots inside each section connect their two endpoint
+    // Non-reference shots inside each line connect their two endpoint
     // stations into the same segment.
     let mut has_non_ref_shot: HashSet<usize> = HashSet::new();
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
+            let from = StationRef::new(line.id, i as u32);
+            let to = StationRef::new(line.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
@@ -807,7 +808,7 @@ pub fn generate_svg_string_with_stations(
     // cluster if either (a) they're the same physical point - i.e. their
     // segment_uf roots already match, which encodes station_merges and
     // aligned closures - or (b) they're connected by a reference shot. The
-    // first rule keeps merged "hub" stations across separate stub sections
+    // first rule keeps merged "hub" stations across separate stub lines
     // from being split into multiple sibling clusters.
     let mut free_uf = UnionFind::new(n);
     let mut first_free_per_seg: HashMap<usize, usize> = HashMap::new();
@@ -825,13 +826,13 @@ pub fn generate_svg_string_with_stations(
             }
         }
     }
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
+            let from = StationRef::new(line.id, i as u32);
+            let to = StationRef::new(line.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
@@ -845,13 +846,13 @@ pub fn generate_svg_string_with_stations(
     // direct anchor-anchor ties straight away.
     let mut neighbors: HashMap<usize, HashSet<usize>> = HashMap::new();
     let mut cluster_segments: HashMap<usize, HashSet<usize>> = HashMap::new();
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
+            let from = StationRef::new(line.id, i as u32);
+            let to = StationRef::new(line.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
@@ -917,7 +918,7 @@ pub fn generate_svg_string_with_stations(
 
     // ---- Junction trimming ----------------------------------------------
     // A "child" segment that ties into a "parent" segment via reference
-    // shots (possibly a short stub section, possibly a direct anchor↔
+    // shots (possibly a short stub line, possibly a direct anchor↔
     // anchor ref) ends visually right next to the parent line, blending
     // into it. The parent's polyline typically passes *through* the
     // connection as a middle vertex, so it shouldn't be touched - only
@@ -961,13 +962,13 @@ pub fn generate_svg_string_with_stations(
         }
     }
     let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
+            let from = StationRef::new(line.id, i as u32);
+            let to = StationRef::new(line.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
@@ -1023,9 +1024,9 @@ pub fn generate_svg_string_with_stations(
     }
 
     // Pass 1: shots. One polyline per maximal contiguous run of
-    // non-reference shots in a section. Drawing per-run rather than
+    // non-reference shots in a line. Drawing per-run rather than
     // per-shot lets `stroke-linejoin="round"` smooth interior corners and
-    // `stroke-linecap="round"` cover the cross-section/cross-run joins
+    // `stroke-linecap="round"` cover the cross-line/cross-run joins
     // (e.g. at merged stations), eliminating the butt-cap notches that
     // showed up at angled joins between consecutive `<line>` elements.
     //
@@ -1034,7 +1035,7 @@ pub fn generate_svg_string_with_stations(
     // well-defined by looking at any one shot's segment.
     // Shots are monochrome by default. Raster export can color them to match the
     // live survey map (SVG export always stays monochrome). Depth/Distance are
-    // per-shot gradients; Section/None use the smooth run-batched polylines below.
+    // per-shot gradients; Line/None use the smooth run-batched polylines below.
     let mode = if matches!(options.format, ImageFormat::Svg) {
         ColorMode::None
     } else {
@@ -1044,25 +1045,8 @@ pub fn generate_svg_string_with_stations(
     let depth_ramp = options.depth_ramp();
     let depth_scale = options.depth_scale.as_ref().map(ResolvedScale::new);
     let distance_scale = options.distance_scale.as_ref().map(ResolvedScale::new);
-    let dist_field = (mode == ColorMode::Distance).then(|| {
-        // The map colors the distance ramp from MEASURED distances (it draws
-        // adjusted geometry but deliberately computes the distance field from
-        // measured coords - see `AppState::distance_field`). Match that: distances
-        // key by station_ref, so this stays consistent with the adjusted geometry
-        // we draw. (It also skips the adjusted solve the map was designed to avoid.)
-        let field = project.distance_field_from_with(
-            &project.compute_station_coordinates(),
-            None,
-            options.include_reference_legs,
-        );
-        let by_ref: HashMap<StationRef, Option<f64>> = field
-            .station_refs
-            .iter()
-            .copied()
-            .zip(field.distances.iter().copied())
-            .collect();
-        (by_ref, field.max_reachable)
-    });
+    let dist_field = (mode == ColorMode::Distance)
+        .then(|| image_scope::distance_field(project, whole, options.include_reference_legs));
     let _ = writeln!(
         svg,
         r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
@@ -1070,13 +1054,13 @@ pub fn generate_svg_string_with_stations(
     if matches!(mode, ColorMode::Depth | ColorMode::Distance) {
         // Per-shot gradient: mirror the live map's per-shot coloring. No junction
         // trimming here - the color variation carries the visual, not line breaks.
-        for section in &project.sections {
-            for j in 0..section.shots.len() {
-                if section.shots[j].kind.is_virtual() {
+        for line in &project.lines {
+            for j in 0..line.shots.len() {
+                if line.shots[j].kind.is_virtual() {
                     continue;
                 }
-                let from_ref = StationRef::new(section.id, j as u32);
-                let to_ref = StationRef::new(section.id, (j + 1) as u32);
+                let from_ref = StationRef::new(line.id, j as u32);
+                let to_ref = StationRef::new(line.id, (j + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
                 else {
@@ -1109,7 +1093,7 @@ pub fn generate_svg_string_with_stations(
                     );
                 } else {
                     let (min_d, max_d) = depth_rng.unwrap_or((0.0, 50.0));
-                    let shot = &section.shots[j];
+                    let shot = &line.shots[j];
                     // Subdivide into 4-12 segments (the map's smoothness formula),
                     // each colored at its midpoint depth.
                     let segs = ((shot.length / 2.0).ceil() as i64).clamp(4, 12) as usize;
@@ -1131,14 +1115,13 @@ pub fn generate_svg_string_with_stations(
             }
         }
     } else {
-        for section in &project.sections {
-            // Per-section stroke override (computed once); `None` inherits the
+        for line in &project.lines {
+            // Per-line stroke override (computed once); `None` inherits the
             // group's black stroke for the monochrome path.
-            let section_stroke =
-                (mode == ColorMode::Section).then(|| sanitize_hex_color(&section.color));
+            let line_stroke = (mode == ColorMode::Line).then(|| sanitize_hex_color(&line.color));
             let mut i = 0;
-            while i < section.shots.len() {
-                if section.shots[i].kind.is_virtual() {
+            while i < line.shots.len() {
+                if line.shots[i].kind.is_virtual() {
                     i += 1;
                     continue;
                 }
@@ -1149,9 +1132,9 @@ pub fn generate_svg_string_with_stations(
                 let mut first_si: Option<usize> = None;
                 let mut last_si: Option<usize> = None;
                 let mut j = i;
-                while j < section.shots.len() && !section.shots[j].kind.is_virtual() {
-                    let from_ref = StationRef::new(section.id, j as u32);
-                    let to_ref = StationRef::new(section.id, (j + 1) as u32);
+                while j < line.shots.len() && !line.shots[j].kind.is_virtual() {
+                    let from_ref = StationRef::new(line.id, j as u32);
+                    let to_ref = StationRef::new(line.id, (j + 1) as u32);
                     let (Some(from), Some(to)) =
                         (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
                     else {
@@ -1213,7 +1196,7 @@ pub fn generate_svg_string_with_stations(
                         }
                         let _ = write!(pts_str, "{x:.2},{y:.2}");
                     }
-                    match section_stroke {
+                    match line_stroke {
                         Some(stroke) => {
                             let _ = writeln!(
                                 svg,
@@ -1275,7 +1258,7 @@ pub fn generate_svg_string_with_stations(
     if options.show_penetration_labels
         || options.show_station_labels
         || options.show_station_names
-        || options.show_section_names
+        || options.show_line_names
         || options.show_station_comments
         || options.show_shot_comments
         || options.show_shot_data
@@ -1296,14 +1279,20 @@ pub fn generate_svg_string_with_stations(
     // station. Only attempted when the project has at least one zero datum
     // (otherwise penetration distance is undefined). Labels carry a white
     // halo for readability and dodge collisions by trying eight placement
-    // offsets before giving up.
-    if options.show_penetration_labels && !zero_datum_indices.is_empty() {
+    // offsets before giving up. A datum on a hidden line still measures the
+    // drawn ones.
+    let has_datum = image_scope::has_datum(!zero_datum_indices.is_empty(), whole);
+    if options.show_penetration_labels && has_datum {
         // Use the project's shared along-cave penetration computation -
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        let pen_dist =
-            project.compute_penetration_distances_with(&stations, options.include_reference_legs);
+        let pen_dist = image_scope::penetration_distances(
+            project,
+            whole,
+            &stations,
+            options.include_reference_legs,
+        );
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -1445,13 +1434,13 @@ pub fn generate_svg_string_with_stations(
 
         // Degree per physical point (non-reference shot endpoints).
         let mut degree: HashMap<usize, u32> = HashMap::new();
-        for section in &project.sections {
-            for (i, shot) in section.shots.iter().enumerate() {
+        for line in &project.lines {
+            for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
                 }
-                let from = StationRef::new(section.id, i as u32);
-                let to = StationRef::new(section.id, (i + 1) as u32);
+                let from = StationRef::new(line.id, i as u32);
+                let to = StationRef::new(line.id, (i + 1) as u32);
                 let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to))
                 else {
                     continue;
@@ -1469,19 +1458,24 @@ pub fn generate_svg_string_with_stations(
 
         // Pass 4a: one label at every point touched by at least one drawn
         // shot (deg >= 1) - i.e. all stations on drawn passage, deduped by
-        // colocation. The label is the station index, or with names on, the
-        // station name. Representative station per point = the smallest
-        // station index that has a label (deterministic): every station for
-        // index labels, only named ones for names, so a merge of an unnamed
-        // and a named station still shows the name, and a point with no
-        // named station gets no label.
+        // colocation. The label is the Station ID, or with names on, the
+        // station name. Representative station per point (docs/SPEC.md 4.2,
+        // Labels; the map's `labelMergeGroups.ts` picks the same): among the
+        // stations that have a label, one that is not its line's first
+        // station, then one that is not its line's last, ties broken by the
+        // line's order in the project and then the station index - so a
+        // branch merged onto the main line shows the main line's name there,
+        // not the branch's `0`. Every station has a label for index labels,
+        // only named ones for names, so a merge of an unnamed and a named
+        // station still shows the name, and a point with no named station
+        // gets no label.
         if options.show_station_labels || show_station_names {
             // Names mode cleans each name once (it decides who represents a
             // point); index labels are formatted only for the chosen stations.
             let names: Vec<Option<String>> = if show_station_names {
                 stations
                     .iter()
-                    .map(|s| station_name_label(s.name.as_deref()))
+                    .map(|s| station_name_label(Some(s.name.as_str())))
                     .collect()
             } else {
                 Vec::new()
@@ -1490,17 +1484,17 @@ pub fn generate_svg_string_with_stations(
                 if show_station_names {
                     names[i].clone()
                 } else {
-                    Some(stations[i].station_ref.station_index.to_string())
+                    // The project-unique Station ID, never the positional
+                    // index (which is a session handle, not shown to users).
+                    Some(stations[i].id.to_string())
                 }
             };
-            let mut rep: HashMap<usize, usize> = HashMap::new();
-            for i in 0..n {
-                if show_station_names && names[i].is_none() {
-                    continue;
-                }
-                // Ascending `i`: the first entry per point is its smallest.
-                rep.entry(point_uf.find(i)).or_insert(i);
-            }
+            let rep = point_representatives(
+                project,
+                &stations,
+                |i| point_uf.find(i),
+                |i| !show_station_names || names[i].is_some(),
+            );
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
                 .filter(|&(_, &deg)| deg >= 1)
@@ -1586,28 +1580,28 @@ pub fn generate_svg_string_with_stations(
         }
     }
 
-    // Pass 5: section-name labels at the centroid of each section's drawn
-    // (non-reference) stations. Sections with zero drawn stations (all
-    // reference, or empty) are skipped. Falls back to "Section {id}" when
-    // the section has no user-given name.
-    if options.show_section_names {
+    // Pass 5: line-name labels at the centroid of each line's drawn
+    // (non-reference) stations. Lines with zero drawn stations (all
+    // reference, or empty) are skipped. Falls back to "Line {id}" when
+    // the line has no user-given name.
+    if options.show_line_names {
         let label_size = px(PEN_LABEL_PX);
         let halo = px(PEN_LABEL_HALO_PX);
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for section in &project.sections {
+        for line in &project.lines {
             let mut seen: HashSet<StationRef> = HashSet::new();
             let mut sum_x = 0.0;
             let mut sum_y = 0.0;
             let mut summed = 0u32;
-            for (i, shot) in section.shots.iter().enumerate() {
+            for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
                 }
                 for sr in [
-                    StationRef::new(section.id, i as u32),
-                    StationRef::new(section.id, (i + 1) as u32),
+                    StationRef::new(line.id, i as u32),
+                    StationRef::new(line.id, (i + 1) as u32),
                 ] {
                     // Average only the points we actually resolved, so a missing
                     // lookup can't dilute the centroid toward the world origin.
@@ -1626,10 +1620,10 @@ pub fn generate_svg_string_with_stations(
             let count = f64::from(summed);
             let cx = sum_x / count;
             let cy = sum_y / count;
-            let text = section
+            let text = line
                 .name
                 .clone()
-                .unwrap_or_else(|| format!("Section {}", section.id));
+                .unwrap_or_else(|| format!("Line {}", line.id));
             let text_w = char_w * text.chars().count() as f64;
             let text_h = label_size;
             let offsets = compass_offsets(offset);
@@ -1637,7 +1631,7 @@ pub fn generate_svg_string_with_stations(
                 if !opened {
                     let _ = writeln!(
                         svg,
-                        r##"<g class="section-names" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                        r##"<g class="line-names" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
                         size = label_size,
                         halo = halo,
                     );
@@ -1673,7 +1667,7 @@ pub fn generate_svg_string_with_stations(
     // first (closest, cleanest), then the same two farther out, then a compass
     // ring as a last resort. Richer than a bare 2-candidate perpendicular so a
     // dense passage drops far fewer labels before giving up (matches the
-    // 9-candidate budget the station/section passes get).
+    // 9-candidate budget the station/line passes get).
     fn shot_offsets(dir: f64, offset: f64) -> Vec<(f64, f64)> {
         let a = dir + std::f64::consts::FRAC_PI_2;
         let b = dir - std::f64::consts::FRAC_PI_2;
@@ -1701,13 +1695,13 @@ pub fn generate_svg_string_with_stations(
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for section in &project.sections {
-            for (i, shot) in section.shots.iter().enumerate() {
+        for line in &project.lines {
+            for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
                 }
-                let from_ref = StationRef::new(section.id, i as u32);
-                let to_ref = StationRef::new(section.id, (i + 1) as u32);
+                let from_ref = StationRef::new(line.id, i as u32);
+                let to_ref = StationRef::new(line.id, (i + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
                 else {
@@ -1753,16 +1747,16 @@ pub fn generate_svg_string_with_stations(
         let offset = px(PEN_LABEL_OFFSET_PX);
         let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
         let mut opened = false;
-        for section in &project.sections {
-            for (i, shot) in section.shots.iter().enumerate() {
+        for line in &project.lines {
+            for (i, shot) in line.shots.iter().enumerate() {
                 if shot.kind.is_virtual() {
                     continue;
                 }
                 let Some(text) = shot.comment.clone() else {
                     continue;
                 };
-                let from_ref = StationRef::new(section.id, i as u32);
-                let to_ref = StationRef::new(section.id, (i + 1) as u32);
+                let from_ref = StationRef::new(line.id, i as u32);
+                let to_ref = StationRef::new(line.id, (i + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
                 else {
@@ -1799,7 +1793,7 @@ pub fn generate_svg_string_with_stations(
     }
 
     svg.push_str("</svg>\n");
-    Ok(svg)
+    svg
 }
 
 /// Sum of edge lengths along the polyline.
@@ -1894,13 +1888,13 @@ fn label_open_space_angle(
             dirs.push(dy.atan2(dx));
         }
     };
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
+    for line in &project.lines {
+        for (i, shot) in line.shots.iter().enumerate() {
             if shot.kind.is_virtual() {
                 continue;
             }
-            let from_ref = StationRef::new(section.id, i as u32);
-            let to_ref = StationRef::new(section.id, (i + 1) as u32);
+            let from_ref = StationRef::new(line.id, i as u32);
+            let to_ref = StationRef::new(line.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from_ref), station_index.get(&to_ref))
             else {
                 continue;
@@ -1944,7 +1938,7 @@ fn label_open_space_angle(
 /// with `placed`, along with that box. `None` if every candidate collided -
 /// callers drop the label rather than stack it on top of another. Shared by
 /// every label pass that dodges collisions from a single anchor point
-/// (station labels/comments, section names, shot data/comments); Pass 3
+/// (station labels/comments, line names, shot data/comments); Pass 3
 /// (penetration labels) predates this helper and keeps its own inline copy.
 fn place_near(
     hub_x: f64,
@@ -1990,7 +1984,7 @@ fn radial_offsets(primary: f64, step: f64, offset: f64) -> Vec<(f64, f64)> {
     out
 }
 
-/// Nine candidate `(dx, dy)` offsets for a section-name label: the centroid
+/// Nine candidate `(dx, dy)` offsets for a line-name label: the centroid
 /// itself (no offset), then eight compass directions at distance `offset`.
 fn compass_offsets(offset: f64) -> Vec<(f64, f64)> {
     let mut out = Vec::with_capacity(9);
@@ -2083,7 +2077,7 @@ impl UnionFind {
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::models::{GpsCoordinates, SectionData, ShotData, ShotKind, StationMerge};
+    use crate::models::{GpsCoordinates, LineData, ShotData, ShotKind, StationMerge};
     use tempfile::NamedTempFile;
 
     fn make_shot(length: f64, azimuth: f64, is_virtual: bool) -> ShotData {
@@ -2106,7 +2100,7 @@ mod tests {
 
     fn simple_project() -> Project {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false)],
@@ -2153,12 +2147,12 @@ mod tests {
 
     #[test]
     fn zero_size_bounds_are_clamped_to_non_degenerate_viewbox() {
-        // A single-station project (one section with no shots) - the
+        // A single-station project (one line with no shots) - the
         // only station sits at the origin, so raw extent_x == extent_y
         // == 0. Without clamping the viewBox would be 0×0 and usvg
         // would refuse to rasterise it.
         let mut project = Project::new("Single".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Just one station".to_string()),
             color: "#000000".to_string(),
             shots: vec![],
@@ -2198,7 +2192,7 @@ mod tests {
         // the actual stick map shrinks to ~1 % of the rendered area.
         let mut project = Project::new("RefBounds".to_string(), None);
         let main_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Main".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 90.0, false)],
@@ -2206,7 +2200,7 @@ mod tests {
             })
             .id;
         let ref_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("LongRef".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(1000.0, 90.0, true)], // invisible
@@ -2230,6 +2224,96 @@ mod tests {
             w < 100.0,
             "viewBox width {w} should hug the drawn 10 m line, not the 1000 m ref shot",
         );
+    }
+
+    /// A hidden Section's lines (`hidden_line_ids`) are not drawn: no shot,
+    /// station, label, comment or datum star of theirs, and the picture's
+    /// extent hugs what is drawn. Distances still run along the whole
+    /// survey: the datum on the hidden line still measures the drawn one.
+    #[test]
+    fn hidden_lines_are_not_drawn_but_still_measure_distances() {
+        let mut project = Project::new("Hidden".to_string(), None);
+        // "Far" runs 100 m east from the entrance to the start of "Main",
+        // which runs 10 m further east.
+        let far = project
+            .add_line(LineData {
+                name: Some("Far".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(50.0, 90.0, false), make_shot(50.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let main = project
+            .add_line(LineData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project
+            .set_zero_datum(
+                StationRef::new(far, 0),
+                GpsCoordinates::new(45.0, -122.0, 0.0).unwrap(),
+            )
+            .unwrap();
+        project
+            .merge_stations(StationRef::new(far, 2), StationRef::new(main, 0))
+            .unwrap();
+        let far_key = project.key_for_ref(StationRef::new(far, 1)).unwrap();
+        project
+            .station_comments
+            .insert(far_key, "far-note".to_string());
+        let main_key = project.key_for_ref(StationRef::new(main, 1)).unwrap();
+        project
+            .station_comments
+            .insert(main_key, "main-note".to_string());
+        let options = |hidden: Option<Vec<LineId>>| ExportImageOptions {
+            format: ImageFormat::Svg,
+            show_penetration_labels: false,
+            show_line_names: true,
+            show_station_comments: true,
+            hidden_line_ids: hidden,
+            ..Default::default()
+        };
+
+        let all = generate_svg_string(&project, &options(None)).unwrap();
+        assert!(all.contains(">Far</text>"), "{all}");
+        assert!(all.contains("far-note"), "{all}");
+        let (_, _, all_w, _) = parse_viewbox(&all);
+        assert!(all_w > 100.0, "the whole survey spans 110 m: {all_w}");
+
+        let svg = generate_svg_string(&project, &options(Some(vec![far]))).unwrap();
+        assert!(svg.contains(">Main</text>"), "{svg}");
+        assert!(svg.contains("main-note"), "{svg}");
+        assert!(!svg.contains(">Far</text>"), "hidden line name: {svg}");
+        assert!(!svg.contains("far-note"), "hidden station comment: {svg}");
+        assert!(
+            !svg.contains("<polygon"),
+            "the datum star sits on the hidden line: {svg}"
+        );
+        let (_, _, w, _) = parse_viewbox(&svg);
+        assert!(w < 60.0, "the extent hugs the drawn 10 m line: {w}");
+        // Main's far end is 110 m from the entrance along the survey, the
+        // hidden line included.
+        let measured = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                branching_threshold: 0,
+                show_penetration_labels: true,
+                hidden_line_ids: Some(vec![far]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(measured.contains(">p. 110</text>"), "{measured}");
+
+        // An empty list, or ids of lines that do not exist, hide nothing.
+        let none = generate_svg_string(&project, &options(Some(vec![]))).unwrap();
+        assert_eq!(none, all);
+        let stale = generate_svg_string(&project, &options(Some(vec![999]))).unwrap();
+        assert_eq!(stale, all);
     }
 
     #[test]
@@ -2400,13 +2484,13 @@ mod tests {
 
     // ---- Segmentation / branching -----------------------------------------
 
-    /// Build a project: one section with five shots; shot index 2 is a
+    /// Build a project: one line with five shots; shot index 2 is a
     /// reference shot. That splits the chain into two segments:
     ///   segment A = shots 0,1 (between stations 0..=2)
     ///   segment B = shots 3,4 (between stations 3..=5)
     fn project_with_one_ref_separator() -> Project {
         let mut project = Project::new("RefSplit".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("S".to_string()),
             color: "#000000".to_string(),
             shots: vec![
@@ -2435,7 +2519,7 @@ mod tests {
         // consume the entire side polyline.
         let mut project = Project::new("ShortSide".to_string(), None);
         let parent_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Parent".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(100.0, 90.0, false)],
@@ -2443,7 +2527,7 @@ mod tests {
             })
             .id;
         let side_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("ShortSide".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(1.0, 0.0, false)], // 1 m only
@@ -2453,7 +2537,7 @@ mod tests {
         let merged_at = chrono::Utc::now();
         for (parent_station, side_station) in [(0u32, 0u32), (1, 1)] {
             let stub = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Stub".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 0.0, true)],
@@ -2527,7 +2611,7 @@ mod tests {
         // is left untouched.
         let mut project = Project::new("ParentChild".to_string(), None);
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(50.0, 90.0, false), make_shot(50.0, 90.0, false)],
@@ -2535,7 +2619,7 @@ mod tests {
             })
             .id;
         let child_x = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("ChildX".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(40.0, 0.0, false)], // north
@@ -2543,7 +2627,7 @@ mod tests {
             })
             .id;
         let child_y = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("ChildY".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(40.0, 180.0, false)], // south
@@ -2551,7 +2635,7 @@ mod tests {
             })
             .id;
         let child_z = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("ChildZ".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(40.0, 45.0, false)], // NE
@@ -2559,13 +2643,13 @@ mod tests {
             })
             .id;
 
-        // Stub section per child: one ref shot whose two ends merge into
+        // Stub line per child: one ref shot whose two ends merge into
         // the trunk's middle station and the child's start.
         let trunk_mid = StationRef::new(trunk_id, 1);
         let merged_at = chrono::Utc::now();
         for child in [child_x, child_y, child_z] {
             let stub = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Stub".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 0.0, true)], // short ref
@@ -2655,7 +2739,7 @@ mod tests {
         // than the trunk. The trunk should stay full length.
         let mut project = Project::new("Asymm".to_string(), None);
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(100.0, 90.0, false)],
@@ -2667,7 +2751,7 @@ mod tests {
         let trunk_east = StationRef::new(trunk_id, 1);
         for az in [0.0, 90.0, 180.0] {
             let child = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Child".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(20.0, az, false)],
@@ -2675,7 +2759,7 @@ mod tests {
                 })
                 .id;
             let stub = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Stub".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 0.0, true)],
@@ -2840,16 +2924,16 @@ mod tests {
     fn extract_unique_stroke_widths(svg: &str) -> Vec<String> {
         // Only consider stroke widths emitted on shot <polyline> elements.
         // The pen-distance label group also carries its own (halo)
-        // stroke-width on its <text> wrapper - that's unrelated to line
+        // stroke-width on its <text> wrapper - that's unrelated to stroke
         // weights.
         let mut found: HashSet<String> = HashSet::new();
-        for line in svg.lines() {
-            let line = line.trim_start();
-            if !line.starts_with("<polyline ") {
+        for svg_line in svg.lines() {
+            let svg_line = svg_line.trim_start();
+            if !svg_line.starts_with("<polyline ") {
                 continue;
             }
-            if let Some(start) = line.find(r#"stroke-width=""#) {
-                let after = &line[start + r#"stroke-width=""#.len()..];
+            if let Some(start) = svg_line.find(r#"stroke-width=""#) {
+                let after = &svg_line[start + r#"stroke-width=""#.len()..];
                 if let Some(end) = after.find('"') {
                     found.insert(after[..end].to_string());
                 }
@@ -2865,16 +2949,16 @@ mod tests {
         // Trunk segment connected by reference shots to three leaf segments.
         // Trunk's branching factor = 3, each leaf's branching factor = 1.
         //
-        // Layout: each piece is its own section. The three ref shots each
-        // live in their own one-shot "stub" section, with station 0 merged
+        // Layout: each piece is its own line. The three ref shots each
+        // live in their own one-shot "stub" line, with station 0 merged
         // into the trunk's tip station and station 1 merged into the
-        // leaf's start station. Putting refs in separate sections is the
+        // leaf's start station. Putting refs in separate lines is the
         // only way to make them genuinely fan out from a single trunk
-        // station - within a section, shots form a linear chain.
+        // station - within a line, shots form a linear chain.
         let mut project = Project::new("Trunk".to_string(), None);
 
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
@@ -2882,9 +2966,9 @@ mod tests {
             })
             .id;
 
-        let mut leaf_id = |name: &str| -> crate::models::SectionId {
+        let mut leaf_id = |name: &str| -> LineId {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some(name.to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(5.0, 90.0, false)],
@@ -2896,9 +2980,9 @@ mod tests {
         let b_id = leaf_id("LeafB");
         let c_id = leaf_id("LeafC");
 
-        let mut stub_id = || -> crate::models::SectionId {
+        let mut stub_id = || -> LineId {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Stub".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 90.0, true)],
@@ -2961,14 +3045,14 @@ mod tests {
     #[test]
     fn ref_chain_through_free_stations_counts_as_one_tie() {
         // Two real segments connected by *two* reference shots in series,
-        // routed through a reference-only intermediate section. Old behaviour
+        // routed through a reference-only intermediate line. Old behaviour
         // would have ignored the chain (neither hop touches two real
         // segments); the new tie semantics should give each segment
         // branching factor = 1.
         let mut project = Project::new("Chain".to_string(), None);
 
         let left_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Left".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false)],
@@ -2976,7 +3060,7 @@ mod tests {
             })
             .id;
         let right_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Right".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false)],
@@ -2984,9 +3068,9 @@ mod tests {
             })
             .id;
         // Two-hop reference chain. Stations 0,1,2 - only ref shots in this
-        // section, so all three are "free" w.r.t. real segments.
+        // line, so all three are "free" w.r.t. real segments.
         let chain_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Chain".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
@@ -3058,16 +3142,16 @@ mod tests {
         let mut project = Project::new("YAtAnchor".to_string(), None);
 
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
             .id;
-        let mut leaf_id = |name: &str| -> crate::models::SectionId {
+        let mut leaf_id = |name: &str| -> LineId {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some(name.to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(5.0, 90.0, false)],
@@ -3078,7 +3162,7 @@ mod tests {
         let left_id = leaf_id("Left");
         let right_id = leaf_id("Right");
 
-        // Each stub is a one-ref-shot section. Station 0 → trunk tip
+        // Each stub is a one-ref-shot line. Station 0 → trunk tip
         // (anchor), station 1 → leaf start (anchor). Both endpoints are
         // anchors, so the tie is the direct anchor-anchor variety. No
         // free station is shared, so the two stubs do NOT cross-tie the
@@ -3087,7 +3171,7 @@ mod tests {
         let trunk_tip = StationRef::new(trunk_id, 1);
         for leaf in [left_id, right_id] {
             let stub = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some("Stub".to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 90.0, true)],
@@ -3145,9 +3229,9 @@ mod tests {
         // share a segment_uf root via merges, so free_uf groups them into
         // one cluster, and the three attached anchors form a 3-clique.
         let mut project = Project::new("FreeHub".to_string(), None);
-        let mut real_seg = |name: &str| -> crate::models::SectionId {
+        let mut real_seg = |name: &str| -> LineId {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some(name.to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(5.0, 0.0, false)],
@@ -3160,10 +3244,10 @@ mod tests {
         let c_id = real_seg("C");
 
         let merged_at = chrono::Utc::now();
-        let mut spoke_ids: Vec<crate::models::SectionId> = Vec::new();
+        let mut spoke_ids: Vec<LineId> = Vec::new();
         for (label, leaf) in [("SpokeA", a_id), ("SpokeB", b_id), ("SpokeC", c_id)] {
             let spoke = project
-                .add_section(SectionData {
+                .add_line(LineData {
                     name: Some(label.to_string()),
                     color: "#000000".to_string(),
                     shots: vec![make_shot(1.0, 0.0, true)],
@@ -3210,10 +3294,10 @@ mod tests {
     #[test]
     fn zero_datum_renders_as_star_polygon() {
         let mut project = simple_project();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
@@ -3272,10 +3356,10 @@ mod tests {
         assert!(!svg.contains("p. "), "{svg}");
 
         // Add a zero datum at station 0 → labels appear.
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
         let svg = generate_svg_string(
             &project,
@@ -3301,7 +3385,7 @@ mod tests {
         // and triggers a label at the deepest station (250 m).
         let mut project = Project::new("PenDist".to_string(), None);
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(100.0, 0.0, false), make_shot(150.0, 0.0, false)],
@@ -3337,10 +3421,10 @@ mod tests {
         // Thin segments (below threshold) should NOT get labelled, even when
         // a zero datum exists.
         let mut project = simple_project();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
         // Default threshold = 2; simple_project has branching = 0 (no ref
         // shots), so the lone segment is thin → no label.
@@ -3388,7 +3472,7 @@ mod tests {
         // The label must therefore land east of station 1.
         let mut project = Project::new("EastShot".to_string(), None);
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(100.0, 90.0, false)],
@@ -3443,7 +3527,7 @@ mod tests {
         // Total path trunk.0 → trunk.1 → chain → far.0 → far.1 = 152.
         let mut project = Project::new("Chain".to_string(), None);
         let trunk_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(100.0, 0.0, false)],
@@ -3451,7 +3535,7 @@ mod tests {
             })
             .id;
         let far_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Far".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(50.0, 0.0, false)],
@@ -3459,7 +3543,7 @@ mod tests {
             })
             .id;
         let chain_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Chain".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
@@ -3503,11 +3587,11 @@ mod tests {
     // ---- Removed features ARE gone ----------------------------------------
 
     #[test]
-    fn no_section_color_in_default_output() {
+    fn no_line_color_in_default_output() {
         // Color is opt-in: with the default options (color_mode None) the
         // export stays a monochrome stick map.
         let mut project = Project::new("Colored".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Red".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false)],
@@ -3516,33 +3600,33 @@ mod tests {
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         assert!(
             !svg.contains("#ff0000"),
-            "section color must not bleed in by default: {svg}"
+            "line color must not bleed in by default: {svg}"
         );
     }
 
     #[test]
-    fn section_colors_only_for_raster_when_enabled() {
+    fn line_colors_only_for_raster_when_enabled() {
         let mut project = Project::new("Colored".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Red".to_string()),
             color: "#ff0000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false)],
             ..Default::default()
         });
 
-        // Raster (PNG) + colors on → the shot is drawn in the section color.
+        // Raster (PNG) + colors on → the shot is drawn in the line color.
         let png = generate_svg_string(
             &project,
             &ExportImageOptions {
                 format: ImageFormat::Png,
-                color_mode: ColorMode::Section,
+                color_mode: ColorMode::Line,
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(
             png.contains(r##"stroke="#ff0000""##),
-            "raster export with colors on should use the section color: {png}"
+            "raster export with colors on should use the line color: {png}"
         );
 
         // SVG stays monochrome even with colors on (the raster-only invariant).
@@ -3550,7 +3634,7 @@ mod tests {
             &project,
             &ExportImageOptions {
                 format: ImageFormat::Svg,
-                color_mode: ColorMode::Section,
+                color_mode: ColorMode::Line,
                 ..Default::default()
             },
         )
@@ -3564,10 +3648,10 @@ mod tests {
     #[test]
     fn penetration_labels_toggle_off_suppresses_labels() {
         let mut project = project_with_one_ref_separator();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
 
         // Baseline: labels on → the pen-distance group is present.
@@ -3612,7 +3696,7 @@ mod tests {
         // Normal - Reference - Normal, datum at station 0. Excluding the
         // reference tie strands everything past it; including it does not.
         let mut project = Project::new("RefRoute".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("S".to_string()),
             color: "#000000".to_string(),
             shots: vec![
@@ -3625,10 +3709,10 @@ mod tests {
             ],
             ..Default::default()
         });
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
 
         let labels = |include: bool| {
@@ -3669,7 +3753,7 @@ mod tests {
         // The commands pass the closure-adjusted solve here; the renderer must
         // draw from the supplied coordinates, not recompute the measured ones.
         let mut project = Project::new("Coords".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
@@ -3777,7 +3861,7 @@ mod tests {
     #[test]
     fn depth_color_mode_colors_raster_but_svg_stays_mono() {
         let mut project = Project::new("Depth".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
@@ -3818,7 +3902,7 @@ mod tests {
     fn distance_color_mode_greys_unreachable_raster_but_svg_stays_mono() {
         // No zero datum → every station is unreachable → shots render grey.
         let mut project = Project::new("Dist".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
@@ -3874,7 +3958,7 @@ mod tests {
         // the per-shot subdivision - not one flat color. Guards the subdivision
         // count, the midpoint-depth formula, and the per-segment coloring.
         let mut project = Project::new("DepthGrad".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -3916,13 +4000,13 @@ mod tests {
         // With a zero datum every station is reachable → shots get the gold→purple
         // ramp, none grey. Exercises the reachable `Some((a+b)/2)` avg + ramp path.
         let mut project = Project::new("DistReach".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("A".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
             ..Default::default()
         });
-        let sid = project.sections[0].id;
+        let sid = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
             .set_zero_datum(StationRef::new(sid, 0), gps)
@@ -3968,7 +4052,7 @@ mod tests {
     /// A straight 3-shot line: stations 0 (start), 1, 2 (interior), 3 (end).
     fn three_shot_line_project() -> Project {
         let mut project = Project::new("Line".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             color: "#000000".to_string(),
             shots: vec![
@@ -3985,8 +4069,10 @@ mod tests {
     fn station_labels_mark_all_stations() {
         // CHANGED semantics (#240 follow-up): station labels now cover every
         // point touched by a drawn shot (deg >= 1), including interior
-        // degree-2 stations 1 and 2 -- not just endpoints/junctions.
-        let project = three_shot_line_project();
+        // degree-2 stations 1 and 2 -- not just endpoints/junctions. The label
+        // is the Station ID, allocated 0..=3 along the line.
+        let mut project = three_shot_line_project();
+        project.ensure_station_identities();
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4033,7 +4119,7 @@ mod tests {
     /// The three-shot line with names on stations 0 and 2; 1 and 3 unnamed.
     fn named_line_project() -> Project {
         let mut project = three_shot_line_project();
-        let sid = project.sections[0].id;
+        let sid = project.lines[0].id;
         project
             .station_names
             .insert(StationRef::new(sid, 0).into(), "17".to_string());
@@ -4099,8 +4185,10 @@ mod tests {
 
     #[test]
     fn station_labels_win_when_both_label_options_are_set() {
+        let mut project = named_line_project();
+        project.ensure_station_identities();
         let svg = generate_svg_string(
-            &named_line_project(),
+            &project,
             &ExportImageOptions {
                 show_station_labels: true,
                 ..names_only()
@@ -4172,7 +4260,7 @@ mod tests {
     #[test]
     fn station_names_are_xml_escaped_and_parse() {
         let mut project = three_shot_line_project();
-        let sid = project.sections[0].id;
+        let sid = project.lines[0].id;
         project.station_names.insert(
             StationRef::new(sid, 1).into(),
             "a & b </text><script>x".to_string(),
@@ -4195,9 +4283,9 @@ mod tests {
         // no name, so the point is labelled - once - with Branch:0's name, at
         // Branch:0's own position (the representative's coordinates).
         let mut project = three_shot_line_project();
-        let main_id = project.sections[0].id;
+        let main_id = project.lines[0].id;
         let branch_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Branch".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
@@ -4220,6 +4308,91 @@ mod tests {
         assert!(
             x.abs() < 1.0 && y.abs() < 1.0,
             "the named member speaks for the point, at its own position: {svg}"
+        );
+    }
+
+    /// Main (the three-shot line, every station named by its index, `1`
+    /// renamed `Junction`) and a two-shot Branch named `0 1 2` whose start is
+    /// merged onto `main_at`; `branch_first` lists Branch first in the
+    /// project. Returns the project with every Station ID allocated.
+    fn junction_project(main_at: u32, branch_first: bool) -> Project {
+        let mut project = three_shot_line_project();
+        let main_id = project.lines[0].id;
+        let branch_id = project
+            .add_line(LineData {
+                name: Some("Branch".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(branch_id, 0).into(),
+            station_b: StationRef::new(main_id, main_at).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.ensure_station_identities();
+        project
+            .set_station_name(StationRef::new(main_id, 1), "Junction")
+            .unwrap();
+        if branch_first {
+            project.lines.reverse();
+            project.rebuild_line_index();
+        }
+        project
+    }
+
+    #[test]
+    fn a_merged_point_is_labelled_by_the_main_line_not_the_branch_start() {
+        // Branch:0 is merged onto Main:1 (`Junction`): the point shows
+        // `Junction` once, never Branch's `0`, whatever the line order.
+        for branch_first in [false, true] {
+            let project = junction_project(1, branch_first);
+            let svg = generate_svg_string(&project, &names_only()).unwrap();
+            assert_eq!(
+                sorted_texts(&svg),
+                ["0", "1", "2", "2", "3", "Junction"],
+                "Main 0 Junction 2 3 + Branch 1 2 (its 0 is the junction): {svg}"
+            );
+            // The Station IDs label draws the same representative's ID.
+            let stations = project.compute_station_coordinates();
+            let id_of = |line: usize, index: u32| {
+                let at = StationRef::new(project.lines[line].id, index);
+                stations
+                    .iter()
+                    .find(|s| s.station_ref == at)
+                    .unwrap()
+                    .id
+                    .to_string()
+            };
+            let (main, branch) = if branch_first { (1, 0) } else { (0, 1) };
+            let svg = generate_svg_string(
+                &project,
+                &ExportImageOptions {
+                    show_penetration_labels: false,
+                    show_station_labels: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let texts = sorted_texts(&svg);
+            assert!(texts.contains(&id_of(main, 1)), "{svg}");
+            assert!(!texts.contains(&id_of(branch, 0)), "{svg}");
+            assert_eq!(texts.len(), 6, "{svg}");
+        }
+    }
+
+    #[test]
+    fn a_merged_line_end_wins_over_the_other_line_start() {
+        // Branch:0 merged onto Main's last station `3`: neither is in the
+        // middle of its line, and Main's end is not a line start, so it
+        // labels the point even with Branch listed first.
+        let project = junction_project(3, true);
+        let svg = generate_svg_string(&project, &names_only()).unwrap();
+        assert_eq!(
+            sorted_texts(&svg),
+            ["0", "1", "2", "2", "3", "Junction"],
+            "{svg}"
         );
     }
 
@@ -4246,15 +4419,15 @@ mod tests {
         // follow-up labels EVERY station (deg >= 1), asserting on the raw
         // ">1</text>" substring is no longer a clean junction proxy: Branch's
         // OWN unmerged interior station also happens to carry local index 1
-        // (every section restarts numbering at 0) and renders its own,
+        // (every line restarts numbering at 0) and renders its own,
         // separate ">1</text>" near (0, 10). So the dedup regression this
         // test guards is checked by POSITION: the merged point must render
         // exactly once, at Main:1's coordinates, and must NOT also render
         // a second time at Branch:0's own (0, 0).
         let mut project = three_shot_line_project();
-        let main_id = project.sections[0].id;
+        let main_id = project.lines[0].id;
         let branch_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some("Branch".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
@@ -4266,6 +4439,8 @@ mod tests {
             station_b: StationRef::new(main_id, 1).into(),
             merged_at: chrono::Utc::now(),
         });
+        // Station IDs: Main 0..=3, Branch 4..=6.
+        project.ensure_station_identities();
 
         let svg = generate_svg_string(
             &project,
@@ -4301,8 +4476,8 @@ mod tests {
         assert!(
             labels
                 .iter()
-                .any(|(x, _, text)| text == "2" && x.abs() < 1.0),
-            "branch free endpoint (Branch:2, x≈0) should be labeled: {svg}"
+                .any(|(x, _, text)| text == "6" && x.abs() < 1.0),
+            "branch free endpoint (Branch:2, Station ID 6, x≈0) should be labeled: {svg}"
         );
     }
 
@@ -4337,7 +4512,7 @@ mod tests {
         // nothing is labeled. If that exclusion regressed, both ends of the
         // jump would read as degree-1 endpoints and a group would appear.
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Jump".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, true)],
@@ -4366,10 +4541,10 @@ mod tests {
         // the shared vector. (The other station-label tests have no zero datum,
         // so Pass 3 is inert and this interaction is otherwise untested.)
         let mut project = project_with_one_ref_separator();
-        let section_id = project.sections[0].id;
+        let line_id = project.lines[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
-            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .set_zero_datum(StationRef::new(line_id, 0), gps)
             .unwrap();
         let svg = generate_svg_string(
             &project,
@@ -4394,19 +4569,19 @@ mod tests {
         );
     }
 
-    // ---- Section names, station/shot comments, shot data (#240 follow-up) --
+    // ---- Line names, station/shot comments, shot data (#240 follow-up) --
 
     #[test]
-    fn section_names_present_with_custom_name_and_id_fallback() {
+    fn line_names_present_with_custom_name_and_id_fallback() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, false)],
             ..Default::default()
         });
         let unnamed_id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: None,
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 0.0, false)],
@@ -4416,46 +4591,46 @@ mod tests {
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
-                show_section_names: true,
+                show_line_names: true,
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(
-            svg.contains(r#"class="section-names""#),
-            "section-names group should be present: {svg}"
+            svg.contains(r#"class="line-names""#),
+            "line-names group should be present: {svg}"
         );
-        assert!(svg.contains(">Trunk</text>"), "named section: {svg}");
+        assert!(svg.contains(">Trunk</text>"), "named line: {svg}");
         assert!(
-            svg.contains(&format!(">Section {unnamed_id}</text>")),
-            "unnamed section falls back to \"Section {{id}}\": {svg}"
+            svg.contains(&format!(">Line {unnamed_id}</text>")),
+            "unnamed line falls back to \"Line {{id}}\": {svg}"
         );
     }
 
     #[test]
-    fn section_names_absent_when_disabled() {
+    fn line_names_absent_when_disabled() {
         let project = three_shot_line_project();
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
-                show_section_names: false,
+                show_line_names: false,
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(
-            !svg.contains(r#"class="section-names""#),
-            "section-names group should be absent when opted out: {svg}"
+            !svg.contains(r#"class="line-names""#),
+            "line-names group should be absent when opted out: {svg}"
         );
     }
 
     #[test]
-    fn section_names_skip_section_with_no_drawn_stations() {
-        // A section whose only shot is a reference (jump) has zero drawn
+    fn line_names_skip_line_with_no_drawn_stations() {
+        // A line whose only shot is a reference (jump) has zero drawn
         // stations and must be skipped entirely, not even via the
-        // "Section {id}" fallback.
+        // "Line {id}" fallback.
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Jump".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, true)],
@@ -4464,48 +4639,48 @@ mod tests {
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
-                show_section_names: true,
+                show_line_names: true,
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(
-            !svg.contains(r#"class="section-names""#),
-            "reference-only section should produce no section-name label: {svg}"
+            !svg.contains(r#"class="line-names""#),
+            "reference-only line should produce no line-name label: {svg}"
         );
     }
 
     #[test]
-    fn section_names_stay_black_regardless_of_color_mode() {
+    fn line_names_stay_black_regardless_of_color_mode() {
         let project = three_shot_line_project();
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
-                show_section_names: true,
+                show_line_names: true,
                 color_mode: ColorMode::Depth,
                 ..Default::default()
             },
         )
         .unwrap();
         let group_start = svg
-            .find(r#"class="section-names""#)
-            .expect("section-names group should be present");
+            .find(r#"class="line-names""#)
+            .expect("line-names group should be present");
         let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
         let group_tag = &svg[..group_tag_end];
         assert!(
             group_tag.contains(r##"fill="#000000""##),
-            "section names should stay black regardless of color_mode: {svg}"
+            "line names should stay black regardless of color_mode: {svg}"
         );
     }
 
     #[test]
-    fn section_names_share_collision_space_with_station_labels() {
+    fn line_names_share_collision_space_with_station_labels() {
         let project = three_shot_line_project();
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
                 show_station_labels: true,
-                show_section_names: true,
+                show_line_names: true,
                 ..Default::default()
             },
         )
@@ -4515,19 +4690,18 @@ mod tests {
             "station labels should render: {svg}"
         );
         assert!(
-            svg.contains(r#"class="section-names""#),
-            "section names should render alongside station labels: {svg}"
+            svg.contains(r#"class="line-names""#),
+            "line names should render alongside station labels: {svg}"
         );
     }
 
     #[test]
     fn station_comments_present_when_seeded() {
         let mut project = three_shot_line_project();
-        let section_id = project.sections[0].id;
-        project.station_comments.insert(
-            StationRef::new(section_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        let line_id = project.lines[0].id;
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4545,7 +4719,7 @@ mod tests {
 
     #[test]
     fn user_text_labels_are_xml_escaped_and_parse() {
-        // Section names, station comments, and shot comments are user free-text
+        // Line names, station comments, and shot comments are user free-text
         // written into SVG <text>. A raw '&' / '<' / '>' would produce invalid
         // XML (resvg/svg2pdf fail on the PNG/PDF paths) or inject sibling markup
         // into the raw .svg. Verify each sink in isolation (so the three labels
@@ -4553,9 +4727,9 @@ mod tests {
         // injected element survives, and the whole document still parses.
         let parses = |svg: &str| Tree::from_str(svg, &Options::default()).is_ok();
 
-        // Section name.
+        // Line name.
         let mut p = Project::new("Test".to_string(), None);
-        p.add_section(SectionData {
+        p.add_line(LineData {
             name: Some("Sump & <Gallery>".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, false)],
@@ -4564,20 +4738,20 @@ mod tests {
         let svg = generate_svg_string(
             &p,
             &ExportImageOptions {
-                show_section_names: true,
+                show_line_names: true,
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(
             svg.contains("Sump &amp; &lt;Gallery&gt;"),
-            "section name must be XML-escaped: {svg}"
+            "line name must be XML-escaped: {svg}"
         );
-        assert!(parses(&svg), "section-name SVG must parse: {svg}");
+        assert!(parses(&svg), "line-name SVG must parse: {svg}");
 
         // Station comment carrying a full injection payload.
         let mut p = three_shot_line_project();
-        let sid = p.sections[0].id;
+        let sid = p.lines[0].id;
         p.station_comments.insert(
             StationRef::new(sid, 1).into(),
             "a & b </text><script>x".to_string(),
@@ -4602,7 +4776,7 @@ mod tests {
 
         // Shot comment.
         let mut p = Project::new("Test".to_string(), None);
-        p.add_section(SectionData {
+        p.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -4630,7 +4804,7 @@ mod tests {
         // document still parses; the legal tab (0x09), a Unicode noncharacter that
         // XML 1.0 DOES permit (U+FDD0), and the surrounding letters survive.
         let mut p = Project::new("Test".to_string(), None);
-        p.add_section(SectionData {
+        p.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -4666,11 +4840,10 @@ mod tests {
     #[test]
     fn station_comments_absent_when_disabled() {
         let mut project = three_shot_line_project();
-        let section_id = project.sections[0].id;
-        project.station_comments.insert(
-            StationRef::new(section_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        let line_id = project.lines[0].id;
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4710,18 +4883,17 @@ mod tests {
         // shot must not render: the station never reaches deg >= 1 (the same
         // "on drawn geometry" guard as station labels).
         let mut project = Project::new("Jump".to_string(), None);
-        let section_id = project
-            .add_section(SectionData {
+        let line_id = project
+            .add_line(LineData {
                 name: Some("Jump".to_string()),
                 color: "#000000".to_string(),
                 shots: vec![make_shot(10.0, 90.0, true)],
                 ..Default::default()
             })
             .id;
-        project.station_comments.insert(
-            StationRef::new(section_id, 0).into(),
-            "orphaned".to_string(),
-        );
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 0).into(), "orphaned".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4739,11 +4911,10 @@ mod tests {
     #[test]
     fn station_comments_stay_black_regardless_of_color_mode() {
         let mut project = three_shot_line_project();
-        let section_id = project.sections[0].id;
-        project.station_comments.insert(
-            StationRef::new(section_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        let line_id = project.lines[0].id;
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4767,11 +4938,10 @@ mod tests {
     #[test]
     fn station_comments_share_collision_space_with_station_labels() {
         let mut project = three_shot_line_project();
-        let section_id = project.sections[0].id;
-        project.station_comments.insert(
-            StationRef::new(section_id, 1).into(),
-            "wet crawl".to_string(),
-        );
+        let line_id = project.lines[0].id;
+        project
+            .station_comments
+            .insert(StationRef::new(line_id, 1).into(), "wet crawl".to_string());
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4798,7 +4968,7 @@ mod tests {
         // pins the label to azimuth_IN specifically -- it can't pass on
         // azimuth_out or the wraparound average_azimuth() (~48.7) the geometry
         // solver uses elsewhere.
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -4850,7 +5020,7 @@ mod tests {
     #[test]
     fn shot_data_excludes_reference_shots() {
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Jump".to_string()),
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, true)],
@@ -4918,7 +5088,7 @@ mod tests {
     #[test]
     fn shot_comments_present_when_seeded() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -4945,7 +5115,7 @@ mod tests {
     #[test]
     fn shot_comments_absent_when_disabled() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -4988,7 +5158,7 @@ mod tests {
     #[test]
     fn shot_comments_exclude_reference_shots() {
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Jump".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -5014,7 +5184,7 @@ mod tests {
     #[test]
     fn shot_comments_stay_black_regardless_of_color_mode() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
@@ -5046,7 +5216,7 @@ mod tests {
     #[test]
     fn shot_comments_share_collision_space_with_shot_data() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {

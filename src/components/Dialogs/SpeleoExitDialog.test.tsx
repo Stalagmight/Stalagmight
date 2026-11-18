@@ -11,7 +11,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { askSpeleoExit, resetSpeleoExitPromptForTests, useSpeleoExitPrompt } from '../../utils/speleoExit';
 
-const ok = { success: true, warnings: [], error: null, section_ids: [] };
+const ok = { success: true, warnings: [], error: null, line_ids: [] };
 const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   permission: 'READ_AND_WRITE', editState: 'editing', lockHolder: null, lockedByOther: false,
   hasUnpushedEdits: true, unwound: false, undoMode: 'full', remoteState: 'up_to_date',

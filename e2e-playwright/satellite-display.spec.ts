@@ -302,7 +302,7 @@ test.describe('Satellite Display', () => {
       // Satellite should be near the beginning (low index = rendered first = below)
       expect(satelliteIndex).toBeGreaterThanOrEqual(0);
       // If there are survey layers, satellite should be below them
-      const surveyLayerIndex = layerOrder.findIndex((id: string) => id.includes('survey') || id.includes('section') || id.includes('shot'));
+      const surveyLayerIndex = layerOrder.findIndex((id: string) => id.includes('survey') || id.includes('line') || id.includes('shot'));
       if (surveyLayerIndex >= 0) {
         expect(satelliteIndex).toBeLessThan(surveyLayerIndex);
       }
@@ -311,7 +311,7 @@ test.describe('Satellite Display', () => {
 
   /**
    * Cache Status tests require navigating back to GlobalView and opening Settings.
-   * These tests are marked .fixme because the mock project always has sections and
+   * These tests are marked .fixme because the mock project always has lines and
    * triggers the unsaved-changes dialog with timing issues. The cache functionality
    * is tested in e2e-playwright/ui-components.spec.ts via Settings tests from GlobalView.
    */

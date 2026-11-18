@@ -47,10 +47,10 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
   it('re-syncs the view AND shows the read-only notice on an EDIT_DISABLED rejection', async () => {
     invokeIpcMock.mockResolvedValue({
       success: false,
-      error: `${EDIT_DISABLED}: Move section is disabled: this SpeleoDB project is open read-only.`,
+      error: `${EDIT_DISABLED}: Move line is disabled: this SpeleoDB project is open read-only.`,
     });
 
-    const result = await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+    const result = await useProjectStore.getState().moveLine(1, { x: 1, y: 2, z: 0 });
 
     expect(result.success).toBe(false);
     // (a) anti-"vanishing shots": a rejected edit re-syncs to backend truth.
@@ -63,7 +63,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     useUIStore.setState({ activeDialog: null } as never);
     invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
 
-    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+    await useProjectStore.getState().moveLine(1, { x: 1, y: 2, z: 0 });
 
     expect(refreshProjectState).toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
@@ -73,7 +73,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     useUIStore.setState({ activeDialog: 'context-menu' } as never);
     invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
 
-    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+    await useProjectStore.getState().moveLine(1, { x: 1, y: 2, z: 0 });
 
     expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
   });
@@ -82,7 +82,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     useUIStore.setState({ activeDialog: 'edit-shot' } as never);
     invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
 
-    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+    await useProjectStore.getState().moveLine(1, { x: 1, y: 2, z: 0 });
 
     expect(refreshProjectState).toHaveBeenCalled();
     expect(showToast).not.toHaveBeenCalled();
@@ -92,7 +92,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     invokeIpcMock.mockRejectedValue(new Error('transport down'));
 
     await expect(
-      useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 })
+      useProjectStore.getState().moveLine(1, { x: 1, y: 2, z: 0 })
     ).rejects.toThrow('transport down');
 
     // The throw must still re-sync (so a committed drag preview can't be stranded),

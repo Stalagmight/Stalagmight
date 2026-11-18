@@ -1634,7 +1634,7 @@ fn test_shortcut_new_actions_defaults() {
     // Verify new actions have defaults
     assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
     assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
-    assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
+    assert_eq!(config.toggle_line_labels, vec!["Ctrl+L".to_string()]);
     assert_eq!(
         config.zoom_in,
         vec!["Equal".to_string(), "Plus".to_string()]
@@ -2821,62 +2821,62 @@ fn test_zoom_speed_write_path_clamps_rather_than_migrating() {
 }
 
 // ========================================================================
-// Config.next_section_color Tests
+// Config.next_line_color Tests
 // ========================================================================
 
 #[test]
-fn test_next_section_color_returns_first_unused() {
+fn test_next_line_color_returns_first_unused() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
+    config.line_colors.palette = vec![
         "#ff0000".to_string(),
         "#00ff00".to_string(),
         "#0000ff".to_string(),
     ];
     let used = vec!["#ff0000".to_string()];
-    assert_eq!(config.next_section_color(&used), "#00ff00");
+    assert_eq!(config.next_line_color(&used), "#00ff00");
 }
 
 #[test]
-fn test_next_section_color_skips_multiple_used() {
+fn test_next_line_color_skips_multiple_used() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
+    config.line_colors.palette = vec![
         "#ff0000".to_string(),
         "#00ff00".to_string(),
         "#0000ff".to_string(),
     ];
     let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
-    assert_eq!(config.next_section_color(&used), "#0000ff");
+    assert_eq!(config.next_line_color(&used), "#0000ff");
 }
 
 #[test]
-fn test_next_section_color_all_used_wraps_to_first() {
+fn test_next_line_color_all_used_wraps_to_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    config.line_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     // All used → returns first color
-    assert_eq!(config.next_section_color(&used), "#ff0000");
+    assert_eq!(config.next_line_color(&used), "#ff0000");
 }
 
 #[test]
-fn test_next_section_color_empty_palette_returns_hardcoded() {
+fn test_next_line_color_empty_palette_returns_hardcoded() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![];
-    assert_eq!(config.next_section_color(&[]), "#4ecdc4");
+    config.line_colors.palette = vec![];
+    assert_eq!(config.next_line_color(&[]), "#4ecdc4");
 }
 
 #[test]
-fn test_next_section_color_no_used_returns_first() {
+fn test_next_line_color_no_used_returns_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#aabbcc".to_string(), "#ddeeff".to_string()];
-    assert_eq!(config.next_section_color(&[]), "#aabbcc");
+    config.line_colors.palette = vec!["#aabbcc".to_string(), "#ddeeff".to_string()];
+    assert_eq!(config.next_line_color(&[]), "#aabbcc");
 }
 
 #[test]
-fn test_next_section_color_used_colors_not_in_palette_ignored() {
+fn test_next_line_color_used_colors_not_in_palette_ignored() {
     let mut config = Config::default();
-    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    config.line_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#999999".to_string()]; // not in palette
-    assert_eq!(config.next_section_color(&used), "#ff0000");
+    assert_eq!(config.next_line_color(&used), "#ff0000");
 }
 
 // ========================================================================
@@ -2956,14 +2956,14 @@ fn test_syntactic_highlighting_normalize_drops_bad_hex() {
     roles.insert("station".to_string(), "#36b96a".to_string()); // valid
     roles.insert("shot".to_string(), "0070dd".to_string()); // missing '#'
     roles.insert("segment".to_string(), "#xyz123".to_string()); // non-hex
-    roles.insert("section".to_string(), "#A335EE".to_string()); // valid uppercase
+    roles.insert("line".to_string(), "#A335EE".to_string()); // valid uppercase
     config.overrides.insert("default".to_string(), roles);
 
     config.normalize();
 
     let default_roles = &config.overrides["default"];
     assert!(default_roles.contains_key("station"));
-    assert!(default_roles.contains_key("section"));
+    assert!(default_roles.contains_key("line"));
     assert!(!default_roles.contains_key("shot"));
     assert!(!default_roles.contains_key("segment"));
 }
@@ -3903,10 +3903,11 @@ fn test_a_config_file_without_the_shot_seen_key_gets_the_credit_columns_hidden()
     );
     std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
 
+    // The file's `section_id` column key reads back in this build's vocabulary.
     let loaded = Config::load_from_path(&path).unwrap().panels;
     assert_eq!(
         loaded.data_table_shot_hidden_columns,
-        vec!["section_id", "surveyors", "explorers", "survey_date"]
+        vec!["line_id", "surveyors", "explorers", "survey_date"]
     );
     assert_eq!(loaded.data_table_shot_columns_seen, CREDIT_COLUMNS);
 }
@@ -3982,5 +3983,198 @@ fn test_load_normalizes_a_hand_edited_people_table() {
             name: "Ann".to_string(),
             email: None
         }]
+    );
+}
+
+// ========================================================================
+// Section -> Line rename: `config.toml` keeps the pre-rename names
+// ========================================================================
+
+/// The names a config file written before the Section -> Line rename uses,
+/// spelled out here rather than taken from `toml_names`, so a typo there fails.
+const PRE_RENAME_KEYS: [(&str, &str); 8] = [
+    ("", "section_colors"),
+    ("shortcuts", "toggle_section_labels"),
+    ("panels", "new_section_column_order"),
+    ("panels", "new_section_hidden_columns"),
+    ("panels", "new_section_column_widths"),
+    ("panels", "edit_section_column_order"),
+    ("panels", "edit_section_hidden_columns"),
+    ("panels", "edit_section_column_widths"),
+];
+
+fn toml_table<'a>(document: &'a toml::Value, table: &str) -> &'a toml::value::Table {
+    let root = document.as_table().unwrap();
+    if table.is_empty() {
+        root
+    } else {
+        root[table].as_table().unwrap()
+    }
+}
+
+fn strings(values: &[&str]) -> toml::Value {
+    toml::Value::Array(
+        values
+            .iter()
+            .map(|v| toml::Value::String((*v).to_string()))
+            .collect(),
+    )
+}
+
+#[test]
+fn test_a_config_file_from_before_the_line_rename_loads_every_renamed_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    // What a pre-rename build wrote, built by hand: every renamed key under its
+    // old name, the old column key in the layouts, the old highlighting role.
+    let mut document = toml::Value::try_from(Config::default()).unwrap();
+    let root = document.as_table_mut().unwrap();
+    assert!(root.remove("line_colors").is_some());
+    root.insert(
+        "section_colors".to_string(),
+        toml::Value::try_from(HashMap::from([("palette", vec!["#123456", "#abcdef"])])).unwrap(),
+    );
+    let shortcuts = root["shortcuts"].as_table_mut().unwrap();
+    assert!(shortcuts.remove("toggle_line_labels").is_some());
+    shortcuts.insert("toggle_section_labels".to_string(), strings(&["Ctrl+K"]));
+    let panels = root["panels"].as_table_mut().unwrap();
+    for field in [
+        "new_line_column_order",
+        "new_line_hidden_columns",
+        "new_line_column_widths",
+        "edit_line_column_order",
+        "edit_line_hidden_columns",
+        "edit_line_column_widths",
+    ] {
+        assert!(panels.remove(field).is_some(), "{field}");
+    }
+    panels.insert(
+        "new_section_column_order".to_string(),
+        strings(&["length", "section_id"]),
+    );
+    panels.insert("new_section_hidden_columns".to_string(), strings(&["up"]));
+    panels.insert(
+        "new_section_column_widths".to_string(),
+        toml::Value::try_from(HashMap::from([("section_id", 70)])).unwrap(),
+    );
+    panels.insert(
+        "edit_section_column_order".to_string(),
+        strings(&["comment"]),
+    );
+    panels.insert(
+        "edit_section_hidden_columns".to_string(),
+        strings(&["down"]),
+    );
+    panels.insert(
+        "edit_section_column_widths".to_string(),
+        toml::Value::try_from(HashMap::from([("length", 90)])).unwrap(),
+    );
+    panels.insert(
+        "data_table_shot_hidden_columns".to_string(),
+        strings(&["section_id", "shot_id"]),
+    );
+    root["syntactic_highlighting"]
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            "overrides".to_string(),
+            toml::Value::try_from(HashMap::from([(
+                "default",
+                HashMap::from([("section", "#A335EE"), ("station", "#36b96a")]),
+            )]))
+            .unwrap(),
+        );
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.line_colors.palette, vec!["#123456", "#abcdef"]);
+    assert_eq!(loaded.shortcuts.toggle_line_labels, vec!["Ctrl+K"]);
+    let panels = &loaded.panels;
+    assert_eq!(panels.new_line_column_order, vec!["length", "line_id"]);
+    assert_eq!(panels.new_line_hidden_columns, vec!["up"]);
+    assert_eq!(
+        panels.new_line_column_widths,
+        std::collections::BTreeMap::from([("line_id".to_string(), 70)])
+    );
+    assert_eq!(panels.edit_line_column_order, vec!["comment"]);
+    assert_eq!(panels.edit_line_hidden_columns, vec!["down"]);
+    assert_eq!(
+        panels.edit_line_column_widths,
+        std::collections::BTreeMap::from([("length".to_string(), 90)])
+    );
+    assert!(panels
+        .data_table_shot_hidden_columns
+        .starts_with(&["line_id".to_string(), "shot_id".to_string()]));
+    let roles = &loaded.syntactic_highlighting.overrides["default"];
+    assert_eq!(roles.get("line").map(String::as_str), Some("#A335EE"));
+    assert!(!roles.contains_key("section"));
+}
+
+#[test]
+fn test_a_save_writes_the_pre_rename_names_and_reads_them_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.line_colors.palette = vec!["#010203".to_string()];
+    config.shortcuts.toggle_line_labels = vec!["Ctrl+J".to_string()];
+    config.panels.new_line_column_order = vec!["line_id".to_string(), "length".to_string()];
+    config.panels.edit_line_column_widths =
+        std::collections::BTreeMap::from([("line_id".to_string(), 64)]);
+    config.syntactic_highlighting.overrides.insert(
+        "default".to_string(),
+        HashMap::from([("line".to_string(), "#a335ee".to_string())]),
+    );
+    config.save_to_path(&path).unwrap();
+
+    // An older build requires `section_colors`, so a file without it would
+    // reset every setting there: the file keeps the old vocabulary throughout.
+    let written: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for (table, key) in PRE_RENAME_KEYS {
+        let table = toml_table(&written, table);
+        assert!(table.contains_key(key), "{key} must be written");
+        assert!(
+            !table.contains_key(&key.replace("section", "line")),
+            "{key} must not be written under its new name"
+        );
+    }
+    let panels = toml_table(&written, "panels");
+    assert_eq!(
+        panels["new_section_column_order"],
+        strings(&["section_id", "length"])
+    );
+    assert_eq!(
+        panels["data_table_shot_hidden_columns"].as_array().unwrap()[0],
+        toml::Value::String("section_id".to_string())
+    );
+    assert!(panels["edit_section_column_widths"]
+        .as_table()
+        .unwrap()
+        .contains_key("section_id"));
+    let roles = written["syntactic_highlighting"]["overrides"]["default"]
+        .as_table()
+        .unwrap();
+    assert!(roles.contains_key("section") && !roles.contains_key("line"));
+
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.line_colors.palette, config.line_colors.palette);
+    assert_eq!(
+        loaded.shortcuts.toggle_line_labels,
+        config.shortcuts.toggle_line_labels
+    );
+    assert_eq!(
+        loaded.panels.new_line_column_order,
+        config.panels.new_line_column_order
+    );
+    assert_eq!(
+        loaded.panels.edit_line_column_widths,
+        config.panels.edit_line_column_widths
+    );
+    assert_eq!(
+        loaded.panels.data_table_shot_hidden_columns,
+        config.panels.data_table_shot_hidden_columns
+    );
+    assert_eq!(
+        loaded.syntactic_highlighting.overrides,
+        config.syntactic_highlighting.overrides
     );
 }

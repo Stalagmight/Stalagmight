@@ -1,6 +1,6 @@
 /**
  * #674: the post-add sequence reuses the existing import tail - dirty via
- * saveAfterImport, orphan placement keyed on `section_ids`, receipt via
+ * saveAfterImport, orphan placement keyed on `line_ids`, receipt via
  * finishImportWithoutOrphanSuggestions - and drops that tail when the project it
  * was issued against is no longer the open one.
  */
@@ -34,7 +34,7 @@ beforeEach(() => {
 
 describe('runAddProjectFile', () => {
   it('stops at a failed command: no save, no orphan lookup, context dropped', async () => {
-    addProjectFile.mockResolvedValue({ success: false, section_ids: [] });
+    addProjectFile.mockResolvedValue({ success: false, line_ids: [] });
     await runAddProjectFile('/cave/a.stalx');
     expect(saveAfterImport).not.toHaveBeenCalled();
     expect(invokeIpc).not.toHaveBeenCalled();
@@ -42,13 +42,13 @@ describe('runAddProjectFile', () => {
     expect(useUIStore.getState().importContext).toBeNull();
   });
 
-  it('opens orphan placement with the receipt when suggestions exist for the new section ids', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7, 8], import_receipt: receipt });
-    invokeIpc.mockResolvedValue([{ orphanSectionId: 7 }]);
+  it('opens orphan placement with the receipt when suggestions exist for the new line ids', async () => {
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7, 8], import_receipt: receipt });
+    invokeIpc.mockResolvedValue([{ orphanLineId: 7 }]);
     await runAddProjectFile('/cave/a.stalx');
     expect(invokeIpc).toHaveBeenCalledWith(
       'suggest_orphan_placements',
-      { newlyImportedSectionIds: [7, 8] },
+      { newlyImportedLineIds: [7, 8] },
       expect.anything(),
     );
     expect(useUIStore.getState().activeDialog).toBe('orphan-placement');
@@ -57,21 +57,21 @@ describe('runAddProjectFile', () => {
   });
 
   it('finishes with the receipt when there are no suggestions', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7], import_receipt: receipt });
     invokeIpc.mockResolvedValue([]);
     await runAddProjectFile('/cave/a.stalx');
     expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [7], receipt, expect.any(Function));
   });
 
-  it('skips the orphan lookup when the add created no sections', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [], import_receipt: receipt });
+  it('skips the orphan lookup when the add created no lines', async () => {
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [], import_receipt: receipt });
     await runAddProjectFile('/cave/a.stalx');
     expect(invokeIpc).not.toHaveBeenCalled();
     expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [], receipt, expect.any(Function));
   });
 
   it('a failed orphan lookup is non-fatal and still finishes', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7], import_receipt: receipt });
     invokeIpc.mockRejectedValue(new Error('boom'));
     await runAddProjectFile('/cave/a.stalx');
     expect(finish).toHaveBeenCalledTimes(1);
@@ -87,7 +87,7 @@ describe('runAddProjectFile', () => {
   });
 
   it('stops after reporting a failed deferred save, like every other import route', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt, warnings: [] });
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7], import_receipt: receipt, warnings: [] });
     finalizeDeferred.mockReturnValue(true);
     await runAddProjectFile('/cave/a.stalx');
     expect(finalizeDeferred).toHaveBeenCalledWith([], 'add-or-open-project', expect.anything(), receipt);
@@ -106,7 +106,7 @@ describe('runAddProjectFile', () => {
   it('drops the tail when the project changed while the add ran', async () => {
     addProjectFile.mockImplementation(async () => {
       useProjectStore.setState({ project: { created_at: 'cave-b' } } as never);
-      return { success: true, section_ids: [7], import_receipt: receipt };
+      return { success: true, line_ids: [7], import_receipt: receipt };
     });
     await runAddProjectFile('/cave/a.stalx');
     expect(saveAfterImport).not.toHaveBeenCalled();
@@ -118,10 +118,10 @@ describe('runAddProjectFile', () => {
   /** Injection: drop the `stillOpen()` check after the orphan lookup and the
    *  placement dialog opens over the replacement project. */
   it('drops orphan placement when the project changed during the lookup', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7], import_receipt: receipt });
     invokeIpc.mockImplementation(async () => {
       useProjectStore.setState({ project: null } as never);
-      return [{ orphanSectionId: 7 }];
+      return [{ orphanLineId: 7 }];
     });
     await runAddProjectFile('/cave/a.stalx');
     expect(useUIStore.getState().activeDialog).toBeNull();
@@ -132,7 +132,7 @@ describe('runAddProjectFile', () => {
   /** The final helper awaits its own count IPC; the add hands it the identity
    *  predicate so a switch during THAT await drops the completion too. */
   it('hands the finish helper a predicate that goes false when the project changes', async () => {
-    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    addProjectFile.mockResolvedValue({ success: true, line_ids: [7], import_receipt: receipt });
     invokeIpc.mockResolvedValue([]);
     await runAddProjectFile('/cave/a.stalx');
     const stillCurrent = finish.mock.calls[0]?.[4] as () => boolean;

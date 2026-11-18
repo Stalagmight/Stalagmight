@@ -70,7 +70,7 @@ describe('credit columns in the columns menu', () => {
   it('are hidden by default and can be shown', async () => {
     vi.useFakeTimers();
     try {
-      render(<DataTable sections={[]} />);
+      render(<DataTable lines={[]} />);
       fireEvent.click(screen.getByTestId('data-table-columns-menu'));
       for (const key of ['surveyors', 'explorers', 'survey_date']) {
         expect(screen.getByTestId(`col-vis-${key}`)).not.toBeChecked();
@@ -82,7 +82,7 @@ describe('credit columns in the columns menu', () => {
       });
       const saves = invokeIpcMock.mock.calls.filter(([command]) => command === 'update_data_table_view');
       expect(saves[saves.length - 1]?.[1]).toMatchObject({
-        hiddenColumns: ['explorers', 'section_id', 'shot_id', 'survey_date'],
+        hiddenColumns: ['explorers', 'line_id', 'shot_id', 'survey_date'],
       });
     } finally {
       vi.useRealTimers();
@@ -127,7 +127,7 @@ describe('credit cells in a bulk edit', () => {
     expect(commands).toEqual([
       { type: 'edit_shot_credit', targets: { type: 'shots', shots: [[7, 11]] }, edit: { set_date: '2026-03-02' } },
       { type: 'edit_shot_credit', targets: { type: 'shots', shots: [[7, 12]] }, edit: { set_explorers: [{ name: 'Bo' }] } },
-      { type: 'update_shot', section_id: 7, shot_id: 12, updates: { comment: 'sump' } },
+      { type: 'update_shot', line_id: 7, shot_id: 12, updates: { comment: 'sump' } },
     ]);
   });
 

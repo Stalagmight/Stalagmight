@@ -7,14 +7,17 @@ import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotImpact } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 
 export default function DeleteShotChoiceDialog() {
   const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
   const { deleteShot } = useProjectStore();
+  const labels = useIdentityLabels();
 
-  const sectionId = dialogData.sectionId as number | undefined;
+  const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
-  const sectionName = dialogData.sectionName as string | undefined;
+  const lineName = dialogData.lineName as string | undefined;
+  const shotLabel = lineId !== undefined && shotId !== undefined ? labels.shot(lineId, shotId, true) : null;
 
   const [impact, setImpact] = useState<DeleteShotImpact | null>(null);
   const [impactError, setImpactError] = useState<string | null>(null);
@@ -24,8 +27,8 @@ export default function DeleteShotChoiceDialog() {
   const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
 
   useEffect(() => {
-    if (sectionId !== undefined && shotId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
+    if (lineId !== undefined && shotId !== undefined) {
+      invokeIpc<DeleteShotImpact>('preview_delete_shot', { lineId, shotId }, { purpose: 'preview shot deletion' })
         .then((result) => {
           setImpact(result);
           setImpactError(null);
@@ -38,24 +41,24 @@ export default function DeleteShotChoiceDialog() {
       setImpact(null);
       setImpactError(null);
     }
-  }, [sectionId, shotId]);
+  }, [lineId, shotId]);
 
   const handleSplit = () => {
-    if (sectionId === undefined || shotId === undefined) return;
+    if (lineId === undefined || shotId === undefined) return;
     setSource('dialog');
-    openDialog('split-section', {
-      sectionId,
+    openDialog('split-line', {
+      lineId,
       shotId,
-      sectionName,
+      lineName,
     });
   };
 
   const handleShift = async () => {
-    if (sectionId === undefined || shotId === undefined) return;
+    if (lineId === undefined || shotId === undefined) return;
     setIsLoading(true);
     setError(null);
     try {
-      const result = await deleteShot(sectionId, shotId);
+      const result = await deleteShot(lineId, shotId);
       if (result.success) {
         clearSelection();
         trackDialogComplete('delete-shot-choice');
@@ -74,7 +77,8 @@ export default function DeleteShotChoiceDialog() {
     <DialogWrapper title="Delete Shot" onClose={isLoading ? () => {} : closeDialog} size="md" data-testid="delete-shot-choice-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary">
-          This shot is in the middle of the section. Choose whether to split the section or shift geometry.
+          {shotLabel ? `Shot ${shotLabel} is` : 'This shot is'} in the middle of the line. Choose
+          whether to split the line or shift geometry.
         </p>
 
         {error && (
@@ -112,7 +116,7 @@ export default function DeleteShotChoiceDialog() {
             Cancel
           </Button>
           <Button onClick={handleSplit} disabled={isLoading} data-testid="delete-shot-choice-split">
-            Split Section
+            Split Line
           </Button>
           <Button
             data-testid="delete-shot-choice-shift"

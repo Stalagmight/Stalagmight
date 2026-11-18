@@ -1,22 +1,22 @@
 //! Keeping the least-squares gauge on one physical station across the edits
-//! that move stations between sections (Split Section Here, Combine Sections).
+//! that move stations between lines (Split Line Here, Combine Lines).
 //!
-//! The gauge is named by a pair of shots ([`Section::gauge_shot_uuid`], read
+//! The gauge is named by a pair of shots ([`Line::gauge_shot_uuid`], read
 //! by `Project::gauge_index`). An edit that moves the gauge station's shots
-//! into another section, or cuts the neighbour shot off, would leave a pair
+//! into another line, or cuts the neighbour shot off, would leave a pair
 //! that names a different station, or none, and the adjusted component would
 //! translate by the adjustment residual. [`gauge_pair_for_station`] is the
 //! inverse of `gauge_index`: the pair that names a given station.
 //!
-//! A section's own gauge is not the whole story. A datum-less component is
-//! held fixed at the gauge station of its LOWEST-ID section
-//! (`default_anchor_for_component`), and these edits change which sections a
-//! component holds: a combine retires a section id, a split or a
+//! A line's own gauge is not the whole story. A datum-less component is
+//! held fixed at the gauge station of its LOWEST-ID line
+//! (`default_anchor_for_component`), and these edits change which lines a
+//! component holds: a combine retires a line id, a split or a
 //! delete-and-split mints one. So every such edit brackets itself with
 //! [`Project::hold_component_gauges`] and [`Project::restore_component_gauges`],
 //! which record the physical station each touched component was held at and
-//! put it back on the section that anchors the component afterwards. When
-//! that section does not hold the station (a third section with an id
+//! put it back on the line that anchors the component afterwards. When
+//! that line does not hold the station (a third line with an id
 //! between the two combined ones, or a split whose anchor station went to the
 //! new half while the halves stay connected), the station is recorded in
 //! [`Project::held_gauges`] instead, which `default_anchor_for_component`
@@ -26,30 +26,30 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Section, SectionId, StationRef};
+use crate::{Line, LineId, StationRef};
 
 use super::Project;
 
-/// A station named by the shots it touches in `section_id`: the
-/// least-squares gauge an edit kept for a component whose anchoring section
+/// A station named by the shots it touches in `line_id`: the
+/// least-squares gauge an edit kept for a component whose anchoring line
 /// does not hold it (see the module doc and [`Project::held_gauges`]).
 ///
-/// The same naming as a section's gauge pair: with `neighbour` in the section
+/// The same naming as a line's gauge pair: with `neighbour` in the line
 /// the station is the end of `shot` facing away from it, which a reverse
 /// carries intact; without it, `end` says which end of `shot` (its start or
 /// its end) as the record stood when `parity` (the shot's record parity,
 /// [`Project::shot_record_parity`]) was read, and a reverse of the record since
 /// flips it.
 ///
-/// Scoped by section, like a station key: a file saved before shot uuids were
-/// unique across the project can hold one uuid in two sections, and only the
-/// section says which copy is meant (the load's rename follows it through
+/// Scoped by line, like a station key: a file saved before shot uuids were
+/// unique across the project can hold one uuid in two lines, and only the
+/// line says which copy is meant (the load's rename follows it through
 /// `apply_shot_uuid_remap`). It also makes a lookup one probe of the shot uuid
-/// index. Every edit that moves shots to another section re-records the held
+/// index. Every edit that moves shots to another line re-records the held
 /// gauge of each component it touches.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HeldGauge {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub shot: String,
     #[serde(default)]
     pub neighbour: Option<String>,
@@ -62,64 +62,64 @@ pub struct HeldGauge {
 #[derive(Debug, Clone, Default)]
 pub struct ComponentGauges {
     /// One per touched component, in the order of the component's lowest
-    /// section id (so when an edit joins two, the one the lowest-id rule would
+    /// line id (so when an edit joins two, the one the lowest-id rule would
     /// have picked is restored first and keeps the joined component).
     held: Vec<HeldStation>,
 }
 
 #[derive(Debug, Clone)]
 enum HeldStation {
-    /// Named by its shots: the station may move to another section or index.
+    /// Named by its shots: the station may move to another line or index.
     Shots(HeldGauge),
-    /// A shot-less section's single station, in a section the edit does not
+    /// A shot-less line's single station, in a line the edit does not
     /// change: its reference survives as is.
     Untouched(StationRef),
 }
 
-/// A section's recorded gauge pair: `(gauge_shot_uuid, gauge_neighbour_uuid)`.
+/// A line's recorded gauge pair: `(gauge_shot_uuid, gauge_neighbour_uuid)`.
 pub(super) type GaugePair = (Option<String>, Option<String>);
 
-/// `section`'s gauge pair when a save captured one, else `None`.
-pub(super) fn captured_gauge(section: &Section) -> Option<GaugePair> {
-    section.gauge_shot_uuid.as_ref()?;
+/// `line`'s gauge pair when a save captured one, else `None`.
+pub(super) fn captured_gauge(line: &Line) -> Option<GaugePair> {
+    line.gauge_shot_uuid.as_ref()?;
     Some((
-        section.gauge_shot_uuid.clone(),
-        section.gauge_neighbour_uuid.clone(),
+        line.gauge_shot_uuid.clone(),
+        line.gauge_neighbour_uuid.clone(),
     ))
 }
 
 /// The gauge pair `(gauge_shot_uuid, gauge_neighbour_uuid)` that names station
-/// `index` of `section`, or `None` when no pair can.
+/// `index` of `line`, or `None` when no pair can.
 ///
 /// Prefers a two-shot pair, which a reverse carries intact and an extension at
 /// either end does not disturb:
 /// - the start of `shots[index]`, facing away from `shots[index + 1]`;
 /// - else the end of `shots[index - 1]`, facing away from `shots[index - 2]`.
 ///
-/// Only a section of one or two shots can lack both. There a lone shot names
-/// the station, and its side comes from [`Section::reverse_parity`] (the rule
+/// Only a line of one or two shots can lack both. There a lone shot names
+/// the station, and its side comes from [`Line::reverse_parity`] (the rule
 /// `gauge_index` applies to a pair with no neighbour): the start of the shot
-/// while the parity is false, its end while it is true. A one-shot section
+/// while the parity is false, its end while it is true. A one-shot line
 /// whose parity points at the other end cannot name `index` at all.
 ///
 /// A shot without a uuid (a pre-v6 file before its first save) cannot be named
 /// either.
 pub(crate) fn gauge_pair_for_station(
-    section: &Section,
+    line: &Line,
     index: usize,
 ) -> Option<(String, Option<String>)> {
-    let n = section.shots.len();
+    let n = line.shots.len();
     if n == 0 || index > n {
         return None;
     }
-    let uuid = |i: usize| section.shots.get(i).and_then(|s| s.uuid.clone());
+    let uuid = |i: usize| line.shots.get(i).and_then(|s| s.uuid.clone());
     if index + 1 < n {
         return Some((uuid(index)?, Some(uuid(index + 1)?)));
     }
     if index >= 2 {
         return Some((uuid(index - 1)?, Some(uuid(index - 2)?)));
     }
-    if section.reverse_parity {
+    if line.reverse_parity {
         let shot = index.checked_sub(1)?;
         Some((uuid(shot)?, None))
     } else if index < n {
@@ -129,7 +129,7 @@ pub(crate) fn gauge_pair_for_station(
     }
 }
 
-/// What a cut needs to keep a section's orientation and least-squares gauge,
+/// What a cut needs to keep a line's orientation and least-squares gauge,
 /// read BEFORE its shots move: its reverse parity and the gauge station it
 /// uses, with the pair a save captured for it, if any.
 #[derive(Debug, Clone)]
@@ -143,12 +143,12 @@ impl Project {
     /// Name station `at` by its shots ([`HeldGauge`]); `None` when it has no
     /// shot, or a shot without a uuid.
     pub fn held_gauge_at(&self, at: StationRef) -> Option<HeldGauge> {
-        let section = self.get_section(at.section_id)?;
-        let (n, i) = (section.shots.len(), at.station_index as usize);
+        let line = self.get_line(at.line_id)?;
+        let (n, i) = (line.shots.len(), at.station_index as usize);
         if n == 0 || i > n {
             return None;
         }
-        let uuid = |i: usize| section.shots.get(i).and_then(|s| s.uuid.clone());
+        let uuid = |i: usize| line.shots.get(i).and_then(|s| s.uuid.clone());
         // The station is the start of `shots[i]`, or the end of `shots[i - 1]`.
         let (shot, end, neighbour) = if i + 1 < n {
             (uuid(i)?, false, uuid(i + 1))
@@ -159,9 +159,9 @@ impl Project {
         } else {
             (uuid(i - 1)?, true, None)
         };
-        let parity = self.shot_record_parity(section, Some(&shot));
+        let parity = self.shot_record_parity(line, Some(&shot));
         Some(HeldGauge {
-            section_id: at.section_id,
+            line_id: at.line_id,
             shot,
             neighbour,
             end,
@@ -169,64 +169,57 @@ impl Project {
         })
     }
 
-    /// Where shot `uuid` sits in `section`: one probe of the shot uuid index,
-    /// checked against the section (a stale or missing entry falls back to a
-    /// scan of that section only, as `resolve_key` does).
-    fn shot_position(&self, section: &Section, uuid: &str) -> Option<usize> {
-        if let Some(&i) = self.shot_uuid_index.get(&(section.id, uuid.to_string())) {
-            if section
-                .shots
-                .get(i as usize)
-                .and_then(|s| s.uuid.as_deref())
-                == Some(uuid)
-            {
+    /// Where shot `uuid` sits in `line`: one probe of the shot uuid index,
+    /// checked against the line (a stale or missing entry falls back to a
+    /// scan of that line only, as `resolve_key` does).
+    fn shot_position(&self, line: &Line, uuid: &str) -> Option<usize> {
+        if let Some(&i) = self.shot_uuid_index.get(&(line.id, uuid.to_string())) {
+            if line.shots.get(i as usize).and_then(|s| s.uuid.as_deref()) == Some(uuid) {
                 return Some(i as usize);
             }
         }
-        section
-            .shots
+        line.shots
             .iter()
             .position(|s| s.uuid.as_deref() == Some(uuid))
     }
 
-    /// Where `held` names a station now, in its own section; `None` when that
-    /// section no longer holds its shot.
+    /// Where `held` names a station now, in its own line; `None` when that
+    /// line no longer holds its shot.
     pub(crate) fn resolve_held_gauge(&self, held: &HeldGauge) -> Option<StationRef> {
-        let section = self.get_section(held.section_id)?;
-        self.place_held_gauge(held, section)
+        let line = self.get_line(held.line_id)?;
+        self.place_held_gauge(held, line)
     }
 
-    /// Where `held` names a station now, in whichever section holds its shot:
-    /// its own section first, else the first that does. For the stations an
-    /// edit records before it moves shots between sections
+    /// Where `held` names a station now, in whichever line holds its shot:
+    /// its own line first, else the first that does. For the stations an
+    /// edit records before it moves shots between lines
     /// ([`Self::hold_component_gauges`]); at most one per touched component,
     /// once per edit.
     fn resolve_held_gauge_anywhere(&self, held: &HeldGauge) -> Option<StationRef> {
         self.resolve_held_gauge(held).or_else(|| {
-            self.sections.iter().find_map(|section| {
-                section
-                    .shots
+            self.lines.iter().find_map(|line| {
+                line.shots
                     .iter()
                     .any(|s| s.uuid.as_deref() == Some(held.shot.as_str()))
-                    .then(|| self.place_held_gauge(held, section))
+                    .then(|| self.place_held_gauge(held, line))
                     .flatten()
             })
         })
     }
 
-    /// The station `held` names in `section`, if `section` holds its shot.
-    fn place_held_gauge(&self, held: &HeldGauge, section: &Section) -> Option<StationRef> {
-        let px = self.shot_position(section, &held.shot)?;
+    /// The station `held` names in `line`, if `line` holds its shot.
+    fn place_held_gauge(&self, held: &HeldGauge, line: &Line) -> Option<StationRef> {
+        let px = self.shot_position(line, &held.shot)?;
         let neighbour = held
             .neighbour
             .as_deref()
-            .and_then(|n| self.shot_position(section, n));
+            .and_then(|n| self.shot_position(line, n));
         let index = match neighbour {
             Some(py) if py < px => px + 1,
             Some(_) => px,
             None => {
                 // A reverse of the record since flips which end `end` names.
-                let flipped = held.parity != self.shot_record_parity(section, Some(&held.shot));
+                let flipped = held.parity != self.shot_record_parity(line, Some(&held.shot));
                 if held.end ^ flipped {
                     px + 1
                 } else {
@@ -234,7 +227,7 @@ impl Project {
                 }
             }
         };
-        Some(StationRef::new(section.id, index as u32))
+        Some(StationRef::new(line.id, index as u32))
     }
 
     /// Whether `held` still names a station (its shot is in the project).
@@ -242,7 +235,7 @@ impl Project {
         self.resolve_held_gauge(held).is_some()
     }
 
-    /// Drop every held gauge that no longer names a station (its section no
+    /// Drop every held gauge that no longer names a station (its line no
     /// longer holds its shot). The save writes only the ones that resolve: a
     /// dangling entry anchors nothing. One index probe per entry.
     pub fn prune_held_gauges(&mut self) {
@@ -258,23 +251,20 @@ impl Project {
     /// Bring `held_gauges` to what the edits keep it at: entries that name a
     /// station, at most ONE per connected component (the first; the anchor
     /// lookup reads only the first anyway), so never more than there are
-    /// sections. Run by the load after its uuid heals, and by Add and Merge
+    /// lines. Run by the load after its uuid heals, and by Add and Merge
     /// projects after they append a project's entries: a file is untrusted, and
     /// a crafted list would otherwise cost every adjustment and every edit.
     ///
     /// Linear: one index probe per entry, and the components labelled once
-    /// with a union-find over the same edges `get_connected_section_ids` walks
+    /// with a union-find over the same edges `get_connected_line_ids` walks
     /// (every merge and every loop closure).
     pub fn normalize_held_gauges(&mut self) {
         if self.held_gauges.is_empty() {
             return;
         }
-        let mut parent: std::collections::HashMap<SectionId, SectionId> =
-            self.sections.iter().map(|s| (s.id, s.id)).collect();
-        fn root(
-            parent: &mut std::collections::HashMap<SectionId, SectionId>,
-            id: SectionId,
-        ) -> SectionId {
+        let mut parent: std::collections::HashMap<LineId, LineId> =
+            self.lines.iter().map(|s| (s.id, s.id)).collect();
+        fn root(parent: &mut std::collections::HashMap<LineId, LineId>, id: LineId) -> LineId {
             let mut at = id;
             while let Some(&up) = parent.get(&at) {
                 if up == at {
@@ -293,14 +283,14 @@ impl Project {
             }
             top
         }
-        let edges: Vec<(SectionId, SectionId)> = self
+        let edges: Vec<(LineId, LineId)> = self
             .station_merges
             .iter()
-            .map(|m| (m.station_a.section_id, m.station_b.section_id))
+            .map(|m| (m.station_a.line_id, m.station_b.line_id))
             .chain(
                 self.loop_closures
                     .iter()
-                    .map(|c| (c.station_a.section_id, c.station_b.section_id)),
+                    .map(|c| (c.station_a.line_id, c.station_b.line_id)),
             )
             .collect();
         for (a, b) in edges {
@@ -312,20 +302,20 @@ impl Project {
                 parent.insert(ra.max(rb), ra.min(rb));
             }
         }
-        let mut seen: HashSet<SectionId> = HashSet::new();
+        let mut seen: HashSet<LineId> = HashSet::new();
         let keep: Vec<bool> = self
             .held_gauges
             .iter()
             .map(|held| {
                 self.resolve_held_gauge(held).is_some()
-                    && seen.insert(root(&mut parent, held.section_id))
+                    && seen.insert(root(&mut parent, held.line_id))
             })
             .collect();
         let mut keep = keep.into_iter();
         self.held_gauges.retain(|_| keep.next().unwrap_or(false));
     }
 
-    /// Record, before an edit that changes `sections`, the station each of
+    /// Record, before an edit that changes `lines`, the station each of
     /// their components is held at by the least-squares adjustment when it
     /// has no zero datum (`default_anchor_for_component`). Pair it with
     /// [`Self::restore_component_gauges`] once the edit is done.
@@ -333,15 +323,15 @@ impl Project {
     /// Recorded whether or not the component has a datum or a closure today:
     /// the edit should not change which station a later adjustment holds
     /// either. A station that cannot be named by its shots (a shot without a
-    /// uuid) in a section the edit changes is not recorded, and its component
+    /// uuid) in a line the edit changes is not recorded, and its component
     /// falls back to the lowest-id rule.
-    pub fn hold_component_gauges(&self, sections: &[SectionId]) -> ComponentGauges {
-        let mut components: Vec<(SectionId, HashSet<SectionId>)> = Vec::new();
-        for &id in sections {
-            if self.get_section(id).is_none() || components.iter().any(|(_, c)| c.contains(&id)) {
+    pub fn hold_component_gauges(&self, lines: &[LineId]) -> ComponentGauges {
+        let mut components: Vec<(LineId, HashSet<LineId>)> = Vec::new();
+        for &id in lines {
+            if self.get_line(id).is_none() || components.iter().any(|(_, c)| c.contains(&id)) {
                 continue;
             }
-            let component = self.get_connected_section_ids(id);
+            let component = self.get_connected_line_ids(id);
             let lowest = component.iter().copied().min().unwrap_or(id);
             components.push((lowest, component));
         }
@@ -352,7 +342,7 @@ impl Project {
                 let at = self.default_anchor_for_component(component)?;
                 match self.held_gauge_at(at) {
                     Some(held) => Some(HeldStation::Shots(held)),
-                    None if !sections.contains(&at.section_id) => Some(HeldStation::Untouched(at)),
+                    None if !lines.contains(&at.line_id) => Some(HeldStation::Untouched(at)),
                     None => {
                         tracing::warn!(
                             ?at,
@@ -369,7 +359,7 @@ impl Project {
 
     /// After the edit [`Self::hold_component_gauges`] recorded `before` for:
     /// hold every component that still contains one of the recorded stations
-    /// at that station. The section that now anchors the component (its
+    /// at that station. The line that now anchors the component (its
     /// lowest id) gets its gauge put on the station when it holds it;
     /// otherwise, or when no gauge pair can name the station there, the
     /// station is recorded in [`Self::held_gauges`]. Any held gauge the
@@ -381,7 +371,7 @@ impl Project {
     /// (the one with the lower lowest id, which the lowest-id rule would have
     /// picked had they been joined all along) keeps the joined component.
     pub fn restore_component_gauges(&mut self, before: &ComponentGauges) {
-        let mut claimed: Vec<HashSet<SectionId>> = Vec::new();
+        let mut claimed: Vec<HashSet<LineId>> = Vec::new();
         for held in &before.held {
             let at = match held {
                 HeldStation::Shots(held) => self.resolve_held_gauge_anywhere(held),
@@ -394,14 +384,13 @@ impl Project {
                 );
                 continue;
             };
-            if claimed.iter().any(|c| c.contains(&at.section_id)) {
+            if claimed.iter().any(|c| c.contains(&at.line_id)) {
                 continue;
             }
-            let component = self.get_connected_section_ids(at.section_id);
-            self.held_gauges
-                .retain(|g| !component.contains(&g.section_id));
-            let lowest = component.iter().copied().min().unwrap_or(at.section_id);
-            if at.section_id == lowest {
+            let component = self.get_connected_line_ids(at.line_id);
+            self.held_gauges.retain(|g| !component.contains(&g.line_id));
+            let lowest = component.iter().copied().min().unwrap_or(at.line_id);
+            if at.line_id == lowest {
                 self.keep_gauge_on_station(lowest, at.station_index as usize, None);
             }
             if self.default_anchor_for_component(&component) != Some(at) {
@@ -417,43 +406,43 @@ impl Project {
             }
             claimed.push(component);
         }
-        // An entry whose shots this edit moved to another section names
+        // An entry whose shots this edit moved to another line names
         // nothing now (its component was re-recorded above).
         self.prune_held_gauges();
     }
 
-    /// See [`CutOrientation`]; `None` when the section does not exist.
-    pub fn cut_orientation(&self, section_id: SectionId) -> Option<CutOrientation> {
-        let section = self.get_section(section_id)?;
+    /// See [`CutOrientation`]; `None` when the line does not exist.
+    pub fn cut_orientation(&self, line_id: LineId) -> Option<CutOrientation> {
+        let line = self.get_line(line_id)?;
         Some(CutOrientation {
-            reverse_parity: section.reverse_parity,
-            gauge_station: Self::gauge_index(section),
-            gauge_capture: captured_gauge(section),
+            reverse_parity: line.reverse_parity,
+            gauge_station: Self::gauge_index(line),
+            gauge_capture: captured_gauge(line),
         })
     }
 
-    /// After a cut turned `first` into two sections - `first` keeping the
+    /// After a cut turned `first` into two lines - `first` keeping the
     /// original stations `0..=first_end`, and the new `second` holding the
-    /// original stations from `second_start` on - give `second` the section's
+    /// original stations from `second_start` on - give `second` the line's
     /// reverse parity and keep the gauge on its physical station.
     ///
     /// The parity is what a single-neighbour dive-plan pin and the gauge
     /// fallback read to know which end of a shot they sit on, so a second half
-    /// built fresh (parity false) out of a reversed section would put both one
-    /// station off. Split Section Here cuts AT a station (`first_end ==
+    /// built fresh (parity false) out of a reversed line would put both one
+    /// station off. Split Line Here cuts AT a station (`first_end ==
     /// second_start`, the station duplicated); a delete-and-split removes the
     /// shots in between, and a gauge station the delete removed (strictly
     /// between the two) is left to the halves' index fallback.
     pub fn settle_cut_halves(
         &mut self,
-        first: SectionId,
-        second: SectionId,
+        first: LineId,
+        second: LineId,
         before: &CutOrientation,
         first_end: usize,
         second_start: usize,
     ) {
-        if let Some(section) = self.get_section_mut(second) {
-            section.reverse_parity = before.reverse_parity;
+        if let Some(line) = self.get_line_mut(second) {
+            line.reverse_parity = before.reverse_parity;
         }
         let gauge = before.gauge_station;
         let capture = before.gauge_capture.as_ref();
@@ -467,88 +456,87 @@ impl Project {
         }
     }
 
-    /// Keep `section_id`'s gauge on its station `index`.
+    /// Keep `line_id`'s gauge on its station `index`.
     ///
-    /// `inherited` is the pair of the section the station came from, when that
-    /// section was CAPTURED (a save recorded its pair). A captured gauge stays
+    /// `inherited` is the pair of the line the station came from, when that
+    /// line was CAPTURED (a save recorded its pair). A captured gauge stays
     /// captured: the inherited pair is kept when it still names `index` here,
     /// else a pair naming it is re-captured with [`gauge_pair_for_station`].
-    /// Without a capture to inherit, a section whose index fallback already
+    /// Without a capture to inherit, a line whose index fallback already
     /// names `index` is left uncaptured: an edit captures nothing a save did
     /// not, and the next save captures it as usual.
     ///
-    /// When no pair can name the station the section is left uncaptured, so it
+    /// When no pair can name the station the line is left uncaptured, so it
     /// falls back to the index rule.
     pub(super) fn keep_gauge_on_station(
         &mut self,
-        section_id: SectionId,
+        line_id: LineId,
         index: usize,
         inherited: Option<&GaugePair>,
     ) {
-        let Some(section) = self.get_section_mut(section_id) else {
+        let Some(line) = self.get_line_mut(line_id) else {
             return;
         };
-        let names_index = |section: &Section| {
-            // A pair naming a shot the section no longer holds does not count
+        let names_index = |line: &Line| {
+            // A pair naming a shot the line no longer holds does not count
             // even when it lands on `index` through the fallback: see
             // `clear_unresolvable_gauge` for why a dangling pair is worse than
             // none.
-            pair_resolves(section) && Self::gauge_index(section) == index
+            pair_resolves(line) && Self::gauge_index(line) == index
         };
-        let captured = section.gauge_shot_uuid.is_some();
-        if names_index(section) && (captured || inherited.is_none()) {
+        let captured = line.gauge_shot_uuid.is_some();
+        if names_index(line) && (captured || inherited.is_none()) {
             return;
         }
         if let Some((shot, neighbour)) = inherited {
-            section.gauge_shot_uuid.clone_from(shot);
-            section.gauge_neighbour_uuid.clone_from(neighbour);
-            if section.gauge_shot_uuid.is_some() && names_index(section) {
+            line.gauge_shot_uuid.clone_from(shot);
+            line.gauge_neighbour_uuid.clone_from(neighbour);
+            if line.gauge_shot_uuid.is_some() && names_index(line) {
                 return;
             }
         }
-        if let Some((shot, neighbour)) = gauge_pair_for_station(section, index) {
-            section.gauge_shot_uuid = Some(shot);
-            section.gauge_neighbour_uuid = neighbour;
+        if let Some((shot, neighbour)) = gauge_pair_for_station(line, index) {
+            line.gauge_shot_uuid = Some(shot);
+            line.gauge_neighbour_uuid = neighbour;
         } else {
             tracing::warn!(
-                section_id,
+                line_id,
                 index,
-                "no gauge pair can name this station; the section falls back to the index \
+                "no gauge pair can name this station; the line falls back to the index \
                  rule"
             );
-            section.gauge_shot_uuid = None;
-            section.gauge_neighbour_uuid = None;
+            line.gauge_shot_uuid = None;
+            line.gauge_neighbour_uuid = None;
         }
     }
 
-    /// Clear a gauge pair that names a shot `section_id` no longer holds. A
+    /// Clear a gauge pair that names a shot `line_id` no longer holds. A
     /// pair that does not resolve is no pin at all, and it is worse than none:
-    /// `capture_missing_gauge_anchors` skips every section that has one, so
-    /// the section would never be captured again (see
+    /// `capture_missing_gauge_anchors` skips every line that has one, so
+    /// the line would never be captured again (see
     /// `reapply_heals_after_restore`).
-    pub(super) fn clear_unresolvable_gauge(&mut self, section_id: SectionId) {
-        let Some(section) = self.get_section_mut(section_id) else {
+    pub(super) fn clear_unresolvable_gauge(&mut self, line_id: LineId) {
+        let Some(line) = self.get_line_mut(line_id) else {
             return;
         };
-        if !pair_resolves(section) {
-            section.gauge_shot_uuid = None;
-            section.gauge_neighbour_uuid = None;
+        if !pair_resolves(line) {
+            line.gauge_shot_uuid = None;
+            line.gauge_neighbour_uuid = None;
         }
     }
 }
 
-/// True when every recorded member of `section`'s gauge pair is a shot it
+/// True when every recorded member of `line`'s gauge pair is a shot it
 /// holds (an unset member passes).
-fn pair_resolves(section: &Section) -> bool {
+fn pair_resolves(line: &Line) -> bool {
     let holds = |uuid: &Option<String>| {
         uuid.as_deref().is_none_or(|uuid| {
-            section
-                .shots
+            line.shots
                 .iter()
                 .any(|shot| shot.uuid.as_deref() == Some(uuid))
         })
     };
-    holds(&section.gauge_shot_uuid) && holds(&section.gauge_neighbour_uuid)
+    holds(&line.gauge_shot_uuid) && holds(&line.gauge_neighbour_uuid)
 }
 
 #[cfg(test)]
@@ -558,12 +546,12 @@ fn pair_resolves(section: &Section) -> bool {
 )]
 mod tests {
     use super::gauge_pair_for_station;
-    use crate::{Project, SectionData, SectionId, ShotData};
+    use crate::{LineData, LineId, Project, ShotData};
 
-    fn project(shots: usize, reversed: bool) -> (Project, SectionId) {
+    fn project(shots: usize, reversed: bool) -> (Project, LineId) {
         let mut project = Project::new("Gauge".to_string(), None);
         let id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: (0..shots)
                     .map(|i| ShotData {
                         azimuth_in: 90.0,
@@ -576,15 +564,15 @@ mod tests {
             })
             .id;
         if reversed {
-            assert!(project.reverse_section(id, false));
+            assert!(project.reverse_line(id, false));
         }
         (project, id)
     }
 
-    fn set_pair(project: &mut Project, id: SectionId, pair: (String, Option<String>)) {
-        let section = project.get_section_mut(id).unwrap();
-        section.gauge_shot_uuid = Some(pair.0);
-        section.gauge_neighbour_uuid = pair.1;
+    fn set_pair(project: &mut Project, id: LineId, pair: (String, Option<String>)) {
+        let line = project.get_line_mut(id).unwrap();
+        line.gauge_shot_uuid = Some(pair.0);
+        line.gauge_neighbour_uuid = pair.1;
     }
 
     /// Every station the helper names, `gauge_index` reads back, in either
@@ -596,26 +584,26 @@ mod tests {
             for reversed in [false, true] {
                 for index in 0..=shots {
                     let (mut project, id) = project(shots, reversed);
-                    let section = project.get_section(id).unwrap();
-                    let Some(pair) = gauge_pair_for_station(section, index) else {
+                    let line = project.get_line(id).unwrap();
+                    let Some(pair) = gauge_pair_for_station(line, index) else {
                         assert!(
                             shots == 1,
-                            "only a one-shot section can lack a pair ({shots} shots, \
+                            "only a one-shot line can lack a pair ({shots} shots, \
                              station {index}, reversed {reversed})"
                         );
                         continue;
                     };
                     set_pair(&mut project, id, pair);
-                    let section = project.get_section(id).unwrap();
+                    let line = project.get_line(id).unwrap();
                     assert_eq!(
-                        Project::gauge_index(section),
+                        Project::gauge_index(line),
                         index,
                         "{shots} shots, station {index}, reversed {reversed}"
                     );
-                    assert!(project.reverse_section(id, false));
-                    let section = project.get_section(id).unwrap();
+                    assert!(project.reverse_line(id, false));
+                    let line = project.get_line(id).unwrap();
                     assert_eq!(
-                        Project::gauge_index(section),
+                        Project::gauge_index(line),
                         shots - index,
                         "after a reverse: {shots} shots, station {index}"
                     );
@@ -628,18 +616,15 @@ mod tests {
     fn keeping_a_gauge_that_already_resolves_changes_nothing() {
         let (mut project, id) = project(3, false);
         project.keep_gauge_on_station(id, 0, None);
-        let section = project.get_section(id).unwrap();
-        assert_eq!(
-            section.gauge_shot_uuid, None,
-            "the fallback already names 0"
-        );
+        let line = project.get_line(id).unwrap();
+        assert_eq!(line.gauge_shot_uuid, None, "the fallback already names 0");
 
         project.keep_gauge_on_station(id, 2, None);
-        let section = project.get_section(id).unwrap();
-        assert_eq!(Project::gauge_index(section), 2);
-        let captured = section.gauge_shot_uuid.clone();
+        let line = project.get_line(id).unwrap();
+        assert_eq!(Project::gauge_index(line), 2);
+        let captured = line.gauge_shot_uuid.clone();
         project.keep_gauge_on_station(id, 2, None);
-        assert_eq!(project.get_section(id).unwrap().gauge_shot_uuid, captured);
+        assert_eq!(project.get_line(id).unwrap().gauge_shot_uuid, captured);
     }
 
     /// A captured source stays captured, keeping its own pair when it still
@@ -647,18 +632,18 @@ mod tests {
     #[test]
     fn an_inherited_capture_is_kept_or_recaptured() {
         let (mut project, id) = project(3, false);
-        let section = project.get_section(id).unwrap();
-        let pair = gauge_pair_for_station(section, 0).unwrap();
+        let line = project.get_line(id).unwrap();
+        let pair = gauge_pair_for_station(line, 0).unwrap();
         let inherited = (Some(pair.0.clone()), pair.1.clone());
         project.keep_gauge_on_station(id, 0, Some(&inherited));
-        let section = project.get_section(id).unwrap();
-        assert_eq!(section.gauge_shot_uuid.as_ref(), Some(&pair.0));
-        assert_eq!(section.gauge_neighbour_uuid, pair.1);
+        let line = project.get_line(id).unwrap();
+        assert_eq!(line.gauge_shot_uuid.as_ref(), Some(&pair.0));
+        assert_eq!(line.gauge_neighbour_uuid, pair.1);
 
         // The same capture cannot name station 3: a pair that can is taken.
         project.keep_gauge_on_station(id, 3, Some(&inherited));
-        let section = project.get_section(id).unwrap();
-        assert_eq!(Project::gauge_index(section), 3);
-        assert_ne!(section.gauge_shot_uuid.as_ref(), Some(&pair.0));
+        let line = project.get_line(id).unwrap();
+        assert_eq!(Project::gauge_index(line), 3);
+        assert_ne!(line.gauge_shot_uuid.as_ref(), Some(&pair.0));
     }
 }

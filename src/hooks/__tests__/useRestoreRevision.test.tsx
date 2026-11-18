@@ -5,7 +5,7 @@
  *
  * #258 is what makes a leftover plan dangerous here specifically: two `.stalx` under
  * one SpeleoDB project are independent SQLite databases with independently assigned
- * section ids, so a restore can swap in a survey whose ids collide with the old one by
+ * line ids, so a restore can swap in a survey whose ids collide with the old one by
  * construction. A pin or anchor that survives the swap silently renames itself onto
  * whatever station holds that id in the new tree.
  */
@@ -60,7 +60,7 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
     // #345 says survives today: `useGasPlanStore.reset()` has exactly one production
     // caller (`applyDisplaySettings`), reached only from `loadProject`/`createProject`,
     // never from this in-place swap.
-    useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setEndpoint({ line_id: 1, station_index: 2 });
     useGasPlanStore.getState().setPushyAck(true);
     useGasPlanStore.setState({
       loadedPlanId: 7,
@@ -74,7 +74,7 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
       },
       anchoredPins: {
         origin: null,
-        endpoint: { section_id: 1, station_index: 2 },
+        endpoint: { line_id: 1, station_index: 2 },
         waypoints: [],
         markedPoints: [],
         stageDropOverrides: [],
@@ -104,7 +104,7 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
       useSpeleoStore.setState({ remoteProjectId: 'p2' });
       return RESTORED;
     });
-    useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setEndpoint({ line_id: 1, station_index: 2 });
 
     const { result } = renderHook(() => useRestoreRevision());
     let applied = true;
@@ -113,7 +113,7 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
     });
 
     expect(applied).toBe(false);
-    expect(useGasPlanStore.getState().endpoint).toEqual({ section_id: 1, station_index: 2 });
+    expect(useGasPlanStore.getState().endpoint).toEqual({ line_id: 1, station_index: 2 });
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 });

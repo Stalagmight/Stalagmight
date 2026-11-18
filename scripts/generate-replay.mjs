@@ -149,8 +149,12 @@ for (let i = 0; i < actions.length; i++) {
       break;
     }
     case 'map_feature_click': {
-      if (p.featureType && Number.isInteger(p.sectionId)) {
-        push(`    await mapFeatureClick(browser, ${q(p)});`);
+      // A trace recorded before the Section -> Line rename names the line
+      // `sectionId`; the replay helper takes `lineId`.
+      const { sectionId, ...rest } = p;
+      const feature = { ...rest, lineId: p.lineId ?? sectionId };
+      if (feature.featureType && Number.isInteger(feature.lineId)) {
+        push(`    await mapFeatureClick(browser, ${q(feature)});`);
       } else push(`    // map_feature_click had no recorded feature identity; skipped`);
       break;
     }

@@ -319,7 +319,7 @@ export async function handBackProject(
  * in the app with the evicted dialog gone. The sharp case is a multi-step import
  * wizard: press X mid-placement and tier 1 asks "Import is in progress. Discard all
  * import data and close?"; confirming that swaps the wizard out for this prompt, and
- * cancelling here drops the user back into the app with the wizard - and the sections
+ * cancelling here drops the user back into the app with the wizard - and the lines
  * they had placed - discarded. They consented to that discard only as PART of
  * quitting. Both new prompts on this branch solved the same eviction with a return
  * hop (`SpeleoUnpushedLocalDialog`'s `cancelReturnsTo`, `SpeleoRevertDialog`'s

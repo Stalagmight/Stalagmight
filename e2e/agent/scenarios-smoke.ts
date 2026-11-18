@@ -18,7 +18,7 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   'undo-redo-churn': 5,
   // GREEN, and STRICT. This count is not arbitrary: seed 1 x40 on the v2
   // generator stream is the repro line for issue #413 bug 1 (a redo of
-  // CreateSection re-minting every shot uuid, plus the gauge-anchor half), so
+  // CreateLine re-minting every shot uuid, plus the gauge-anchor half), so
   // this entry is that bug's standing regression check. It is also finding 11's
   // residue's: after bug 1 was fixed this seed went on failing, and
   // `pnpm agent:fuzz-shrink` cut it to two steps - executeBatch(...+crtSec+...)
@@ -48,7 +48,7 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   //
   // Worth running on naharon by hand now and then, since the gate only ever sees
   // the default fixture: finding 27 (an undo dropping an exactly-zero
-  // section_offsets key) was found at STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx
+  // line_offsets key) was found at STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx
   // --seed 5 and nowhere else. Fixed in b9d6b14b / f16c96a8, and that seed is
   // clean; the write-up is in the scenario header.
   'undo-persistence-fuzz': 1,

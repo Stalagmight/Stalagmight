@@ -23,7 +23,7 @@
  *
  * Pure: aligned to the global shot / station indices `SurveyData` uses.
  */
-import type { SectionMetadata, SurveyData } from '../../../types/survey-data';
+import type { LineMetadata, SurveyData } from '../../../types/survey-data';
 import type { ProjectWarning } from '../../../types/commands';
 import type { DecimalPrecision, LengthUnit } from '../../../types/config';
 import type { LoopClosure } from '../../../types/project';
@@ -66,15 +66,15 @@ export function computeIssueScores(
   const warned = new Uint8Array(n);
 
   // (1) Unresolved warnings and ignored metrics per shot, keyed by
-  //     (sectionId, shotId) and resolved to a global index through a
-  //     per-section map built lazily, so untouched sections cost nothing.
+  //     (lineId, shotId) and resolved to a global index through a
+  //     per-line map built lazily, so untouched lines cost nothing.
   //     A warning about a graded metric (azimuth / inclination in vs out,
   //     inclination vs depth) sets no floor: its metric already scores it on
   //     the user's levels, and switching that metric off or raising its levels
   //     must be able to take the shot below the warn colour.
   const lookupShotGlobal = shotGlobalLookup(data);
   for (const w of warnings) {
-    const g = lookupShotGlobal(w.sectionId, w.shotId);
+    const g = lookupShotGlobal(w.lineId, w.shotId);
     if (g === null) continue; // a warning for a shot not in this SoA (stale)
     if (w.isResolved) {
       ignored[g] = ignored[g]! | (WARNING_CODE_METRICS[w.code] ?? 0);
@@ -93,7 +93,7 @@ export function computeIssueScores(
     shotScore[i] = hardError[i] ? SCORE_MAX : Math.max(metric, warned[i] ? SCORE_WARNING : 0);
   }
 
-  // (3) (sectionId, stationIndex) -> global station index, the renderer's own map.
+  // (3) (lineId, stationIndex) -> global station index, the renderer's own map.
   const stationLookup = buildStationLookup(data);
   const average = scale.combine === 'average';
   // Average mode: palette-position sums and shot counts per station.
@@ -109,9 +109,9 @@ export function computeIssueScores(
     }
   };
 
-  // (4) Each shot's score into its endpoint stations. Shot i of a section
+  // (4) Each shot's score into its endpoint stations. Shot i of a line
   //     connects station_index i and i + 1.
-  for (const sec of data.sections) {
+  for (const sec of data.lines) {
     const inner = stationLookup.get(sec.id);
     if (!inner) continue;
     for (let i = 0; i < sec.shotCount; i++) {
@@ -131,7 +131,7 @@ export function computeIssueScores(
     const group = data.stationMergedWith.get(g);
     const members = [g];
     for (const ref of group ?? []) {
-      const mg = stationLookup.get(ref.section_id)?.get(ref.station_index);
+      const mg = stationLookup.get(ref.line_id)?.get(ref.station_index);
       if (mg !== undefined) members.push(mg);
     }
     let shared = 0;
@@ -159,7 +159,7 @@ export function computeIssueScores(
   for (const w of warnings) {
     if (w.isResolved || w.datumStationIndex === undefined) continue;
     const s = w.severity === 'error' ? SCORE_MAX : SCORE_WARNING;
-    raise(stationScore, stationLookup.get(w.sectionId)?.get(w.datumStationIndex), s);
+    raise(stationScore, stationLookup.get(w.lineId)?.get(w.datumStationIndex), s);
   }
 
   return { shotScore, stationScore, labelScore, ignored };
@@ -169,18 +169,18 @@ function raise(scores: Float32Array, g: number | undefined, s: number): void {
   if (g !== undefined && s > scores[g]!) scores[g] = s;
 }
 
-function shotGlobalLookup(data: SurveyData): (sectionId: number, shotId: number) => number | null {
-  const sectionById = new Map<number, SectionMetadata>();
-  for (const s of data.sections) sectionById.set(s.id, s);
-  const bySection = new Map<number, Map<number, number>>();
-  return (sectionId, shotId) => {
-    let inner = bySection.get(sectionId);
+function shotGlobalLookup(data: SurveyData): (lineId: number, shotId: number) => number | null {
+  const lineById = new Map<number, LineMetadata>();
+  for (const s of data.lines) lineById.set(s.id, s);
+  const byLine = new Map<number, Map<number, number>>();
+  return (lineId, shotId) => {
+    let inner = byLine.get(lineId);
     if (!inner) {
-      const sec = sectionById.get(sectionId);
+      const sec = lineById.get(lineId);
       if (!sec) return null;
       inner = new Map();
       for (let i = sec.shotOffset; i < sec.shotOffset + sec.shotCount; i++) inner.set(data.shotIds[i]!, i);
-      bySection.set(sectionId, inner);
+      byLine.set(lineId, inner);
     }
     return inner.get(shotId) ?? null;
   };

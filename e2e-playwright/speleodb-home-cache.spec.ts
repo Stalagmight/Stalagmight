@@ -189,9 +189,9 @@ for (const signedIn of [false, true]) {
       copies: [copy(THEIRS, 'Synthetic theirs', signedIn ? 'other_account' : 'signed_out')],
       recents: [
         { name: 'Local cave', file_path: '/projects/local.stalx', location: null, modified_at: '2026-01-01T00:00:00Z',
-          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.46, 20.21], gps_bounds: null, is_remote: false },
+          line_count: 1, station_count: 2, total_length: 3, gps_center: [-87.46, 20.21], gps_bounds: null, is_remote: false },
         { name: 'Synthetic theirs', file_path: path, location: null, modified_at: '2026-01-01T00:00:00Z',
-          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.4631, 20.2137], gps_bounds: null,
+          line_count: 1, station_count: 2, total_length: 3, gps_center: [-87.4631, 20.2137], gps_bounds: null,
           is_remote: true, speleodb_project_id: THEIRS },
       ],
     });

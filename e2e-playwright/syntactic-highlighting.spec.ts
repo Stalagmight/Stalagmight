@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, createProject, type SectionSeed } from './helpers/app';
+import { seedProjectWithLines, waitForMapReady, createProject, type LineSeed } from './helpers/app';
 
 /**
  * E2E tests for Syntactic Highlighting: the colored duotone toolbar, the
@@ -8,7 +8,7 @@ import { seedProjectWithSections, waitForMapReady, createProject, type SectionSe
  * settings panel (level / preset / per-color overrides) with live preview.
  */
 
-const seeds: SectionSeed[] = [
+const seeds: LineSeed[] = [
   {
     name: 'SH Main',
     direction: 'in',
@@ -71,7 +71,7 @@ test.describe('Syntactic Highlighting', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'SH Test');
-    await seedProjectWithSections(page, seeds);
+    await seedProjectWithLines(page, seeds);
     await waitForMapReady(page);
   });
 
@@ -162,12 +162,12 @@ test.describe('Syntactic Highlighting', () => {
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__: {
-          projectStore: { getState: () => { project: { sections: { id: number; shots: { id: number }[] }[] } } };
+          projectStore: { getState: () => { project: { lines: { id: number; shots: { id: number }[] }[] } } };
           uiStore: { getState: () => { setSelection: (s: unknown) => void } };
         };
       }).__E2E_TEST__;
-      const section = e2e.projectStore.getState().project.sections[0];
-      e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId: section.shots[0].id });
+      const line = e2e.projectStore.getState().project.lines[0];
+      e2e.uiStore.getState().setSelection({ type: 'shot', lineId: line.id, shotId: line.shots[0].id });
     });
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible();
@@ -198,16 +198,10 @@ test.describe('Syntactic Highlighting', () => {
     expect(pill.borderStyle).toBe('solid');
     expect(pill.borderWidth).toBeGreaterThan(0);
     expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
-    // The fully-qualified id (e.g. "1:1"), monospace, after a short ::before divider.
-    const linkId = page.locator('[data-testid$="-link-id"]').first();
-    await expect(linkId).toBeVisible();
-    expect((await linkId.textContent())?.trim()).toMatch(/^\d+:\d+$/);
-    const idStyle = await linkId.evaluate((el) => ({
-      font: getComputedStyle(el).fontFamily,
-      dividerW: getComputedStyle(el, '::before').width,
-    }));
-    expect(idStyle.font.toLowerCase()).toMatch(/mono/);
-    expect(parseFloat(idStyle.dividerW)).toBeGreaterThan(0);
+    // The pill names its target (a station name, "0"), never a positional
+    // `line:index` id; a same-line link carries no line suffix either.
+    expect((await linkPill.textContent())?.trim()).not.toMatch(/\d+:\d+/);
+    await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {

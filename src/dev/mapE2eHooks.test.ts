@@ -36,7 +36,7 @@ describe('map E2E controls', () => {
   });
 
   it('forwards one-use targets and the interaction sequence when enabled', () => {
-    const target = { featureType: 'station', sectionId: 4, stationIndex: 9 } as const;
+    const target = { featureType: 'station', lineId: 4, stationIndex: 9 } as const;
     const setSemanticTarget = vi.fn(() => true);
     const clearSemanticTarget = vi.fn();
     const dispose = installMapE2eHooks({

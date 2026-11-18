@@ -35,24 +35,24 @@ import { lngLatToMercator } from '../../mercatorCoords';
 import { metersToMapCoords } from '../../../../../utils/coordinates';
 
 /**
- * Minimal fixture: two sections.
- *  - Section 1: 3 stations (idx 0,1,2) + 2 shots -> both shots valid (2 segments).
- *  - Section 2: 1 station (idx 0) + 1 shot -> missing endpoint (idx 1) -> 0 segments.
- * Station 0 of section 1 is a zero-datum. Total stations = 4.
+ * Minimal fixture: two lines.
+ *  - Line 1: 3 stations (idx 0,1,2) + 2 shots -> both shots valid (2 segments).
+ *  - Line 2: 1 station (idx 0) + 1 shot -> missing endpoint (idx 1) -> 0 segments.
+ * Station 0 of line 1 is a zero-datum. Total stations = 4.
  */
 function makeFixture(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
     { id: 2, name: 'B', color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
   ];
   d.shotCount = 3;
   d.shotIds = new Uint32Array([0, 1, 0]);
-  d.shotSectionIds = new Uint32Array([1, 1, 2]);
+  d.shotLineIds = new Uint32Array([1, 1, 2]);
   d.shotFlags = new Uint8Array([0, 0, 0]);
 
   d.stationCount = 4;
-  d.stationSectionIds = new Uint32Array([1, 1, 1, 2]);
+  d.stationLineIds = new Uint32Array([1, 1, 1, 2]);
   d.stationIndices = new Uint32Array([0, 1, 2, 0]);
   d.stationCoords = new Float64Array([
     0, 0, 0,
@@ -225,12 +225,12 @@ describe('anchor-relative station projection', () => {
 });
 
 describe('line tessellation', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
 
   it('counts only valid shots (both endpoints present)', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
-    expect(countValidShots(d, lookup)).toBe(2); // section 2's shot is dropped
+    expect(countValidShots(d, lookup)).toBe(2); // line 2's shot is dropped
   });
 
   it('sizes buffers as 4 verts + 6 indices per segment', () => {
@@ -267,7 +267,7 @@ describe('line tessellation', () => {
   // line must draw on top: one draw call, no depth test, so it goes LAST.
   it('draws segments by kind: reference first, then jump, Normal last (on top)', () => {
     const d = makeFixture();
-    // Section 1's two valid shots (section 2's one shot has no end station).
+    // Line 1's two valid shots (line 2's one shot has no end station).
     d.shotFlags = new Uint8Array([shotKindToFlags('Reference'), 0, 0]);
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
@@ -303,7 +303,7 @@ describe('line tessellation', () => {
     expect(writeLineDrawOrder(b)).toBe(false);
   });
 
-  // The selection's section draws above every kind (#700 review): a raised
+  // The selection's line draws above every kind (#700 review): a raised
   // segment goes after the Normal ones, kind ignored, slot order kept.
   it('draws raised segments last, above every kind', () => {
     const d = makeFixture();
@@ -323,7 +323,7 @@ describe('line tessellation', () => {
     expect(writeLineDrawOrder(b)).toBe(true);
     expect(drawn()).toEqual([1, 0]);
     // Both raised: the kind order holds among them, the reference still under
-    // the real line of its own raised section.
+    // the real line of its own raised line.
     raised.fill(1);
     expect(writeLineDrawOrder(b, raised)).toBe(false);
     expect(drawn()).toEqual([1, 0]);
@@ -347,13 +347,13 @@ describe('line tessellation', () => {
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
-    // Segment 0 = shot global 0, section 1 -> [0, 1, 7, 255]. Flat mode: colorFrom
+    // Segment 0 = shot global 0, line 1 -> [0, 1, 7, 255]. Flat mode: colorFrom
     // and colorTo are identical (the fragment's from->to mix is a no-op).
     for (let v = 0; v < 4; v++) {
       expect(Array.from(b.colorFrom.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
       expect(Array.from(b.colorTo.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
     }
-    // Segment 1 = shot global 1, section 1 -> [1, 1, 7, 255].
+    // Segment 1 = shot global 1, line 1 -> [1, 1, 7, 255].
     expect(Array.from(b.colorFrom.slice(16, 20))).toEqual([1, 1, 7, 255]);
   });
 });
@@ -384,7 +384,7 @@ describe('circle tessellation', () => {
     expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 4, 6, 7]);
   });
 
-  // Where markers of several sections coincide (a jump / reference section tied
+  // Where markers of several lines coincide (a jump / reference line tied
   // in at a real station), the real-line one must draw on top. One draw call, no
   // depth test: the LAST quad in the index buffer paints over the earlier ones.
   it('draws stations by rank: reference first, then jump, real last (on top)', () => {
@@ -466,22 +466,22 @@ describe('circle tessellation', () => {
 });
 
 describe('tessellation exclusion (move-drag hide semantics)', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   const fill = (g: number): Rgba8 => [g, 0, 0, 255];
   const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
 
-  // Shared fixture handles: section 1 owns stations 0,1,2 + shots (global 0,1);
-  // section 2 owns station 3 + an invalid shot (global 2, dropped).
+  // Shared fixture handles: line 1 owns stations 0,1,2 + shots (global 0,1);
+  // line 2 owns station 3 + an invalid shot (global 2, dropped).
 
-  it('countValidShots drops excluded sections and shots, in lock-step', () => {
+  it('countValidShots drops excluded lines and shots, in lock-step', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     // Baseline.
     expect(countValidShots(d, lookup)).toBe(2);
     // Empty exclusion object == no exclusion.
     expect(countValidShots(d, lookup, {})).toBe(2);
-    // Whole section 1 excluded -> both its shots gone.
-    expect(countValidShots(d, lookup, { sectionIds: new Set([1]) })).toBe(0);
+    // Whole line 1 excluded -> both its shots gone.
+    expect(countValidShots(d, lookup, { lineIds: new Set([1]) })).toBe(0);
     // Single shot (global 0) excluded -> one valid shot remains.
     expect(countValidShots(d, lookup, { shotGlobalIndices: new Set([0]) })).toBe(1);
   });
@@ -501,11 +501,11 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
     expect(b.posB[0]).toBeCloseTo(rel[4]!, 6); // station global 2
   });
 
-  it('buildLineBuffers with an excluded section yields zero segments', () => {
+  it('buildLineBuffers with an excluded line yields zero segments', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
-    const b = buildLineBuffers(d, rel, lookup, stubColor, { sectionIds: new Set([1]) });
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { lineIds: new Set([1]) });
     expect(b.segmentCount).toBe(0);
     expect(b.vertexCount).toBe(0);
     expect(b.indices.length).toBe(0);
@@ -529,11 +529,11 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
     expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 4, 6, 7]);
   });
 
-  it('buildCircleBuffers with an excluded section drops all its stations', () => {
+  it('buildCircleBuffers with an excluded line drops all its stations', () => {
     const d = makeFixture();
     const rel = projectStationsRel(d, null, 0, 0);
-    const b = buildCircleBuffers(d, rel, fill, stroke, { sectionIds: new Set([1]) });
-    expect(b.stationCount).toBe(1); // only section 2's station 3
+    const b = buildCircleBuffers(d, rel, fill, stroke, { lineIds: new Set([1]) });
+    expect(b.stationCount).toBe(1); // only line 2's station 3
     expect(Array.from(b.fill.slice(0, 4))).toEqual([3, 0, 0, 255]);
   });
 
@@ -570,11 +570,11 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
 });
 
 describe('reference-shot flags (setShowReferenceShots parity)', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   const fill = (g: number): Rgba8 => [g, 0, 0, 255];
   const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
 
-  /** makeFixture with shot global 0 (section 1, shot idx0) flagged reference. */
+  /** makeFixture with shot global 0 (line 1, shot idx0) flagged reference. */
   function refFixture(): SurveyData {
     const d = makeFixture();
     d.shotFlags = new Uint8Array([shotKindToFlags('Reference'), 0, 0]);
@@ -618,7 +618,7 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
     // References are hidden while Jumps are still drawn.
     // Station 0: only endpoint of the Reference shot -> 2.
     // Stations 1,2: endpoints of the Normal shot global 1 -> 0.
-    // Station 3: section 2's only shot is invalid (missing endpoint) -> no legs -> 3.
+    // Station 3: line 2's only shot is invalid (missing endpoint) -> no legs -> 3.
     expect(Array.from(allRef)).toEqual([2, 0, 0, 3]);
   });
 
@@ -654,9 +654,9 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
 });
 
 describe('depth-gradient per-endpoint colors', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   // Distinct from/to colors per shot so the A/B split is observable.
-  const endpoints = (shotIdx: number, _sectionId: number): readonly [Rgba8, Rgba8] => [
+  const endpoints = (shotIdx: number, _lineId: number): readonly [Rgba8, Rgba8] => [
     [shotIdx, 0, 0, 255],
     [shotIdx, 255, 0, 255],
   ];
@@ -737,7 +737,7 @@ describe('zero-datum sizing (stock circle-radius/-stroke parity)', () => {
 });
 
 describe('anchored/immovable dim flag (stock opacity parity)', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   const fill = (g: number): Rgba8 => [g, 0, 0, 255];
   const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
 
@@ -845,7 +845,7 @@ describe('round caps (shot-shot junction shaders)', () => {
 });
 
 describe('segment highlight flag (Move Segment whole-segment hover)', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   const fill = (g: number): Rgba8 => [g, 0, 0, 255];
   const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
 
@@ -859,11 +859,11 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     expect(Array.from(b.highlight.slice(4, 8))).toEqual([0, 0, 0, 0]);
   });
 
-  it('buildCircleBuffers marks every station of a highlighted section, 0 otherwise', () => {
+  it('buildCircleBuffers marks every station of a highlighted line, 0 otherwise', () => {
     const d = makeFixture();
     const rel = projectStationsRel(d, null, 0, 0);
-    // Whole connected-set semantics: highlight keys off section membership.
-    const hlStation = (g: number): boolean => d.stationSectionIds[g]! === 1;
+    // Whole connected-set semantics: highlight keys off line membership.
+    const hlStation = (g: number): boolean => d.stationLineIds[g]! === 1;
     const b = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
     for (const g of [0, 1, 2]) for (let c = 0; c < 4; c++) expect(b.highlight[g * 4 + c]).toBe(1);
     for (let c = 0; c < 4; c++) expect(b.highlight[3 * 4 + c]).toBe(0);
@@ -884,7 +884,7 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const hlShot = (_sgi: number, sid: number): boolean => sid === 1;
-    const hlStation = (g: number): boolean => d.stationSectionIds[g]! === 1;
+    const hlStation = (g: number): boolean => d.stationLineIds[g]! === 1;
     const line = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, undefined, hlShot);
     const circle = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
     // computeLine/CircleDim double as the per-vertex flag builders for any predicate.
@@ -919,9 +919,9 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
-    // Section 1 at hover level (2), station shots as a numeric-returning predicate.
+    // Line 1 at hover level (2), station shots as a numeric-returning predicate.
     const hlShot = (_sgi: number, sid: number): number => (sid === 1 ? 2 : 0);
-    const hlStation = (g: number): number => (d.stationSectionIds[g]! === 1 ? 1 : 0);
+    const hlStation = (g: number): number => (d.stationLineIds[g]! === 1 ? 1 : 0);
     const line = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, undefined, hlShot);
     const circle = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
     // Levels flow through verbatim (not clamped to 0/1).
@@ -986,17 +986,17 @@ describe('SurveyCustomLayer first-frames GL-error probe', () => {
   });
 });
 
-describe('per-section line range map', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+describe('per-line line range map', () => {
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
 
-  it('records [segStart, segCount] per section in declaration order', () => {
+  it('records [segStart, segCount] per line in declaration order', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
-    // Section 1 owns the 2 valid shots (segments 0,1); section 2's only shot is
-    // invalid, so it contributes 0 segments starting after section 1.
-    expect(Array.from(b.sectionRanges)).toEqual([0, 2, 2, 0]);
+    // Line 1 owns the 2 valid shots (segments 0,1); line 2's only shot is
+    // invalid, so it contributes 0 segments starting after line 1.
+    expect(Array.from(b.lineRanges)).toEqual([0, 2, 2, 0]);
   });
 
   it('tracks ranges under a single-shot exclusion (compacted)', () => {
@@ -1004,21 +1004,21 @@ describe('per-section line range map', () => {
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor, { shotGlobalIndices: new Set([0]) });
-    // Shot 0 excluded -> section 1 keeps 1 segment (shot 1); section 2 still 0.
-    expect(Array.from(b.sectionRanges)).toEqual([0, 1, 1, 0]);
+    // Shot 0 excluded -> line 1 keeps 1 segment (shot 1); line 2 still 0.
+    expect(Array.from(b.lineRanges)).toEqual([0, 1, 1, 0]);
   });
 
-  it('a fully excluded section has a zero-count range', () => {
+  it('a fully excluded line has a zero-count range', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
-    const b = buildLineBuffers(d, rel, lookup, stubColor, { sectionIds: new Set([1]) });
-    expect(Array.from(b.sectionRanges)).toEqual([0, 0, 0, 0]);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { lineIds: new Set([1]) });
+    expect(Array.from(b.lineRanges)).toEqual([0, 0, 0, 0]);
   });
 });
 
 describe('drag hide flag (per-vertex, no rebuild)', () => {
-  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const stubColor = (shotIdx: number, lineId: number): Rgba8 => [shotIdx, lineId, 7, 255];
   const fill = (g: number): Rgba8 => [g, 0, 0, 255];
   const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
 
@@ -1104,29 +1104,29 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
     };
   }
 
-  /** Random but valid survey: each section owns N stations (indices 0..N-1) and
+  /** Random but valid survey: each line owns N stations (indices 0..N-1) and
    *  up to N-1 shots, with the occasional dropped endpoint so invalid shots are
    *  exercised (the color recompute must skip them in lock-step with the build). */
   function randomSurvey(rng: () => number): SurveyData {
     const d = emptySurveyData();
-    const sectionCount = 1 + Math.floor(rng() * 4);
-    const sections = [];
-    const stationSectionIds: number[] = [];
+    const lineCount = 1 + Math.floor(rng() * 4);
+    const lines = [];
+    const stationLineIds: number[] = [];
     const stationIndices: number[] = [];
     const stationCoords: number[] = [];
     const stationFlags: number[] = [];
     const shotIds: number[] = [];
-    const shotSectionIds: number[] = [];
+    const shotLineIds: number[] = [];
     const shotFlags: number[] = [];
     let shotOffset = 0;
-    for (let s = 0; s < sectionCount; s++) {
+    for (let s = 0; s < lineCount; s++) {
       const id = s + 1;
       const nStations = 2 + Math.floor(rng() * 5);
       // Drop a random interior station sometimes to force an invalid shot.
       const dropIdx = rng() < 0.3 ? 1 + Math.floor(rng() * (nStations - 1)) : -1;
       for (let i = 0; i < nStations; i++) {
         if (i === dropIdx) continue;
-        stationSectionIds.push(id);
+        stationLineIds.push(id);
         stationIndices.push(i);
         stationCoords.push(rng() * 100, rng() * 100, -rng() * 10);
         stationFlags.push(rng() < 0.2 ? STATION_FLAG_IS_ZERO_DATUM : 0);
@@ -1134,24 +1134,24 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
       const nShots = nStations - 1;
       for (let i = 0; i < nShots; i++) {
         shotIds.push(i);
-        shotSectionIds.push(id);
+        shotLineIds.push(id);
         shotFlags.push(rng() < 0.25 ? shotKindToFlags('Reference') : 0);
       }
-      sections.push({
+      lines.push({
         id, name: `S${id}`, surveyor: null, date: null, color: '#abcdef',
         direction: 'in' as never, quality: 0, next_shot_id: nShots, shotOffset, shotCount: nShots,
       });
       shotOffset += nShots;
     }
-    d.sections = sections;
-    d.stationCount = stationSectionIds.length;
-    d.stationSectionIds = new Uint32Array(stationSectionIds);
+    d.lines = lines;
+    d.stationCount = stationLineIds.length;
+    d.stationLineIds = new Uint32Array(stationLineIds);
     d.stationIndices = new Uint32Array(stationIndices);
     d.stationCoords = new Float64Array(stationCoords);
     d.stationFlags = new Uint8Array(stationFlags);
     d.shotCount = shotIds.length;
     d.shotIds = new Uint32Array(shotIds);
-    d.shotSectionIds = new Uint32Array(shotSectionIds);
+    d.shotLineIds = new Uint32Array(shotLineIds);
     d.shotFlags = new Uint8Array(shotFlags);
     return d;
   }

@@ -33,7 +33,7 @@ const READ_ONLY_LINK: SpeleoLinkState = {
   serverError: null,
 };
 
-const STATION_SELECTION = { type: 'station' as const, stationRef: { section_id: 0, station_index: 1 } };
+const STATION_SELECTION = { type: 'station' as const, stationRef: { line_id: 0, station_index: 1 } };
 
 function pressDelete(): void {
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));

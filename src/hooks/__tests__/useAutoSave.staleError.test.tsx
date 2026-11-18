@@ -29,7 +29,7 @@ const FAILED: CommandResult = {
   success: false,
   error: 'Disk full: no space left on device',
   warnings: [],
-  section_ids: [],
+  line_ids: [],
 };
 
 describe('useAutoSave error status', () => {

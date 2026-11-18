@@ -14,29 +14,29 @@ import type { GasReachField } from '../../types/ipc.generated';
 import type { StationRef } from '../../types/project';
 
 describe('buildGasReachFeatureState', () => {
-  // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: shot id20 (st0→st1).
-  // SoA shape: section metadata (shotOffset/shotCount) + a flat shotIds array.
+  // Line 1: shots id10 (st0→st1), id11 (st1→st2). Line 2: shot id20 (st0→st1).
+  // SoA shape: line metadata (shotOffset/shotCount) + a flat shotIds array.
   const data = {
-    sections: [
+    lines: [
       { id: 1, shotOffset: 0, shotCount: 2 },
       { id: 2, shotOffset: 2, shotCount: 1 },
     ],
     shotIds: new Uint32Array([10, 11, 20]),
-  } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
+  } as unknown as Pick<SurveyData, 'lines' | 'shotIds'>;
 
   // (1,2) is finite-but-OVER-budget (gas_to_reach 1500 > budget 1000, reachable false)
   // - the adversarial case. (2,1) is disconnected (null). Budget is 1000.
   const field: GasReachField = {
     station_refs: [
-      { section_id: 1, station_index: 0 },
-      { section_id: 1, station_index: 1 },
-      { section_id: 1, station_index: 2 },
-      { section_id: 2, station_index: 0 },
-      { section_id: 2, station_index: 1 },
+      { line_id: 1, station_index: 0 },
+      { line_id: 1, station_index: 1 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 2, station_index: 0 },
+      { line_id: 2, station_index: 1 },
     ],
     gas_to_reach: [0, 300, 1500, 200, null],
     reachable: [true, true, false, true, false],
-    turn_frontier: [{ section_id: 1, station_index: 1 }],
+    turn_frontier: [{ line_id: 1, station_index: 1 }],
     max_reachable_gas: 300,
     budget_litres: 1000,
     route: [],
@@ -145,16 +145,16 @@ describe('gasReachColorExpression', () => {
 describe('reachableStationKeySet', () => {
   const field = {
     station_refs: [
-      { section_id: 1, station_index: 0 },
-      { section_id: 1, station_index: 1 },
-      { section_id: 1, station_index: 2 },
-      { section_id: 2, station_index: 0 },
+      { line_id: 1, station_index: 0 },
+      { line_id: 1, station_index: 1 },
+      { line_id: 1, station_index: 2 },
+      { line_id: 2, station_index: 0 },
     ],
     reachable: [true, false, true, true],
     // remaining GasReachField fields are unused by this helper
   } as unknown as GasReachField;
 
-  it('keys only the reachable stations, by section_id:station_index', () => {
+  it('keys only the reachable stations, by line_id:station_index', () => {
     const keys = reachableStationKeySet(field);
     expect(keys).toEqual(new Set(['1:0', '1:2', '2:0']));
     expect(keys.has('1:1')).toBe(false); // unreachable is excluded
@@ -167,8 +167,8 @@ describe('reachableStationKeySet', () => {
 });
 
 describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always the entrance)', () => {
-  const a: StationRef = { section_id: 1, station_index: 0 };
-  const b: StationRef = { section_id: 1, station_index: 1 };
+  const a: StationRef = { line_id: 1, station_index: 0 };
+  const b: StationRef = { line_id: 1, station_index: 1 };
 
   const fieldWith = (aGas: number | null, bGas: number | null): GasReachField =>
     ({
@@ -193,7 +193,7 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
       { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
       {
-        station_ref: { section_id: 9, station_index: 0 },
+        station_ref: { line_id: 9, station_index: 0 },
         coordinates: { x: 10, y: 0, z: 0 }, // right next to b: b is the entrance-nearest endpoint
         is_zero_datum: true,
       },
@@ -209,7 +209,7 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
       { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
       {
-        station_ref: { section_id: 9, station_index: 0 },
+        station_ref: { line_id: 9, station_index: 0 },
         coordinates: { x: 1, y: 0, z: 0 },
         is_zero_datum: true,
       },
@@ -224,7 +224,7 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
       { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
       {
-        station_ref: { section_id: 9, station_index: 0 },
+        station_ref: { line_id: 9, station_index: 0 },
         coordinates: { x: 9, y: 0, z: 0 },
         is_zero_datum: true,
       },
@@ -233,8 +233,8 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
   });
 
   it('with no field loaded, ignores a zero datum that is not an entrance (#741)', () => {
-    const entrance = { section_id: 9, station_index: 0 };
-    const midPassageFix = { section_id: 9, station_index: 4 };
+    const entrance = { line_id: 9, station_index: 0 };
+    const midPassageFix = { line_id: 9, station_index: 4 };
     const stations = [
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
       { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },

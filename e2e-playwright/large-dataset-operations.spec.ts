@@ -43,14 +43,14 @@ test.describe('Large Dataset Operations', () => {
         throw new Error('Project must exist before seeding large dataset');
       }
 
-      const sections: Array<Record<string, unknown>> = [];
-      for (let sectionId = 1; sectionId <= 24; sectionId += 1) {
+      const lines: Array<Record<string, unknown>> = [];
+      for (let lineId = 1; lineId <= 24; lineId += 1) {
         const shots: Array<Record<string, unknown>> = [];
         for (let shotId = 1; shotId <= 40; shotId += 1) {
           shots.push({
             id: shotId,
-            azimuth_in: (sectionId * 12 + shotId * 3) % 360,
-            azimuth_out: (sectionId * 12 + shotId * 3) % 360,
+            azimuth_in: (lineId * 12 + shotId * 3) % 360,
+            azimuth_out: (lineId * 12 + shotId * 3) % 360,
             length: 3 + (shotId % 5),
             depth_in: -(shotId * 0.15),
             depth_out: -((shotId + 1) * 0.15),
@@ -67,12 +67,12 @@ test.describe('Large Dataset Operations', () => {
           });
         }
 
-        sections.push({
-          id: sectionId,
-          name: `Dataset Section ${sectionId}`,
+        lines.push({
+          id: lineId,
+          name: `Dataset Line ${lineId}`,
           surveyor: 'Load Tester',
           date: '2026-02-10',
-          color: sectionId % 2 === 0 ? '#4a90d9' : '#22c55e',
+          color: lineId % 2 === 0 ? '#4a90d9' : '#22c55e',
           direction: 'in',
           shots,
         });
@@ -80,16 +80,16 @@ test.describe('Large Dataset Operations', () => {
 
       const nextProject = {
         ...baseProject,
-        sections,
+        lines,
         station_merges: [],
         zero_datums: [
           {
-            station_ref: { section_id: 1, station_index: 0 },
+            station_ref: { line_id: 1, station_index: 0 },
             gps: { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
           },
         ],
         loop_closures: [],
-        section_offsets: {},
+        line_offsets: {},
       };
 
       mocks.setCurrentProject(nextProject);
@@ -97,22 +97,22 @@ test.describe('Large Dataset Operations', () => {
       await e2e.projectStore.getState().refreshProjectState();
     });
 
-    // The sections panel is virtualized (a 14k-section project must not mount a
-    // <li> per section), so only the visible window of rows is in the DOM at
-    // once. Assert the seed loaded all 24 sections via the store, not by DOM
+    // The sections panel is virtualized (a 14k-line project must not mount a
+    // <li> per line), so only the visible window of rows is in the DOM at
+    // once. Assert the seed loaded all 24 lines via the store, not by DOM
     // node count, then reveal the last row before interacting with it.
-    const seededSectionCount = await page.evaluate(() =>
+    const seededLineCount = await page.evaluate(() =>
       (window as unknown as {
-        __E2E_TEST__: { projectStore: { getState: () => { project: { sections: unknown[] } | null } } };
-      }).__E2E_TEST__.projectStore.getState().project?.sections.length ?? 0,
+        __E2E_TEST__: { projectStore: { getState: () => { project: { lines: unknown[] } | null } } };
+      }).__E2E_TEST__.projectStore.getState().project?.lines.length ?? 0,
     );
-    expect(seededSectionCount).toBe(24);
+    expect(seededLineCount).toBe(24);
 
     await page.getByTestId('sections-list').evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
-    await expect(page.getByTestId('section-row-24')).toBeVisible();
-    await page.getByTestId('section-row-24').click();
+    await expect(page.getByTestId('line-row-24')).toBeVisible();
+    await page.getByTestId('line-row-24').click();
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 10000 });
 

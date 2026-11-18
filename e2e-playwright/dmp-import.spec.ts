@@ -4,7 +4,7 @@ import {
   createProject,
   openDmpSelectionDialog,
   proceedToDmpSectionConfig,
-  createSectionViaStore,
+  createLineViaStore,
   ensureDmpNewImportDialogVisible,
   openAppMenu,
 } from './helpers/app';
@@ -15,7 +15,7 @@ import {
  * Tests the core DMP file import functionality including:
  * - Context-aware import triggering (new project vs existing project)
  * - Parsing and displaying DMP file data in Step 1 (selection) and Step 2 (config)
- * - Section selection and configuration
+ * - Line selection and configuration
  * - Cancel without importing
  * - Drag-drop DMP file handling
  */
@@ -24,7 +24,7 @@ import {
  * Helper to create a project and open the import dialog via Ctrl+I.
  * With the new context-aware flow:
  * - From existing project: Opens DmpSelectionDialog (Step 1) directly with parsed DMP
- * Returns when the DMP file is loaded and sections are visible in Step 1.
+ * Returns when the DMP file is loaded and lines are visible in Step 1.
  */
 async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
   await createProject(page, 'DMP Import Test');
@@ -32,7 +32,7 @@ async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
 
   const dialog = page.getByTestId('dmp-selection-dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
   // Version is now shown in the filename line
   await expect(dialog.getByTestId('dmp-filename')).toContainText('(v5)');
 }
@@ -44,18 +44,18 @@ async function proceedToStep2(page: Page): Promise<void> {
   await proceedToDmpSectionConfig(page);
 }
 
-/** How many sections the open project holds. */
-async function countSections(page: Page): Promise<number> {
+/** How many lines the open project holds. */
+async function countLines(page: Page): Promise<number> {
   return page.evaluate(() => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore?: { getState: () => { project: { sections: unknown[] } | null } };
+        projectStore?: { getState: () => { project: { lines: unknown[] } | null } };
       };
     }).__E2E_TEST__;
     if (!e2e?.projectStore) {
       throw new Error('E2E project store unavailable');
     }
-    return e2e.projectStore.getState().project?.sections.length ?? 0;
+    return e2e.projectStore.getState().project?.lines.length ?? 0;
   });
 }
 
@@ -81,7 +81,7 @@ test.describe('DMP Import Dialog', () => {
    * Test 6.1: should parse and display DMP file data in Step 1 dialog
    *
    * Verifies the DmpSelectionDialog (Step 1) correctly displays parsed DMP data
-   * including section names, shot counts, and file metadata.
+   * including line names, shot counts, and file metadata.
    */
   test('should parse and display DMP file data in import dialog @smoke', async ({
     page,
@@ -94,24 +94,24 @@ test.describe('DMP Import Dialog', () => {
     await expect(dialog).toHaveAttribute('role', 'dialog');
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
 
-    // Verify section names displayed in Step 1
+    // Verify line names displayed in Step 1
     await expect(dialog.locator('text=Main Passage')).toBeVisible();
     await expect(dialog.locator('text=Side Tunnel')).toBeVisible();
 
-    // Step 1 shows a table with checkboxes, section names, dates, and shot counts
-    // Verify the section table has expected structure
-    const sectionRow0 = dialog.locator('[data-testid="section-row-0"]');
-    await expect(sectionRow0).toBeVisible();
-    await expect(sectionRow0).toContainText('Main Passage');
+    // Step 1 shows a table with checkboxes, line names, dates, and shot counts
+    // Verify the line table has expected structure
+    const lineRow0 = dialog.locator('[data-testid="line-row-0"]');
+    await expect(lineRow0).toBeVisible();
+    await expect(lineRow0).toContainText('Main Passage');
 
-    const sectionRow1 = dialog.locator('[data-testid="section-row-1"]');
-    await expect(sectionRow1).toBeVisible();
-    await expect(sectionRow1).toContainText('Side Tunnel');
+    const lineRow1 = dialog.locator('[data-testid="line-row-1"]');
+    await expect(lineRow1).toBeVisible();
+    await expect(lineRow1).toContainText('Side Tunnel');
 
-    // Verify section checkboxes are present
-    const checkbox0 = dialog.locator('[data-testid="section-checkbox-0"]');
+    // Verify line checkboxes are present
+    const checkbox0 = dialog.locator('[data-testid="line-checkbox-0"]');
     await expect(checkbox0).toBeVisible();
-    await expect(checkbox0).toBeChecked(); // Non-empty sections are selected by default
+    await expect(checkbox0).toBeChecked(); // Non-empty lines are selected by default
 
     // Verify file metadata header (version is in filename, stats are in selection-stats)
     const filename = dialog.locator('[data-testid="dmp-filename"]');
@@ -153,30 +153,30 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.3: should allow toggling section selection in Step 1
+   * Test 6.3: should allow toggling line selection in Step 1
    *
-   * Verifies users can select/deselect sections in Step 1 (DmpSelectionDialog)
+   * Verifies users can select/deselect lines in Step 1 (DmpSelectionDialog)
    * using checkboxes and bulk selection buttons.
    */
-  test('should allow toggling section selection in Step 1', async ({ page }) => {
+  test('should allow toggling line selection in Step 1', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Find section checkboxes
-    const checkbox0 = page.locator('[data-testid="section-checkbox-0"]');
-    const checkbox1 = page.locator('[data-testid="section-checkbox-1"]');
+    // Find line checkboxes
+    const checkbox0 = page.locator('[data-testid="line-checkbox-0"]');
+    const checkbox1 = page.locator('[data-testid="line-checkbox-1"]');
     await expect(checkbox0).toBeVisible();
     await expect(checkbox1).toBeVisible();
 
-    // Both non-empty sections should be selected by default
+    // Both non-empty lines should be selected by default
     await expect(checkbox0).toBeChecked();
     await expect(checkbox1).toBeChecked();
 
-    // Test deselecting a section
+    // Test deselecting a line
     await checkbox0.click();
     await expect(checkbox0).not.toBeChecked();
-    await expect(checkbox1).toBeChecked(); // Other section still selected
+    await expect(checkbox1).toBeChecked(); // Other line still selected
 
-    // Test reselecting the section
+    // Test reselecting the line
     await checkbox0.click();
     await expect(checkbox0).toBeChecked();
 
@@ -194,57 +194,57 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.4: should handle multi-section DMP files in Step 1
+   * Test 6.4: should handle multi-line DMP files in Step 1
    *
-   * Verifies the Step 1 dialog handles DMP files with multiple sections,
-   * showing all sections with checkboxes for selection.
+   * Verifies the Step 1 dialog handles DMP files with multiple lines,
+   * showing all lines with checkboxes for selection.
    */
-  test('should handle multi-section DMP files', async ({ page }) => {
+  test('should handle multi-line DMP files', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Verify multiple sections are listed (mock returns 6 sections)
+    // Verify multiple lines are listed (mock returns 6 lines)
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialog.locator('text=Main Passage')).toBeVisible();
     await expect(dialog.locator('text=Side Tunnel')).toBeVisible();
-    await expect(dialog.locator('text=Mixed LRUD Section')).toBeVisible();
-    await expect(dialog.locator('text=Undefined LRUD Section')).toBeVisible();
-    await expect(dialog.locator('text=Empty Section')).toBeVisible();
-    await expect(dialog.locator('text=Validation Test Section')).toBeVisible();
+    await expect(dialog.locator('text=Mixed LRUD Line')).toBeVisible();
+    await expect(dialog.locator('text=Undefined LRUD Line')).toBeVisible();
+    await expect(dialog.locator('text=Empty Line')).toBeVisible();
+    await expect(dialog.locator('text=Validation Test Line')).toBeVisible();
 
-    // Step 1 shows section rows with checkboxes - no expand buttons in Step 1
-    const sectionRow0 = dialog.locator('[data-testid="section-row-0"]');
-    const sectionRow1 = dialog.locator('[data-testid="section-row-1"]');
-    await expect(sectionRow0).toBeVisible();
-    await expect(sectionRow1).toBeVisible();
+    // Step 1 shows line rows with checkboxes - no expand buttons in Step 1
+    const lineRow0 = dialog.locator('[data-testid="line-row-0"]');
+    const lineRow1 = dialog.locator('[data-testid="line-row-1"]');
+    await expect(lineRow0).toBeVisible();
+    await expect(lineRow1).toBeVisible();
 
-    // Empty section should be displayed but with (empty) indicator and disabled checkbox
-    const emptyRow = dialog.locator('[data-testid="section-row-4"]');
+    // Empty line should be displayed but with (empty) indicator and disabled checkbox
+    const emptyRow = dialog.locator('[data-testid="line-row-4"]');
     await expect(emptyRow).toContainText('(empty)');
-    const emptyCheckbox = dialog.locator('[data-testid="section-checkbox-4"]');
+    const emptyCheckbox = dialog.locator('[data-testid="line-checkbox-4"]');
     await expect(emptyCheckbox).toBeDisabled();
 
-    // Test section selection checkboxes
-    // Click "Select None" to deselect all sections
+    // Test line selection checkboxes
+    // Click "Select None" to deselect all lines
     await dialog.locator('[data-testid="select-none-button"]').click();
 
     // The selection count should show 0 selected
-    await expect(dialog.locator('text=/0 of \\d+ sections selected/')).toBeVisible();
+    await expect(dialog.locator('text=/0 of \\d+ lines selected/')).toBeVisible();
 
-    // Click "Select All" to select all non-empty sections
+    // Click "Select All" to select all non-empty lines
     await dialog.locator('[data-testid="select-all-button"]').click();
 
-    // All non-empty sections should be selected
-    await expect(dialog.locator('text=/5 of 5 sections selected/')).toBeVisible();
+    // All non-empty lines should be selected
+    await expect(dialog.locator('text=/5 of 5 lines selected/')).toBeVisible();
 
-    // Select only specific sections
+    // Select only specific lines
     await dialog.locator('[data-testid="select-none-button"]').click();
 
     // Select Main Passage and Side Tunnel only
-    await dialog.locator('[data-testid="section-checkbox-0"]').click();
-    await dialog.locator('[data-testid="section-checkbox-1"]').click();
+    await dialog.locator('[data-testid="line-checkbox-0"]').click();
+    await dialog.locator('[data-testid="line-checkbox-1"]').click();
 
     // Selection count should show 2 selected
-    await expect(dialog.locator('text=/2 of 5 sections selected/')).toBeVisible();
+    await expect(dialog.locator('text=/2 of 5 lines selected/')).toBeVisible();
   });
 
   /**
@@ -263,7 +263,7 @@ test.describe('DMP Import Dialog', () => {
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialog).toBeVisible();
 
-    // Dialog should show the parsed DMP sections
+    // Dialog should show the parsed DMP lines
     await expect(page.locator('text=Main Passage')).toBeVisible();
 
     // Click Cancel button
@@ -281,7 +281,7 @@ test.describe('DMP Import Dialog', () => {
     const dialogAfter = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialogAfter).toBeVisible();
 
-    // Dialog should show sections (file is parsed each time)
+    // Dialog should show lines (file is parsed each time)
     await expect(page.locator('text=Main Passage')).toBeVisible();
   });
 
@@ -376,7 +376,7 @@ test.describe('DMP Import Dialog', () => {
     const selectionDialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(selectionDialog).toBeVisible();
 
-    // Sections should be visible
+    // Lines should be visible
     await expect(page.locator('text=Main Passage')).toBeVisible();
   });
 });
@@ -401,7 +401,7 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await page.getByTestId('continue-button').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
 
-    await page.getByTestId('zero-datum-section-card-0').click();
+    await page.getByTestId('zero-datum-line-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
     await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
     await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
@@ -419,12 +419,12 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
    * everything typed - App.tsx relayed no carry through the hop back to
    * 'zero-datum-selection'. It now hands `onBack` the dialog's LIVE state
    * (`buildCurrentDraft`), and App.tsx re-seeds it on a forward pass ONLY
-   * when the re-picked section matches (`carryZeroDatumConfig`,
+   * when the re-picked line matches (`carryZeroDatumConfig`,
    * `src/utils/zeroDatumCarry.ts`). This drives the REAL App.tsx wiring -
    * the vitest suite for this pins the shared decision function, not the
    * routing that calls it.
    */
-  test('carries typed GPS back through Back-to-selection on a same-section re-pick, not a different one', async ({
+  test('carries typed GPS back through Back-to-selection on a same-line re-pick, not a different one', async ({
     page,
   }) => {
     await createProject(page, 'Zero Datum Back Carry Test');
@@ -433,7 +433,7 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await page.getByTestId('continue-button').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
 
-    await page.getByTestId('zero-datum-section-card-0').click();
+    await page.getByTestId('zero-datum-line-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
     await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
     await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
@@ -442,8 +442,8 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await page.getByTestId('zero-datum-config-back-confirm-discard').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
 
-    // Same section re-picked: the typed GPS comes back.
-    await page.getByTestId('zero-datum-section-card-0').click();
+    // Same line re-picked: the typed GPS comes back.
+    await page.getByTestId('zero-datum-line-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('zero-datum-gps-input')).toHaveValue('24.550123, -81.780456');
 
@@ -452,32 +452,32 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await page.getByTestId('zero-datum-config-back').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
 
-    await page.getByTestId('zero-datum-section-card-1').click();
+    await page.getByTestId('zero-datum-line-card-1').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('zero-datum-gps-input')).toHaveValue('');
   });
 
   /**
-   * The section preview starts drawing Esri imagery the moment valid GPS
+   * The line preview starts drawing Esri imagery the moment valid GPS
    * coordinates are entered, so it owes attribution from that moment too. It is
    * a few hundred pixels square, so the source names live behind the `i` button
    * Esri's guidance allows for exactly this case - and that panel has to escape
    * the preview's own `overflow-hidden`, which is why it is portalled.
    * https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/
    */
-  test('attributes the imagery the section preview draws, behind an i button', async ({ page }) => {
+  test('attributes the imagery the line preview draws, behind an i button', async ({ page }) => {
     await createProject(page, 'Zero Datum Attribution Test');
     await openDmpSelectionDialog(page);
 
     await page.getByTestId('continue-button').click();
     await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
-    await page.getByTestId('zero-datum-section-card-0').click();
+    await page.getByTestId('zero-datum-line-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
 
     // Scoped to the preview: the survey map behind this dialog draws satellite
     // by default and carries its own attribution, so an unscoped locator would
     // match two elements and assert against the wrong one.
-    const preview = page.getByTestId('section-preview');
+    const preview = page.getByTestId('line-preview');
 
     // No imagery before there is a GPS origin, so nothing is owed yet.
     await expect(preview.getByTestId('map-attribution')).toBeHidden();
@@ -497,7 +497,7 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
 
     // The preview clips its own children; the panel must not be one of them.
     const escapesPreview = await page.evaluate(() => {
-      const preview = document.querySelector('[data-testid="section-preview"]');
+      const preview = document.querySelector('[data-testid="line-preview"]');
       const el = document.querySelector('[data-testid="map-attribution-panel"]');
       if (!preview || !el) return 'missing';
       return { contained: preview.contains(el), inBody: el.closest('body') !== null };
@@ -545,7 +545,7 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // The Continue button being enabled indicates hash check has completed
     // and the dialog is fully ready (avoids false positive from checking too early).
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('[data-testid="continue-button"]')).toBeEnabled({ timeout: 5000 });
 
     // The duplicate-hash-warning banner should NOT be visible
@@ -571,9 +571,9 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     await createProject(page, 'Hash Test With Banner');
     await openDmpSelectionDialog(page);
 
-    // Wait for sections to load (hash check runs on mount)
+    // Wait for lines to load (hash check runs on mount)
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
 
     // The duplicate-hash-warning banner should be visible
     const warning = page.locator('[data-testid="duplicate-hash-warning"]');
@@ -582,15 +582,15 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * Test: file hash passed to import_sections after successful import
+   * Test: file hash passed to import_lines after successful import
    *
    * After a successful import (no errors), the file hash should be
-   * included in the import_sections call for backend tracking.
+   * included in the import_lines call for backend tracking.
    */
-  test('should pass file hash to import_sections after successful import', async ({ page }) => {
+  test('should pass file hash to import_lines after successful import', async ({ page }) => {
     await createProject(page, 'Hash Track Success');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
     });
 
@@ -608,11 +608,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Main Passage',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Main Passage',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -626,14 +626,14 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       if (reset) reset();
     });
 
-    // Capture import_sections arguments for fileHash verification
+    // Capture import_lines arguments for fileHash verification
     await page.evaluate(() => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
       const originalInvoke = tauri.invoke;
-      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ = [];
       tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === 'import_sections') {
-          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        if (cmd === 'import_lines') {
+          (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__?.push(args ?? {});
         }
         return originalInvoke(cmd, args);
       };
@@ -642,11 +642,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Open import dialog and select only Main Passage (no errors)
     await openDmpSelectionDialog(page);
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
 
     // Select only Main Passage
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
 
     // Proceed to Step 2
     await proceedToDmpSectionConfig(page);
@@ -655,16 +655,16 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
     await page.getByTestId('confirm-button').click();
 
-    // Wait for import_sections call and verify fileHash passed for tracking
+    // Wait for import_lines call and verify fileHash passed for tracking
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+        const calls = (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ ?? [];
         return calls.length;
       });
     }).toBeGreaterThan(0);
 
     const lastArgs = await page.evaluate(() => {
-      const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+      const calls = (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ ?? [];
       return calls[calls.length - 1] ?? null;
     });
     expect(lastArgs).not.toBeNull();
@@ -679,8 +679,8 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
    */
   test('default surveyors and explorers become the credit of every imported shot', async ({ page }) => {
     await createProject(page, 'Default People');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
     });
     await page.evaluate(() => {
@@ -694,11 +694,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Main Passage',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Main Passage',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -706,9 +706,9 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
 
     await openDmpSelectionDialog(page);
     const dialog = page.getByTestId('dmp-selection-dialog');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
     await dialog.getByTestId('select-none-button').click();
-    await page.getByTestId('section-checkbox-0').click();
+    await page.getByTestId('line-checkbox-0').click();
 
     await dialog.getByTestId('default-surveyors-input').fill('Ann Diver');
     await dialog.getByTestId('default-surveyors-input').press('Enter');
@@ -726,10 +726,10 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       page.evaluate(() => {
         type Shot = { credit?: { surveyors: Array<{ name: string }>; explorers: Array<{ name: string }> } };
         const e2e = (window as unknown as {
-          __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ name: string | null; shots: Shot[] }> } | null } } };
+          __E2E_TEST__: { projectStore: { getState: () => { project: { lines: Array<{ name: string | null; shots: Shot[] }> } | null } } };
         }).__E2E_TEST__;
-        const section = e2e.projectStore.getState().project?.sections.find((s) => s.name === 'Main Passage');
-        return (section?.shots ?? []).map((shot) => ({
+        const line = e2e.projectStore.getState().project?.lines.find((s) => s.name === 'Main Passage');
+        return (line?.shots ?? []).map((shot) => ({
           surveyors: (shot.credit?.surveyors ?? []).map((p) => p.name),
           explorers: (shot.credit?.explorers ?? []).map((p) => p.name),
         }));
@@ -755,8 +755,8 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
    */
   test('sends each station MNemo number as its name and the stations carry it', async ({ page }) => {
     await createProject(page, 'Station Names');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
     });
     await page.evaluate(() => {
@@ -773,11 +773,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Main Passage',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Main Passage',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -785,10 +785,10 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     await page.evaluate(() => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
       const originalInvoke = tauri.invoke;
-      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ = [];
       tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === 'import_sections') {
-          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        if (cmd === 'import_lines') {
+          (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__?.push(args ?? {});
         }
         return originalInvoke(cmd, args);
       };
@@ -796,22 +796,22 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
 
     await openDmpSelectionDialog(page);
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
     await proceedToDmpSectionConfig(page);
     await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
     await page.getByTestId('confirm-button').click();
 
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+        const calls = (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ ?? [];
         return calls.length;
       });
     }).toBeGreaterThan(0);
     const sent = await page.evaluate(() => {
-      const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<{ sections?: Array<{ name: string; station_names: Array<[number, string]> }> }> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
-      return calls.flatMap((call) => call.sections ?? []).find((section) => section.name === 'Main Passage')?.station_names ?? null;
+      const calls = (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<{ lines?: Array<{ name: string; station_names: Array<[number, string]> }> }> }).__CAPTURED_IMPORT_LINES_ARGS__ ?? [];
+      return calls.flatMap((call) => call.lines ?? []).find((line) => line.name === 'Main Passage')?.station_names ?? null;
     });
     expect(sent).toEqual([
       [0, '0'],
@@ -824,14 +824,14 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       return page.evaluate(() => {
         const state = (window as unknown as {
           __E2E_TEST__: { projectStore: { getState: () => {
-            project: { sections: Array<{ id: number; name: string }> } | null;
-            stations: Array<{ station_ref: { section_id: number; station_index: number }; name?: string }>;
+            project: { lines: Array<{ id: number; name: string }> } | null;
+            stations: Array<{ station_ref: { line_id: number; station_index: number }; name?: string }>;
           } } };
         }).__E2E_TEST__.projectStore.getState();
-        const imported = state.project?.sections.find((section) => section.name === 'Main Passage');
+        const imported = state.project?.lines.find((line) => line.name === 'Main Passage');
         if (!imported) return null;
         return state.stations
-          .filter((station) => station.station_ref.section_id === imported.id)
+          .filter((station) => station.station_ref.line_id === imported.id)
           .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index)
           .map((station) => station.name ?? null);
       });
@@ -839,13 +839,13 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * Test: #567 item 2 - the suggestion phase's section-settings disclosure
+   * Test: #567 item 2 - the suggestion phase's line-settings disclosure
    * starts collapsed and preserves a typed name across a collapse/re-open.
    */
-  test('suggestion-phase section settings disclosure starts collapsed and preserves a typed name', async ({ page }) => {
+  test('suggestion-phase line settings disclosure starts collapsed and preserves a typed name', async ({ page }) => {
     await createProject(page, 'Disclosure Preserve');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
     });
 
@@ -863,11 +863,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Main Passage',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Main Passage',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -875,15 +875,15 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
 
     await openDmpSelectionDialog(page);
     const dialog = page.getByTestId('dmp-selection-dialog');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
     await proceedToDmpSectionConfig(page);
 
     await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
 
     const header = page.getByTestId('wizard-suggestion-section-settings-header');
-    const nameInput = page.getByTestId('section-name-input');
+    const nameInput = page.getByTestId('line-name-input');
 
     // Collapsed by default.
     await expect(nameInput).not.toBeVisible();
@@ -891,14 +891,14 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Expand, type a name.
     await header.click();
     await expect(nameInput).toBeVisible();
-    await nameInput.fill('Renamed Section');
-    await expect(nameInput).toHaveValue('Renamed Section');
+    await nameInput.fill('Renamed Line');
+    await expect(nameInput).toHaveValue('Renamed Line');
 
     // Collapse, then re-open - the typed name survives.
     await header.click();
     await expect(nameInput).not.toBeVisible();
     await header.click();
-    await expect(nameInput).toHaveValue('Renamed Section');
+    await expect(nameInput).toHaveValue('Renamed Line');
   });
 
   /**
@@ -914,8 +914,8 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
    */
   test('should clear importContext after the wizard completes @smoke', async ({ page }) => {
     await createProject(page, 'Import Context Clear');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
     });
 
@@ -933,11 +933,11 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Main Passage',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Main Passage',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -950,9 +950,9 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     expect(await readImportContext(page)).toBe('existing-project');
 
     const dialog = page.getByTestId('dmp-selection-dialog');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await page.locator('[data-testid="line-checkbox-0"]').click();
 
     await proceedToDmpSectionConfig(page);
 
@@ -962,19 +962,19 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Anchor on the import actually LANDING, not on the context going null:
     // a cancelled wizard also closes and also (correctly) clears the context,
     // so without this the test could pass having exercised nothing. A clean
-    // receipt is surfaced as a toast rather than the modal, so the section
+    // receipt is surfaced as a toast rather than the modal, so the line
     // count is the honest signal that the shared exit ran.
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 15000 });
-    await expect.poll(() => countSections(page), { timeout: 10000 }).toBe(2);
+    await expect.poll(() => countLines(page), { timeout: 10000 }).toBe(2);
 
     expect(await readImportContext(page)).toBeNull();
   });
 
   /**
-   * Test: import_sections NOT called when import has errors
+   * Test: import_lines NOT called when import has errors
    *
-   * When importing a section with validation errors, the import cannot proceed,
-   * so import_sections should not be called.
+   * When importing a line with validation errors, the import cannot proceed,
+   * so import_lines should not be called.
    */
   test('should not call track_imported_file when import has errors', async ({ page }) => {
     await createProject(page, 'Hash Track Error');
@@ -993,27 +993,27 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       if (reset) reset();
     });
 
-    // Capture import_sections arguments to confirm no import occurs
+    // Capture import_lines arguments to confirm no import occurs
     await page.evaluate(() => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
       const originalInvoke = tauri.invoke;
-      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ = [];
       tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === 'import_sections') {
-          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        if (cmd === 'import_lines') {
+          (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__?.push(args ?? {});
         }
         return originalInvoke(cmd, args);
       };
     });
 
-    // Open import dialog and select only the Validation Test Section (has errors)
+    // Open import dialog and select only the Validation Test Line (has errors)
     await openDmpSelectionDialog(page);
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
 
-    // Select only Validation Test Section (index 5)
+    // Select only Validation Test Line (index 5)
     await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-5"]').click();
+    await page.locator('[data-testid="line-checkbox-5"]').click();
 
     // Proceed to Step 2
     await proceedToDmpSectionConfig(page);
@@ -1021,9 +1021,9 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
 
-    // Verify import_sections was NOT called without an explicit placement action.
+    // Verify import_lines was NOT called without an explicit placement action.
     const calls = await page.evaluate(() => {
-      return (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+      return (window as unknown as { __CAPTURED_IMPORT_LINES_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_LINES_ARGS__ ?? [];
     });
     expect(calls.length).toBe(0);
 

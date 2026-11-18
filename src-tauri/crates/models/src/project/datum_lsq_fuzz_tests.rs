@@ -1,6 +1,6 @@
 //! Property fuzzer for GPS fixes in the Closures Computed View solve (#741).
 //!
-//! Random networks (sections merged into trees, loop closures, separately
+//! Random networks (lines merged into trees, loop closures, separately
 //! placed pieces, soft and hard GPS fixes, random solve sigmas), solved by
 //! [`Project::compute_adjusted_stations`]. Every property is derived from
 //! `lsq.rs`, not from the feature's summary:
@@ -42,15 +42,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, Project, SectionData,
-    SectionId, ShotData, StationRef, ZeroDatum,
+    gps_to_local, local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LineData, LineId,
+    Project, ShotData, StationRef, ZeroDatum,
 };
 
 /// `lsq.rs`'s `HARD_FIX_ACCURACY_M`: below it a fix is a hard pin.
 const HARD_FIX_ACCURACY_M: f64 = 1e-3;
 
-/// Per axis: the solve accepts stations of one section disagreeing on their
-/// section's translation by up to 1e-6 m before it refuses, so a held
+/// Per axis: the solve accepts stations of one line disagreeing on their
+/// line's translation by up to 1e-6 m before it refuses, so a held
 /// station can land that far from its target; plus float noise.
 const HELD_TOL_M: f64 = 1e-6 + 1e-8;
 
@@ -138,7 +138,7 @@ fn random_shot(rng: &mut Rng, depth_in: f64) -> ShotData {
 
 fn every_station(project: &Project) -> Vec<StationRef> {
     project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .collect()
@@ -172,7 +172,7 @@ fn gps_near(
     GpsCoordinates::new(lat, lon, 0.0).ok()
 }
 
-/// Sections merged into trees (some left on their own), loop closures in the
+/// Lines merged into trees (some left on their own), loop closures in the
 /// merged groups and now and then between two placed pieces, a placement
 /// datum on most pieces, and soft and hard fixes on random stations of the
 /// placed ones, a few of them on a placement datum's own station or a
@@ -180,8 +180,8 @@ fn gps_near(
 fn network(seed: u64) -> Network {
     let mut rng = Rng::new(seed);
     let mut project = Project::new(format!("LsqFuzz{seed}"), None);
-    let sections = 2 + rng.below(5);
-    for _ in 0..sections {
+    let lines = 2 + rng.below(5);
+    for _ in 0..lines {
         let mut depth = rng.range(0.0, 30.0);
         let shots = (0..=rng.below(6))
             .map(|_| {
@@ -195,14 +195,14 @@ fn network(seed: u64) -> Network {
         } else {
             1.0
         };
-        project.add_section(SectionData {
+        project.add_line(LineData {
             quality,
             shots,
             ..Default::default()
         });
     }
     project.ensure_shot_uuids();
-    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+    let ids: Vec<LineId> = project.lines.iter().map(|s| s.id).collect();
     for (i, &id) in ids.iter().enumerate().skip(1) {
         if rng.chance(70) {
             let other = ids[rng.below(i)];
@@ -215,12 +215,12 @@ fn network(seed: u64) -> Network {
     // Placement datums: the first is the frame, at a random origin.
     let origin = random_origin(&mut rng);
     let mut frame: Option<GpsCoordinates> = None;
-    let mut seen: HashSet<SectionId> = HashSet::new();
+    let mut seen: HashSet<LineId> = HashSet::new();
     for &id in &ids {
         if seen.contains(&id) {
             continue;
         }
-        seen.extend(project.get_merged_section_ids(id));
+        seen.extend(project.get_merged_line_ids(id));
         if !rng.chance(80) {
             continue;
         }
@@ -256,15 +256,15 @@ fn network(seed: u64) -> Network {
 
     // GPS fixes on placed pieces, appended after every placement datum.
     if let Some(frame) = frame {
-        let placed: HashSet<SectionId> = project
+        let placed: HashSet<LineId> = project
             .placement_datum_refs()
             .into_iter()
-            .flat_map(|sr| project.get_merged_section_ids(sr.section_id))
+            .flat_map(|sr| project.get_merged_line_ids(sr.line_id))
             .collect();
         let candidates: Vec<StationRef> = stations
             .iter()
             .copied()
-            .filter(|s| placed.contains(&s.section_id))
+            .filter(|s| placed.contains(&s.line_id))
             .collect();
         // Stations merged to a placement datum's station: one point with it,
         // so a fix there is in the placement's own constraint group.
@@ -330,8 +330,8 @@ fn network(seed: u64) -> Network {
     Network { project, config }
 }
 
-fn random_station_of(project: &Project, id: SectionId, rng: &mut Rng) -> StationRef {
-    let shots = project.get_section(id).map_or(0, |s| s.shots.len());
+fn random_station_of(project: &Project, id: LineId, rng: &mut Rng) -> StationRef {
+    let shots = project.get_line(id).map_or(0, |s| s.shots.len());
     let index = if rng.chance(30) {
         0
     } else {
@@ -438,18 +438,18 @@ fn held_groups(project: &Project) -> (Groups, HashSet<StationRef>, Vec<HeldFix>)
     (groups, held, fixes)
 }
 
-/// Whether every constraint group of `section`'s component is held, so the
+/// Whether every constraint group of `line`'s component is held, so the
 /// solve has no unknown there.
 fn component_all_held(
     project: &Project,
     groups: &mut Groups,
     held: &HashSet<StationRef>,
-    section: SectionId,
+    line: LineId,
 ) -> bool {
-    let component = project.get_connected_section_ids(section);
+    let component = project.get_connected_line_ids(line);
     every_station(project)
         .into_iter()
-        .filter(|s| component.contains(&s.section_id))
+        .filter(|s| component.contains(&s.line_id))
         .all(|s| held.contains(&groups.find(s)))
 }
 
@@ -457,31 +457,27 @@ fn component_all_held(
 fn enforced_hard_fixes(project: &Project) -> Vec<HeldFix> {
     let (mut groups, held, mut fixes) = held_groups(project);
     for fix in &mut fixes {
-        fix.no_unknowns = component_all_held(project, &mut groups, &held, fix.at.section_id);
+        fix.no_unknowns = component_all_held(project, &mut groups, &held, fix.at.line_id);
     }
     fixes
 }
 
-/// "hard-fix-no-unknowns" when every group of `section`'s component is held
+/// "hard-fix-no-unknowns" when every group of `line`'s component is held
 /// in `project` (the solve's `n == 0` return), else `class`.
-fn class_unless_all_held(
-    project: &Project,
-    section: SectionId,
-    class: &'static str,
-) -> &'static str {
+fn class_unless_all_held(project: &Project, line: LineId, class: &'static str) -> &'static str {
     let (mut groups, held, _) = held_groups(project);
-    if component_all_held(project, &mut groups, &held, section) {
+    if component_all_held(project, &mut groups, &held, line) {
         "hard-fix-no-unknowns"
     } else {
         class
     }
 }
 
-/// A computed view: every station's (x, y, z), the sections of every
+/// A computed view: every station's (x, y, z), the lines of every
 /// component the solve could not adjust (shown measured), and why.
 struct View {
     at: HashMap<StationRef, (f64, f64, f64)>,
-    failed: HashSet<SectionId>,
+    failed: HashSet<LineId>,
     errors: Vec<String>,
 }
 
@@ -499,7 +495,7 @@ fn solve(project: &Project, config: &ClosureAdjustmentConfig) -> View {
         failed: solved
             .failures
             .iter()
-            .flat_map(|f| f.section_ids.iter().copied())
+            .flat_map(|f| f.line_ids.iter().copied())
             .collect(),
         errors: solved.failures.iter().map(|f| f.error.clone()).collect(),
     }
@@ -544,7 +540,7 @@ fn check_view(project: &Project, view: &View, bare: &View) -> Result<(), String>
         if !(x.is_finite() && y.is_finite() && z.is_finite()) {
             return Err(format!("nonfinite: {at:?} at ({x}, {y}, {z})"));
         }
-        if view.failed.contains(&at.section_id) || bare.failed.contains(&at.section_id) {
+        if view.failed.contains(&at.line_id) || bare.failed.contains(&at.line_id) {
             continue;
         }
         let bz = bare.at[at].2;
@@ -556,7 +552,7 @@ fn check_view(project: &Project, view: &View, bare: &View) -> Result<(), String>
         }
     }
     for at in project.placement_datum_refs() {
-        if view.failed.contains(&at.section_id) {
+        if view.failed.contains(&at.line_id) {
             continue;
         }
         let (rx, ry, _) = raw[&at];
@@ -569,7 +565,7 @@ fn check_view(project: &Project, view: &View, bare: &View) -> Result<(), String>
     }
     for fix in enforced_hard_fixes(project) {
         let at = fix.at;
-        if view.failed.contains(&at.section_id) {
+        if view.failed.contains(&at.line_id) {
             continue;
         }
         let (x, y, _) = view.at[&at];
@@ -630,13 +626,13 @@ fn check_tightening(
     // The tightened project is a network of its own: its view must hold
     // first, so a fix the tightening made hard is judged as one.
     check_view(&tighter, &after, bare)?;
-    if base.failed.contains(&at.section_id) || after.failed.contains(&at.section_id) {
+    if base.failed.contains(&at.line_id) || after.failed.contains(&at.line_id) {
         return Ok(false);
     }
     let target = gps_to_local(&zd.gps, &frame);
     let (d0, d1) = (off(base, at, target), off(&after, at, target));
     if d1 > d0 + 1e-6 {
-        let class = class_unless_all_held(&tighter, at.section_id, "tighten-moved-away");
+        let class = class_unless_all_held(&tighter, at.line_id, "tighten-moved-away");
         return Err(format!(
             "{class}: fix {i} at {at:?}, accuracy {was} -> {now}: {d0} m -> {d1} m \
              from its GPS"
@@ -657,15 +653,15 @@ fn check_consistent_fix(
     let Some(frame) = project.frame_datum().map(|zd| zd.gps) else {
         return Ok(false);
     };
-    let placed: HashSet<SectionId> = project
+    let placed: HashSet<LineId> = project
         .placement_datum_refs()
         .into_iter()
-        .flat_map(|sr| project.get_merged_section_ids(sr.section_id))
+        .flat_map(|sr| project.get_merged_line_ids(sr.line_id))
         .collect();
     let taken: HashSet<StationRef> = project.all_datum_refs().into_iter().collect();
     let candidates: Vec<StationRef> = every_station(project)
         .into_iter()
-        .filter(|s| placed.contains(&s.section_id) && !taken.contains(s))
+        .filter(|s| placed.contains(&s.line_id) && !taken.contains(s))
         .collect();
     if candidates.is_empty() {
         return Ok(false);
@@ -698,7 +694,7 @@ fn check_consistent_fix(
     }
     let after = solve(&with_fix, &net.config);
     check_view(&with_fix, &after, bare)?;
-    let component = project.get_connected_section_ids(at.section_id);
+    let component = project.get_connected_line_ids(at.line_id);
     if component
         .iter()
         .any(|s| base.failed.contains(s) || after.failed.contains(s))
@@ -708,7 +704,7 @@ fn check_consistent_fix(
     for (sr, &(bx, by, _)) in &base.at {
         let (ax, ay, _) = after.at[sr];
         if (ax - bx).abs() > 1e-6 || (ay - by).abs() > 1e-6 {
-            let class = class_unless_all_held(&with_fix, at.section_id, "consistent-fix-moved");
+            let class = class_unless_all_held(&with_fix, at.line_id, "consistent-fix-moved");
             return Err(format!(
                 "{class}: a fix ({:?}) at {at:?} on its computed position moved {sr:?} \
                  from ({bx}, {by}) to ({ax}, {ay})",
@@ -774,10 +770,10 @@ fn gps_fixes_in_the_computed_view_keep_their_properties() {
     let mut failed: Vec<String> = Vec::new();
     for seed in first..first + seeds {
         if let Err(e) = run_seed(seed, &mute, &mut stats) {
-            let line = format!("{e} (datum lsq fuzz seed {seed})");
-            assert!(keep_going, "{line}");
-            eprintln!("FAIL {line}");
-            failed.push(line);
+            let report = format!("{e} (datum lsq fuzz seed {seed})");
+            assert!(keep_going, "{report}");
+            eprintln!("FAIL {report}");
+            failed.push(report);
         }
     }
     eprintln!(
@@ -811,7 +807,7 @@ fn gps_fixes_in_the_computed_view_keep_their_properties() {
     }
 }
 
-/// Print network `seed` - its sections, merges, closures, datums with their
+/// Print network `seed` - its lines, merges, closures, datums with their
 /// roles, and both views - then run its checks.
 #[test]
 #[ignore = "replays one network: STALAGMIGHT_DATUM_LSQ_FUZZ_REPLAY=<seed>"]
@@ -822,11 +818,11 @@ fn replay_a_datum_lsq_seed() {
         .unwrap();
     let net = network(seed);
     let p = &net.project;
-    for s in &p.sections {
+    for s in &p.lines {
         eprintln!(
-            "section {} offset {:?}: {} shots",
+            "line {} offset {:?}: {} shots",
             s.id,
-            p.section_offsets.get(&s.id),
+            p.line_offsets.get(&s.id),
             s.shots.len()
         );
     }

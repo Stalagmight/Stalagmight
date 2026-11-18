@@ -110,7 +110,7 @@ describe('AddOrOpenProjectDialog', () => {
   });
 
   it('"Add to" appends the file and never opens it as a project', async () => {
-    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, line_ids: [] });
     render(<AddOrOpenProjectDialog />);
     await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
     expect(runAddProjectFile).toHaveBeenCalledWith('/cave/other.stalx');
@@ -145,13 +145,13 @@ describe('AddOrOpenProjectDialog', () => {
 
     // The tail finished the flow: orphan placement replaced this dialog.
     activeDialog = 'orphan-placement';
-    await act(async () => resolveAdd({ success: true, warnings: [], error: null, section_ids: [7] }));
+    await act(async () => resolveAdd({ success: true, warnings: [], error: null, line_ids: [7] }));
     expect(closeDialog).not.toHaveBeenCalled();
     expect(trackDialogComplete).not.toHaveBeenCalled();
   });
 
   it('a failed add shows why inline and hands the choice back', async () => {
-    vi.mocked(runAddProjectFile).mockResolvedValue({ success: false, warnings: [], error: 'boom', section_ids: [] });
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: false, warnings: [], error: 'boom', line_ids: [] });
     render(<AddOrOpenProjectDialog />);
     await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
     expect(screen.getByTestId('add-or-open-project-error').textContent).toBe('boom');
@@ -161,7 +161,7 @@ describe('AddOrOpenProjectDialog', () => {
   });
 
   it('closes itself when the add landed but its project moved (the tail was dropped)', async () => {
-    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, line_ids: [] });
     render(<AddOrOpenProjectDialog />);
     await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
     expect(closeDialog).toHaveBeenCalledTimes(1);

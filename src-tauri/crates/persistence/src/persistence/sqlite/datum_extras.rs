@@ -15,12 +15,12 @@
 //! - `zero_datum_extras` holds one row per saved datum, placement and fix
 //!   alike, so the order of the WHOLE list survives:
 //!   - `position` (primary key): the datum's place in the saved list, from 0;
-//!   - `section_id`, `station_index`: its station;
+//!   - `line_id`, `station_index`: its station;
 //!   - `shot_uuid`: the uuid of the shot ending at that station, NULL for
 //!     station 0 (see the checks below);
 //!   - `start_shot_uuid`: for station 0 only, the uuid of the shot STARTING
-//!     there (the section's first shot); NULL for any other station, and for
-//!     a section with no shots;
+//!     there (the line's first shot); NULL for any other station, and for
+//!     a line with no shots;
 //!   - `in_zero_datums`: 1 when its GPS is the `zero_datums` row at that
 //!     station (a placement datum), 0 for a GPS fix;
 //!   - `latitude`, `longitude`, `depth_reference`: a fix's GPS, NULL for a
@@ -48,11 +48,11 @@
 //!   warning): the project loads as an older build sees it;
 //! - each row's `shot_uuid` must still be the uuid of the shot ending at its
 //!   station, and a station 0 row's `start_shot_uuid` the uuid of the
-//!   section's first shot. A fix whose station moved is skipped; a placement
+//!   line's first shot. A fix whose station moved is skipped; a placement
 //!   row that moved fails the first check, so the table is ignored. A station
 //!   0 row with no `start_shot_uuid` (the column was added after the table, so
 //!   a table without it, or a NULL, is a row written before it) is checked by
-//!   its section alone, as it was then. A table without `entrance` (also
+//!   its line alone, as it was then. A table without `entrance` (also
 //!   added after the table) reads every row as having no answer.
 //!
 //! Nothing the table holds fails the load, as with the credit tables (#717): a
@@ -70,7 +70,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::models::{
-    validate_gps_accuracy, DatumRole, GpsCoordinates, Project, Section, StationKey, ZeroDatum,
+    validate_gps_accuracy, DatumRole, GpsCoordinates, Line, Project, StationKey, ZeroDatum,
 };
 
 use super::shot_credits::{extended_code, is_schema_error};
@@ -120,7 +120,7 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
     )?;
     for (station, datum, _) in saved.iter().filter(|(_, _, is_fix)| !is_fix) {
         insert.execute(params![
-            station.section_id,
+            station.line_id,
             station.station_index,
             datum.gps.latitude,
             datum.gps.longitude,
@@ -143,19 +143,19 @@ pub(super) fn write_zero_datums(tx: &Transaction<'_>, project: &Project) -> Resu
                 None => (
                     None,
                     uuid_of
-                        .query_row(params![station.section_id, 0], |row| row.get(0))
+                        .query_row(params![station.line_id, 0], |row| row.get(0))
                         .optional()?
                         .flatten(),
                 ),
                 Some(seq) => (
-                    uuid_of.query_row(params![station.section_id, seq], |row| row.get(0))?,
+                    uuid_of.query_row(params![station.line_id, seq], |row| row.get(0))?,
                     None,
                 ),
             };
         let gps = is_fix.then_some(&datum.gps);
         insert.execute(params![
             i64::try_from(position)?,
-            station.section_id,
+            station.line_id,
             station.station_index,
             shot_uuid,
             i64::from(!is_fix),
@@ -188,13 +188,13 @@ pub fn holds_datum_extras(project: &Project) -> bool {
 
 /// The project's zero datums: `base` (the `zero_datums` rows, in table order,
 /// as positional keys) combined with `zero_datum_extras` as the module doc
-/// describes. `sections` are the loaded sections, for the station checks.
+/// describes. `lines` are the loaded lines, for the station checks.
 pub(super) fn combine(
     conn: &Connection,
-    sections: &[Section],
+    lines: &[Line],
     base: Vec<ZeroDatum>,
 ) -> Result<Vec<ZeroDatum>> {
-    let rows = match read_rows(conn, sections) {
+    let rows = match read_rows(conn, lines) {
         Ok(Read::Rows(rows)) => rows,
         Ok(Read::Absent) => return Ok(base),
         Ok(Read::TooMany) => {
@@ -219,7 +219,7 @@ pub(super) fn combine(
         .enumerate()
         .map(|(i, datum)| (&datum.station_ref, i))
         .collect();
-    let sections: HashMap<u32, &Section> = sections.iter().map(|s| (s.id, s)).collect();
+    let lines: HashMap<u32, &Line> = lines.iter().map(|s| (s.id, s)).collect();
 
     // What each row becomes: a `base` datum (by index) or a fix of its own.
     enum Entry {
@@ -235,11 +235,11 @@ pub(super) fn combine(
             counts.skipped += 1;
             continue;
         };
-        if !anchor_holds(&sections, &row) {
+        if !anchor_holds(&lines, &row) {
             counts.stale += 1;
             continue;
         }
-        let key = StationKey::positional(row.section_id, row.station_index);
+        let key = StationKey::positional(row.line_id, row.station_index);
         let accuracy_m = row.accuracy_m.unwrap_or_else(|()| {
             counts.unreadable_values += 1;
             None
@@ -311,7 +311,7 @@ enum Read {
 
 /// One readable row.
 struct Row {
-    section_id: u32,
+    line_id: u32,
     station_index: u32,
     shot_uuid: Option<String>,
     /// Station 0 only: the uuid of the shot starting there, when recorded.
@@ -325,7 +325,7 @@ struct Row {
     entrance: Result<Option<bool>, ()>,
 }
 
-fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> {
+fn read_rows(conn: &Connection, lines: &[Line]) -> rusqlite::Result<Read> {
     let tables: i64 = conn.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'zero_datum_extras'",
         [],
@@ -337,7 +337,7 @@ fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> 
     let rows: i64 = conn.query_row("SELECT count(*) FROM zero_datum_extras", [], |row| {
         row.get(0)
     })?;
-    let stations: usize = sections.iter().map(|s| s.shots.len() + 1).sum();
+    let stations: usize = lines.iter().map(|s| s.shots.len() + 1).sum();
     if usize::try_from(rows).map_or(true, |rows| rows > stations) {
         return Ok(Read::TooMany);
     }
@@ -379,7 +379,7 @@ fn read_rows(conn: &Connection, sections: &[Section]) -> rusqlite::Result<Read> 
 
 /// A row as this build writes it, or `None`.
 fn decode(
-    section_id: rusqlite::Result<u32>,
+    line_id: rusqlite::Result<u32>,
     station_index: rusqlite::Result<u32>,
     [shot_uuid, start_shot_uuid]: [rusqlite::Result<Option<String>>; 2],
     in_zero_datums: rusqlite::Result<i64>,
@@ -415,7 +415,7 @@ fn decode(
         _ => Err(()),
     };
     Some(Row {
-        section_id: section_id.ok()?,
+        line_id: line_id.ok()?,
         station_index: station_index.ok()?,
         shot_uuid: shot_uuid.ok()?,
         start_shot_uuid: start_shot_uuid.ok()?,
@@ -426,12 +426,12 @@ fn decode(
 }
 
 /// Whether the station still exists and the shot ending at it is still the
-/// one the row recorded. Station 0 ends no shot: it holds while the section's
+/// one the row recorded. Station 0 ends no shot: it holds while the line's
 /// first shot is still the one the row recorded, or always for a row that
-/// recorded none (one written before `start_shot_uuid`, or a section with no
+/// recorded none (one written before `start_shot_uuid`, or a line with no
 /// shots then).
-fn anchor_holds(sections: &HashMap<u32, &Section>, row: &Row) -> bool {
-    let Some(section) = sections.get(&row.section_id) else {
+fn anchor_holds(lines: &HashMap<u32, &Line>, row: &Row) -> bool {
+    let Some(line) = lines.get(&row.line_id) else {
         return false;
     };
     let shot_uuid = row.shot_uuid.as_deref();
@@ -439,13 +439,13 @@ fn anchor_holds(sections: &HashMap<u32, &Section>, row: &Row) -> bool {
         None => {
             shot_uuid.is_none()
                 && row.start_shot_uuid.as_deref().is_none_or(|start| {
-                    section.shots.first().and_then(|s| s.uuid.as_deref()) == Some(start)
+                    line.shots.first().and_then(|s| s.uuid.as_deref()) == Some(start)
                 })
         }
         Some(seq) => {
             let Some(shot) = usize::try_from(seq)
                 .ok()
-                .and_then(|seq| section.shots.get(seq))
+                .and_then(|seq| line.shots.get(seq))
             else {
                 return false;
             };

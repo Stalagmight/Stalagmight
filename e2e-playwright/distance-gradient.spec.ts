@@ -1,13 +1,13 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForDrawnStations,
   getStationScreenPositions,
   getShotScreenPositions,
   readCanvasPixel,
   type PixelRgba,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../src/utils/distanceGradient';
 
@@ -25,7 +25,7 @@ import { DISTANCE_NEAR, DISTANCE_FAR } from '../src/utils/distanceGradient';
  * distance-ramp color". That is strictly closer to what the diver sees.
  *
  * The mock's distance field is `|x|` of each station and the mock puts station
- * `i` at `x = i * 10`, so with a 2-shot section the scale is 0..20: station 0 is
+ * `i` at `x = i * 10`, so with a 2-shot line the scale is 0..20: station 0 is
  * at distance 0 (the exact NEAR end of the ramp), station 2 at the max (the exact
  * FAR end) and station 1 halfway (a genuinely interpolated color). Those two
  * endpoints are exact because MapLibre's `interpolate` short-circuits them, and
@@ -41,7 +41,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Distance A',
     direction: 'in',
@@ -78,7 +78,7 @@ async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
 async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
   const colorKeys = ['showDepthGradient', 'showDistanceGradient', 'showIssueSeverity'];
   const before = await isToggleOn(page, toggleKey);
-  // Color modes are single-select: turn one OFF by selecting Section, not by re-clicking the pill.
+  // Color modes are single-select: turn one OFF by selecting Line, not by re-clicking the pill.
   if (before && colorKeys.includes(toggleKey)) {
     await page.locator('[data-testid="display-color-section"]').click();
   } else {
@@ -127,16 +127,16 @@ async function zoomIn(page: Page, delta = 4): Promise<number> {
 }
 
 /**
- * The painted pixel at the center of one station's disc, identified by section
- * ORDER (the seeded sections' ids are assigned by the mock) and station index.
+ * The painted pixel at the center of one station's disc, identified by line
+ * ORDER (the seeded lines' ids are assigned by the mock) and station index.
  * The center pixel is the station's fill, which is exactly what the overlay owns.
  */
-async function stationPixel(page: Page, sectionOrder: number, stationIndex: number): Promise<PixelRgba> {
+async function stationPixel(page: Page, lineOrder: number, stationIndex: number): Promise<PixelRgba> {
   const stations = await getStationScreenPositions(page);
-  const sectionIds = [...new Set(stations.map((s) => s.sectionId))].sort((a, b) => a - b);
-  const sectionId = sectionIds[sectionOrder];
-  const station = stations.find((s) => s.sectionId === sectionId && s.stationIndex === stationIndex);
-  if (!station) throw new Error(`no drawn station for section #${sectionOrder} index ${stationIndex}`);
+  const lineIds = [...new Set(stations.map((s) => s.lineId))].sort((a, b) => a - b);
+  const lineId = lineIds[lineOrder];
+  const station = stations.find((s) => s.lineId === lineId && s.stationIndex === stationIndex);
+  if (!station) throw new Error(`no drawn station for line #${lineOrder} index ${stationIndex}`);
   return readCanvasPixel(page, station.x, station.y);
 }
 
@@ -145,13 +145,13 @@ async function stationPixel(page: Page, sectionOrder: number, stationIndex: numb
  * line color too, and a shot's value is the average of its endpoint stations, so a
  * mid-survey shot always lands strictly inside the ramp.
  */
-async function shotPixel(page: Page, sectionOrder: number, shotOrder: number): Promise<PixelRgba> {
+async function shotPixel(page: Page, lineOrder: number, shotOrder: number): Promise<PixelRgba> {
   const shots = await getShotScreenPositions(page);
-  const sectionIds = [...new Set(shots.map((s) => s.sectionId))].sort((a, b) => a - b);
-  const sectionId = sectionIds[sectionOrder];
-  const inSection = shots.filter((s) => s.sectionId === sectionId).sort((a, b) => a.shotId - b.shotId);
-  const shot = inSection[shotOrder];
-  if (!shot) throw new Error(`no drawn shot #${shotOrder} for section #${sectionOrder}`);
+  const lineIds = [...new Set(shots.map((s) => s.lineId))].sort((a, b) => a - b);
+  const lineId = lineIds[lineOrder];
+  const inLine = shots.filter((s) => s.lineId === lineId).sort((a, b) => a.shotId - b.shotId);
+  const shot = inLine[shotOrder];
+  if (!shot) throw new Error(`no drawn shot #${shotOrder} for line #${lineOrder}`);
   return readCanvasPixel(page, shot.mid.x, shot.mid.y);
 }
 
@@ -171,17 +171,17 @@ test.describe('Distance Gradient', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Distance Gradient Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapLoaded(page);
     await waitForDrawnStations(page, 1);
   });
 
-  test('toggle paints the distance ramp (+ legend) and off restores the section colors', async ({ page }) => {
+  test('toggle paints the distance ramp (+ legend) and off restores the line colors', async ({ page }) => {
     await zoomIn(page);
     await openDisplayMenu(page);
     expect(await isToggleOn(page, 'showDistanceGradient')).toBe(false);
 
-    // Baseline: in plain section-color mode every station of the section shares one
+    // Baseline: in plain line-color mode every station of the line shares one
     // color, and it is neither end of the distance ramp.
     const baseline = await stationPixel(page, 0, 0);
     expect(await stationPixel(page, 0, 1)).toEqual(baseline);
@@ -202,7 +202,7 @@ test.describe('Distance Gradient', () => {
     expect(await stationPixel(page, 0, 2)).toEqual(FAR_RGBA);
     expectBetweenRampEnds(await stationPixel(page, 0, 1));
 
-    // Toggle off -> legend gone, section colors restored.
+    // Toggle off -> legend gone, line colors restored.
     await toggleDisplayOption(page, 'showDistanceGradient');
     await expect(page.locator('[data-testid="distance-legend"]')).not.toBeVisible();
     await expect.poll(() => stationPixel(page, 0, 0), { timeout: 3000 }).toEqual(baseline);
@@ -233,7 +233,7 @@ test.describe('Distance Gradient', () => {
     const zoom = await zoomIn(page);
     await openDisplayMenu(page);
 
-    // Baseline section color of the two features probed after the rebuild, so
+    // Baseline line color of the two features probed after the rebuild, so
     // "still ramp-painted" is provably not "reverted to the base colors".
     const stationBase = await stationPixel(page, 0, 2);
     const shotBase = await shotPixel(page, 0, 1);
@@ -246,7 +246,7 @@ test.describe('Distance Gradient', () => {
     // buffers from scratch; the stock path had setData wipe the feature-state). The
     // overlay must re-apply its ramp afterward, the key correctness risk. (Depth
     // toggle can no longer be the trigger since it now disables distance.)
-    await seedProjectWithSections(page, [
+    await seedProjectWithLines(page, [
       {
         name: 'Distance C',
         direction: 'in',
@@ -257,16 +257,16 @@ test.describe('Distance Gradient', () => {
     await setMapZoom(page, zoom);
     await waitForDrawnStations(page, 1);
 
-    // Still painted ramp colors, NOT the base section colors: the re-apply held for
+    // Still painted ramp colors, NOT the base line colors: the re-apply held for
     // both the station fill and the shot line.
     //
-    // Probe the far end of the FIRST section: the mock lays every section out along
-    // the same axis (station i at x = i*10), so the new section's stations sit
+    // Probe the far end of the FIRST line: the mock lays every line out along
+    // the same axis (station i at x = i*10), so the new line's stations sit
     // exactly on top of the first two of this one, and the mock never bumps
-    // `modified_at` on create_section (the refetch key), so the field the ramp
-    // re-applies from still predates the new section and paints it grey
-    // (unreachable) where they overlap. Station 2 / shot 2 of the first section are
-    // beyond the new section's extent, so they read the ramp cleanly.
+    // `modified_at` on create_line (the refetch key), so the field the ramp
+    // re-applies from still predates the new line and paints it grey
+    // (unreachable) where they overlap. Station 2 / shot 2 of the first line are
+    // beyond the new line's extent, so they read the ramp cleanly.
     await expect.poll(() => stationPixel(page, 0, 2), { timeout: 3000 }).toEqual(FAR_RGBA);
     expect(await stationPixel(page, 0, 2)).not.toEqual(stationBase);
     const shotAfter = await shotPixel(page, 0, 1);

@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -16,13 +16,13 @@ import {
  *   overscan = 8
  *
  * Legacy structural selectors remain available, while semantic row/cell aliases
- * use section and shot IDs. Tests verify both contracts across virtualization.
+ * use line and shot IDs. Tests verify both contracts across virtualization.
  */
 
 const SHOT_COUNT = 120;
 
-/** Generate a section with many shots. */
-function buildLargeSection(): SectionSeed {
+/** Generate a line with many shots. */
+function buildLargeLine(): LineSeed {
   const shots = Array.from({ length: SHOT_COUNT }, (_, i) => ({
     azimuth_in: (i * 3) % 360,
     azimuth_out: ((i * 3) + 180) % 360,
@@ -42,7 +42,7 @@ function buildLargeSection(): SectionSeed {
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // Wait for grid rows to render (auto-selects first section)
+  // Wait for grid rows to render (auto-selects first line)
   await page.waitForSelector('[data-testid^="grid-row-"]', { timeout: 10000 });
 }
 
@@ -53,17 +53,17 @@ test.describe('Virtual Scrolling in DataTable', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Virtual Scroll Test');
-    await seedProjectWithSections(page, [buildLargeSection()]);
+    await seedProjectWithLines(page, [buildLargeLine()]);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);
   });
 
-  test('DataTable virtualizes rows while preserving full section data', async ({ page }) => {
+  test('DataTable virtualizes rows while preserving full line data', async ({ page }) => {
     const totalShots = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return 0;
-      return e2e.projectStore.getState().project?.sections?.[0]?.shots?.length ?? 0;
+      return e2e.projectStore.getState().project?.lines?.[0]?.shots?.length ?? 0;
     });
     expect(totalShots).toBe(SHOT_COUNT);
 
@@ -77,18 +77,19 @@ test.describe('Virtual Scrolling in DataTable', () => {
     const ids = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return null;
-      const section = e2e.projectStore.getState().project?.sections?.[0];
-      return section ? { sectionId: section.id, shotId: section.shots[0]?.id ?? null } : null;
+      const line = e2e.projectStore.getState().project?.lines?.[0];
+      return line ? { lineId: line.id, shotId: line.shots[0]?.id ?? null } : null;
     });
     if (!ids || ids.shotId == null) throw new Error('No first shot identity');
 
     const firstRow = page.getByTestId('grid-row-0');
     await expect(firstRow).toBeVisible();
-    // The row gutter shows the section:position shot id (positions are 1-based)
-    await expect(page.getByTestId('grid-gutter-0')).toContainText(`${ids.sectionId}:1`);
+    // The row gutter names the shot by its two stations (seeded "0" and "1"),
+    // never by a line:position id.
+    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0 \u2192 1');
 
-    const semanticRow = page.getByTestId(`shot-row-${ids.sectionId}-${ids.shotId}`);
-    const semanticCell = page.getByTestId(`shot-cell-${ids.sectionId}-${ids.shotId}-length`);
+    const semanticRow = page.getByTestId(`shot-row-${ids.lineId}-${ids.shotId}`);
+    const semanticCell = page.getByTestId(`shot-cell-${ids.lineId}-${ids.shotId}-length`);
     await expect(semanticRow).toHaveCount(1);
     await expect(semanticRow).toBeVisible();
     await expect(semanticCell).toHaveCount(1);
@@ -101,8 +102,8 @@ test.describe('Virtual Scrolling in DataTable', () => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return null;
       const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
-      const shots = section?.shots ?? [];
+      const line = state.project?.lines?.[0];
+      const shots = line?.shots ?? [];
       return shots[shots.length - 1]?.id ?? null;
     });
     expect(lastShotId).not.toBeNull();
@@ -110,9 +111,9 @@ test.describe('Virtual Scrolling in DataTable', () => {
     await page.evaluate((shotId) => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return;
-      const section = e2e.projectStore.getState().project?.sections?.[0];
-      if (!section || shotId == null) return;
-      e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId });
+      const line = e2e.projectStore.getState().project?.lines?.[0];
+      if (!line || shotId == null) return;
+      e2e.uiStore.getState().setSelection({ type: 'shot', lineId: line.id, shotId });
     }, lastShotId);
 
     // The grid scrolls to the externally-selected row and marks it active
@@ -126,10 +127,10 @@ test.describe('Virtual Scrolling in DataTable', () => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return null;
       const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
+      const line = state.project?.lines?.[0];
       return {
-        sectionId: section?.id ?? 0,
-        shotIds: (section?.shots ?? []).map((s: any) => s.id),
+        lineId: line?.id ?? 0,
+        shotIds: (line?.shots ?? []).map((s: any) => s.id),
       };
     });
     if (!ids) throw new Error('No project IDs');
@@ -137,12 +138,12 @@ test.describe('Virtual Scrolling in DataTable', () => {
     // Select a shot near the end (index 100) via store
     const targetShotId = ids.shotIds[100];
     await page.evaluate(
-      ({ sectionId, shotId }) => {
+      ({ lineId, shotId }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
-        e2e.uiStore.getState().setSelection({ type: 'shot', sectionId, shotId });
+        e2e.uiStore.getState().setSelection({ type: 'shot', lineId, shotId });
       },
-      { sectionId: ids.sectionId, shotId: targetShotId },
+      { lineId: ids.lineId, shotId: targetShotId },
     );
 
     // The grid moves its active cell to the externally-selected row
@@ -165,9 +166,9 @@ test.describe('Virtual Scrolling in DataTable', () => {
     await expect(page.getByTestId('grid-gutter-0')).toHaveClass(/sg-gutter-active/);
   });
 
-  test('DataTable header section pill shows section name', async ({ page }) => {
-    const sectionPill = page.getByTestId('data-table-section-pill');
-    await expect(sectionPill).toBeVisible();
-    await expect(sectionPill).toContainText('Long Passage');
+  test('DataTable header line pill shows line name', async ({ page }) => {
+    const linePill = page.getByTestId('data-table-line-pill');
+    await expect(linePill).toBeVisible();
+    await expect(linePill).toContainText('Long Passage');
   });
 });

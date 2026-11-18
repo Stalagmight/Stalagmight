@@ -220,13 +220,14 @@ fn release_context(state: &AppState, endpoint: &str) -> SpeleoReleaseContext {
 
 /// A small edit through the `execute()` chokepoint.
 fn an_edit(name: &str) -> Command {
-    Command::CreateSection {
+    Command::CreateLine {
         name: Some(name.to_owned()),
         surveyor: None,
         date: None,
         color: "#336699".to_owned(),
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     }
 }
 
@@ -328,7 +329,7 @@ fn an_instance_change_still_waits_for_the_lock_operation() {
 }
 
 #[test]
-fn a_partial_write_keeps_the_live_speleodb_section() {
+fn a_partial_write_keeps_the_live_speleodb_line() {
     // A sign-in writes `config` without `config_write_lock`. One landing between a
     // partial write's clone and its save used to read as an instance change: the
     // panel write cleared the new token and ended the session.

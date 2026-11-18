@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, createSectionViaStore, openSettingsFromMenu } from './helpers/app';
+import { setupMockedPage, createProject, createLineViaStore, openSettingsFromMenu } from './helpers/app';
 import { setIpcOverrides } from './helpers/ipcOverrides';
 
 /**
@@ -108,8 +108,8 @@ test.describe('In-app update banner', () => {
   });
 
   test('Restart with a dirty project raises the unsaved-changes guard instead of restarting', async ({ page }) => {
-    await createSectionViaStore(page, {
-      name: 'Update Restart Dirty Section',
+    await createLineViaStore(page, {
+      name: 'Update Restart Dirty Line',
       shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 0 }],
     });
     await page.waitForFunction(

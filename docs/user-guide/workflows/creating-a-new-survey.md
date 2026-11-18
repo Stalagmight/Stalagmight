@@ -1,6 +1,6 @@
 ---
 title: Creating a new survey
-description: "Create a new survey project in Stalagmight: name it, add a section by hand or import one, place it on the map and check the warnings."
+description: "Create a new survey project in Stalagmight: name it, add a line by hand or import one, place it on the map and check the warnings."
 order: 1
 ---
 
@@ -13,10 +13,10 @@ order: 1
    [import a file](importing-from-mnemo.md) (for example a `.dmp` from an
    MNemo), or click **+** next to **Sections** to enter it by hand.
 4. Entering by hand: in the
-   [Import / Create Section dialog](../screens/create-section-dialog.md), name
-   the section and set its surveyors, explorers, survey date and color.
-5. Enter one row per shot and click **Create Section**.
-6. Click the map to [place the section](../screens/placement-mode.md). Rough
+   [Import / Create Line dialog](../screens/create-section-dialog.md), name
+   the line and set its surveyors, explorers, survey date and color.
+5. Enter one row per shot and click **Create Line**.
+6. Click the map to [place the line](../screens/placement-mode.md). Rough
    is fine, it can be moved later.
 7. Optional: [set a zero datum](setting-a-zero-datum.md) to put the survey at
    its real GPS position.
@@ -54,17 +54,20 @@ for the project details.
 
 - **Import** (2) or **Import data** (13): read data from a file, for example a
   `.dmp` from an MNemo.
-- **Add section** (12): start an empty section and enter shots by hand. See
-  [Sections, shots and stations](../concepts/sections-shots-stations.md).
+- **Add line** (12): start an empty line and enter shots by hand. See
+  [Lines, shots and stations](../concepts/sections-shots-stations.md).
 
-### 4. Section details
+### 4. Line details
 
-![Import / Create Section dialog](../images/create-section-dialog.png)
+![Import / Create Line dialog](../images/create-section-dialog.png)
 
-- **Section Name** (2) is optional. So are **Surveyors** and **Explorers**
-  (lists of names: type a name and press **Enter**) and **Survey date**, which
-  go on every shot you enter.
-- **Color** (5) is how the section shows on the map.
+- **Line Name** (2) starts as the next free `Line N`, `Line 1` in a new
+  project. Keep it or type your own: every line needs a name no other line
+  has.
+- **Surveyors** and **Explorers** (lists of names: type a name and press
+  **Enter**) and **Survey date** are optional, and go on every shot you
+  enter.
+- **Color** (5) is how the line shows on the map.
 - The picture shows an older layout with one **Surveyor** field (3) and a
   **Date** field (4). See the
   [dialog page](../screens/create-section-dialog.md) for the current fields.
@@ -77,17 +80,18 @@ for the project details.
 - **J/R** (13): leave blank for permanent line. Click it for `J` (jump) or `R`
   (reference). See
   [shot kinds](../concepts/sections-shots-stations.md).
-- **Create Section** (16).
+- **Create Line** (16). The stations are named `0`, `1`, `2`, ... from the
+  first; see [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - LRUD, and azimuth or inclination at both ends of a shot, are extra columns
   under the eye icon. See the
   [dialog page](../screens/create-section-dialog.md).
 
-### 6. Place the section
+### 6. Place the line
 
 ![Placement mode](../images/placement-mode.png)
 
-- The first station (1) follows the pointer. Click to drop the section.
+- The first station (1) follows the pointer. Click to drop the line.
 - Drag, scroll or zoom (3) the map to get to the right spot.
-- Placement does not need to be accurate. The section can be moved later or
+- Placement does not need to be accurate. The line can be moved later or
   anchored to a [zero datum](../concepts/sections-shots-stations.md).
 - **Esc** (2) goes back to the dialog with what you entered.

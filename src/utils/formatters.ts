@@ -2,34 +2,37 @@
  * Formatting utilities for consistent display of survey data.
  */
 
+/** The arrow between a shot's two station names (`4 → 5`, U+2192). */
+export const SHOT_ARROW = '\u2192';
+
 /**
- * Format a shot ID for user display.
- *
- * @param sectionId - Section ID (1-indexed, from database)
- * @param shotPosition - Shot position within section (1-indexed)
- * @returns Formatted ID string in "sectionId:shotPosition" format
+ * A station as the user sees it: its name (unique within its line), or with
+ * line context `Main Line / 17`. Never the positional `line:index` handle,
+ * which is an internal session address (SPEC 4.1). Both names pass through
+ * {@link displayStationName}, so a hostile file cannot reorder the text.
  *
  * @example
- * formatShotId(5, 3) // returns "5:3"
- * formatShotId(1, 1) // returns "1:1"
+ * formatStationLabel('17')              // "17"
+ * formatStationLabel('17', 'Main Line') // "Main Line / 17"
  */
-export function formatShotId(sectionId: number, shotPosition: number): string {
-  return `${sectionId}:${shotPosition}`;
+export function formatStationLabel(stationName: string, lineName?: string | null): string {
+  const station = displayStationName(stationName);
+  const line = displayStationName(lineName);
+  return line ? `${line} / ${station}` : station;
 }
 
 /**
- * Format a station ID for user display.
- *
- * @param sectionId - Section ID (1-indexed, from database)
- * @param stationIndex - Station index within section (0-indexed)
- * @returns Formatted ID string in "sectionId:stationIndex" format
+ * A shot as the user sees it: its from and to station names, or with line
+ * context `Main Line: 4 → 5` (SPEC 4.2). Never the shot's id or position.
  *
  * @example
- * formatStationId(5, 0) // returns "5:0"
- * formatStationId(1, 3) // returns "1:3"
+ * formatShotLabel('4', '5')              // "4 → 5"
+ * formatShotLabel('4', '5', 'Main Line') // "Main Line: 4 → 5"
  */
-export function formatStationId(sectionId: number, stationIndex: number): string {
-  return `${sectionId}:${stationIndex}`;
+export function formatShotLabel(fromName: string, toName: string, lineName?: string | null): string {
+  const shot = `${displayStationName(fromName)} ${SHOT_ARROW} ${displayStationName(toName)}`;
+  const line = displayStationName(lineName);
+  return line ? `${line}: ${shot}` : shot;
 }
 
 /**
@@ -52,9 +55,9 @@ function isUnsafeForDisplay(codePoint: number): boolean {
 }
 
 /**
- * A station name as it may be shown. Names come from the file - a shared or
- * downloaded `.stalx` - so a right-to-left override or a newline in one must not
- * be able to reorder or disguise the positional ID displayed beside it.
+ * A station or line name as it may be shown. Names come from the file - a
+ * shared or downloaded `.stalx` - so a right-to-left override or a newline in
+ * one must not be able to reorder or disguise the text displayed beside it.
  */
 export function displayStationName(name: string | null | undefined): string {
   if (!name) return '';
@@ -63,25 +66,4 @@ export function displayStationName(name: string | null | undefined): string {
     if (!isUnsafeForDisplay(ch.codePointAt(0) ?? 0)) out += ch;
   }
   return out;
-}
-
-/**
- * A station ID with its name, when it has one (e.g. the MNemo station number
- * a DMP import recorded). The name is not unique - MNemo restarts at 0 in
- * every section - so here it is shown beside the positional ID. Only the
- * opt-in Station names map label (exclusive with the Station IDs label) shows
- * a name instead of the ID.
- *
- * @example
- * formatStationIdWithName(5, 3, '17') // returns "5:3 · 17"
- * formatStationIdWithName(5, 3)       // returns "5:3"
- */
-export function formatStationIdWithName(
-  sectionId: number,
-  stationIndex: number,
-  name?: string | null,
-): string {
-  const id = formatStationId(sectionId, stationIndex);
-  const shown = displayStationName(name);
-  return shown ? `${id} · ${shown}` : id;
 }

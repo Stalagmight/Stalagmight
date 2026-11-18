@@ -7,7 +7,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { EntityBlob } from '../common/EntityBlob';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
 import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
@@ -16,6 +16,7 @@ import { reverseTargetShot, type TargetShotLike } from '../../utils/overlapHelpe
 export default function DrawShotDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { createShot, project, stations } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
   const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;
@@ -51,19 +52,18 @@ export default function DrawShotDialog() {
   const [up, setUp] = useState('');
   const [down, setDown] = useState('');
 
-  // Get section info
-  const section = useMemo(() => {
+  // Get line info
+  const line = useMemo(() => {
     if (!fromStation) return null;
-    return project?.sections.find((s) => s.id === fromStation.section_id);
+    return project?.lines.find((s) => s.id === fromStation.line_id);
   }, [fromStation, project]);
 
-  const sectionName = section?.name ?? `Section ${fromStation?.section_id}`;
 
   // Get current station depth for default
   const currentStationDepth = useMemo(() => {
     if (!fromStation) return 0;
     const station = stations.find(
-      (s) => s.station_ref.section_id === fromStation.section_id && s.station_ref.station_index === fromStation.station_index
+      (s) => s.station_ref.line_id === fromStation.line_id && s.station_ref.station_index === fromStation.station_index
     );
     return station?.coordinates.z ?? 0;
   }, [fromStation, stations]);
@@ -103,7 +103,7 @@ export default function DrawShotDialog() {
   };
 
   const handleCreate = async () => {
-    if (!fromStation || !section) return;
+    if (!fromStation || !line) return;
 
     if (!validateForm()) return;
 
@@ -119,7 +119,7 @@ export default function DrawShotDialog() {
       // helper carries the antipodal tie-break matching the backend's
       // `average_azimuth`, and a second copy here is exactly the divergence its
       // comment documents. It is NOT identical to `reverse_shots` - that gates
-      // the left/right swap behind the Reverse Section dialog's LRUD opt-in,
+      // the left/right swap behind the Reverse Line dialog's LRUD opt-in,
       // where this always swaps them.
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
@@ -148,22 +148,22 @@ export default function DrawShotDialog() {
       // Determine where to insert the shot
       let afterShotId: number | undefined;
       let beforeShotId: number | undefined;
-      if (prependMode && section.shots.length > 0) {
+      if (prependMode && line.shots.length > 0) {
         // Prepend: insert before the first shot
-        beforeShotId = section.shots[0]?.id;
-      } else if (fromStation.station_index > 0 && fromStation.station_index <= section.shots.length) {
+        beforeShotId = line.shots[0]?.id;
+      } else if (fromStation.station_index > 0 && fromStation.station_index <= line.shots.length) {
         // Append after the shot at station_index - 1
-        afterShotId = section.shots[fromStation.station_index - 1]?.id;
+        afterShotId = line.shots[fromStation.station_index - 1]?.id;
       }
 
-      const result = await createShot(fromStation.section_id, shotData, afterShotId, beforeShotId);
+      const result = await createShot(fromStation.line_id, shotData, afterShotId, beforeShotId);
 
       if (result.success) {
         // Select the newly created shot
         if (result.shot_id != null) {
           setSelection({
             type: 'shot',
-            sectionId: fromStation.section_id,
+            lineId: fromStation.line_id,
             shotId: result.shot_id,
           });
         }
@@ -205,7 +205,7 @@ export default function DrawShotDialog() {
   }
 
   return (
-    <DialogWrapper title={prependMode ? 'Add Shot Before Section' : appendMode ? `Add Shot After Station #${fromStation.station_index}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
+    <DialogWrapper title={prependMode ? 'Add Shot Before Line' : appendMode ? `Add Shot After Station ${labels.station(fromStation)}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
@@ -215,8 +215,7 @@ export default function DrawShotDialog() {
         <div className="p-3 bg-background rounded">
           <span className="text-text-secondary">From:</span>{' '}
           <span className="inline-flex items-center gap-1.5 align-middle font-medium">
-            <EntityBlob entity="station">{formatStationId(fromStation.section_id, fromStation.station_index)}</EntityBlob>
-            <EntityBlob entity="section">{sectionName}</EntityBlob>
+            <EntityBlob entity="station">{labels.station(fromStation, true)}</EntityBlob>
           </span>
         </div>
 
@@ -259,7 +258,7 @@ export default function DrawShotDialog() {
             the other way needs the whole shot turned around rather than just
             its bearings: the depths swap ends, pitch negates and swaps, and
             left/right trade places. Off by default - the entered bearing is
-            the shot's own direction, which is how the section reads. */}
+            the shot's own direction, which is how the line reads. */}
         <label className="flex items-center gap-2">
           <input
             type="checkbox"

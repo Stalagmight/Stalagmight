@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../SectionPreview')>()),
+vi.mock('../LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));

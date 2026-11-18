@@ -36,8 +36,8 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -72,44 +72,43 @@ fn state_with_project() -> AppState {
     state
 }
 
-/// Create a section with `shots` and return its id.
-fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
-    let result = state.execute(Command::CreateSection {
+/// Create a line with `shots` and return its id.
+fn create_line(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
+    let result = state.execute(Command::CreateLine {
         name: Some(name.to_string()),
         surveyor: None,
         date: None,
         color: "#3388FF".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
-    assert!(result.success, "CreateSection failed: {:?}", result.error);
-    result
-        .section_id
-        .expect("CreateSection returned no section id")
+    assert!(result.success, "CreateLine failed: {:?}", result.error);
+    result.line_id.expect("CreateLine returned no line id")
 }
 
-/// Every shot uuid in `section_id`, in order.
-fn shot_uuids(state: &AppState, section_id: SectionId) -> Vec<Option<String>> {
+/// Every shot uuid in `line_id`, in order.
+fn shot_uuids(state: &AppState, line_id: LineId) -> Vec<Option<String>> {
     let project = state.get_project_state().expect("no project open");
     project
-        .sections
+        .lines
         .iter()
-        .find(|section| section.id == section_id)
-        .expect("section missing")
+        .find(|line| line.id == line_id)
+        .expect("line missing")
         .shots
         .iter()
         .map(|s| s.uuid.clone())
         .collect()
 }
 
-/// Every shot id in `section_id`, in order.
-fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
+/// Every shot id in `line_id`, in order.
+fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
     let project = state.get_project_state().expect("no project open");
     project
-        .sections
+        .lines
         .iter()
-        .find(|section| section.id == section_id)
-        .expect("section missing")
+        .find(|line| line.id == line_id)
+        .expect("line missing")
         .shots
         .iter()
         .map(|s| s.id)
@@ -117,63 +116,63 @@ fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
 }
 
 // ===========================================================================
-// Bug 1 (FIXED): redo of CreateSection re-minted every shot uuid
+// Bug 1 (FIXED): redo of CreateLine re-minted every shot uuid
 // ===========================================================================
 
-/// `UndoData::CreatedSectionSnapshot` stored a `SectionData`, which has no uuid
-/// field, so redo went `restore_section` -> `Section::new_with_id` ->
-/// `Section::new` -> `add_shot` -> `Shot::new` -> `Uuid::new_v4()`. The sibling
+/// `UndoData::CreatedLineSnapshot` stored a `LineData`, which has no uuid
+/// field, so redo went `restore_line` -> `Line::new_with_id` ->
+/// `Line::new` -> `add_shot` -> `Shot::new` -> `Uuid::new_v4()`. The sibling
 /// `CreateShot` path was explicitly fixed for this exact reason
 /// (`UndoData::CreatedShotSnapshot { uuid }`), because a fresh uuid dangles
 /// every `StationKey::AfterShot` anchor and the Ariane export identity.
 ///
 /// FIXED, and kept as the regression guard: the entry carries a
-/// `SectionIdentity` alongside its `SectionData` - the shots' uuids, the reverse
-/// parity and the gauge pair - and `Section::restore_with_identity`
-/// (models/section.rs) applies it, with the old mint kept as the fallback for a
+/// `LineIdentity` alongside its `LineData` - the shots' uuids, the reverse
+/// parity and the gauge pair - and `Line::restore_with_identity`
+/// (models/line.rs) applies it, with the old mint kept as the fallback for a
 /// legacy entry that has no such field.
 #[test]
-fn redo_of_create_section_preserves_shot_uuids() {
+fn redo_of_create_line_preserves_shot_uuids() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "Main", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let line_id = create_line(&state, "Main", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
 
-    let before = shot_uuids(&state, section_id);
+    let before = shot_uuids(&state, line_id);
     assert!(
         before.iter().all(Option::is_some),
         "setup: freshly created shots should all have uuids, got {before:?}"
     );
 
-    assert!(state.undo().success, "undo of CreateSection failed");
-    assert!(state.redo().success, "redo of CreateSection failed");
+    assert!(state.undo().success, "undo of CreateLine failed");
+    assert!(state.redo().success, "redo of CreateLine failed");
 
-    let after = shot_uuids(&state, section_id);
+    let after = shot_uuids(&state, line_id);
     assert_eq!(
         before, after,
-        "redo of CreateSection re-minted the shot uuids: every StationKey::AfterShot anchor \
-         onto this section now dangles"
+        "redo of CreateLine re-minted the shot uuids: every StationKey::AfterShot anchor \
+         onto this line now dangles"
     );
 }
 
-/// The same root cause in a second field. `restore_section` rebuilt through
-/// `Section::new`, which hardcodes `gauge_shot_uuid: None` /
-/// `gauge_neighbour_uuid: None` (models/section.rs), and `SectionData` carries
+/// The same root cause in a second field. `restore_line` rebuilt through
+/// `Line::new`, which hardcodes `gauge_shot_uuid: None` /
+/// `gauge_neighbour_uuid: None` (models/line.rs), and `LineData` carries
 /// neither - so a redo discarded the least-squares gauge pair.
 ///
 /// The anchors only exist after a save (`capture_missing_gauge_anchors` is a
 /// save-time heal), which is why the fuzzer could not see this half until it
 /// started crossing the persistence boundary - and why the fix needs the second
-/// half it has: the undo REFRESHES the entry's `SectionIdentity` from the live
-/// section immediately before deleting it
-/// (`AppState::refresh_created_section_identity`, which re-reads BOTH halves so a
+/// half it has: the undo REFRESHES the entry's `LineIdentity` from the live
+/// line immediately before deleting it
+/// (`AppState::refresh_created_line_identity`, which re-reads BOTH halves so a
 /// redo puts back exactly what the undo removed), so anchors captured by a save
 /// that happened after the entry was pushed are carried too.
 #[test]
-fn redo_of_create_section_preserves_gauge_anchors() {
+fn redo_of_create_line_preserves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let state = state_with_project();
-    let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let line_id = create_line(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
 
     // The save is what mints the gauge pair.
     let saved = state.save_project(Some(temp.path().join("gauge.stalx")));
@@ -181,14 +180,14 @@ fn redo_of_create_section_preserves_gauge_anchors() {
 
     let gauge_before = {
         let project = state.get_project_state().expect("no project");
-        let section = project
-            .sections
+        let line = project
+            .lines
             .iter()
-            .find(|s| s.id == section_id)
-            .expect("section missing");
+            .find(|s| s.id == line_id)
+            .expect("line missing");
         (
-            section.gauge_shot_uuid.clone(),
-            section.gauge_neighbour_uuid.clone(),
+            line.gauge_shot_uuid.clone(),
+            line.gauge_neighbour_uuid.clone(),
         )
     };
     assert!(
@@ -196,102 +195,102 @@ fn redo_of_create_section_preserves_gauge_anchors() {
         "setup: a save should have captured a gauge anchor, got {gauge_before:?}"
     );
 
-    assert!(state.undo().success, "undo of CreateSection failed");
-    assert!(state.redo().success, "redo of CreateSection failed");
+    assert!(state.undo().success, "undo of CreateLine failed");
+    assert!(state.redo().success, "redo of CreateLine failed");
 
     let gauge_after = {
         let project = state.get_project_state().expect("no project");
-        let section = project
-            .sections
+        let line = project
+            .lines
             .iter()
-            .find(|s| s.id == section_id)
-            .expect("section missing");
+            .find(|s| s.id == line_id)
+            .expect("line missing");
         (
-            section.gauge_shot_uuid.clone(),
-            section.gauge_neighbour_uuid.clone(),
+            line.gauge_shot_uuid.clone(),
+            line.gauge_neighbour_uuid.clone(),
         )
     };
     assert_eq!(
         gauge_before, gauge_after,
-        "redo of CreateSection discarded the captured gauge anchors"
+        "redo of CreateLine discarded the captured gauge anchors"
     );
 }
 
 // ===========================================================================
-// Bug 5: undo of UpdateSectionMetadata cannot restore a previously-null field
+// Bug 5: undo of UpdateLineMetadata cannot restore a previously-null field
 // ===========================================================================
 
 /// The capture is correct - `generate_undo_data` builds
-/// `SectionUpdates { surveyor: Some(None), .. }` for a section whose surveyor
-/// was null - but `SectionUpdates` (models/section.rs) has only
+/// `LineUpdates { surveyor: Some(None), .. }` for a line whose surveyor
+/// was null - but `LineUpdates` (models/line.rs) has only
 /// `#[serde(default)]` on `name` / `surveyor` / `date`, with no
 /// `deserialize_with = "double_option"` and no `skip_serializing_if`. So
 /// `Some(None)` and `None` BOTH serialize to `null` and both read back as
 /// `None` = "leave it alone".
 ///
 /// This test pins the mechanism at the exact layer the undo path uses: the
-/// `values_json` round trip. `ShotUpdates` gets this right; `SectionUpdates` was
+/// `values_json` round trip. `ShotUpdates` gets this right; `LineUpdates` was
 /// left out.
 #[test]
-fn section_updates_round_trip_preserves_clear_to_null() {
+fn line_updates_round_trip_preserves_clear_to_null() {
     let _config = isolated_config();
-    let clear_the_surveyor = SectionUpdates {
+    let clear_the_surveyor = LineUpdates {
         surveyor: Some(None),
         ..Default::default()
     };
 
-    let json = serde_json::to_string(&clear_the_surveyor).expect("serialize SectionUpdates");
-    let restored: SectionUpdates = serde_json::from_str(&json).expect("deserialize SectionUpdates");
+    let json = serde_json::to_string(&clear_the_surveyor).expect("serialize LineUpdates");
+    let restored: LineUpdates = serde_json::from_str(&json).expect("deserialize LineUpdates");
 
     assert_eq!(
         restored.surveyor,
         Some(None),
-        "SectionUpdates lost the difference between \"clear this field\" (Some(None)) and \
+        "LineUpdates lost the difference between \"clear this field\" (Some(None)) and \
          \"leave it alone\" (None) through values_json: serialized as {json}"
     );
 }
 
 /// The end-to-end consequence of the round trip above: set a surveyor on a
-/// section that had none, undo, and the value survives the undo.
+/// line that had none, undo, and the value survives the undo.
 #[test]
 fn undo_restores_a_previously_null_surveyor() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "NoSurveyor", vec![shot(0.0, 5.0)]);
+    let line_id = create_line(&state, "NoSurveyor", vec![shot(0.0, 5.0)]);
 
     let surveyor_before = {
         let project = state.get_project_state().expect("no project");
         project
-            .sections
+            .lines
             .iter()
-            .find(|s| s.id == section_id)
-            .expect("section missing")
+            .find(|s| s.id == line_id)
+            .expect("line missing")
             .surveyor_names()
             .clone()
     };
     assert_eq!(
         surveyor_before, None,
-        "setup: the section should start with no surveyor"
+        "setup: the line should start with no surveyor"
     );
 
-    let updated = state.execute(Command::UpdateSectionMetadata {
-        section_id,
-        updates: SectionUpdates {
+    let updated = state.execute(Command::UpdateLineMetadata {
+        line_id,
+        updates: LineUpdates {
             surveyor: Some(Some("Someone".to_string())),
             ..Default::default()
         },
     });
-    assert!(updated.success, "UpdateSectionMetadata failed");
+    assert!(updated.success, "UpdateLineMetadata failed");
 
-    assert!(state.undo().success, "undo of UpdateSectionMetadata failed");
+    assert!(state.undo().success, "undo of UpdateLineMetadata failed");
 
     let surveyor_after = {
         let project = state.get_project_state().expect("no project");
         project
-            .sections
+            .lines
             .iter()
-            .find(|s| s.id == section_id)
-            .expect("section missing")
+            .find(|s| s.id == line_id)
+            .expect("line missing")
             .surveyor_names()
             .clone()
     };
@@ -307,16 +306,16 @@ fn undo_restores_a_previously_null_surveyor() {
 
 /// The data-loss one.
 ///
-/// Shots are renumbered on load to `section_id * FEATURE_ID_STRIDE +
+/// Shots are renumbered on load to `line_id * FEATURE_ID_STRIDE +
 /// sequence_order` (persistence/sqlite/read.rs), undo entries reload as opaque
 /// JSON with no remapping anywhere on the restore path, and
-/// `UndoData::CreatedShotSnapshot { section_id, shot_id }` undoes by calling
-/// `delete_shot(section_id, shot_id)`. Because the in-session allocator
-/// (`take_shot_id`) hands out ids from the SAME `section_id * STRIDE + n` space
+/// `UndoData::CreatedShotSnapshot { line_id, shot_id }` undoes by calling
+/// `delete_shot(line_id, shot_id)`. Because the in-session allocator
+/// (`take_shot_id`) hands out ids from the SAME `line_id * STRIDE + n` space
 /// the loader renumbers into, a stale id does not miss - it COLLIDES with
 /// whatever shot now occupies that slot.
 ///
-/// An insert-BEFORE into a one-shot section is the minimal way to make the
+/// An insert-BEFORE into a one-shot line is the minimal way to make the
 /// in-session ids diverge from positional order, which is the precondition.
 #[test]
 fn undo_after_reload_deletes_the_shot_it_created() {
@@ -328,20 +327,20 @@ fn undo_after_reload_deletes_the_shot_it_created() {
     let inserted_uuid;
     {
         let state = state_with_project();
-        let section_id = create_section(&state, "Diverged", vec![shot(0.0, 5.0)]);
-        let first_shot = shot_ids(&state, section_id)[0];
+        let line_id = create_line(&state, "Diverged", vec![shot(0.0, 5.0)]);
+        let first_shot = shot_ids(&state, line_id)[0];
 
         // Insert BEFORE the existing shot: the new shot takes position 0 while
         // its id comes from the allocator, so ids no longer match positions.
         let created = state.execute(Command::CreateShot {
-            section_id,
+            line_id,
             shot: shot(180.0, 7.0),
             after_shot_id: None,
             before_shot_id: Some(first_shot),
         });
         assert!(created.success, "CreateShot failed: {:?}", created.error);
 
-        let uuids = shot_uuids(&state, section_id);
+        let uuids = shot_uuids(&state, line_id);
         assert_eq!(uuids.len(), 2, "setup: expected two shots");
         inserted_uuid = uuids[0].clone().expect("inserted shot has no uuid");
         original_uuid = uuids[1].clone().expect("original shot has no uuid");
@@ -364,9 +363,9 @@ fn undo_after_reload_deletes_the_shot_it_created() {
 
     let project = reopened.get_project_state().expect("no project after undo");
     let remaining: Vec<Option<String>> = project
-        .sections
+        .lines
         .iter()
-        .flat_map(|section| section.shots.iter().map(|s| s.uuid.clone()))
+        .flat_map(|line| line.shots.iter().map(|s| s.uuid.clone()))
         .collect();
 
     assert!(
@@ -385,26 +384,26 @@ fn undo_after_reload_deletes_the_shot_it_created() {
     );
 }
 
-/// `section_offsets` for `section_id`, or `None` when the section has no entry.
-fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)> {
+/// `line_offsets` for `line_id`, or `None` when the line has no entry.
+fn line_offset(state: &AppState, line_id: LineId) -> Option<(f64, f64)> {
     state
         .get_project_state()?
-        .section_offsets
-        .get(&section_id)
+        .line_offsets
+        .get(&line_id)
         .copied()
 }
 
 // ===========================================================================
 // Bug 2 (FIXED): undo of a shot insert left an orphan all-zero
-// section_offsets entry
+// line_offsets entry
 // ===========================================================================
 
-/// `adjust_section_offset` CREATED the `section_offsets` key while compensating
+/// `adjust_line_offset` CREATED the `line_offsets` key while compensating
 /// an insert; the undo put the value back to zero but nothing removed the key.
 /// Geometrically inert, but it meant undo was not an exact inverse and the leaked
 /// key was serialized into the .stalx.
 ///
-/// FIXED, and kept as the regression guard: `Project::write_section_offset`
+/// FIXED, and kept as the regression guard: `Project::write_line_offset`
 /// (models/project/offsets.rs) is now THE single normalizing writer, and a value
 /// within `Project::OFFSET_DUST_M` of the origin is REMOVED rather than written.
 /// A present all-zero key is unrepresentable, so there is no orphan to leak -
@@ -418,13 +417,13 @@ fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)>
 fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "Inserted", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
-    let first_shot = shot_ids(&state, section_id)[0];
+    let line_id = create_line(&state, "Inserted", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let first_shot = shot_ids(&state, line_id)[0];
 
-    let before = section_offset(&state, section_id);
+    let before = line_offset(&state, line_id);
 
     let created = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: shot(180.0, 3.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot),
@@ -432,43 +431,43 @@ fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
     assert!(created.success, "CreateShot failed: {:?}", created.error);
     assert!(state.undo().success, "undo of CreateShot failed");
 
-    let after = section_offset(&state, section_id);
+    let after = line_offset(&state, line_id);
     assert_eq!(
         before, after,
-        "undo of a shot insert changed the section_offsets map: it was {before:?} and is now \
-         {after:?} (the compensating adjust_section_offset creates the key and nothing removes it)"
+        "undo of a shot insert changed the line_offsets map: it was {before:?} and is now \
+         {after:?} (the compensating adjust_line_offset creates the key and nothing removes it)"
     );
 }
 
 // ===========================================================================
-// Bug 3: appending the FIRST shot into an EMPTY section, then undoing,
-// displaces the whole section - and the displacement RATCHETS
+// Bug 3: appending the FIRST shot into an EMPTY line, then undoing,
+// displaces the whole line - and the displacement RATCHETS
 // ===========================================================================
 
 /// `Project::add_shot` (the append path) is offset-neutral, but the undo routes
 /// through `remove_shot_with_rewire`, whose `pos == 0` branch unconditionally
-/// calls `adjust_section_offset`. With one shot the appended shot IS index 0, so
-/// the delete slides the section by that shot's horizontal vector.
+/// calls `adjust_line_offset`. With one shot the appended shot IS index 0, so
+/// the delete slides the line by that shot's horizontal vector.
 ///
 /// FIXED: undo of `CreateShot` no longer reuses the general delete for the one
 /// shape it is not the inverse of. `AppState::remove_created_shot`
 /// (`core/state/command_shot.rs`) recognises the recorded append-into-an-empty-
-/// section shape (both anchors absent, position 0, and still the section's sole
+/// line shape (both anchors absent, position 0, and still the line's sole
 /// shot) and calls `Project::remove_appended_first_shot`
 /// (`models/project/shots.rs`), which removes the station the append CREATED -
-/// station 1, `AfterShot(uuid)` - and leaves `section_offsets` and station 0's
+/// station 1, `AfterShot(uuid)` - and leaves `line_offsets` and station 0's
 /// refs untouched, exactly as offset-neutral in reverse as `add_shot` is
 /// forward.
 #[test]
-fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
+fn undo_of_the_first_shot_in_an_empty_line_does_not_move_it() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "Empty", vec![]);
+    let line_id = create_line(&state, "Empty", vec![]);
 
-    let before = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+    let before = line_offset(&state, line_id).unwrap_or((0.0, 0.0));
 
     let created = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -476,27 +475,27 @@ fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
     assert!(created.success, "CreateShot failed: {:?}", created.error);
     assert!(state.undo().success, "undo of CreateShot failed");
 
-    let after = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+    let after = line_offset(&state, line_id).unwrap_or((0.0, 0.0));
     assert_eq!(
         before, after,
-        "undoing the first shot appended into an empty section moved the section from {before:?} \
+        "undoing the first shot appended into an empty line moved the line from {before:?} \
          to {after:?}"
     );
 }
 
 /// The displacement is not a one-off: redo re-inserts without giving the offset
-/// back, so every undo/redo cycle slides the section again.
+/// back, so every undo/redo cycle slides the line again.
 ///
 /// FIXED with the test above: with nothing taken on the undo there is nothing
 /// for the offset-neutral redo to give back, so the cycle is the identity.
 #[test]
-fn the_empty_section_displacement_does_not_ratchet() {
+fn the_empty_line_displacement_does_not_ratchet() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "Ratchet", vec![]);
+    let line_id = create_line(&state, "Ratchet", vec![]);
 
     let created = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -504,15 +503,15 @@ fn the_empty_section_displacement_does_not_ratchet() {
     assert!(created.success, "CreateShot failed: {:?}", created.error);
 
     assert!(state.undo().success, "first undo failed");
-    let after_one = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+    let after_one = line_offset(&state, line_id).unwrap_or((0.0, 0.0));
 
     assert!(state.redo().success, "redo failed");
     assert!(state.undo().success, "second undo failed");
-    let after_two = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+    let after_two = line_offset(&state, line_id).unwrap_or((0.0, 0.0));
 
     assert_eq!(
         after_one, after_two,
-        "a second undo/redo cycle moved the section again ({after_one:?} -> {after_two:?}): the \
+        "a second undo/redo cycle moved the line again ({after_one:?} -> {after_two:?}): the \
          displacement compounds without bound"
     );
 }
@@ -523,11 +522,11 @@ fn closure_ids(state: &AppState) -> Vec<u64> {
     project.loop_closures.iter().map(|c| c.id).collect()
 }
 
-/// Two sections joined by a merge, with a zero datum anchoring the first, so a
-/// loop closure between them is legal. Returns `(section_a, section_b)`.
-fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
-    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
-    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+/// Two lines joined by a merge, with a zero datum anchoring the first, so a
+/// loop closure between them is legal. Returns `(line_a, line_b)`.
+fn two_merged_lines(state: &AppState) -> (LineId, LineId) {
+    let a = create_line(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let b = create_line(state, "B", vec![shot(90.0, 5.0)]);
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -560,7 +559,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 fn undo_of_remove_loop_closure_restores_the_original_order() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = two_merged_sections(&state);
+    let (a, b) = two_merged_lines(&state);
 
     let first = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(a, 0),
@@ -575,7 +574,7 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
     // A second, independent loop: a side passage C off A:1, closed to B:1. (A:1
     // to B:1 directly would tie the two ends of the one shot A:0-A:1 - A:0 is
     // tied to B:1 by the first closure - which creation refuses since #737.)
-    let c = create_section(&state, "C", vec![shot(45.0, 5.0)]);
+    let c = create_line(&state, "C", vec![shot(45.0, 5.0)]);
     let side = state.execute(Command::MergeStations {
         station_a: StationRef::new(c, 0),
         station_b: StationRef::new(a, 1),
@@ -640,7 +639,7 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
 fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = two_merged_sections(&state);
+    let (a, b) = two_merged_lines(&state);
 
     // Close the loop. It has to be a CLOSURE, not a second merge: A and B are
     // already connected, and MergeStations refuses that with "Stations are
@@ -664,7 +663,7 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     // condition `delete_shot` refuses.
     let first_shot_of_a = shot_ids(&state, a)[0];
     let created = state.execute(Command::CreateShot {
-        section_id: a,
+        line_id: a,
         shot: shot(45.0, 3.0),
         after_shot_id: Some(first_shot_of_a),
         before_shot_id: None,
@@ -698,7 +697,7 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 ///
 /// The `Move` row snaps `(b, 1)` onto the datum station first, because
 /// `is_aligned` is a MEASUREMENT now (#469 item 2) rather than a property of the
-/// strategy alone: `two_merged_sections` leaves those two stations 11 m apart,
+/// strategy alone: `two_merged_lines` leaves those two stations 11 m apart,
 /// and a closure across that gap is not a coincidence claim anybody would
 /// believe. Snapping is also what the real workflow does - the strategy is
 /// called `Move` because the frontend sends it only behind the move commands
@@ -713,7 +712,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
         (ClosureStrategy::Batch, "Use split instead."),
     ] {
         let state = state_with_project();
-        let (a, b) = two_merged_sections(&state);
+        let (a, b) = two_merged_lines(&state);
 
         // The insert comes FIRST here, before the loop is closed. It lengthens
         // the loop by 3 m, which a closure across it cannot absorb - so closing
@@ -721,7 +720,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
         // aligned, i.e. genuinely coincident, closure) survives to the delete.
         let first_shot_of_a = shot_ids(&state, a)[0];
         let created = state.execute(Command::CreateShot {
-            section_id: a,
+            line_id: a,
             shot: shot(45.0, 3.0),
             after_shot_id: Some(first_shot_of_a),
             before_shot_id: None,
@@ -771,7 +770,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
         );
 
         let deleted = state.execute(Command::DeleteShot {
-            section_id: a,
+            line_id: a,
             shot_id: inserted,
         });
         assert!(
@@ -816,19 +815,19 @@ fn the_delete_guards_still_refuse_a_user_delete() {
 // of the drift sources reachable in a small synthetic project qualifies. Each
 // was measured, not assumed:
 //
-//   * bug 3's empty-section displacement DROPPED the merge it would misalign -
+//   * bug 3's empty-line displacement DROPPED the merge it would misalign -
 //     the `pos == 0` branch removed refs keyed to station 0, and an empty
-//     section has no other station to merge on. (Measured while bug 3 was open.
+//     line has no other station to merge on. (Measured while bug 3 was open.
 //     It is fixed now and there is no displacement at all, so this route is
 //     doubly unavailable.)
-//   * `UpdateShot` on a merged section restores the offsets symmetrically: both
+//   * `UpdateShot` on a merged line restores the offsets symmetrically: both
 //     unwind paths land on the same offset (verified by instrumenting).
-//   * an insert-before on a section merged at a SURVIVING station compensates
+//   * an insert-before on a line merged at a SURVIVING station compensates
 //     correctly - the offset returns to (0, 0) and `check_merge_alignment()`
 //     stays empty on both paths.
 //   * undo-of-`RepairIntegrity`, whose `before` snapshot is documented to carry
 //     the drift Repair healed and which therefore RELIES on the epilogue. Two
-//     repairable shapes were built: bug 3's displaced section (repair returns
+//     repairable shapes were built: bug 3's displaced line (repair returns
 //     `changed = false`, so no entry is pushed at all) and finding 10's orphan
 //     closure (repair fires, but `undo()` and `undo_to(0)` land on identical
 //     projects - `realign_merges` early-returns while `check_merge_alignment()`
@@ -853,15 +852,15 @@ fn the_delete_guards_still_refuse_a_user_delete() {
 /// (`execute_delete_shot_and_split`, `execute_delete_shot_range_split`), and
 /// unconditionally on LOAD from `redrive_offsets_after_load`.
 ///
-/// It did NOT run from `execute_delete_last_shot_and_section`
+/// It did NOT run from `execute_delete_last_shot_and_line`
 /// (command_delete_split.rs), a separate entry point rather than a `Command`
 /// variant, so it never saw the `execute()` epilogue either. Deleting the
-/// section that carried the loop's other path left an orphan closure in memory,
+/// line that carried the loop's other path left an orphan closure in memory,
 /// the save persisted it, and the next load silently reclassified it as a merge:
 /// `(1 closure, 0 merges)` saved, `(0 closures, 1 merge)` reopened.
 ///
 /// RESOLVED as option 1 of the write-up - make the four delete entry points
-/// consistent. `execute_delete_last_shot_and_section` now converts (and then
+/// consistent. `execute_delete_last_shot_and_line` now converts (and then
 /// reconciles, so a closure that just became a rigid merge is solved rather than
 /// left drifted), which is what its two split siblings already did.
 /// `execute_delete_shot_range_shift` needed no call of its own: it removes the
@@ -874,7 +873,7 @@ fn the_delete_guards_still_refuse_a_user_delete() {
 /// delete, so restoring it as a closure is the inverse, not a missed conversion.
 ///
 /// Derived from the fuzzer's naharon seed 26 x40, whose history contains
-/// `deleteLastShotAndSection` before the reload that diverged.
+/// `deleteLastShotAndLine` before the reload that diverged.
 #[test]
 fn save_and_reopen_preserves_an_orphan_loop_closure() {
     let _config = isolated_config();
@@ -885,9 +884,9 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
         let state = state_with_project();
         // A - bridge - B, plus a closure straight from A to B: a genuine loop
         // with two independent paths.
-        let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-        let bridge = create_section(&state, "Bridge", vec![shot(90.0, 5.0)]);
-        let b = create_section(&state, "B", vec![shot(180.0, 5.0)]);
+        let a = create_line(&state, "A", vec![shot(0.0, 5.0)]);
+        let bridge = create_line(&state, "Bridge", vec![shot(90.0, 5.0)]);
+        let b = create_line(&state, "B", vec![shot(180.0, 5.0)]);
         let datum = state.execute(Command::SetZeroDatum {
             station_ref: StationRef::new(a, 0),
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -915,10 +914,10 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 
         // Delete the bridge through the entry point that does NOT convert.
         let bridge_shot = shot_ids(&state, bridge)[0];
-        let deleted = state.execute_delete_last_shot_and_section(bridge, bridge_shot);
+        let deleted = state.execute_delete_last_shot_and_line(bridge, bridge_shot);
         assert!(
             deleted.success,
-            "delete_last_shot_and_section failed: {:?}",
+            "delete_last_shot_and_line failed: {:?}",
             deleted.error
         );
 
@@ -972,11 +971,11 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 /// self-refreshing walls on top of that - undo re-records the entry's `after`
 /// half from the live project before restoring `before`, redo symmetrically, so
 /// pair undo/redo are exact inverses by construction even when the restored half
-/// re-creates a section that has no live counterpart to copy a heal from.
+/// re-creates a line that has no live counterpart to copy a heal from.
 ///
 /// `save_project` HEALS live state with no undo entry of its own -
 /// `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
-/// `capture_missing_gauge_anchors`, the orphan `section_offsets` retain
+/// `capture_missing_gauge_anchors`, the orphan `line_offsets` retain
 /// (`core/state/project_io.rs`). A `ProjectSnapshotPair` captured BEFORE that
 /// save holds the pre-heal project in BOTH its `before` and its `after`, and
 /// neither is refreshed. So undoing (or redoing) an unrelated command recorded
@@ -997,25 +996,25 @@ fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let state = state_with_project();
-    let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let line_id = create_line(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
 
     let gauge_of = |s: &AppState| -> (Option<String>, Option<String>) {
         let project = s.get_project_state().expect("no project");
-        let section = project
-            .sections
+        let line = project
+            .lines
             .iter()
-            .find(|sec| sec.id == section_id)
-            .expect("section missing");
+            .find(|sec| sec.id == line_id)
+            .expect("line missing");
         (
-            section.gauge_shot_uuid.clone(),
-            section.gauge_neighbour_uuid.clone(),
+            line.gauge_shot_uuid.clone(),
+            line.gauge_neighbour_uuid.clone(),
         )
     };
 
     // A command whose undo data is a ProjectSnapshotPair, recorded BEFORE the
     // save so both of its snapshots predate the heal.
     let moved = state.execute(Command::MoveStation {
-        station_ref: StationRef::new(section_id, 1),
+        station_ref: StationRef::new(line_id, 1),
         offset: Coordinates {
             x: 1.0,
             y: 2.0,
@@ -1050,67 +1049,67 @@ fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
     );
 }
 
-/// The kind of every shot in `section_id`, in order.
-fn shot_kinds(state: &AppState, section_id: SectionId) -> Vec<ShotKind> {
+/// The kind of every shot in `line_id`, in order.
+fn shot_kinds(state: &AppState, line_id: LineId) -> Vec<ShotKind> {
     let project = state.get_project_state().expect("no project open");
     project
-        .sections
+        .lines
         .iter()
-        .find(|section| section.id == section_id)
-        .expect("section missing")
+        .find(|line| line.id == line_id)
+        .expect("line missing")
         .shots
         .iter()
         .map(|s| s.kind)
         .collect()
 }
 
-/// The length of every shot in `section_id`, in order.
-fn shot_lengths(state: &AppState, section_id: SectionId) -> Vec<f64> {
+/// The length of every shot in `line_id`, in order.
+fn shot_lengths(state: &AppState, line_id: LineId) -> Vec<f64> {
     let project = state.get_project_state().expect("no project open");
     project
-        .sections
+        .lines
         .iter()
-        .find(|section| section.id == section_id)
-        .expect("section missing")
+        .find(|line| line.id == line_id)
+        .expect("line missing")
         .shots
         .iter()
         .map(|s| s.length)
         .collect()
 }
 
-/// Build a section whose shot ids no longer match positional order, save it, and
-/// return the path plus the section id.
+/// Build a line whose shot ids no longer match positional order, save it, and
+/// return the path plus the line id.
 ///
 /// Three shots and one insert-BEFORE: the new shot takes position 0 while its id
 /// comes from the allocator, so after the save the loader's
-/// `section_id * FEATURE_ID_STRIDE + sequence_order` renumbering moves every id
+/// `line_id * FEATURE_ID_STRIDE + sequence_order` renumbering moves every id
 /// by one slot. No shot is DELETED, so the ids the allocator handed out are
 /// exactly the ids the loader renumbers into - which is what makes a stale id
 /// COLLIDE with a live shot rather than miss it (the miss case is its own test
 /// below).
-fn diverged_section(state: &AppState) -> SectionId {
-    let section_id = create_section(
+fn diverged_line(state: &AppState) -> LineId {
+    let line_id = create_line(
         state,
         "Diverged",
         vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
     );
-    let first = shot_ids(state, section_id)[0];
+    let first = shot_ids(state, line_id)[0];
     let created = state.execute(Command::CreateShot {
-        section_id,
+        line_id,
         shot: shot(270.0, 8.0),
         after_shot_id: None,
         before_shot_id: Some(first),
     });
     assert!(created.success, "CreateShot failed: {:?}", created.error);
-    let ids = shot_ids(state, section_id);
+    let ids = shot_ids(state, line_id);
     assert_ne!(
         ids,
         (0..ids.len())
-            .map(|i| section_id * crate::models::FEATURE_ID_STRIDE + i as u32)
+            .map(|i| line_id * crate::models::FEATURE_ID_STRIDE + i as u32)
             .collect::<Vec<_>>(),
         "setup: the ids must no longer match positional order, or the reload changes nothing"
     );
-    section_id
+    line_id
 }
 
 // ===========================================================================
@@ -1121,7 +1120,7 @@ fn diverged_section(state: &AppState) -> SectionId {
 /// `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })` names the
 /// shot by its IN-SESSION id (`undo_capture.rs`), and undo executes that command
 /// verbatim (`execute_without_undo`, core/state/undo.rs). The loader renumbers
-/// shots to `section_id * FEATURE_ID_STRIDE + sequence_order`
+/// shots to `line_id * FEATURE_ID_STRIDE + sequence_order`
 /// (persistence/sqlite/read.rs) and nothing remaps the persisted entries, so
 /// after a reopen the id addresses whichever shot now occupies that slot.
 ///
@@ -1137,25 +1136,25 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
     let save_path: PathBuf = temp.path().join("wrong-shot-kind.stalx");
 
     let marked_uuid;
-    let section_id;
+    let line_id;
     {
         let state = state_with_project();
-        section_id = diverged_section(&state);
+        line_id = diverged_line(&state);
 
         // Mark the shot at POSITION 0, whose id is the highest the allocator
         // handed out - so the renumbering will move it to the lowest.
-        let target = shot_ids(&state, section_id)[0];
-        marked_uuid = shot_uuids(&state, section_id)[0]
+        let target = shot_ids(&state, line_id)[0];
+        marked_uuid = shot_uuids(&state, line_id)[0]
             .clone()
             .expect("shot has no uuid");
         let marked = state.execute(Command::SetShotKind {
-            section_id,
+            line_id,
             shot_id: target,
             kind: ShotKind::Jump,
         });
         assert!(marked.success, "SetShotKind failed: {:?}", marked.error);
         assert_eq!(
-            shot_kinds(&state, section_id)[0],
+            shot_kinds(&state, line_id)[0],
             ShotKind::Jump,
             "setup: the forward command should have marked position 0"
         );
@@ -1176,12 +1175,12 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
     );
 
     let project = reopened.get_project_state().expect("no project after undo");
-    let section = project
-        .sections
+    let line = project
+        .lines
         .iter()
-        .find(|s| s.id == section_id)
-        .expect("section missing");
-    let marked = section
+        .find(|s| s.id == line_id)
+        .expect("line missing");
+    let marked = line
         .shots
         .iter()
         .find(|s| s.uuid.as_deref() == Some(marked_uuid.as_str()))
@@ -1193,12 +1192,12 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
          kinds are now {:?} (the entry named the in-session shot id, which the loaders \
          renumbering has since reassigned)",
         marked.kind,
-        shot_kinds(&reopened, section_id)
+        shot_kinds(&reopened, line_id)
     );
 }
 
-/// The same defect through `UndoData::PreviousValues { section_id, shot_id, .. }`,
-/// whose undo calls `update_shot(section_id, shot_id, prev)` with the stale id
+/// The same defect through `UndoData::PreviousValues { line_id, shot_id, .. }`,
+/// whose undo calls `update_shot(line_id, shot_id, prev)` with the stale id
 /// (core/state/undo.rs). `redo_inner`'s catch-all arm re-executes
 /// `entry.command` - `Command::UpdateShot { shot_id, .. }` - so the REDO half
 /// carries the same stale id, which is what makes an undo/redo cycle after a
@@ -1211,18 +1210,18 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
 
     let edited_uuid;
     let original_length;
-    let section_id;
+    let line_id;
     {
         let state = state_with_project();
-        section_id = diverged_section(&state);
+        line_id = diverged_line(&state);
 
-        let target = shot_ids(&state, section_id)[0];
-        edited_uuid = shot_uuids(&state, section_id)[0]
+        let target = shot_ids(&state, line_id)[0];
+        edited_uuid = shot_uuids(&state, line_id)[0]
             .clone()
             .expect("shot has no uuid");
-        original_length = shot_lengths(&state, section_id)[0];
+        original_length = shot_lengths(&state, line_id)[0];
         let edited = state.execute(Command::UpdateShot {
-            section_id,
+            line_id,
             shot_id: target,
             updates: ShotUpdates {
                 length: Some(42.5),
@@ -1247,12 +1246,12 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
     );
 
     let project = reopened.get_project_state().expect("no project after undo");
-    let section = project
-        .sections
+    let line = project
+        .lines
         .iter()
-        .find(|s| s.id == section_id)
-        .expect("section missing");
-    let edited = section
+        .find(|s| s.id == line_id)
+        .expect("line missing");
+    let edited = line
         .shots
         .iter()
         .find(|s| s.uuid.as_deref() == Some(edited_uuid.as_str()))
@@ -1263,7 +1262,7 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
          old value onto a DIFFERENT shot: lengths are now {:?}",
         edited.length,
         original_length,
-        shot_lengths(&reopened, section_id)
+        shot_lengths(&reopened, line_id)
     );
 }
 
@@ -1273,16 +1272,16 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
 // ===========================================================================
 
 /// Bug 8's mechanism with the opposite outcome, and the reason it needs its own
-/// entry: a section that has had a shot DELETED has handed out more ids than it
+/// entry: a line that has had a shot DELETED has handed out more ids than it
 /// has shots, so the newest persisted id runs past
-/// `section_id * FEATURE_ID_STRIDE + (len - 1)`. `delete_shot` then finds
+/// `line_id * FEATURE_ID_STRIDE + (len - 1)`. `delete_shot` then finds
 /// nothing, the undo fails, and `undo_inner`'s epilogue pushes the entry back
 /// (core/state/undo.rs) - so it fails identically forever and EVERY entry
 /// beneath it is unreachable for the rest of the project's life.
 ///
 /// A wedged history is worse than a wrong one: the user cannot even walk past it
 /// to reach the edits underneath. The same shape applies to `update_shot` and
-/// `set_shot_kind`, whose undo also returns `Shot ... not found in section ...`.
+/// `set_shot_kind`, whose undo also returns `Shot ... not found in line ...`.
 ///
 /// Found by `undo-persistence-fuzz` with
 /// `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1`.
@@ -1292,35 +1291,34 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("wedged.stalx");
 
-    let section_id;
+    let line_id;
     {
         let state = state_with_project();
-        section_id = create_section(
+        line_id = create_line(
             &state,
             "Wedged",
             vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
         );
 
         // The delete is what makes the allocator run ahead of the shot count.
-        let middle = shot_ids(&state, section_id)[1];
+        let middle = shot_ids(&state, line_id)[1];
         let deleted = state.execute(Command::DeleteShot {
-            section_id,
+            line_id,
             shot_id: middle,
         });
         assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
 
-        let first = shot_ids(&state, section_id)[0];
+        let first = shot_ids(&state, line_id)[0];
         let created = state.execute(Command::CreateShot {
-            section_id,
+            line_id,
             shot: shot(270.0, 8.0),
             after_shot_id: None,
             before_shot_id: Some(first),
         });
         assert!(created.success, "CreateShot failed: {:?}", created.error);
 
-        let ids = shot_ids(&state, section_id);
-        let highest_renumbered =
-            section_id * crate::models::FEATURE_ID_STRIDE + ids.len() as u32 - 1;
+        let ids = shot_ids(&state, line_id);
+        let highest_renumbered = line_id * crate::models::FEATURE_ID_STRIDE + ids.len() as u32 - 1;
         assert!(
             ids.iter().any(|id| *id > highest_renumbered),
             "setup: at least one live id must be past the range the loader renumbers into, \
@@ -1352,7 +1350,7 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 // Finding 14: REAL, and pinned - but by a SEED, not by a reduction
 // ===========================================================================
 //
-// With a datum on section A and a merge chain A -> B -> C, a mid-chain
+// With a datum on line A and a merge chain A -> B -> C, a mid-chain
 // `CreateShot` into A leaves the A/B merge metres apart and the app's own
 // `debug_assert_merge_alignment` (`models/project/offsets.rs`, whose assert arm
 // is `#[cfg(test)]` and therefore exists in NO other tier) panics inside
@@ -1363,17 +1361,17 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 // fuzzer seed. It lives there rather than here because two reductions were
 // MEASURED not to reproduce, and a red test has to be red:
 //
-//   * sections A(3 shots, datum at 0), B(1), C(1), merges A:3<->B:0 and
+//   * lines A(3 shots, datum at 0), B(1), C(1), merges A:3<->B:0 and
 //     B:1<->C:0, then `CreateShot(after = A's first shot)` - every merge stays
 //     aligned. The cascade handles the plain chain.
 //   * the same with the fuzzer's FULL starting topology transcribed (seven
-//     sections of varied length, the zero datum, both merges, the loop closure)
+//     lines of varied length, the zero datum, both merges, the loop closure)
 //     and a `MoveStation` on the bridge before the insert - also clean.
 //
 // So the ingredient is further back in the fuzzer's history than either
 // reduction reaches, and pinning the seed pins the defect honestly while a
 // reduction would only pin a guess. `models/project/shots.rs`'s
-// `insert_shot_after` back-shifts the section offset only when the merged
+// `insert_shot_after` back-shifts the line offset only when the merged
 // partner has an INDEPENDENT datum path (`has_datum_path_excluding`), which on a
 // chain it does not, leaving `cascade_connection_offsets` to move the partner
 // instead - that is still the suspected mechanism, and it is what a fix should
@@ -1385,12 +1383,12 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 // Whichever is authoritative, the two should not disagree.
 
 // ===========================================================================
-// Finding 15: an undo leaves a `section_offsets` entry with REAL geometry -
+// Finding 15: an undo leaves a `line_offsets` entry with REAL geometry -
 // which is FINDING 3, re-measured several moves later
 // ===========================================================================
 
 /// Finding 15 was filed as its own defect because the move that FAILS is not
-/// the move that did it. Finding 3 displaces the empty section on the undo that
+/// the move that did it. Finding 3 displaces the empty line on the undo that
 /// removes its first shot; nothing puts that back (the redo re-inserts through
 /// the offset-neutral append path, which is finding 3's ratchet half), so the
 /// leftover is still there several undos later, when the entry being consumed
@@ -1398,7 +1396,7 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 /// snapshot it is compared against never had the key.
 ///
 /// Root-caused with the Rust fuzzer's own reported instance: seed 7 at 100
-/// moves, `section_offsets.1` = `[7.11187043796, 0.315846281796]` at depth 14,
+/// moves, `line_offsets.1` = `[7.11187043796, 0.315846281796]` at depth 14,
 /// whose immediately preceding two moves are `createShot(s=1,n=0,append)` and
 /// the undo of it. The write-up read the move log from the wrong end.
 ///
@@ -1409,22 +1407,22 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 /// FIXED by fixing finding 3: there is no displacement left to survive. Nothing
 /// here was specific to finding 15, which is why it was closed as a duplicate.
 #[test]
-fn unwinding_the_history_leaves_no_displaced_section_behind() {
+fn unwinding_the_history_leaves_no_displaced_line_behind() {
     let _config = isolated_config();
     let state = state_with_project();
-    let keeper = create_section(&state, "Keeper", vec![shot(0.0, 5.0)]);
-    let empty = create_section(&state, "Empty", vec![]);
+    let keeper = create_line(&state, "Keeper", vec![shot(0.0, 5.0)]);
+    let empty = create_line(&state, "Empty", vec![]);
 
-    let before = section_offset(&state, empty);
+    let before = line_offset(&state, empty);
     assert_eq!(
         before, None,
-        "setup: a section that has never been moved should have no offset entry"
+        "setup: a line that has never been moved should have no offset entry"
     );
 
-    // Depth 1: an ordinary edit on an unrelated section.
+    // Depth 1: an ordinary edit on an unrelated line.
     let keeper_shot = shot_ids(&state, keeper)[0];
     let edited = state.execute(Command::UpdateShot {
-        section_id: keeper,
+        line_id: keeper,
         shot_id: keeper_shot,
         updates: ShotUpdates {
             length: Some(9.0),
@@ -1433,9 +1431,9 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
     });
     assert!(edited.success, "UpdateShot failed: {:?}", edited.error);
 
-    // Depth 2: the first shot appended into the empty section.
+    // Depth 2: the first shot appended into the empty line.
     let created = state.execute(Command::CreateShot {
-        section_id: empty,
+        line_id: empty,
         shot: shot(90.0, 10.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -1447,17 +1445,17 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
     assert!(state.undo().success, "undo of UpdateShot failed");
 
     assert_eq!(
-        section_offset(&state, empty),
+        line_offset(&state, empty),
         before,
-        "unwinding the history left section {empty} displaced: the undo of the first shot in an \
-         empty section slides it (finding 3) and nothing puts it back, so the offset is still \
+        "unwinding the history left line {empty} displaced: the undo of the first shot in an \
+         empty line slides it (finding 3) and nothing puts it back, so the offset is still \
          there after the undo of an UNRELATED entry - which is what finding 15 observed"
     );
 }
 
 // ===========================================================================
 // Finding 16: after a reload, an undo/redo cycle of CreateShot leaves the
-// section holding the SAME shot uuid twice
+// line holding the SAME shot uuid twice
 // ===========================================================================
 
 /// The redo half of finding 8, which nothing had exercised.
@@ -1466,7 +1464,7 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
 /// created one in place. The redo then re-runs the SAME insert through
 /// `redo_inner`'s `CreatedShotSnapshot` arm (`core/state/undo.rs`), which forces
 /// both the id AND the uuid from the entry - so the shot it re-creates is a
-/// second copy of one that never left. The section ends up holding one
+/// second copy of one that never left. The line ends up holding one
 /// `Shot::uuid` twice.
 ///
 /// That is worse than a wrong shot: uuid is the identity `StationKey::AfterShot`
@@ -1481,10 +1479,10 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("duplicated.stalx");
 
-    let section_id;
+    let line_id;
     {
         let state = state_with_project();
-        section_id = diverged_section(&state);
+        line_id = diverged_line(&state);
         let saved = state.save_project(Some(save_path.clone()));
         assert!(saved.success, "save failed: {:?}", saved.error);
     }
@@ -1496,7 +1494,7 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
     assert!(reopened.undo().success, "undo after reopen failed");
     assert!(reopened.redo().success, "redo after reopen failed");
 
-    let uuids: Vec<String> = shot_uuids(&reopened, section_id)
+    let uuids: Vec<String> = shot_uuids(&reopened, line_id)
         .into_iter()
         .flatten()
         .collect();
@@ -1506,7 +1504,7 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
     assert_eq!(
         unique.len(),
         uuids.len(),
-        "an undo/redo cycle after the reopen left section {section_id} holding the same shot uuid \
+        "an undo/redo cycle after the reopen left line {line_id} holding the same shot uuid \
          twice: {uuids:?}. The undo deleted the wrong shot and the redo re-inserted the one that \
          was still there, forcing the persisted uuid onto the copy"
     );
@@ -1538,11 +1536,11 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
     let state = state_with_project();
     // Two INDEPENDENT components, so both may carry a datum: a second datum in
     // one component is refused.
-    let first = create_section(&state, "First", vec![shot(0.0, 5.0)]);
-    let second = create_section(&state, "Second", vec![shot(90.0, 5.0)]);
-    for (section_id, latitude) in [(first, 10.0), (second, 11.0)] {
+    let first = create_line(&state, "First", vec![shot(0.0, 5.0)]);
+    let second = create_line(&state, "Second", vec![shot(90.0, 5.0)]);
+    for (line_id, latitude) in [(first, 10.0), (second, 11.0)] {
         let datum = state.execute(Command::SetZeroDatum {
-            station_ref: StationRef::new(section_id, 0),
+            station_ref: StationRef::new(line_id, 0),
             coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
             accuracy_m: None,
             entrance: None,
@@ -1550,7 +1548,7 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
         assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
     }
 
-    let before = datum_sections(&state);
+    let before = datum_lines(&state);
     assert_eq!(
         before,
         vec![first, second],
@@ -1570,7 +1568,7 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
     assert!(state.undo().success, "undo of RemoveZeroDatum failed");
 
     assert_eq!(
-        datum_sections(&state),
+        datum_lines(&state),
         before,
         "undo put the datum back at the END of zero_datums instead of its original index; the \
          order is persisted, indexed by the frontend, and the order resolve_offsets anchors \
@@ -1578,13 +1576,13 @@ fn undo_of_remove_zero_datum_restores_the_original_order() {
     );
 }
 
-/// The section of every zero datum, in `Project::zero_datums` order.
-fn datum_sections(state: &AppState) -> Vec<SectionId> {
+/// The line of every zero datum, in `Project::zero_datums` order.
+fn datum_lines(state: &AppState) -> Vec<LineId> {
     let project = state.get_project_state().expect("no project open");
     project
         .zero_datums
         .iter()
-        .map(|datum| datum.station_ref.section_id)
+        .map(|datum| datum.station_ref.line_id)
         .collect()
 }
 
@@ -1603,11 +1601,11 @@ fn datum_sections(state: &AppState) -> Vec<SectionId> {
 /// needs the VECTOR between them (a snap-to-merge move) rather than the distance.
 fn station_raw_xy(
     state: &AppState,
-    a: (SectionId, u32),
-    b: (SectionId, u32),
+    a: (LineId, u32),
+    b: (LineId, u32),
 ) -> ((f64, f64), (f64, f64)) {
     let project = state.get_project_state().expect("no project open");
-    let raw = |at: (SectionId, u32)| {
+    let raw = |at: (LineId, u32)| {
         let coords = project
             .compute_station_raw_coords(StationRef::new(at.0, at.1))
             .expect("station has no raw coordinates");
@@ -1616,7 +1614,7 @@ fn station_raw_xy(
     (raw(a), raw(b))
 }
 
-fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -> f64 {
+fn raw_station_gap(state: &AppState, a: (LineId, u32), b: (LineId, u32)) -> f64 {
     let project = state.get_project_state().expect("no project open");
     let left = project
         .compute_station_raw_coords(StationRef::new(a.0, a.1))
@@ -1627,15 +1625,15 @@ fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
 }
 
-/// Two sections joined by ONE merge and anchored by NOTHING - no zero datum
+/// Two lines joined by ONE merge and anchored by NOTHING - no zero datum
 /// anywhere in the project. Returns `(a, b)`, merged at `a:1 <-> b:0`.
 ///
 /// The absence of the datum is the whole precondition, so it is not an
 /// oversight: `realign_after_shot_edit` looks for a datum in the edited
-/// section's merge group and returns early when there is none.
-fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
-    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
-    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+/// line's merge group and returns early when there is none.
+fn two_unanchored_merged_lines(state: &AppState) -> (LineId, LineId) {
+    let a = create_line(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let b = create_line(state, "B", vec![shot(90.0, 5.0)]);
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
@@ -1657,7 +1655,7 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 /// 1. `Project::realign_after_shot_edit` (`models/project/mutations.rs:923`) -
 ///    the only thing `update_shot` calls to repair the merge
 ///    (`core/state/command_shot.rs:173`) - looks for a zero datum in the edited
-///    section's merge group and, finding none, returns at
+///    line's merge group and, finding none, returns at
 ///    `mutations.rs:941` ("No anchor in this group, nothing to realign").
 /// 2. `AppState::execute`'s epilogue (`core/state/commands.rs:654`) then runs
 ///    `reconcile_geometry()` -> `Project::realign_merges()`
@@ -1682,7 +1680,7 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 /// FIXED on both gates, and kept as the regression guard.
 /// `realign_after_shot_edit` no longer gives up on an unanchored group: it has no
 /// ABSOLUTE anchor but it still has the relative merge constraints, so it anchors
-/// on the edited section and BFSes its partners into place. And `realign_merges`
+/// on the edited line and BFSes its partners into place. And `realign_merges`
 /// heals at `Project::MERGE_ALIGNMENT_INVARIANT_M` (the assert's own 1 cm) rather
 /// than at the 5 cm REPORTING tolerance, so the 1-5 cm band is not a band any
 /// more. Red on `left the merged pair 0.020000 m apart`.
@@ -1690,14 +1688,14 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = two_unanchored_merged_sections(&state);
+    let (a, b) = two_unanchored_merged_lines(&state);
 
     // 2 cm of extra length on the shot BEFORE the merged station, so the station
     // moves by exactly that. Deliberately inside the band: 5.1 cm would be
     // healed by the epilogue and would prove nothing.
     let first_shot = shot_ids(&state, a)[0];
     let updated = state.execute(Command::UpdateShot {
-        section_id: a,
+        line_id: a,
         shot_id: first_shot,
         updates: ShotUpdates {
             length: Some(5.02),
@@ -1723,7 +1721,7 @@ fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
 /// shot paths, `merge_stations`, `set_zero_datum`, `adjust_loop_closures` and
 /// `delete_shot_range_shift`), so the edit itself says nothing. The next command
 /// that DOES assert - here a `CreateShot` into a third, entirely unrelated
-/// section - trips on the merge the edit broke two commands ago, in a test build
+/// line - trips on the merge the edit broke two commands ago, in a test build
 /// with no way to attribute it.
 ///
 /// In a release build the same state produces neither the assert nor a user
@@ -1733,17 +1731,17 @@ fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
 /// is not confined to the pair, so a future regression that only re-opens the
 /// landmine (an edit path that skips the realign) still fails here. Red on
 /// `Merge alignment violated after insert_shot_after: ... 0.020000m apart`,
-/// raised by an insert into a section that touches neither side of the merge.
+/// raised by an insert into a line that touches neither side of the merge.
 #[test]
 fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, _b) = two_unanchored_merged_sections(&state);
-    let elsewhere = create_section(&state, "Elsewhere", vec![shot(45.0, 5.0)]);
+    let (a, _b) = two_unanchored_merged_lines(&state);
+    let elsewhere = create_line(&state, "Elsewhere", vec![shot(45.0, 5.0)]);
 
     let first_shot = shot_ids(&state, a)[0];
     let updated = state.execute(Command::UpdateShot {
-        section_id: a,
+        line_id: a,
         shot_id: first_shot,
         updates: ShotUpdates {
             length: Some(5.02),
@@ -1752,11 +1750,11 @@ fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     });
     assert!(updated.success, "UpdateShot failed: {:?}", updated.error);
 
-    // A command in a DIFFERENT section, touching neither side of the merge.
+    // A command in a DIFFERENT line, touching neither side of the merge.
     let anchor = shot_ids(&state, elsewhere)[0];
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         state.execute(Command::CreateShot {
-            section_id: elsewhere,
+            line_id: elsewhere,
             shot: shot(10.0, 3.0),
             after_shot_id: Some(anchor),
             before_shot_id: None,
@@ -1772,7 +1770,7 @@ fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     };
     assert!(
         message.is_empty(),
-        "an unrelated insert into a third section tripped the app's own merge-alignment assert \
+        "an unrelated insert into a third line tripped the app's own merge-alignment assert \
          on the merge a shot edit broke two commands earlier: {}",
         message.lines().next().unwrap_or_default()
     );
@@ -1797,7 +1795,7 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
             (
                 format!(
                     "{}:{}",
-                    station.station_ref.section_id, station.station_ref.station_index
+                    station.station_ref.line_id, station.station_ref.station_index
                 ),
                 [
                     station.coordinates.x.to_bits(),
@@ -1853,12 +1851,12 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 fn the_adjusted_solve_is_a_function_of_the_project() {
     let _config = isolated_config();
     let state = state_with_project();
-    let a = create_section(
+    let a = create_line(
         &state,
         "A",
         vec![shot(0.0, 5.0), shot(0.0, 5.0), shot(10.0, 4.0)],
     );
-    let b = create_section(&state, "B", vec![shot(90.0, 5.0), shot(95.0, 6.0)]);
+    let b = create_line(&state, "B", vec![shot(90.0, 5.0), shot(95.0, 6.0)]);
     let datum = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(a, 0),
         coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -1927,17 +1925,17 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
 // HOW THIS ONE ENDED. Finding 22 was reported as a defect: a range shift-delete
 // is not the `n` single `Command::DeleteShot`s its own doc comment said it
 // "generalizes ... by deleting the range's shots in forward order", because on a
-// suffix range the merged PARTNER section ends up seven metres from where the
+// suffix range the merged PARTNER line ends up seven metres from where the
 // single deletes leave it.
 //
 // The equivalence is false BY DESIGN, and the doc comment was the defect. Two
 // deliberately-reviewed tests from PR #95 pin the atomic semantics -
-// `test_delete_range_shift_does_not_displace_free_floating_merged_section` and
+// `test_delete_range_shift_does_not_displace_free_floating_merged_line` and
 // `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`
 // (`core/state/tests.rs`) - and they are irreconcilable with the composition on
 // this topology. `AppState::execute` runs the geometry epilogue after every
 // command, so the single-delete sequence re-anchors the partner while the merge
-// is still live, drags it as the section shrinks, and then deletes the merge:
+// is still live, drags it as the line shrinks, and then deletes the merge:
 // the partner is left displaced with no edge to pull it back. The range path
 // defers to ONE cascade at the end and leaves it where the surveyor put it,
 // which is the better answer for the user and the reviewed intent.
@@ -1950,11 +1948,11 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
 // the same two halves on random topology and no longer classifies the
 // difference away.
 
-/// Every `section_offsets` entry, by section, ascending.
-fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
+/// Every `line_offsets` entry, by line, ascending.
+fn line_offsets(state: &AppState) -> Vec<(LineId, (f64, f64))> {
     let project = state.get_project_state().expect("no project open");
-    let mut out: Vec<(SectionId, (f64, f64))> = project
-        .section_offsets
+    let mut out: Vec<(LineId, (f64, f64))> = project
+        .line_offsets
         .iter()
         .map(|(id, offset)| (*id, (offset.0, offset.1)))
         .collect();
@@ -1962,10 +1960,10 @@ fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
     out
 }
 
-/// A four-shot section merged at its far end to a one-shot section, anchored by
+/// A four-shot line merged at its far end to a one-shot line, anchored by
 /// nothing. Returns `(a, b)`.
-fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
-    let a = create_section(
+fn merged_chain_for_range_delete(state: &AppState) -> (LineId, LineId) {
+    let a = create_line(
         state,
         "A",
         vec![
@@ -1975,7 +1973,7 @@ fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
             shot(90.0, 8.0),
         ],
     );
-    let b = create_section(state, "B", vec![shot(120.0, 5.0)]);
+    let b = create_line(state, "B", vec![shot(120.0, 5.0)]);
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 4),
         station_b: StationRef::new(b, 0),
@@ -1984,13 +1982,13 @@ fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
     (a, b)
 }
 
-/// Every adjusted station position of one section, by index, ascending.
-fn positions_of(state: &AppState, section_id: SectionId) -> Vec<(u32, [f64; 3])> {
+/// Every adjusted station position of one line, by index, ascending.
+fn positions_of(state: &AppState, line_id: LineId) -> Vec<(u32, [f64; 3])> {
     let mut out: Vec<(u32, [f64; 3])> = state
         .get_adjusted_stations()
         .expect("no project open")
         .iter()
-        .filter(|station| station.station_ref.section_id == section_id)
+        .filter(|station| station.station_ref.line_id == line_id)
         .map(|station| {
             (
                 station.station_ref.station_index,
@@ -2036,10 +2034,10 @@ struct Routes {
     /// The state the same shots were deleted on one `Command::DeleteShot` at a
     /// time, forward from the range's start position.
     singles: AppState,
-    /// The four-shot section that was edited.
-    a: SectionId,
-    /// The one-shot section merged to A's far station.
-    b: SectionId,
+    /// The four-shot line that was edited.
+    a: LineId,
+    /// The one-shot line merged to A's far station.
+    b: LineId,
 }
 
 fn both_routes_over(lo: usize, hi: usize) -> Routes {
@@ -2065,7 +2063,7 @@ fn both_routes_over(lo: usize, hi: usize) -> Routes {
     for step in lo..=hi {
         let live = shot_ids(&singles, singles_a);
         let single = singles.execute(Command::DeleteShot {
-            section_id: singles_a,
+            line_id: singles_a,
             shot_id: live[lo],
         });
         assert!(
@@ -2086,20 +2084,20 @@ fn both_routes_over(lo: usize, hi: usize) -> Routes {
 /// is the contract - not the composition its doc comment used to claim.
 ///
 /// Two halves, both measured on `merged_chain_for_range_delete` (a four-shot
-/// section A whose far station A:4 is merged to a one-shot, undatumed section B):
+/// line A whose far station A:4 is merged to a one-shot, undatumed line B):
 ///
 /// 1. THE DOOMED-ANCHOR SHAPE, `[2..=3]`. The range takes A:3 and A:4 - the
 ///    station the merge is anchored to - so B is cut loose with no datum and no
 ///    remaining edge. The range delete leaves B exactly where it was; the two
 ///    single deletes leave it 7.000000 m away, because the first of them
-///    re-anchors B against a section that has already lost one shot and the
+///    re-anchors B against a line that has already lost one shot and the
 ///    second then deletes the merge. Keeping B put is the reviewed intent
 ///    (PR #95, the two tests named in the block comment above), and the
 ///    difference is documented in `execute_delete_shot_range_shift`.
 ///
 /// 2. EVERY OTHER SHAPE. A prefix `[0..=1]` and an interior `[1..=2]` remove no
 ///    merged-to station, and there the two routes agree to the last bit - both
-///    in `section_offsets` and in the adjusted geometry, for BOTH sections. The
+///    in `line_offsets` and in the adjusted geometry, for BOTH lines. The
 ///    atomic path is not free to differ wherever it likes; it differs on exactly
 ///    the shape the doc comment now names.
 #[test]
@@ -2109,12 +2107,12 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
     let reference = state_with_project();
     let (_, reference_b) = merged_chain_for_range_delete(&reference);
     let b_before = positions_of(&reference, reference_b);
-    let offsets_before = section_offsets(&reference);
+    let offsets_before = line_offsets(&reference);
 
     let suffix = both_routes_over(2, 3);
     assert_eq!(
         suffix.b, reference_b,
-        "the reference project and the routed ones disagree on which section B is"
+        "the reference project and the routed ones disagree on which line B is"
     );
 
     let b_ranged = positions_of(&suffix.ranged, suffix.b);
@@ -2125,7 +2123,7 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
          {b_before:?} -> {b_ranged:?}. A deferred cascade must leave a free-floating partner \
          where it was"
     );
-    // B is really cut loose - otherwise the assertion above is about a section
+    // B is really cut loose - otherwise the assertion above is about a line
     // something else was holding in place, and proves nothing.
     let project = suffix
         .ranged
@@ -2145,15 +2143,15 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
     // no offset going in and comes out with none (or, if some other path leaves
     // the key behind, a geometrically inert one - whether an inert key survives
     // at all is finding 2's business, its VALUE is this test's).
-    let ranged_offset = section_offsets(&suffix.ranged)
+    let ranged_offset = line_offsets(&suffix.ranged)
         .into_iter()
         .find(|(id, _)| *id == suffix.b)
         .map(|(_, offset)| offset);
     assert!(
         ranged_offset.is_none_or(|(x, y)| x.abs() <= 1e-9 && y.abs() <= 1e-9),
-        "the range delete gave B a section_offsets entry that MOVES it: {:?} -> {:?}",
+        "the range delete gave B a line_offsets entry that MOVES it: {:?} -> {:?}",
         offsets_before,
-        section_offsets(&suffix.ranged)
+        line_offsets(&suffix.ranged)
     );
 
     // The other route, and the DIFFERENCE this pins: the singles drag B along.
@@ -2165,11 +2163,11 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
          first shot it deletes, applied while the merge was still live); it moved it \
          {singles_moved} m: {b_before:?} -> {b_singles:?}"
     );
-    let singles_offset = section_offsets(&suffix.singles)
+    let singles_offset = line_offsets(&suffix.singles)
         .into_iter()
         .find(|(id, _)| *id == suffix.b)
         .map(|(_, offset)| offset)
-        .expect("the single deletes were expected to give B a section_offsets entry");
+        .expect("the single deletes were expected to give B a line_offsets entry");
     assert!(
         (singles_offset.0 - -6.062_177_826_491_07).abs() <= 1e-9
             && (singles_offset.1 - -3.5).abs() <= 1e-9,
@@ -2180,19 +2178,19 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
     for (label, lo, hi) in [("prefix", 0, 1), ("interior", 1, 2)] {
         let routes = both_routes_over(lo, hi);
         assert_eq!(
-            section_offsets(&routes.ranged),
-            section_offsets(&routes.singles),
+            line_offsets(&routes.ranged),
+            line_offsets(&routes.singles),
             "a {label} range [{lo}..={hi}] removes no station a merge is anchored to, so the \
-             range delete and the single deletes must leave identical section_offsets"
+             range delete and the single deletes must leave identical line_offsets"
         );
-        for (name, section_id) in [("A", routes.a), ("B", routes.b)] {
+        for (name, line_id) in [("A", routes.a), ("B", routes.b)] {
             let gap = position_gap(
-                &positions_of(&routes.ranged, section_id),
-                &positions_of(&routes.singles, section_id),
+                &positions_of(&routes.ranged, line_id),
+                &positions_of(&routes.singles, line_id),
             );
             assert!(
                 gap <= 1e-9,
-                "a {label} range [{lo}..={hi}] put section {name} in two different places \
+                "a {label} range [{lo}..={hi}] put line {name} in two different places \
                  depending on the route ({gap} m apart), and only the doomed-anchor shape is \
                  allowed to differ"
             );
@@ -2211,17 +2209,17 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
 /// a 1-indexed display position:
 ///
 /// ```text
-/// let base = section_id.saturating_mul(FEATURE_ID_STRIDE);
+/// let base = line_id.saturating_mul(FEATURE_ID_STRIDE);
 /// if shot_id >= base { shot_id - base + 1 } else { shot_id + 1 }
 /// ```
 ///
 /// The multiply saturates; neither add does. `shot_id == u32::MAX` with a
-/// section whose base is 0 takes the first arm and computes `u32::MAX + 1`.
+/// line whose base is 0 takes the first arm and computes `u32::MAX + 1`.
 ///
 /// It is reached from `Command::description()` (`core/command.rs:702`, `:710`,
 /// `:717`), which `AppState::execute` calls on EVERY command to label the undo
 /// entry and to build the corruption guard's message - so the panic happens
-/// before the id is ever checked against the section. A debug or test build
+/// before the id is ever checked against the line. A debug or test build
 /// aborts; a release build wraps and shows the user a nonsense position.
 ///
 /// Found by the adversarial engine (`adversarial_tests.rs`), seeds 4 and 7.
@@ -2229,12 +2227,12 @@ fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
 fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
     let _config = isolated_config();
     let state = state_with_project();
-    let section_id = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+    let line_id = create_line(&state, "A", vec![shot(0.0, 5.0)]);
 
-    // No section holds this shot. The command must be REFUSED, not fatal.
+    // No line holds this shot. The command must be REFUSED, not fatal.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         state.execute(Command::SetShotKind {
-            section_id,
+            line_id,
             shot_id: ShotId::MAX,
             kind: ShotKind::Jump,
         })
@@ -2243,7 +2241,7 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
         Ok(result) => {
             assert!(
                 !result.success,
-                "SetShotKind with a shot id no section holds reported success"
+                "SetShotKind with a shot id no line holds reported success"
             );
             String::new()
         }
@@ -2304,9 +2302,9 @@ fn raw_station_xy(state: &AppState, station: StationRef) -> (f64, f64) {
 /// Nothing re-solved for it. `remove_zero_datum` (core/state/command_station.rs)
 /// does call `resolve_offsets()`, but that solver deliberately never touches an
 /// anchor's own offset - "only the genuinely non-derivable anchors (datum
-/// sections and free-placed floating components) keep their stored offset,
+/// lines and free-placed floating components) keep their stored offset,
 /// because the cascade never seed-adjusts them" (models/project/offsets.rs). A
-/// datum section IS such an anchor, so the surviving datum kept the offset it was
+/// datum line IS such an anchor, so the surviving datum kept the offset it was
 /// given while it was still a SECONDARY datum, and the project was left holding a
 /// placement its own rule no longer produces.
 ///
@@ -2324,23 +2322,23 @@ fn raw_station_xy(state: &AppState, station: StationRef) -> (f64, f64) {
 /// is self-consistent - they part company only on the promoted-datum
 /// contradiction this test builds.
 ///
-/// The oracle is the ANCHOR, not the section offset, because the offset is
+/// The oracle is the ANCHOR, not the line offset, because the offset is
 /// allowed to move: this edit lengthens the shot UPSTREAM of the datum station by
-/// 2 m, and holding the station still is precisely what slides the section by 2 m.
+/// 2 m, and holding the station still is precisely what slides the line by 2 m.
 /// Both are asserted - the anchor to the bit, the slide to the edit's own
 /// magnitude - so a re-georeference (kilometres, in either quantity) still fails.
 ///
-/// Found by the Rust fuzzer's HORIZON mode, seed 2, at undo depth 1189: sections
+/// Found by the Rust fuzzer's HORIZON mode, seed 2, at undo depth 1189: lines
 /// 65 and 81 both off by exactly `(22230.0946076, -10480.744175)` with 81 landing
-/// on `[0, 0]` - the offset a section gets when the surviving datum is its own
+/// on `[0, 0]` - the offset a line gets when the surviving datum is its own
 /// station 0. `fuzz_shrink_tests.rs` minimized that 1770-move trace to seven
 /// moves, of which this is the reduction.
 #[test]
 fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
 
     // The FIRST datum is the project's local origin.
     let first = state.execute(Command::SetZeroDatum {
@@ -2366,7 +2364,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
         "SetZeroDatum (second) failed: {:?}",
         second.error
     );
-    let far = section_offset(&state, anchored).expect("the second datum should place its section");
+    let far = line_offset(&state, anchored).expect("the second datum should place its line");
     assert!(
         far.0.abs() > 1000.0,
         "setup: the second datum should sit kilometres from the first, got {far:?}"
@@ -2385,7 +2383,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     );
     let datum_station = StationRef::new(anchored, 1);
     let settled_anchor = raw_station_xy(&state, datum_station);
-    let settled = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let settled = line_offset(&state, anchored).expect("the anchored line lost its offset");
 
     // The removal promoted this datum to first, and local (0, 0) means
     // `zero_datums[0]`'s GPS - so the survey is translated onto the new origin
@@ -2401,7 +2399,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     // extra length on the shot UPSTREAM of the datum station.
     let target = shot_ids(&state, anchored)[0];
     let edited = state.execute(Command::UpdateShot {
-        section_id: anchored,
+        line_id: anchored,
         shot_id: target,
         updates: ShotUpdates {
             length: Some(9.0),
@@ -2420,11 +2418,11 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
          of holding the anchor where it found it, translating the whole connected component"
     );
 
-    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let after = line_offset(&state, anchored).expect("the anchored line lost its offset");
     let moved = (after.0 - settled.0).hypot(after.1 - settled.1);
     assert!(
         (moved - 2.0).abs() <= 1e-9,
-        "the anchored section slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
+        "the anchored line slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
          lengthening of the shot upstream of its datum station; with the anchor held, the edit's \
          own magnitude is the only motion allowed"
     );
@@ -2440,19 +2438,19 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
 /// project's geometry kilometres from where it was before the edit it undid.
 ///
 /// This is what makes it an undo/redo finding rather than only a geometry one: a
-/// single `undo` of a single `UpdateShot` is not a no-op on `section_offsets`.
+/// single `undo` of a single `UpdateShot` is not a no-op on `line_offsets`.
 ///
 /// FIXED with the forward half, and kept as the regression guard: the undo takes
 /// the same `hold_anchor_at` route as the edit, so it holds the anchor where the
 /// undo found it instead of re-georeferencing a second time. The oracle here is
 /// still exact offset equality - unlike the forward tests, an undo has no edit of
-/// its own to pay for, so every section has to land on the offset it had.
+/// its own to pay for, so every line has to land on the offset it had.
 #[test]
 fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
 
     assert!(
         state
@@ -2494,12 +2492,12 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
          {promoted:?}"
     );
 
-    let before = section_offset(&state, anchored);
+    let before = line_offset(&state, anchored);
     let target = shot_ids(&state, anchored)[0];
     assert!(
         state
             .execute(Command::UpdateShot {
-                section_id: anchored,
+                line_id: anchored,
                 shot_id: target,
                 updates: ShotUpdates {
                     length: Some(9.0),
@@ -2512,9 +2510,9 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
     assert!(state.undo().success, "undo of UpdateShot failed");
 
     assert_eq!(
-        section_offset(&state, anchored),
+        line_offset(&state, anchored),
         before,
-        "undoing the UpdateShot did not restore the section offset it found: the edit re-anchored \
+        "undoing the UpdateShot did not restore the line offset it found: the edit re-anchored \
          the component onto the datum that the primary datum's removal had promoted, and the undo \
          re-derives the same new frame instead of putting the old one back"
     );
@@ -2523,27 +2521,27 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
 /// The same defect reached the way a user reaches it, and the way the fuzzer did:
 /// nobody removed a datum, they deleted a SHOT.
 ///
-/// `DeleteShot` on the first shot of a section removes that section's station 0,
+/// `DeleteShot` on the first shot of a line removes that line's station 0,
 /// and the reference cleanup drops every stored ref anchored there - including a
-/// zero datum keyed `StationAnchor::SectionStart`. If that datum was the primary
+/// zero datum keyed `StationAnchor::LineStart`. If that datum was the primary
 /// one, the project's origin has just moved and no command was issued that says
 /// so. Everything after is finding 25 exactly as above.
 ///
 /// This is the shape the shrinker minimized the horizon failure to: an empty
-/// section, one appended shot, a second datum, `deleteShot`, a merge, and one
+/// line, one appended shot, a second datum, `deleteShot`, a merge, and one
 /// `updateShot`.
 ///
 /// FIXED with the test above, and kept because the promotion arrives here through
 /// a path that never mentions datums: `hold_anchor_at` is measured from the live
 /// project, so it does not care WHICH command left the frame contradicting itself.
-/// Same oracle as above - the anchor to the bit, the section's slide to the
+/// Same oracle as above - the anchor to the bit, the line's slide to the
 /// edit's own 2 m.
 #[test]
 fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
 
     assert!(
         state
@@ -2569,22 +2567,22 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
     );
 
     // Deleting the first shot removes station 0, and with it the datum anchored
-    // to `SectionStart`.
+    // to `LineStart`.
     let first_shot = shot_ids(&state, origin)[0];
     let deleted = state.execute(Command::DeleteShot {
-        section_id: origin,
+        line_id: origin,
         shot_id: first_shot,
     });
     assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
     let datum_station = StationRef::new(anchored, 1);
     let settled_anchor = raw_station_xy(&state, datum_station);
-    let settled = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let settled = line_offset(&state, anchored).expect("the anchored line lost its offset");
 
     let target = shot_ids(&state, anchored)[0];
     assert!(
         state
             .execute(Command::UpdateShot {
-                section_id: anchored,
+                line_id: anchored,
                 shot_id: target,
                 updates: ShotUpdates {
                     length: Some(9.0),
@@ -2604,11 +2602,11 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
          {settled_anchor:?} to {now_anchor:?}) with no command in between that asked for it"
     );
 
-    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let after = line_offset(&state, anchored).expect("the anchored line lost its offset");
     let moved = (after.0 - settled.0).hypot(after.1 - settled.1);
     assert!(
         (moved - 2.0).abs() <= 1e-9,
-        "the anchored section slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
+        "the anchored line slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
          lengthening of the shot upstream of its datum station; with the anchor held, the edit's \
          own magnitude is the only motion allowed"
     );
@@ -2619,14 +2617,14 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
 // georeference frame and moved nothing, so the whole survey slid on the map
 // ===========================================================================
 
-/// Every station of every section, keyed by ref. A section with N shots has
+/// Every station of every line, keyed by ref. A line with N shots has
 /// N + 1 stations.
 fn all_station_xy(state: &AppState) -> Vec<(StationRef, (f64, f64))> {
     let project = state.get_project_state().expect("no project open");
     let mut out = Vec::new();
-    for section in &project.sections {
-        for index in 0..=section.shots.len() {
-            let station = StationRef::new(section.id, index as u32);
+    for line in &project.lines {
+        for index in 0..=line.shots.len() {
+            let station = StationRef::new(line.id, index as u32);
             let coords = project
                 .compute_station_raw_coords(station)
                 .expect("station has no raw coordinates");
@@ -2636,12 +2634,12 @@ fn all_station_xy(state: &AppState) -> Vec<(StationRef, (f64, f64))> {
     out
 }
 
-/// The whole `section_offsets` map.
-fn all_section_offsets(state: &AppState) -> std::collections::HashMap<SectionId, (f64, f64)> {
+/// The whole `line_offsets` map.
+fn all_line_offsets(state: &AppState) -> std::collections::HashMap<LineId, (f64, f64)> {
     state
         .get_project_state()
         .expect("no project open")
-        .section_offsets
+        .line_offsets
         .clone()
 }
 
@@ -2669,7 +2667,7 @@ fn frame_gps(state: &AppState) -> (f64, f64) {
 /// `gps_to_local(new_origin_gps, old_origin_gps)` plus its local xy. Both use the
 /// app's own conversion, the one `MapCanvas` and the data table's GPS column use.
 ///
-/// The third section is free-floating: no datum, no merge, no closure. It must
+/// The third line is free-floating: no datum, no merge, no closure. It must
 /// translate with everything else - its local coordinates are read against the
 /// same origin, so leaving it behind would move it RELATIVE to the anchored
 /// survey, which is the one thing a georeference change must not do.
@@ -2677,11 +2675,11 @@ fn frame_gps(state: &AppState) -> (f64, f64) {
 fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
     // Free-floating: no datum, no merge, no closure. `all_station_xy` sweeps it
-    // like every other section, which is what puts it under the oracle below.
-    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    // like every other line, which is what puts it under the oracle below.
+    let _floater = create_line(&state, "Floater", vec![shot(300.0, 12.0)]);
 
     let first_gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
     // About 400 m away: far enough that a missed translation is unmissable, close
@@ -2758,17 +2756,17 @@ fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
 
 /// The undo half. `RemoveZeroDatum` records a `ProjectSnapshotPair`, which
 /// restores verbatim - so the translation is already exactly invertible, and this
-/// pins it rather than fixing it. The oracle is the WHOLE `section_offsets` map,
+/// pins it rather than fixing it. The oracle is the WHOLE `line_offsets` map,
 /// key presence included: the renormalisation drops the promoted datum's own key
-/// (it lands on the origin) and creates keys for sections that had none, so an
+/// (it lands on the origin) and creates keys for lines that had none, so an
 /// inverse that restored values but not presence would fail here.
 #[test]
-fn undoing_the_primary_datum_removal_restores_every_section_offset() {
+fn undoing_the_primary_datum_removal_restores_every_line_offset() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let _floater = create_line(&state, "Floater", vec![shot(300.0, 12.0)]);
 
     for (station, gps) in [
         (
@@ -2793,7 +2791,7 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
         );
     }
 
-    let before = all_section_offsets(&state);
+    let before = all_line_offsets(&state);
     assert!(
         state
             .execute(Command::RemoveZeroDatum {
@@ -2802,7 +2800,7 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
             .success,
         "RemoveZeroDatum failed"
     );
-    let renormalised = all_section_offsets(&state);
+    let renormalised = all_line_offsets(&state);
     assert_ne!(
         renormalised, before,
         "setup: the removal must have translated the survey, or this proves nothing"
@@ -2810,21 +2808,21 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
 
     assert!(state.undo().success, "undo of RemoveZeroDatum failed");
     assert_eq!(
-        all_section_offsets(&state),
+        all_line_offsets(&state),
         before,
-        "undoing the removal did not put the section offsets back: the renormalisation moved \
-         every section, so the inverse has to restore every one of them - values AND key presence"
+        "undoing the removal did not put the line offsets back: the renormalisation moved \
+         every line, so the inverse has to restore every one of them - values AND key presence"
     );
 
     assert!(state.redo().success, "redo of RemoveZeroDatum failed");
     assert_eq!(
-        all_section_offsets(&state),
+        all_line_offsets(&state),
         renormalised,
         "redo has to land on the renormalised state the forward command produced"
     );
 }
 
-/// `SetZeroDatum`'s `UndoData::ZeroDatumInfo` now captures EVERY section's offset,
+/// `SetZeroDatum`'s `UndoData::ZeroDatumInfo` now captures EVERY line's offset,
 /// not the datum's merge group.
 ///
 /// Undoing the add of the first datum REMOVES it, which is an inverse that
@@ -2834,12 +2832,12 @@ fn undoing_the_primary_datum_removal_restores_every_section_offset() {
 /// a behavioural test cannot distinguish the two captures on a project where
 /// nothing outside the group happens to move.
 #[test]
-fn the_zero_datum_undo_capture_covers_every_section() {
+fn the_zero_datum_undo_capture_covers_every_line() {
     let _config = isolated_config();
     let state = state_with_project();
-    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let _one = create_section(&state, "One", vec![shot(70.0, 7.0)]);
-    let _two = create_section(&state, "Two", vec![shot(300.0, 12.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let _one = create_line(&state, "One", vec![shot(70.0, 7.0)]);
+    let _two = create_line(&state, "Two", vec![shot(300.0, 12.0)]);
 
     assert!(
         state
@@ -2853,10 +2851,10 @@ fn the_zero_datum_undo_capture_covers_every_section() {
         "SetZeroDatum failed"
     );
 
-    let sections = state
+    let lines = state
         .get_project_state()
         .expect("no project open")
-        .sections
+        .lines
         .len();
 
     let stack = state.undo_stack.lock().unwrap();
@@ -2875,21 +2873,21 @@ fn the_zero_datum_undo_capture_covers_every_section() {
     };
     assert_eq!(
         previous_offsets.len(),
-        sections,
-        "the capture covers {} of {sections} sections: the datum's merge group is not the set an \
+        lines,
+        "the capture covers {} of {lines} lines: the datum's merge group is not the set an \
          inverse that changes the frame has to hand back",
         previous_offsets.len()
     );
 }
 
 /// The behavioural half: adding the survey's first georeference and undoing it
-/// puts every section offset back, presence included - and redoing it lands
+/// puts every line offset back, presence included - and redoing it lands
 /// byte-for-byte back on what the forward add produced.
 ///
 /// The width matters now rather than only in principle. Establishing the frame
-/// translates EVERY section (`Project::set_zero_datum` -> `renormalize_frame`),
+/// translates EVERY line (`Project::set_zero_datum` -> `renormalize_frame`),
 /// free-floating components included, so an inverse that handed back only the
-/// datum's merge group would leave the `Floater` section carrying the
+/// datum's merge group would leave the `Floater` line carrying the
 /// establishing translation with nothing left to justify it. The floater is
 /// asserted to move on the add, which is what makes the restore assertion below
 /// bite: under the pre-fix add it never moved at all and either capture width
@@ -2901,17 +2899,17 @@ fn the_zero_datum_undo_capture_covers_every_section() {
 /// would redo onto the pre-renormalisation geometry and the offsets would differ
 /// from the forward result by the full establishing delta.
 #[test]
-fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
+fn adding_the_first_zero_datum_and_undoing_it_restores_every_line_offset() {
     let _config = isolated_config();
     let state = state_with_project();
-    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let partner = create_section(&state, "Partner", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let partner = create_line(&state, "Partner", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
     // Outside the datum's merge group and outside every other connection: the
-    // section whose movement separates "the group was placed on the origin" from
+    // line whose movement separates "the group was placed on the origin" from
     // "the survey was re-framed onto it".
-    let floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    let floater = create_line(&state, "Floater", vec![shot(300.0, 12.0)]);
 
-    // A merge so the add has a group wider than one section to move.
+    // A merge so the add has a group wider than one line to move.
     assert!(
         state
             .execute(Command::MergeStations {
@@ -2924,8 +2922,8 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     // Displace the group so the add has something to undo.
     assert!(
         state
-            .execute(Command::MoveSection {
-                section_id: anchored,
+            .execute(Command::MoveLine {
+                line_id: anchored,
                 offset: Coordinates {
                     x: 13.0,
                     y: -7.0,
@@ -2933,10 +2931,10 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
                 },
             })
             .success,
-        "MoveSection failed"
+        "MoveLine failed"
     );
 
-    let before = all_section_offsets(&state);
+    let before = all_line_offsets(&state);
     let datum_station_before = raw_station_xy(&state, StationRef::new(anchored, 1));
     let floater_before = raw_station_xy(&state, StationRef::new(floater, 0));
     assert!(
@@ -2957,7 +2955,7 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
         "SetZeroDatum failed"
     );
     assert_ne!(
-        all_section_offsets(&state),
+        all_line_offsets(&state),
         before,
         "setup: adding the first datum must have moved the group"
     );
@@ -2971,21 +2969,21 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     assert!(
         (floater_after.0 - (floater_before.0 + delta.0)).abs() <= 1e-9
             && (floater_after.1 - (floater_before.1 + delta.1)).abs() <= 1e-9,
-        "the section OUTSIDE the datum's merge group has to ride the establishing translation \
+        "the line OUTSIDE the datum's merge group has to ride the establishing translation \
          {delta:?}: it went {floater_before:?} -> {floater_after:?}"
     );
-    let after_add = all_section_offsets(&state);
+    let after_add = all_line_offsets(&state);
 
     assert!(state.undo().success, "undo of SetZeroDatum failed");
     assert_eq!(
-        all_section_offsets(&state),
+        all_line_offsets(&state),
         before,
-        "undoing the add of the first zero datum did not restore the section offsets it found"
+        "undoing the add of the first zero datum did not restore the line offsets it found"
     );
 
     assert!(state.redo().success, "redo of SetZeroDatum failed");
     assert_eq!(
-        all_section_offsets(&state),
+        all_line_offsets(&state),
         after_add,
         "redo has to land byte-for-byte on the geometry the forward add produced - it re-executes \
          the command with no epilogue behind it, so anything the re-framing leaves to `AppState` \
@@ -3003,16 +3001,16 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     );
 }
 
-/// The renormalisation is not a RemoveZeroDatum feature. Deleting the SECTION the
+/// The renormalisation is not a RemoveZeroDatum feature. Deleting the LINE the
 /// primary datum lives in promotes the next datum through
-/// `cleanup_section_references`, and the trigger is derived from the state rather
+/// `cleanup_line_references`, and the trigger is derived from the state rather
 /// than tagged onto a command, so this route is covered by construction.
 #[test]
-fn deleting_the_primary_datums_section_renormalises_the_frame() {
+fn deleting_the_primary_datums_line_renormalises_the_frame() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
 
     for (station, gps) in [
         (
@@ -3042,17 +3040,17 @@ fn deleting_the_primary_datums_section_renormalises_the_frame() {
         "setup: the two datums must sit well apart, got {separation:?}"
     );
 
-    let deleted = state.execute(Command::DeleteSection { section_id: origin });
-    assert!(deleted.success, "DeleteSection failed: {:?}", deleted.error);
+    let deleted = state.execute(Command::DeleteLine { line_id: origin });
+    assert!(deleted.success, "DeleteLine failed: {:?}", deleted.error);
 
     let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
     assert!(
         promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
-        "deleting the primary datum's SECTION promoted the next datum and left the survey on the \
+        "deleting the primary datum's LINE promoted the next datum and left the survey on the \
          old origin: the promoted station is at {promoted:?}, not local (0, 0)"
     );
 
-    assert!(state.undo().success, "undo of DeleteSection failed");
+    assert!(state.undo().success, "undo of DeleteLine failed");
     let restored = raw_station_xy(&state, StationRef::new(anchored, 1));
     assert!(
         (restored.0 - separation.0).abs() <= 1e-9 && (restored.1 - separation.1).abs() <= 1e-9,
@@ -3062,15 +3060,15 @@ fn deleting_the_primary_datums_section_renormalises_the_frame() {
 }
 
 /// The delete/split family bypasses `execute()` entirely, so it carries its own
-/// frame check. `execute_delete_last_shot_and_section` removes a whole section
+/// frame check. `execute_delete_last_shot_and_line` removes a whole line
 /// (and every reference into it, the zero datum included), which is the same
 /// promotion reached through a path that never mentions datums.
 #[test]
 fn the_delete_last_shot_path_renormalises_the_frame() {
     let _config = isolated_config();
     let state = state_with_project();
-    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0)]);
-    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0)]);
+    let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
 
     for (station, gps) in [
         (
@@ -3101,17 +3099,17 @@ fn the_delete_last_shot_path_renormalises_the_frame() {
     );
 
     let only_shot = shot_ids(&state, origin)[0];
-    let deleted = state.execute_delete_last_shot_and_section(origin, only_shot);
+    let deleted = state.execute_delete_last_shot_and_line(origin, only_shot);
     assert!(
         deleted.success,
-        "execute_delete_last_shot_and_section failed: {:?}",
+        "execute_delete_last_shot_and_line failed: {:?}",
         deleted.error
     );
 
     let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
     assert!(
         promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
-        "the delete/split path removed the primary datum's section without renormalising: the \
+        "the delete/split path removed the primary datum's line without renormalising: the \
          promoted station is at {promoted:?}, not local (0, 0)"
     );
 
@@ -3137,9 +3135,9 @@ fn the_renormalised_frame_survives_save_and_reopen() {
 
     let (before_offsets, before_promoted) = {
         let state = state_with_project();
-        let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
-        let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-        let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+        let origin = create_line(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+        let anchored = create_line(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+        let _floater = create_line(&state, "Floater", vec![shot(300.0, 12.0)]);
 
         for (station, gps) in [
             (
@@ -3175,7 +3173,7 @@ fn the_renormalised_frame_survives_save_and_reopen() {
         let saved = state.save_project(Some(save_path.clone()));
         assert!(saved.success, "save failed: {:?}", saved.error);
         (
-            all_section_offsets(&state),
+            all_line_offsets(&state),
             raw_station_xy(&state, StationRef::new(anchored, 1)),
         )
     };
@@ -3189,9 +3187,9 @@ fn the_renormalised_frame_survives_save_and_reopen() {
     assert!(opened.success, "reopen failed: {:?}", opened.error);
 
     assert_eq!(
-        all_section_offsets(&reopened),
+        all_line_offsets(&reopened),
         before_offsets,
-        "save + reopen did not reproduce the renormalised section offsets: the loader must be a \
+        "save + reopen did not reproduce the renormalised line offsets: the loader must be a \
          no-op on a whole-project translation, not a second solve that undoes it"
     );
 }
@@ -3227,7 +3225,7 @@ fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<b
         .map(|c| c.is_aligned)
 }
 
-/// Two merged sections with the far end of B snapped onto A's first station,
+/// Two merged lines with the far end of B snapped onto A's first station,
 /// closing the loop as one physical point, and a `Move` closure recorded over
 /// it - the state the snap-to-merge workflow produces. Returns `(a, b)`.
 ///
@@ -3235,11 +3233,11 @@ fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<b
 /// be done to the loop afterwards, not what it is: on an ANCHORED loop every
 /// shot reaches the datum from both ends, so the frozen-shot guard refuses a
 /// geometry edit outright and only a station move can tear it.
-fn snapped_loop(state: &AppState, anchored: bool) -> (SectionId, SectionId) {
+fn snapped_loop(state: &AppState, anchored: bool) -> (LineId, LineId) {
     let (a, b) = if anchored {
-        two_merged_sections(state)
+        two_merged_lines(state)
     } else {
-        two_unanchored_merged_sections(state)
+        two_unanchored_merged_lines(state)
     };
     let (from, to) = station_raw_xy(state, (b, 1), (a, 0));
     let snapped = state.execute(Command::MoveStation {
@@ -3276,7 +3274,7 @@ fn snapped_loop(state: &AppState, anchored: bool) -> (SectionId, SectionId) {
 fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = two_merged_sections(&state);
+    let (a, b) = two_merged_lines(&state);
 
     let closed = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(a, 0),
@@ -3328,7 +3326,7 @@ fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
 fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = two_merged_sections(&state);
+    let (a, b) = two_merged_lines(&state);
     let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
 
     let batched = state.execute(Command::Batch {
@@ -3347,6 +3345,7 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
                 closure_strategy: ClosureStrategy::Move,
             },
         ],
+        label: None,
     });
     assert!(
         batched.success,
@@ -3402,7 +3401,7 @@ fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
             // `UpdateShot` - a narrow capture, and the only route of the two that
             // a demote-only sweep gets wrong.
             state.execute(Command::UpdateShot {
-                section_id: b,
+                line_id: b,
                 shot_id: shot_ids(&state, b)[0],
                 updates: ShotUpdates {
                     length: Some(105.0),
@@ -3488,18 +3487,18 @@ fn drifting_back_into_coincidence_re_promotes_the_closure() {
 }
 
 /// The double-anchor term, on the one shape where it is the ONLY thing
-/// refusing: two independently GPS-anchored sections whose stations are
+/// refusing: two independently GPS-anchored lines whose stations are
 /// coincident. Aligning the closure would weld two datum-anchored merge
 /// components into one rigid group - `cascade_bfs` pre-loads every
-/// datum-bearing section as authoritative and never traverses an edge into one,
+/// datum-bearing line as authoritative and never traverses an edge into one,
 /// so nothing could ever satisfy it. That is #464 defect A, and
 /// `plan_merge_promotion` refuses it for the same reason.
 #[test]
 fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
     let _config = isolated_config();
     let state = state_with_project();
-    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-    let c = create_section(&state, "C", vec![shot(90.0, 5.0)]);
+    let a = create_line(&state, "A", vec![shot(0.0, 5.0)]);
+    let c = create_line(&state, "C", vec![shot(90.0, 5.0)]);
     // The SAME GPS on both: `set_zero_datum` puts the first datum's station at
     // the local origin and every later one at `gps_to_local(gps, first.gps)`, so
     // identical coordinates place both stations on exactly one point.
@@ -3536,19 +3535,15 @@ fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
 
     // And no later command promotes it either - the term is a function of the
     // merges and the datums, both of which this leaves exactly as they were.
-    let commented = state.execute(Command::MoveSection {
-        section_id: c,
+    let commented = state.execute(Command::MoveLine {
+        line_id: c,
         offset: Coordinates {
             x: 0.0,
             y: 0.0,
             z: 0.0,
         },
     });
-    assert!(
-        commented.success,
-        "MoveSection failed: {:?}",
-        commented.error
-    );
+    assert!(commented.success, "MoveLine failed: {:?}", commented.error);
     assert_eq!(
         closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
         Some(false)
@@ -3621,7 +3616,7 @@ fn a_demoted_alignment_claim_survives_save_and_reopen() {
 /// left the edited shot as it was (finding 12). Nothing put either half back:
 /// the corruption sat in the PROJECT, not in the entry, so every undo below it
 /// restored a state that still carried it - including undos of entries pushed on
-/// a completely different section, whose own persisted ids resolve perfectly.
+/// a completely different line, whose own persisted ids resolve perfectly.
 ///
 /// FIXED with finding 12 itself, and kept as the regression guard: undo/redo
 /// entries address shots by UUID (additive serde fields, with the legacy id as
@@ -3632,14 +3627,14 @@ fn a_demoted_alignment_claim_survives_save_and_reopen() {
 /// That last part is what made this look like a new defect. The fuzzer measures
 /// staleness on the entry it is consuming NOW, so at the depth this fails the
 /// measurement reads `target=Fresh`: the `SetShotKind` entry below the
-/// `UpdateShot` names a shot on another section whose id did not move. The
+/// `UpdateShot` names a shot on another line whose id did not move. The
 /// damage was done one move earlier, by an entry that measured `Collides`.
 ///
 /// Root-caused from `fuzz_shrink_tests.rs`, which minimized the 59-move seed 10
 /// run (`PERSISTENCE=1 CROSSINGS=3 ITERATIONS=60`) to three moves - reproduced
 /// here directly. The insert-BEFORE is the whole setup: it makes the allocator's
 /// ids disagree with positional order, and the loader renumbers to
-/// `section_id * FEATURE_ID_STRIDE + sequence_order`
+/// `line_id * FEATURE_ID_STRIDE + sequence_order`
 /// (persistence/sqlite/read.rs), which swaps the two.
 ///
 /// Pinned separately from the two finding 12 tests above because they assert the
@@ -3651,48 +3646,48 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("stale-cascade.stalx");
 
-    let edited_section;
-    let other_section;
+    let edited_line;
+    let other_line;
     let inserted_uuid;
     let neighbour_uuid;
     let inserted_length;
     let neighbour_length;
     {
         let state = state_with_project();
-        edited_section = create_section(&state, "Edited", vec![shot(0.0, 5.0)]);
-        other_section = create_section(&state, "Other", vec![shot(90.0, 6.0)]);
+        edited_line = create_line(&state, "Edited", vec![shot(0.0, 5.0)]);
+        other_line = create_line(&state, "Other", vec![shot(90.0, 6.0)]);
 
         // Move 1: insert BEFORE the existing shot, so position 0 holds the
         // HIGHEST id the allocator handed out.
-        let existing = shot_ids(&state, edited_section)[0];
+        let existing = shot_ids(&state, edited_line)[0];
         let created = state.execute(Command::CreateShot {
-            section_id: edited_section,
+            line_id: edited_line,
             shot: shot(180.0, 7.0),
             after_shot_id: None,
             before_shot_id: Some(existing),
         });
         assert!(created.success, "CreateShot failed: {:?}", created.error);
-        let uuids = shot_uuids(&state, edited_section);
+        let uuids = shot_uuids(&state, edited_line);
         inserted_uuid = uuids[0].clone().expect("inserted shot has no uuid");
         neighbour_uuid = uuids[1].clone().expect("neighbour shot has no uuid");
-        let lengths = shot_lengths(&state, edited_section);
+        let lengths = shot_lengths(&state, edited_line);
         inserted_length = lengths[0];
         neighbour_length = lengths[1];
 
-        // Move 2: an edit on a DIFFERENT section, so the entry below the one
+        // Move 2: an edit on a DIFFERENT line, so the entry below the one
         // that goes wrong is one whose persisted id will still be correct.
-        let other_shot = shot_ids(&state, other_section)[0];
+        let other_shot = shot_ids(&state, other_line)[0];
         let marked = state.execute(Command::SetShotKind {
-            section_id: other_section,
+            line_id: other_line,
             shot_id: other_shot,
             kind: ShotKind::Jump,
         });
         assert!(marked.success, "SetShotKind failed: {:?}", marked.error);
 
         // Move 3: the edit whose undo will use the stale id.
-        let target = shot_ids(&state, edited_section)[0];
+        let target = shot_ids(&state, edited_line)[0];
         let updated = state.execute(Command::UpdateShot {
-            section_id: edited_section,
+            line_id: edited_line,
             shot_id: target,
             updates: ShotUpdates {
                 length: Some(42.5),
@@ -3710,19 +3705,18 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
     assert!(opened.success, "reopen failed: {:?}", opened.error);
 
     // Undo the UpdateShot (finding 12 fires here) and then the SetShotKind,
-    // which is on the other section entirely.
+    // which is on the other line entirely.
     assert!(reopened.undo().success, "undo of UpdateShot failed");
     assert!(reopened.undo().success, "undo of SetShotKind failed");
 
     let project = reopened.get_project_state().expect("no project after undo");
-    let section = project
-        .sections
+    let line = project
+        .lines
         .iter()
-        .find(|s| s.id == edited_section)
-        .expect("section missing");
+        .find(|s| s.id == edited_line)
+        .expect("line missing");
     let length_of = |uuid: &str| -> f64 {
-        section
-            .shots
+        line.shots
             .iter()
             .find(|s| s.uuid.as_deref() == Some(uuid))
             .expect("shot vanished")
@@ -3732,10 +3726,10 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
     assert!(
         (length_of(&inserted_uuid) - inserted_length).abs() < 1e-9
             && (length_of(&neighbour_uuid) - neighbour_length).abs() < 1e-9,
-        "unwinding two entries past the stale-id edit left section {edited_section} holding \
+        "unwinding two entries past the stale-id edit left line {edited_line} holding \
          {:?} instead of {:?}: the undo of UpdateShot wrote the pre-edit length onto the \
-         NEIGHBOUR (finding 12) and the undo below it - a SetShotKind on section \
-         {other_section}, whose own persisted id is fresh - restores a state that still carries \
+         NEIGHBOUR (finding 12) and the undo below it - a SetShotKind on line \
+         {other_line}, whose own persisted id is fresh - restores a state that still carries \
          the swap",
         (length_of(&inserted_uuid), length_of(&neighbour_uuid)),
         (inserted_length, neighbour_length)
@@ -3743,13 +3737,13 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 }
 
 // ===========================================================================
-// Finding 5, on the COMMAND side (FIXED): a reloaded UpdateSectionMetadata no
+// Finding 5, on the COMMAND side (FIXED): a reloaded UpdateLineMetadata no
 // longer knew it was clearing a field - so the entry mis-described itself, and
 // its redo silently under-applied
 // ===========================================================================
 
-/// `SectionUpdates::name` / `surveyor` / `date` were `Option<Option<T>>` behind a
-/// plain `#[serde(default)]` with no `double_option` (models/section.rs).
+/// `LineUpdates::name` / `surveyor` / `date` were `Option<Option<T>>` behind a
+/// plain `#[serde(default)]` with no `double_option` (models/line.rs).
 /// `Some(None)` ("clear it") and `None` ("leave it alone") therefore BOTH
 /// serialized to `null`, and `null` read back as `None` - so the distinction
 /// survived the write and died on the read.
@@ -3767,7 +3761,7 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 ///
 /// FIXED, and kept as the regression guard: the three nullable fields carry
 /// `deserialize_with = "double_option"` + `skip_serializing_if = "Option::is_none"`
-/// (models/section.rs), so "clear it" writes `null` and "leave it alone" writes
+/// (models/line.rs), so "clear it" writes `null` and "leave it alone" writes
 /// nothing at all, and the two survive the round trip apart. Because the meaning
 /// of an explicit null FLIPPED, schema v17 drops pre-v17 undo history rather than
 /// reinterpreting it - the v13/v15/v16 precedent.
@@ -3776,36 +3770,37 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 /// half of the same defect first: the reloaded entry's history-dropdown preview
 /// stops listing the Surveyor row (`the_history_preview_still_reports_a_cleared_field`).
 #[test]
-fn redo_after_reload_clears_the_section_field_it_cleared() {
+fn redo_after_reload_clears_the_line_field_it_cleared() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("cleared-field.stalx");
 
-    let section_id;
+    let line_id;
     {
         let state = state_with_project();
-        let created = state.execute(Command::CreateSection {
+        let created = state.execute(Command::CreateLine {
             name: Some("Sump".to_string()),
             surveyor: Some("Ferreira".to_string()),
             date: None,
             color: "#3388FF".to_string(),
             direction: None,
             shots: vec![shot(0.0, 5.0)],
+            cave_section_id: None,
         });
-        assert!(created.success, "CreateSection failed: {:?}", created.error);
-        section_id = created.section_id.expect("CreateSection returned no id");
+        assert!(created.success, "CreateLine failed: {:?}", created.error);
+        line_id = created.line_id.expect("CreateLine returned no id");
 
         // The edit under test: CLEAR the surveyor. `Some(None)`, not `None`.
-        let cleared = state.execute(Command::UpdateSectionMetadata {
-            section_id,
-            updates: SectionUpdates {
+        let cleared = state.execute(Command::UpdateLineMetadata {
+            line_id,
+            updates: LineUpdates {
                 surveyor: Some(None),
                 ..Default::default()
             },
         });
         assert!(cleared.success, "clearing failed: {:?}", cleared.error);
         assert_eq!(
-            surveyor_of(&state, section_id),
+            surveyor_of(&state, line_id),
             CLEARED,
             "setup: the clear did not take effect before the save"
         );
@@ -3825,7 +3820,7 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
         undone.error
     );
     assert_eq!(
-        surveyor_of(&reopened, section_id),
+        surveyor_of(&reopened, line_id),
         "Ferreira",
         "setup: the undo did not put the surveyor back, so this test is measuring finding 5's \
          UNDO half rather than its command half"
@@ -3839,10 +3834,10 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
     );
 
     assert_eq!(
-        surveyor_of(&reopened, section_id),
+        surveyor_of(&reopened, line_id),
         CLEARED,
         "the redo of a reloaded 'clear the surveyor' left the surveyor in place: the persisted \
-         command's `Some(None)` came back as `None`, which `update_section` reads as 'leave it \
+         command's `Some(None)` came back as `None`, which `update_line` reads as 'leave it \
          alone'"
     );
 }
@@ -3850,7 +3845,7 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
 /// The same defect, one step earlier and visible without touching the project:
 /// the history dropdown stopped saying the entry cleared anything.
 ///
-/// `derive_preview_data` builds the `UpdateSectionMetadata` rows from
+/// `derive_preview_data` builds the `UpdateLineMetadata` rows from
 /// `updates.surveyor` (commands/history.rs), so an entry whose `Some(None)` had
 /// decayed to `None` rendered no Surveyor row at all - and when the cleared field
 /// was the only thing the edit changed, `preview_data` became `null` and the
@@ -3860,7 +3855,7 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
 /// FIXED with the redo half above (the same `double_option` round trip), and
 /// kept because it is the cheaper tripwire: it fails on a preview string without
 /// needing an undo, a redo or a project to compare, so a serde regression on
-/// `SectionUpdates` is caught here first.
+/// `LineUpdates` is caught here first.
 #[test]
 fn the_history_preview_still_reports_a_cleared_field() {
     let _config = isolated_config();
@@ -3870,20 +3865,21 @@ fn the_history_preview_still_reports_a_cleared_field() {
     let before;
     {
         let state = state_with_project();
-        let created = state.execute(Command::CreateSection {
+        let created = state.execute(Command::CreateLine {
             name: Some("Sump".to_string()),
             surveyor: Some("Ferreira".to_string()),
             date: None,
             color: "#3388FF".to_string(),
             direction: None,
             shots: vec![shot(0.0, 5.0)],
+            cave_section_id: None,
         });
-        assert!(created.success, "CreateSection failed: {:?}", created.error);
-        let section_id = created.section_id.expect("CreateSection returned no id");
+        assert!(created.success, "CreateLine failed: {:?}", created.error);
+        let line_id = created.line_id.expect("CreateLine returned no id");
 
-        let cleared = state.execute(Command::UpdateSectionMetadata {
-            section_id,
-            updates: SectionUpdates {
+        let cleared = state.execute(Command::UpdateLineMetadata {
+            line_id,
+            updates: LineUpdates {
                 surveyor: Some(None),
                 ..Default::default()
             },
@@ -3926,17 +3922,16 @@ fn preview_fields(state: &AppState) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A section's surveyor, rendered so that a CLEARED field and a missing section
+/// A line's surveyor, rendered so that a CLEARED field and a missing line
 /// cannot read as the same thing.
-fn surveyor_of(state: &AppState, section_id: SectionId) -> String {
+fn surveyor_of(state: &AppState, line_id: LineId) -> String {
     let project = state.get_project_state().expect("no project open");
-    let section = project
-        .sections
+    let line = project
+        .lines
         .iter()
-        .find(|section| section.id == section_id)
-        .expect("section missing");
-    section
-        .surveyor_names()
+        .find(|line| line.id == line_id)
+        .expect("line missing");
+    line.surveyor_names()
         .clone()
         .unwrap_or_else(|| CLEARED.to_string())
 }
@@ -3986,10 +3981,10 @@ fn a_reloaded_entry_displays_the_length_it_was_given() {
     let before;
     {
         let state = state_with_project();
-        let section_id = create_section(&state, "Traverse", vec![shot(0.0, 5.0)]);
-        let shot_id = shot_ids(&state, section_id)[0];
+        let line_id = create_line(&state, "Traverse", vec![shot(0.0, 5.0)]);
+        let shot_id = shot_ids(&state, line_id)[0];
         let updated = state.execute(Command::UpdateShot {
-            section_id,
+            line_id,
             shot_id,
             updates: ShotUpdates {
                 length: Some(length),
@@ -4133,7 +4128,7 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
             removed.error
         );
         let counts = closure_and_merge_counts(&state);
-        let offsets = all_section_offsets(&state);
+        let offsets = all_line_offsets(&state);
         let saved = state.save_project(Some(save_path.clone()));
         assert!(saved.success, "save failed: {:?}", saved.error);
         (counts, offsets)
@@ -4155,9 +4150,9 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
     // re-solve to something else (#469, item 1's convergence argument, which rests
     // on the loader being a no-op on what the session already settled).
     assert_eq!(
-        all_section_offsets(&reopened),
+        all_line_offsets(&reopened),
         before_offsets,
-        "save + reopen did not reproduce the section offsets the session settled on"
+        "save + reopen did not reproduce the line offsets the session settled on"
     );
 }
 
@@ -4188,16 +4183,16 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
 /// its `remove_appended_first_shot` sibling in models/project/tests.rs.
 ///
 /// The undo of `CreateShot` picks its inverse by shape, so both are pinned: this
-/// one is the append into an EMPTY section (`remove_appended_first_shot`).
+/// one is the append into an EMPTY line (`remove_appended_first_shot`).
 #[test]
 fn undo_of_an_appended_first_shot_restores_the_recorded_closure_state() {
     let _config = isolated_config();
     let state = converged_orphan_state();
-    let empty = create_section(&state, "Elsewhere", vec![]);
+    let empty = create_line(&state, "Elsewhere", vec![]);
     let recorded = closure_and_merge_counts(&state);
 
     let created = state.execute(Command::CreateShot {
-        section_id: empty,
+        line_id: empty,
         shot: shot(180.0, 4.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -4213,19 +4208,19 @@ fn undo_of_an_appended_first_shot_restores_the_recorded_closure_state() {
     );
 }
 
-/// The other shape of the same undo: an append into a section that already has
+/// The other shape of the same undo: an append into a line that already has
 /// a shot, whose inverse is `remove_shot_with_rewire`. Same requirement - the
 /// undo puts the shot back and touches nothing else.
 #[test]
 fn undo_of_an_appended_shot_restores_the_recorded_closure_state() {
     let _config = isolated_config();
     let state = converged_orphan_state();
-    let elsewhere = create_section(&state, "Elsewhere", vec![shot(270.0, 6.0)]);
+    let elsewhere = create_line(&state, "Elsewhere", vec![shot(270.0, 6.0)]);
     let first = shot_ids(&state, elsewhere)[0];
     let recorded = closure_and_merge_counts(&state);
 
     let created = state.execute(Command::CreateShot {
-        section_id: elsewhere,
+        line_id: elsewhere,
         shot: shot(180.0, 4.0),
         after_shot_id: Some(first),
         before_shot_id: None,
@@ -4278,7 +4273,7 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
             .map(|(position, zd)| (position, zd.gps))
             .expect("setup: the datum being removed must exist");
         assert_eq!(position, 0, "setup: the removal must take the FIRST datum");
-        let previous_offsets = project.capture_connected_section_offsets(a);
+        let previous_offsets = project.capture_connected_line_offsets(a);
         (
             crate::core::UndoData::ZeroDatumInfo {
                 station_ref: station,
@@ -4322,30 +4317,30 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
     );
 
     // What it recorded, it restored - values and key presence both.
-    let now = all_section_offsets(&state);
-    for (section_id, recorded) in &recorded_offsets {
+    let now = all_line_offsets(&state);
+    for (line_id, recorded) in &recorded_offsets {
         assert_eq!(
-            now.get(section_id).copied(),
+            now.get(line_id).copied(),
             *recorded,
-            "the legacy arm did not restore the offset it recorded for section {section_id}"
+            "the legacy arm did not restore the offset it recorded for line {line_id}"
         );
     }
 }
 
-/// Two sections with no path between them, each with its own GPS anchor, and a
+/// Two lines with no path between them, each with its own GPS anchor, and a
 /// loop closure bridging them - which `create_loop_closure` allows only because
 /// both are anchored. The closure is a sole bridge from the moment it exists and
 /// survives as a closure only because converting it would put two anchors in one
-/// rigid merge component. Returns the state and both section ids - the tests
+/// rigid merge component. Returns the state and both line ids - the tests
 /// take an anchor off one or the other.
-fn detached_anchored_closure() -> (AppState, SectionId, SectionId) {
+fn detached_anchored_closure() -> (AppState, LineId, LineId) {
     let state = state_with_project();
-    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
-    let b = create_section(&state, "B", vec![shot(90.0, 5.0)]);
+    let a = create_line(&state, "A", vec![shot(0.0, 5.0)]);
+    let b = create_line(&state, "B", vec![shot(90.0, 5.0)]);
 
-    for (section, latitude) in [(a, 10.0), (b, 11.0)] {
+    for (line, latitude) in [(a, 10.0), (b, 11.0)] {
         let datum = state.execute(Command::SetZeroDatum {
-            station_ref: StationRef::new(section, 0),
+            station_ref: StationRef::new(line, 0),
             coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
             accuracy_m: None,
             entrance: None,
@@ -4406,52 +4401,51 @@ fn datum_stations(state: &AppState) -> Vec<StationRef> {
         .collect()
 }
 
-/// #557: a PERSISTED undo entry reaches `restore_section` with a file-supplied
-/// section id, and `Section::restore_with_identity` -> `Section::new` computes
+/// #557: a PERSISTED undo entry reaches `restore_line` with a file-supplied
+/// line id, and `Line::restore_with_identity` -> `Line::new` computes
 /// `id * FEATURE_ID_STRIDE` unchecked. Live undo cannot mint an over-bound id
 /// (#556), so the guard exists purely for a crafted or corrupted undo table -
 /// the entry is refused, never constructed. Not `#[ignore]`d: written with its
 /// fix, per the module rule it guards the mechanism from day one.
 #[test]
-fn restoring_a_section_with_an_over_bound_id_is_refused() {
+fn restoring_a_line_with_an_over_bound_id_is_refused() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Overbound Restore".to_string(),
         location: None,
     });
 
-    let hostile = crate::models::MAX_SECTION_ID + 1;
-    let result = state.restore_section(
+    let hostile = crate::models::MAX_LINE_ID + 1;
+    let result = state.restore_line(
         hostile,
-        crate::models::SectionData::default(),
-        &crate::models::SectionIdentity::default(),
+        crate::models::LineData::default(),
+        &crate::models::LineIdentity::default(),
     );
     assert!(!result.success, "an over-bound restore must be refused");
     let err = result.error.unwrap_or_default();
     assert!(
-        err.contains(&hostile.to_string())
-            && err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        err.contains(&hostile.to_string()) && err.contains(&crate::models::MAX_LINE_ID.to_string()),
         "the refusal must name the id and the bound: {err}"
     );
     // The refusal must leave the project untouched.
     let project = state.get_project_state().unwrap();
     assert!(
-        project.sections.is_empty(),
-        "no section may be constructed from an over-bound id"
+        project.lines.is_empty(),
+        "no line may be constructed from an over-bound id"
     );
 }
 
 /// #557 review finding (all three reviewers, independently): the
 /// `ProjectSnapshotPair` replay arm - the one CURRENT builds write - rebuilds
-/// sections through serde, never `Section::new`, so neither the open-refusal
-/// nor the `restore_section` bound sees an over-bound id arriving through a
+/// lines through serde, never `Line::new`, so neither the open-refusal
+/// nor the `restore_line` bound sees an over-bound id arriving through a
 /// crafted undo table. `restore_snapshot_into` is the chokepoint both
 /// snapshot arms share; it must refuse and leave the live project untouched.
 #[test]
-fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
+fn a_snapshot_restore_with_an_over_bound_line_id_is_refused() {
     let mut hostile = crate::models::Project::new("Hostile".to_string(), None);
-    hostile.add_section(crate::models::SectionData::default());
-    hostile.sections[0].id = crate::models::MAX_SECTION_ID + 1;
+    hostile.add_line(crate::models::LineData::default());
+    hostile.lines[0].id = crate::models::MAX_LINE_ID + 1;
     let json = serde_json::to_string(&hostile).unwrap();
 
     let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
@@ -4461,26 +4455,23 @@ fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
     );
     let live = slot.unwrap();
     assert_eq!(live.name, "Live", "the live project must be untouched");
-    assert!(
-        live.sections.is_empty(),
-        "no hostile section may be installed"
-    );
+    assert!(live.lines.is_empty(), "no hostile line may be installed");
 }
 
 /// PR #575 Codex finding: `next_shot_id` is serde-carried too, so a snapshot
-/// with a LEGAL section id but a hostile counter (u32::MAX here) used to pass
+/// with a LEGAL line id but a hostile counter (u32::MAX here) used to pass
 /// the id-only guard - and the next `add_shot` (`next_shot_id += 1`) panics in
-/// debug or wraps into another section's id space in release. The window check
+/// debug or wraps into another line's id space in release. The window check
 /// refuses it; a legitimate serialize -> restore round trip must still pass.
 #[test]
 fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
     let mut hostile = crate::models::Project::new("Hostile Counter".to_string(), None);
-    hostile.add_section(crate::models::SectionData::default());
+    hostile.add_line(crate::models::LineData::default());
     assert!(
-        hostile.sections[0].id <= crate::models::MAX_SECTION_ID,
+        hostile.lines[0].id <= crate::models::MAX_LINE_ID,
         "precondition: the id itself is legal"
     );
-    hostile.sections[0].next_shot_id = u32::MAX;
+    hostile.lines[0].next_shot_id = u32::MAX;
     let json = serde_json::to_string(&hostile).unwrap();
 
     let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
@@ -4488,15 +4479,12 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
         !AppState::restore_snapshot_into(&mut slot, &json),
         "a hostile shot counter must be refused"
     );
-    assert!(
-        slot.unwrap().sections.is_empty(),
-        "nothing may be installed"
-    );
+    assert!(slot.unwrap().lines.is_empty(), "nothing may be installed");
 
     // The guard must not over-refuse: a real project with shots serializes and
     // restores cleanly.
     let mut legit = crate::models::Project::new("Legit".to_string(), None);
-    legit.add_section(crate::models::SectionData {
+    legit.add_line(crate::models::LineData {
         shots: vec![ShotData {
             length: 5.0,
             azimuth_in: 90.0,
@@ -4510,5 +4498,5 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
         AppState::restore_snapshot_into(&mut slot, &json),
         "a legitimate snapshot must still restore"
     );
-    assert_eq!(slot.unwrap().sections.len(), 1);
+    assert_eq!(slot.unwrap().lines.len(), 1);
 }

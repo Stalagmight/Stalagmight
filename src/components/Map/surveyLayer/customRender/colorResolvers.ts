@@ -1,15 +1,15 @@
 /**
  * Shared per-feature color resolvers for the custom-render build + incremental
  * paths (#customRender). Factored out of the controller's `build()` so the
- * incremental section/station recompute (incremental.ts) resolves colors with
+ * incremental line/station recompute (incremental.ts) resolves colors with
  * the EXACT same closures the full build uses - a prerequisite for the
- * byte-identical incremental guarantee (a moved section rebuilt incrementally
+ * byte-identical incremental guarantee (a moved line rebuilt incrementally
  * must be indistinguishable from a full rebuild of the same geometry).
  *
  * Pure (no GL, no DOM): reads `SurveyData` + a `DisplayColorContext`, returns
  * packed RGBA resolvers keyed by global shot / station index.
  */
-import type { SurveyData, SectionMetadata } from '../../../../types/survey-data';
+import type { SurveyData, LineMetadata } from '../../../../types/survey-data';
 import { encodeFeatureId } from '../../../../utils/ids';
 import {
   commentColorForKey,
@@ -24,17 +24,17 @@ import { packCssColor, type Rgba8 } from './colorPack';
 import { makeOverlayColor } from './overlayColor';
 
 export interface ColorResolvers {
-  /** Flat whole-segment shot color (section-color / severity mode). */
-  colorForShot: (shotGlobalIdx: number, sectionId: number) => Rgba8;
+  /** Flat whole-segment shot color (line-color / severity mode). */
+  colorForShot: (shotGlobalIdx: number, lineId: number) => Rgba8;
   /** Per-endpoint `[from, to]` shot colors (depth-gradient mode). */
-  colorForShotEndpoints: (shotGlobalIdx: number, sectionId: number) => readonly [Rgba8, Rgba8];
+  colorForShotEndpoints: (shotGlobalIdx: number, lineId: number) => readonly [Rgba8, Rgba8];
   fillForStation: (globalIdx: number) => Rgba8;
   strokeForStation: (globalIdx: number) => Rgba8;
   /** True in depth mode: the line builder should take the endpoint resolver so
    *  the GPU interpolates the shot's depth ramp (stock survey-shot-gradients). */
   useDepthEndpoints: boolean;
-  /** Section id -> metadata, reused by the incremental diff (section color). */
-  sectionById: Map<number, SectionMetadata>;
+  /** Line id -> metadata, reused by the incremental diff (line color). */
+  lineById: Map<number, LineMetadata>;
 }
 
 /**
@@ -47,8 +47,8 @@ export function makeColorResolvers(
   surveyData: SurveyData,
   colorCtx: DisplayColorContext,
 ): ColorResolvers {
-  const sectionById = new Map<number, SectionMetadata>();
-  for (const s of surveyData.sections) sectionById.set(s.id, s);
+  const lineById = new Map<number, LineMetadata>();
+  for (const s of surveyData.lines) lineById.set(s.id, s);
   const stationDefault = colorCtx.themeColors.stationDefault;
 
   const packCache = new Map<string, Rgba8>();
@@ -82,45 +82,45 @@ export function makeColorResolvers(
   // tint, mirroring the "an active overlay owns color outright" precedence.
   const planIdleColor = !overlay && colorCtx.planIdleTint === true ? pack(GAS_FAR) : null;
 
-  const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
+  const colorForShot = (shotGlobalIdx: number, lineId: number): Rgba8 => {
     if (overlay && overlayColor) {
-      const fid = encodeFeatureId(sectionId, surveyData.shotIds[shotGlobalIdx]!);
+      const fid = encodeFeatureId(lineId, surveyData.shotIds[shotGlobalIdx]!);
       return overlayColor(overlay.shots.get(fid) ?? -1);
     }
     if (planIdleColor) return planIdleColor;
     if (commentTint && surveyData.shotComments.get(shotGlobalIdx)) {
-      return pack(commentColorForKey(`${sectionId}:s${surveyData.shotIds[shotGlobalIdx]!}`));
+      return pack(commentColorForKey(`${lineId}:s${surveyData.shotIds[shotGlobalIdx]!}`));
     }
-    const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-    return pack(resolveShotDisplayColor(surveyData, sectionColor, shotGlobalIdx, colorCtx));
+    const lineColor = lineById.get(lineId)?.color ?? stationDefault;
+    return pack(resolveShotDisplayColor(surveyData, lineColor, shotGlobalIdx, colorCtx));
   };
   const colorForShotEndpoints = (
     shotGlobalIdx: number,
-    sectionId: number,
+    lineId: number,
   ): readonly [Rgba8, Rgba8] => {
     // In overlay mode a shot is one flat ramp color (useDepthEndpoints is false),
     // but keep the endpoints coherent if a caller asks for them anyway.
     if (overlay && overlayColor) {
-      const c = colorForShot(shotGlobalIdx, sectionId);
+      const c = colorForShot(shotGlobalIdx, lineId);
       return [c, c];
     }
     if (planIdleColor) return [planIdleColor, planIdleColor];
-    const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-    const [from, to] = resolveShotEndpointColors(surveyData, sectionColor, shotGlobalIdx, colorCtx);
+    const lineColor = lineById.get(lineId)?.color ?? stationDefault;
+    const [from, to] = resolveShotEndpointColors(surveyData, lineColor, shotGlobalIdx, colorCtx);
     return [pack(from), pack(to)];
   };
   const fillForStation = (g: number): Rgba8 => {
-    const sectionId = surveyData.stationSectionIds[g]!;
+    const lineId = surveyData.stationLineIds[g]!;
     if (overlay && overlayColor) {
-      const fid = encodeFeatureId(sectionId, surveyData.stationIndices[g]!);
+      const fid = encodeFeatureId(lineId, surveyData.stationIndices[g]!);
       return overlayColor(overlay.stations.get(fid) ?? -1);
     }
     if (planIdleColor) return planIdleColor;
     if (commentTint && surveyData.stationComments.get(g)) {
-      return pack(commentColorForKey(`${sectionId}:st${surveyData.stationIndices[g]!}`));
+      return pack(commentColorForKey(`${lineId}:st${surveyData.stationIndices[g]!}`));
     }
-    const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-    return pack(resolveStationDisplayColor(surveyData, sectionColor, g, colorCtx));
+    const lineColor = lineById.get(lineId)?.color ?? stationDefault;
+    return pack(resolveStationDisplayColor(surveyData, lineColor, g, colorCtx));
   };
   const strokeForStation = (g: number): Rgba8 => pack(resolveStationStrokeColor(surveyData.stationFlags[g]!, colorCtx));
 
@@ -136,6 +136,6 @@ export function makeColorResolvers(
     fillForStation,
     strokeForStation,
     useDepthEndpoints,
-    sectionById,
+    lineById,
   };
 }

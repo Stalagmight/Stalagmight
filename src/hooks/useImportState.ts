@@ -1,6 +1,6 @@
 import { useReducer, useCallback, useMemo } from 'react';
 import type { DmpFile, DmpShot } from '../types/commands';
-import type { GpsCoordinates, StationRef, Coordinates, Section } from '../types/project';
+import type { GpsCoordinates, StationRef, Coordinates, Line } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import {
   type ImportError,
@@ -12,7 +12,7 @@ import {
 } from '../utils/validation';
 import type { ValidationConfig } from '../types/config';
 import type { Person } from '../types/ipc.generated';
-import { sectionColorPalette } from '../utils/colors';
+import { lineColorPalette } from '../utils/colors';
 
 /**
  * Configuration from Step 1 (DmpSelectionDialog).
@@ -25,20 +25,20 @@ export interface DmpSelectionConfig {
 }
 
 /**
- * Placement configuration for a section.
+ * Placement configuration for a line.
  */
 export type PlacementConfig =
   | { type: 'origin' }
   | { type: 'zeroDatum'; coordinates: GpsCoordinates; stationIndex: number }
   | { type: 'fromExisting'; importStation: number; existingStation: StationRef }
-  | { type: 'fromImporting'; importStation: number; targetSectionIndex: number; targetStationIndex: number }
+  | { type: 'fromImporting'; importStation: number; targetLineIndex: number; targetStationIndex: number }
   | { type: 'manual'; alignStationIndex: number; position?: Coordinates; snappedToStation?: StationRef | null };
 
 /**
- * Configuration for a single imported section.
+ * Configuration for a single imported line.
  */
-export interface SectionConfig {
-  sectionIndex: number;
+export interface LineConfig {
+  lineIndex: number;
   name: string;
   surveyors: Person[];
   explorers: Person[];
@@ -65,7 +65,7 @@ export type UndoEntryType =
  */
 export interface UndoEntry {
   type: UndoEntryType;
-  previousState: Partial<SectionConfig>;
+  previousState: Partial<LineConfig>;
   description: string;
 }
 
@@ -73,44 +73,44 @@ export interface UndoEntry {
  * Complete import state.
  */
 export interface ImportState {
-  /** Per-section configuration */
-  sectionConfigs: Map<number, SectionConfig>;
-  /** Current section index (within the Map keys) */
-  currentSectionIndex: number;
+  /** Per-line configuration */
+  lineConfigs: Map<number, LineConfig>;
+  /** Current line index (within the Map keys) */
+  currentLineIndex: number;
   /** Monotonic counter for unique temporary shot IDs */
   nextTempId: number;
-  /** Placed sections (user has explicitly set placement) */
-  placedSections: Set<number>;
-  /** Excluded sections (will not be imported) */
-  excludedSections: Set<number>;
-  /** Undo stacks per section */
+  /** Placed lines (user has explicitly set placement) */
+  placedLines: Set<number>;
+  /** Excluded lines (will not be imported) */
+  excludedLines: Set<number>;
+  /** Undo stacks per line */
   undoStacks: Map<number, UndoEntry[]>;
-  /** Redo stacks per section */
+  /** Redo stacks per line */
   redoStacks: Map<number, UndoEntry[]>;
-  /** Original section values for reset functionality */
-  originalValues: Map<number, SectionConfig>;
+  /** Original line values for reset functionality */
+  originalValues: Map<number, LineConfig>;
 }
 
 /**
  * Action types for the import state reducer.
  */
 type ImportAction =
-  | { type: 'NAVIGATE'; sectionIndex: number }
-  | { type: 'UPDATE_FIELD'; field: keyof SectionConfig; value: SectionConfig[keyof SectionConfig] }
+  | { type: 'NAVIGATE'; lineIndex: number }
+  | { type: 'UPDATE_FIELD'; field: keyof LineConfig; value: LineConfig[keyof LineConfig] }
   | { type: 'UPDATE_SHOT'; shotIndex: number; field: keyof EditableShot; value: EditableShot[keyof EditableShot] }
   | { type: 'ADD_SHOT' }
   | { type: 'DELETE_SHOT'; index: number }
   | { type: 'INSERT_SHOT_BEFORE'; index: number }
   | { type: 'INSERT_SHOT_AFTER'; index: number }
   | { type: 'SET_PLACEMENT'; placement: PlacementConfig }
-  | { type: 'MARK_PLACED'; sectionIndex: number }
-  | { type: 'UNMARK_PLACED'; sectionIndex: number }
-  | { type: 'EXCLUDE_SECTION'; sectionIndex: number }
-  | { type: 'INCLUDE_SECTION'; sectionIndex: number }
+  | { type: 'MARK_PLACED'; lineIndex: number }
+  | { type: 'UNMARK_PLACED'; lineIndex: number }
+  | { type: 'EXCLUDE_LINE'; lineIndex: number }
+  | { type: 'INCLUDE_LINE'; lineIndex: number }
   | { type: 'UNDO' }
   | { type: 'REDO' }
-  | { type: 'RESET_SECTION' }
-  | { type: 'RESTORE_STATE'; sectionConfigs: Map<number, SectionConfig>; placedSections: Set<number>; excludedSections: Set<number>; currentSectionIndex: number };
+  | { type: 'RESET_LINE' }
+  | { type: 'RESTORE_STATE'; lineConfigs: Map<number, LineConfig>; placedLines: Set<number>; excludedLines: Set<number>; currentLineIndex: number };
 
 const MAX_UNDO_HISTORY = 50;
 const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
@@ -131,7 +131,7 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
 /**
  * The MNemo station number at the END of the importable shot at `index` (its
  * position among the shots `isImportableDmpShot` keeps). MNemo numbers a
- * section's start 0 and the end of its N-th shot N, so this is `index + 1`.
+ * line's start 0 and the end of its N-th shot N, so this is `index + 1`.
  * ASSUMED, not confirmed against a device: that only the shots the importer
  * keeps advance the device's counter. This is the one place the rule lives: if a
  * device turns out to count other shot kinds too (1 m shots, CsA/CsB), this and
@@ -169,9 +169,9 @@ export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
 /**
  * Get the next available temp ID based on existing shots.
  */
-function getNextTempIdFromConfigs(sectionConfigs: Map<number, SectionConfig>): number {
+function getNextTempIdFromConfigs(lineConfigs: Map<number, LineConfig>): number {
   let maxTempId = 0;
-  for (const config of sectionConfigs.values()) {
+  for (const config of lineConfigs.values()) {
     for (const shot of config.shots) {
       const candidate = shot.tempId ?? (shot.id < 0 ? Math.abs(shot.id) : 0);
       if (candidate > maxTempId) {
@@ -214,15 +214,15 @@ function createBlankShot(tempId: number): EditableShot {
 }
 
 /**
- * Save current section state to undo stack.
+ * Save current line state to undo stack.
  */
 function pushToUndoStack(
   state: ImportState,
   entryType: UndoEntryType,
   description: string,
-  previousPartialState: Partial<SectionConfig>
+  previousPartialState: Partial<LineConfig>
 ): ImportState {
-  const currentConfig = state.sectionConfigs.get(state.currentSectionIndex);
+  const currentConfig = state.lineConfigs.get(state.currentLineIndex);
   if (!currentConfig) return state;
 
   const entry: UndoEntry = {
@@ -231,7 +231,7 @@ function pushToUndoStack(
     description,
   };
 
-  const undoStack = state.undoStacks.get(state.currentSectionIndex) || [];
+  const undoStack = state.undoStacks.get(state.currentLineIndex) || [];
   const newUndoStack = [...undoStack, entry];
 
   // Limit undo stack size
@@ -241,10 +241,10 @@ function pushToUndoStack(
 
   // Clear redo stack when new action is taken
   const newUndoStacks = new Map(state.undoStacks);
-  newUndoStacks.set(state.currentSectionIndex, newUndoStack);
+  newUndoStacks.set(state.currentLineIndex, newUndoStack);
 
   const newRedoStacks = new Map(state.redoStacks);
-  newRedoStacks.set(state.currentSectionIndex, []);
+  newRedoStacks.set(state.currentLineIndex, []);
 
   return {
     ...state,
@@ -257,13 +257,13 @@ function pushToUndoStack(
  * Import state reducer.
  */
 export function importReducer(state: ImportState, action: ImportAction): ImportState {
-  const currentConfig = state.sectionConfigs.get(state.currentSectionIndex);
+  const currentConfig = state.lineConfigs.get(state.currentLineIndex);
 
   switch (action.type) {
     case 'NAVIGATE': {
       return {
         ...state,
-        currentSectionIndex: action.sectionIndex,
+        currentLineIndex: action.lineIndex,
       };
     }
 
@@ -271,21 +271,21 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!currentConfig) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         [action.field]: currentConfig[action.field],
       };
       let stateWithUndo = pushToUndoStack(state, 'metadataEdit', `Edit ${String(action.field)}`, previousPartial);
 
       // Update the config
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         [action.field]: action.value,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
       };
     }
 
@@ -296,7 +296,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!shot) return state;
 
       // Save to undo stack (only store the changed shot's previous state)
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         shots: deepCopyShots(currentConfig.shots),
       };
       let stateWithUndo = pushToUndoStack(state, 'shotEdit', `Edit shot ${action.shotIndex} ${String(action.field)}`, previousPartial);
@@ -308,15 +308,15 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
         [action.field]: action.value,
       };
 
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         shots: newShots,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
       };
     }
 
@@ -324,7 +324,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!currentConfig) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         shots: deepCopyShots(currentConfig.shots),
       };
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', 'Add shot', previousPartial);
@@ -333,15 +333,15 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newShot = createBlankShot(state.nextTempId);
       const newShots = [...currentConfig.shots, newShot];
 
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         shots: newShots,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
         nextTempId: state.nextTempId + 1,
       };
     }
@@ -353,7 +353,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!shot) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         shots: deepCopyShots(currentConfig.shots),
       };
       let stateWithUndo = pushToUndoStack(state, 'shotDelete', `Delete shot ${action.index}`, previousPartial);
@@ -362,15 +362,15 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newShots = [...currentConfig.shots];
       newShots[action.index] = { ...shot, isDeleted: true };
 
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         shots: newShots,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
       };
     }
 
@@ -378,7 +378,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!currentConfig) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         shots: deepCopyShots(currentConfig.shots),
       };
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', `Insert shot before ${action.index}`, previousPartial);
@@ -388,15 +388,15 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newShots = [...currentConfig.shots];
       newShots.splice(action.index, 0, newShot);
 
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         shots: newShots,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
         nextTempId: state.nextTempId + 1,
       };
     }
@@ -405,7 +405,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!currentConfig) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         shots: deepCopyShots(currentConfig.shots),
       };
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', `Insert shot after ${action.index}`, previousPartial);
@@ -415,15 +415,15 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newShots = [...currentConfig.shots];
       newShots.splice(action.index + 1, 0, newShot);
 
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         shots: newShots,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
         nextTempId: state.nextTempId + 1,
       };
     }
@@ -432,66 +432,66 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       if (!currentConfig) return state;
 
       // Save to undo stack
-      const previousPartial: Partial<SectionConfig> = {
+      const previousPartial: Partial<LineConfig> = {
         placement: currentConfig.placement,
       };
       let stateWithUndo = pushToUndoStack(state, 'placementChange', 'Change placement', previousPartial);
 
-      // Update placement (does NOT mark section as placed - that only happens via MARK_PLACED)
-      const newConfigs = new Map(stateWithUndo.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, {
+      // Update placement (does NOT mark line as placed - that only happens via MARK_PLACED)
+      const newConfigs = new Map(stateWithUndo.lineConfigs);
+      newConfigs.set(state.currentLineIndex, {
         ...currentConfig,
         placement: action.placement,
       });
 
       return {
         ...stateWithUndo,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
       };
     }
 
     case 'MARK_PLACED': {
-      const newPlaced = new Set(state.placedSections);
-      newPlaced.add(action.sectionIndex);
+      const newPlaced = new Set(state.placedLines);
+      newPlaced.add(action.lineIndex);
       return {
         ...state,
-        placedSections: newPlaced,
+        placedLines: newPlaced,
       };
     }
 
     case 'UNMARK_PLACED': {
-      const newPlaced = new Set(state.placedSections);
-      newPlaced.delete(action.sectionIndex);
+      const newPlaced = new Set(state.placedLines);
+      newPlaced.delete(action.lineIndex);
       return {
         ...state,
-        placedSections: newPlaced,
+        placedLines: newPlaced,
       };
     }
 
-    case 'EXCLUDE_SECTION': {
-      const newExcluded = new Set(state.excludedSections);
-      newExcluded.add(action.sectionIndex);
+    case 'EXCLUDE_LINE': {
+      const newExcluded = new Set(state.excludedLines);
+      newExcluded.add(action.lineIndex);
       // Also remove from placed if it was placed
-      const newPlaced = new Set(state.placedSections);
-      newPlaced.delete(action.sectionIndex);
+      const newPlaced = new Set(state.placedLines);
+      newPlaced.delete(action.lineIndex);
       return {
         ...state,
-        excludedSections: newExcluded,
-        placedSections: newPlaced,
+        excludedLines: newExcluded,
+        placedLines: newPlaced,
       };
     }
 
-    case 'INCLUDE_SECTION': {
-      const newExcluded = new Set(state.excludedSections);
-      newExcluded.delete(action.sectionIndex);
+    case 'INCLUDE_LINE': {
+      const newExcluded = new Set(state.excludedLines);
+      newExcluded.delete(action.lineIndex);
       return {
         ...state,
-        excludedSections: newExcluded,
+        excludedLines: newExcluded,
       };
     }
 
     case 'UNDO': {
-      const undoStack = state.undoStacks.get(state.currentSectionIndex) || [];
+      const undoStack = state.undoStacks.get(state.currentLineIndex) || [];
       if (undoStack.length === 0 || !currentConfig) return state;
 
       // Pop from undo stack
@@ -501,7 +501,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newUndoStack = undoStack.slice(0, -1);
 
       // Push current state to redo stack
-      const redoStack = state.redoStacks.get(state.currentSectionIndex) || [];
+      const redoStack = state.redoStacks.get(state.currentLineIndex) || [];
       const redoEntry: UndoEntry = {
         type: entry.type,
         previousState: {},
@@ -509,7 +509,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       };
 
       // Build redo state from current config
-      for (const key of Object.keys(entry.previousState) as (keyof SectionConfig)[]) {
+      for (const key of Object.keys(entry.previousState) as (keyof LineConfig)[]) {
         if (key === 'shots') {
           redoEntry.previousState.shots = deepCopyShots(currentConfig.shots);
         } else {
@@ -530,25 +530,25 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
         }
       }
 
-      const newConfigs = new Map(state.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, restoredConfig);
+      const newConfigs = new Map(state.lineConfigs);
+      newConfigs.set(state.currentLineIndex, restoredConfig);
 
       const newUndoStacks = new Map(state.undoStacks);
-      newUndoStacks.set(state.currentSectionIndex, newUndoStack);
+      newUndoStacks.set(state.currentLineIndex, newUndoStack);
 
       const newRedoStacks = new Map(state.redoStacks);
-      newRedoStacks.set(state.currentSectionIndex, newRedoStack);
+      newRedoStacks.set(state.currentLineIndex, newRedoStack);
 
       return {
         ...state,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
         undoStacks: newUndoStacks,
         redoStacks: newRedoStacks,
       };
     }
 
     case 'REDO': {
-      const redoStack = state.redoStacks.get(state.currentSectionIndex) || [];
+      const redoStack = state.redoStacks.get(state.currentLineIndex) || [];
       if (redoStack.length === 0 || !currentConfig) return state;
 
       // Pop from redo stack
@@ -558,7 +558,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       const newRedoStack = redoStack.slice(0, -1);
 
       // Push current state to undo stack
-      const undoStack = state.undoStacks.get(state.currentSectionIndex) || [];
+      const undoStack = state.undoStacks.get(state.currentLineIndex) || [];
       const undoEntry: UndoEntry = {
         type: entry.type,
         previousState: {},
@@ -566,7 +566,7 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
       };
 
       // Build undo state from current config
-      for (const key of Object.keys(entry.previousState) as (keyof SectionConfig)[]) {
+      for (const key of Object.keys(entry.previousState) as (keyof LineConfig)[]) {
         if (key === 'shots') {
           undoEntry.previousState.shots = deepCopyShots(currentConfig.shots);
         } else {
@@ -586,52 +586,52 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
         }
       }
 
-      const newConfigs = new Map(state.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, restoredConfig);
+      const newConfigs = new Map(state.lineConfigs);
+      newConfigs.set(state.currentLineIndex, restoredConfig);
 
       const newUndoStacks = new Map(state.undoStacks);
-      newUndoStacks.set(state.currentSectionIndex, newUndoStack);
+      newUndoStacks.set(state.currentLineIndex, newUndoStack);
 
       const newRedoStacks = new Map(state.redoStacks);
-      newRedoStacks.set(state.currentSectionIndex, newRedoStack);
+      newRedoStacks.set(state.currentLineIndex, newRedoStack);
 
       return {
         ...state,
-        sectionConfigs: newConfigs,
+        lineConfigs: newConfigs,
         undoStacks: newUndoStacks,
         redoStacks: newRedoStacks,
       };
     }
 
-    case 'RESET_SECTION': {
-      const original = state.originalValues.get(state.currentSectionIndex);
+    case 'RESET_LINE': {
+      const original = state.originalValues.get(state.currentLineIndex);
       if (!original) return state;
 
       // Reset to original values (deep copy)
-      const resetConfig: SectionConfig = {
+      const resetConfig: LineConfig = {
         ...original,
         shots: deepCopyShots(original.shots),
         placement: { type: 'origin' },
       };
 
-      const newConfigs = new Map(state.sectionConfigs);
-      newConfigs.set(state.currentSectionIndex, resetConfig);
+      const newConfigs = new Map(state.lineConfigs);
+      newConfigs.set(state.currentLineIndex, resetConfig);
 
-      // Remove from placed sections
-      const newPlaced = new Set(state.placedSections);
-      newPlaced.delete(state.currentSectionIndex);
+      // Remove from placed lines
+      const newPlaced = new Set(state.placedLines);
+      newPlaced.delete(state.currentLineIndex);
 
-      // Clear undo/redo stacks for this section
+      // Clear undo/redo stacks for this line
       const newUndoStacks = new Map(state.undoStacks);
-      newUndoStacks.set(state.currentSectionIndex, []);
+      newUndoStacks.set(state.currentLineIndex, []);
 
       const newRedoStacks = new Map(state.redoStacks);
-      newRedoStacks.set(state.currentSectionIndex, []);
+      newRedoStacks.set(state.currentLineIndex, []);
 
       return {
         ...state,
-        sectionConfigs: newConfigs,
-        placedSections: newPlaced,
+        lineConfigs: newConfigs,
+        placedLines: newPlaced,
         undoStacks: newUndoStacks,
         redoStacks: newRedoStacks,
       };
@@ -640,14 +640,14 @@ export function importReducer(state: ImportState, action: ImportAction): ImportS
     case 'RESTORE_STATE': {
       const nextTempId = Math.max(
         state.nextTempId,
-        getNextTempIdFromConfigs(action.sectionConfigs)
+        getNextTempIdFromConfigs(action.lineConfigs)
       );
       return {
         ...state,
-        sectionConfigs: action.sectionConfigs,
-        placedSections: action.placedSections,
-        excludedSections: action.excludedSections,
-        currentSectionIndex: action.currentSectionIndex,
+        lineConfigs: action.lineConfigs,
+        placedLines: action.placedLines,
+        excludedLines: action.excludedLines,
+        currentLineIndex: action.currentLineIndex,
         nextTempId,
       };
     }
@@ -664,98 +664,98 @@ function initializeState(
   dmpFile: DmpFile,
   selectionConfig: DmpSelectionConfig,
   savedState?: {
-    sectionConfigs: Array<[number, SectionConfig]>;
-    placedSections: number[];
-    excludedSections?: number[];
-    currentSectionIndex: number;
+    lineConfigs: Array<[number, LineConfig]>;
+    placedLines: number[];
+    excludedLines?: number[];
+    currentLineIndex: number;
   },
   resolvedTheme = 'dark'
 ): ImportState {
   const selectedIndices = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
-  const firstSectionIndex = selectedIndices[0];
-  const palette = sectionColorPalette(resolvedTheme);
+  const firstLineIndex = selectedIndices[0];
+  const palette = lineColorPalette(resolvedTheme);
 
   // Build original values (these never change)
-  const originalValues = new Map<number, SectionConfig>();
-  selectedIndices.forEach((sectionIdx, arrayIdx) => {
-    const section = dmpFile.sections[sectionIdx];
-    if (!section) return;
+  const originalValues = new Map<number, LineConfig>();
+  selectedIndices.forEach((lineIdx, arrayIdx) => {
+    const line = dmpFile.lines[lineIdx];
+    if (!line) return;
 
-    const dateStr = section.date?.split(/[T ]/)[0] ?? null;
+    const dateStr = line.date?.split(/[T ]/)[0] ?? null;
 
-    originalValues.set(sectionIdx, {
-      sectionIndex: sectionIdx,
-      name: section.name,
-      // DMP sections name nobody - the people come from the Step 1 defaults
+    originalValues.set(lineIdx, {
+      lineIndex: lineIdx,
+      name: line.name,
+      // DMP lines name nobody - the people come from the Step 1 defaults
       surveyors: [],
       explorers: [],
       date: dateStr,
       color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
-      direction: section.direction,
+      direction: line.direction,
       quality: 1.0,
-      shots: convertToEditableShots(section.shots),
+      shots: convertToEditableShots(line.shots),
       placement: { type: 'origin' },
     });
   });
 
   // If restoring from saved state
   if (savedState) {
-    const sectionConfigs = new Map(
-      savedState.sectionConfigs.map(([idx, cfg]) => [
+    const lineConfigs = new Map(
+      savedState.lineConfigs.map(([idx, cfg]) => [
         idx,
         { ...cfg, quality: cfg.quality ?? 1.0 },
       ])
     );
     return {
-      sectionConfigs,
-      currentSectionIndex: savedState.currentSectionIndex,
-      nextTempId: getNextTempIdFromConfigs(sectionConfigs),
-      placedSections: new Set(savedState.placedSections),
-      excludedSections: new Set(savedState.excludedSections ?? []),
+      lineConfigs,
+      currentLineIndex: savedState.currentLineIndex,
+      nextTempId: getNextTempIdFromConfigs(lineConfigs),
+      placedLines: new Set(savedState.placedLines),
+      excludedLines: new Set(savedState.excludedLines ?? []),
       undoStacks: new Map(),
       redoStacks: new Map(),
       originalValues,
     };
   }
 
-  // Build initial section configs
-  const sectionConfigs = new Map<number, SectionConfig>();
-  selectedIndices.forEach((sectionIdx, arrayIdx) => {
-    const section = dmpFile.sections[sectionIdx];
-    if (!section) return;
+  // Build initial line configs
+  const lineConfigs = new Map<number, LineConfig>();
+  selectedIndices.forEach((lineIdx, arrayIdx) => {
+    const line = dmpFile.lines[lineIdx];
+    if (!line) return;
 
-    const direction = section.direction;
-    // The people from step 1 (never anything derived from the section name)
+    const direction = line.direction;
+    // The people from step 1 (never anything derived from the line name)
     const surveyors = selectionConfig.defaultSurveyors ?? [];
     const explorers = selectionConfig.defaultExplorers ?? [];
-    const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+    const dateStr = selectionConfig.defaultDate ?? line.date?.split(/[T ]/)[0] ?? null;
 
-    sectionConfigs.set(sectionIdx, {
-      sectionIndex: sectionIdx,
-      name: section.name,
+    lineConfigs.set(lineIdx, {
+      lineIndex: lineIdx,
+      name: line.name,
       surveyors,
       explorers,
       date: dateStr,
       color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
       direction,
       quality: 1.0,
-      shots: convertToEditableShots(section.shots),
+      shots: convertToEditableShots(line.shots),
       placement: { type: 'origin' },
     });
   });
 
-  // No auto-placement - all sections start as unplaced
-  const placedSections = new Set<number>();
-  const excludedSections = new Set<number>();
+  // No auto-placement - all lines start as unplaced
+  const placedLines = new Set<number>();
+  const excludedLines = new Set<number>();
 
-  const nextTempId = getNextTempIdFromConfigs(sectionConfigs);
+  const nextTempId = getNextTempIdFromConfigs(lineConfigs);
 
   return {
-    sectionConfigs,
-    currentSectionIndex: firstSectionIndex ?? 0,
+    lineConfigs,
+    currentLineIndex: firstLineIndex ?? 0,
     nextTempId,
-    placedSections,
-    excludedSections,
+    placedLines,
+    excludedLines,
     undoStacks: new Map(),
     redoStacks: new Map(),
     originalValues,
@@ -764,16 +764,16 @@ function initializeState(
 
 /**
  * Hook for managing import state with undo/redo functionality.
- * Provides per-section state tracking, undo/redo stacks, and reset functionality.
+ * Provides per-line state tracking, undo/redo stacks, and reset functionality.
  */
 export function useImportState(
   dmpFile: DmpFile,
   selectionConfig: DmpSelectionConfig,
   savedState?: {
-    sectionConfigs: Array<[number, SectionConfig]>;
-    placedSections: number[];
-    excludedSections?: number[];
-    currentSectionIndex: number;
+    lineConfigs: Array<[number, LineConfig]>;
+    placedLines: number[];
+    excludedLines?: number[];
+    currentLineIndex: number;
   },
   resolvedTheme = 'dark'
 ) {
@@ -791,38 +791,38 @@ export function useImportState(
 
   // Current array index (position in selectedIndices)
   const currentArrayIndex = useMemo(() => {
-    return selectedIndices.indexOf(state.currentSectionIndex);
-  }, [selectedIndices, state.currentSectionIndex]);
+    return selectedIndices.indexOf(state.currentLineIndex);
+  }, [selectedIndices, state.currentLineIndex]);
 
   // Current config
-  const currentConfig = state.sectionConfigs.get(state.currentSectionIndex);
+  const currentConfig = state.lineConfigs.get(state.currentLineIndex);
 
-  // Can undo/redo for current section
+  // Can undo/redo for current line
   const canUndo = useMemo(() => {
-    const stack = state.undoStacks.get(state.currentSectionIndex);
+    const stack = state.undoStacks.get(state.currentLineIndex);
     return (stack?.length ?? 0) > 0;
-  }, [state.undoStacks, state.currentSectionIndex]);
+  }, [state.undoStacks, state.currentLineIndex]);
 
   const canRedo = useMemo(() => {
-    const stack = state.redoStacks.get(state.currentSectionIndex);
+    const stack = state.redoStacks.get(state.currentLineIndex);
     return (stack?.length ?? 0) > 0;
-  }, [state.redoStacks, state.currentSectionIndex]);
+  }, [state.redoStacks, state.currentLineIndex]);
 
   // Actions
-  const navigateToSection = useCallback((sectionIndex: number) => {
-    dispatch({ type: 'NAVIGATE', sectionIndex });
+  const navigateToLine = useCallback((lineIndex: number) => {
+    dispatch({ type: 'NAVIGATE', lineIndex });
   }, []);
 
   const navigateToArrayIndex = useCallback((arrayIndex: number) => {
-    const sectionIndex = selectedIndices[arrayIndex];
-    if (sectionIndex !== undefined) {
-      dispatch({ type: 'NAVIGATE', sectionIndex });
+    const lineIndex = selectedIndices[arrayIndex];
+    if (lineIndex !== undefined) {
+      dispatch({ type: 'NAVIGATE', lineIndex });
     }
   }, [selectedIndices]);
 
-  const updateSectionField = useCallback(<K extends keyof SectionConfig>(
+  const updateLineField = useCallback(<K extends keyof LineConfig>(
     field: K,
-    value: SectionConfig[K]
+    value: LineConfig[K]
   ) => {
     dispatch({ type: 'UPDATE_FIELD', field, value });
   }, []);
@@ -855,20 +855,20 @@ export function useImportState(
     dispatch({ type: 'SET_PLACEMENT', placement });
   }, []);
 
-  const markPlaced = useCallback((sectionIndex: number) => {
-    dispatch({ type: 'MARK_PLACED', sectionIndex });
+  const markPlaced = useCallback((lineIndex: number) => {
+    dispatch({ type: 'MARK_PLACED', lineIndex });
   }, []);
 
-  const unmarkPlaced = useCallback((sectionIndex: number) => {
-    dispatch({ type: 'UNMARK_PLACED', sectionIndex });
+  const unmarkPlaced = useCallback((lineIndex: number) => {
+    dispatch({ type: 'UNMARK_PLACED', lineIndex });
   }, []);
 
-  const excludeSection = useCallback((sectionIndex: number) => {
-    dispatch({ type: 'EXCLUDE_SECTION', sectionIndex });
+  const excludeLine = useCallback((lineIndex: number) => {
+    dispatch({ type: 'EXCLUDE_LINE', lineIndex });
   }, []);
 
-  const includeSection = useCallback((sectionIndex: number) => {
-    dispatch({ type: 'INCLUDE_SECTION', sectionIndex });
+  const includeLine = useCallback((lineIndex: number) => {
+    dispatch({ type: 'INCLUDE_LINE', lineIndex });
   }, []);
 
   const undo = useCallback(() => {
@@ -879,100 +879,100 @@ export function useImportState(
     dispatch({ type: 'REDO' });
   }, []);
 
-  const resetSection = useCallback(() => {
-    dispatch({ type: 'RESET_SECTION' });
+  const resetLine = useCallback(() => {
+    dispatch({ type: 'RESET_LINE' });
   }, []);
 
   const restoreState = useCallback((
-    sectionConfigs: Map<number, SectionConfig>,
-    placedSections: Set<number>,
-    excludedSections: Set<number>,
-    currentSectionIndex: number
+    lineConfigs: Map<number, LineConfig>,
+    placedLines: Set<number>,
+    excludedLines: Set<number>,
+    currentLineIndex: number
   ) => {
-    dispatch({ type: 'RESTORE_STATE', sectionConfigs, placedSections, excludedSections, currentSectionIndex });
+    dispatch({ type: 'RESTORE_STATE', lineConfigs, placedLines, excludedLines, currentLineIndex });
   }, []);
 
   // Serialization helpers for state persistence
-  const serializeSectionConfigs = useCallback(() => {
-    return Array.from(state.sectionConfigs.entries());
-  }, [state.sectionConfigs]);
+  const serializeLineConfigs = useCallback(() => {
+    return Array.from(state.lineConfigs.entries());
+  }, [state.lineConfigs]);
 
-  const serializePlacedSections = useCallback(() => {
-    return Array.from(state.placedSections);
-  }, [state.placedSections]);
+  const serializePlacedLines = useCallback(() => {
+    return Array.from(state.placedLines);
+  }, [state.placedLines]);
 
-  const serializeExcludedSections = useCallback(() => {
-    return Array.from(state.excludedSections);
-  }, [state.excludedSections]);
+  const serializeExcludedLines = useCallback(() => {
+    return Array.from(state.excludedLines);
+  }, [state.excludedLines]);
 
   /**
-   * Get the next unplaced section index (not placed and not excluded).
-   * Returns undefined if all sections are placed or excluded.
+   * Get the next unplaced line index (not placed and not excluded).
+   * Returns undefined if all lines are placed or excluded.
    *
-   * @param afterIndex - Section index to start searching after
-   * @param excludeSection - Optional section index to exclude from search (used when
-   *                         the section is being marked as placed but state hasn't updated yet)
+   * @param afterIndex - Line index to start searching after
+   * @param excludeLine - Optional line index to exclude from search (used when
+   *                         the line is being marked as placed but state hasn't updated yet)
    */
-  const getNextUnplacedSection = useCallback((afterIndex?: number, excludeSection?: number): number | undefined => {
+  const getNextUnplacedLine = useCallback((afterIndex?: number, excludeLine?: number): number | undefined => {
     const startIdx = afterIndex !== undefined
       ? selectedIndices.indexOf(afterIndex) + 1
       : 0;
 
     // First check from startIdx to end
     for (let i = startIdx; i < selectedIndices.length; i++) {
-      const sectionIndex = selectedIndices[i];
-      if (sectionIndex === undefined) continue;
-      // Skip the section being placed (state not yet updated)
-      if (sectionIndex === excludeSection) continue;
-      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
-        return sectionIndex;
+      const lineIndex = selectedIndices[i];
+      if (lineIndex === undefined) continue;
+      // Skip the line being placed (state not yet updated)
+      if (lineIndex === excludeLine) continue;
+      if (!state.placedLines.has(lineIndex) && !state.excludedLines.has(lineIndex)) {
+        return lineIndex;
       }
     }
 
     // Then check from beginning to startIdx (wrap around)
     for (let i = 0; i < startIdx; i++) {
-      const sectionIndex = selectedIndices[i];
-      if (sectionIndex === undefined) continue;
-      // Skip the section being placed (state not yet updated)
-      if (sectionIndex === excludeSection) continue;
-      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
-        return sectionIndex;
+      const lineIndex = selectedIndices[i];
+      if (lineIndex === undefined) continue;
+      // Skip the line being placed (state not yet updated)
+      if (lineIndex === excludeLine) continue;
+      if (!state.placedLines.has(lineIndex) && !state.excludedLines.has(lineIndex)) {
+        return lineIndex;
       }
     }
 
     return undefined;
-  }, [selectedIndices, state.placedSections, state.excludedSections]);
+  }, [selectedIndices, state.placedLines, state.excludedLines]);
 
   /**
-   * Check if all sections are either placed or excluded.
+   * Check if all lines are either placed or excluded.
    */
-  const allSectionsHandled = useMemo(() => {
-    for (const sectionIndex of selectedIndices) {
-      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
+  const allLinesHandled = useMemo(() => {
+    for (const lineIndex of selectedIndices) {
+      if (!state.placedLines.has(lineIndex) && !state.excludedLines.has(lineIndex)) {
         return false;
       }
     }
     return true;
-  }, [selectedIndices, state.placedSections, state.excludedSections]);
+  }, [selectedIndices, state.placedLines, state.excludedLines]);
 
   /**
-   * Check if all sections are excluded.
+   * Check if all lines are excluded.
    */
-  const allSectionsExcluded = useMemo(() => {
-    for (const sectionIndex of selectedIndices) {
-      if (!state.excludedSections.has(sectionIndex)) {
+  const allLinesExcluded = useMemo(() => {
+    for (const lineIndex of selectedIndices) {
+      if (!state.excludedLines.has(lineIndex)) {
         return false;
       }
     }
     return true;
-  }, [selectedIndices, state.excludedSections]);
+  }, [selectedIndices, state.excludedLines]);
 
-  // Get section status - now considers validation errors and excluded status
-  const getSectionStatus = useCallback((sectionIndex: number): 'placed' | 'not_placed' | 'errors' | 'excluded' => {
+  // Get line status - now considers validation errors and excluded status
+  const getLineStatus = useCallback((lineIndex: number): 'placed' | 'not_placed' | 'errors' | 'excluded' => {
     // Check excluded first
-    if (state.excludedSections.has(sectionIndex)) return 'excluded';
+    if (state.excludedLines.has(lineIndex)) return 'excluded';
 
-    const config = state.sectionConfigs.get(sectionIndex);
+    const config = state.lineConfigs.get(lineIndex);
     if (!config) return 'not_placed';
 
     const validShots = config.shots.filter((s) => !s.isDeleted);
@@ -982,54 +982,54 @@ export function useImportState(
     for (let i = 0; i < config.shots.length; i++) {
       const shot = config.shots[i];
       if (!shot || shot.isDeleted) continue;
-      const shotErrors = validateEditableShot(shot, i, sectionIndex);
+      const shotErrors = validateEditableShot(shot, i, lineIndex);
       if (shotErrors.length > 0) return 'errors';
     }
 
-    if (state.placedSections.has(sectionIndex)) return 'placed';
+    if (state.placedLines.has(lineIndex)) return 'placed';
 
     return 'not_placed';
-  }, [state.sectionConfigs, state.placedSections, state.excludedSections]);
+  }, [state.lineConfigs, state.placedLines, state.excludedLines]);
 
-  // Get all configs for import (excludes excluded sections)
+  // Get all configs for import (excludes excluded lines)
   const getAllConfigs = useCallback(() => {
-    return Array.from(state.sectionConfigs.values())
-      .filter((config) => !state.excludedSections.has(config.sectionIndex))
+    return Array.from(state.lineConfigs.values())
+      .filter((config) => !state.excludedLines.has(config.lineIndex))
       .map((config) => ({
         ...config,
         shots: config.shots.filter((s) => !s.isDeleted),
       }));
-  }, [state.sectionConfigs, state.excludedSections]);
+  }, [state.lineConfigs, state.excludedLines]);
 
   /**
-   * Get configs for sections that have been placed (for use as targets in "From existing station").
-   * Returns placed sections with their names and station counts.
+   * Get configs for lines that have been placed (for use as targets in "From existing station").
+   * Returns placed lines with their names and station counts.
    */
-  const getPlacedSectionConfigs = useCallback(() => {
-    const placedConfigs: Array<{ sectionIndex: number; name: string; stationCount: number }> = [];
-    for (const sectionIndex of state.placedSections) {
-      const config = state.sectionConfigs.get(sectionIndex);
+  const getPlacedLineConfigs = useCallback(() => {
+    const placedConfigs: Array<{ lineIndex: number; name: string; stationCount: number }> = [];
+    for (const lineIndex of state.placedLines) {
+      const config = state.lineConfigs.get(lineIndex);
       if (config) {
         const validShots = config.shots.filter((s) => !s.isDeleted);
         placedConfigs.push({
-          sectionIndex,
+          lineIndex,
           name: config.name,
           stationCount: validShots.length + 1, // shots + 1 = stations
         });
       }
     }
     return placedConfigs;
-  }, [state.placedSections, state.sectionConfigs]);
+  }, [state.placedLines, state.lineConfigs]);
 
   /**
-   * Get all errors for a specific section.
+   * Get all errors for a specific line.
    * Includes shot validation errors, placement errors, and merge conflicts.
    */
-  const getSectionErrors = useCallback((
-    sectionIndex: number,
-    existingSections: Section[]
+  const getLineErrors = useCallback((
+    lineIndex: number,
+    existingLines: Line[]
   ): ImportError[] => {
-    const config = state.sectionConfigs.get(sectionIndex);
+    const config = state.lineConfigs.get(lineIndex);
     if (!config) return [];
 
     const errors: ImportError[] = [];
@@ -1037,44 +1037,44 @@ export function useImportState(
     // Validate each shot
     config.shots.forEach((shot, shotIndex) => {
       if (!shot.isDeleted) {
-        const shotErrors = validateEditableShot(shot, shotIndex, sectionIndex);
+        const shotErrors = validateEditableShot(shot, shotIndex, lineIndex);
         errors.push(...shotErrors);
       }
     });
 
-    // Check for empty section (no valid shots)
+    // Check for empty line (no valid shots)
     const validShots = config.shots.filter((s) => !s.isDeleted);
     if (validShots.length === 0) {
       errors.push({
         type: 'invalidData',
-        sectionIndex,
-        message: 'Section has no valid shots',
+        lineIndex,
+        message: 'Line has no valid shots',
       });
     }
 
     // Validate placement
-    const isPlaced = state.placedSections.has(sectionIndex);
-    const placementError = validatePlacement(isPlaced, sectionIndex);
+    const isPlaced = state.placedLines.has(lineIndex);
+    const placementError = validatePlacement(isPlaced, lineIndex);
     if (placementError) {
       errors.push(placementError);
     }
 
     // Validate merge target if using fromExisting placement
     if (config.placement.type === 'fromExisting') {
-      const existingSectionIds = new Set(existingSections.map((s) => s.id));
-      // Get target section id from placement config
-      const targetSectionId = config.placement.existingStation.section_id;
+      const existingLineIds = new Set(existingLines.map((s) => s.id));
+      // Get target line id from placement config
+      const targetLineId = config.placement.existingStation.line_id;
 
-      // Get set of section indices that have already been placed in this import
+      // Get set of line indices that have already been placed in this import
       // (these could be valid merge targets)
-      const placedSectionIndices = state.placedSections;
+      const placedLineIndices = state.placedLines;
 
       const mergeError = validateMergeTarget(
         config.placement.type,
-        targetSectionId,
-        existingSectionIds,
-        placedSectionIndices,
-        sectionIndex
+        targetLineId,
+        existingLineIds,
+        placedLineIndices,
+        lineIndex
       );
       if (mergeError) {
         errors.push(mergeError);
@@ -1082,114 +1082,114 @@ export function useImportState(
     }
 
     return errors;
-  }, [state.sectionConfigs, state.placedSections]);
+  }, [state.lineConfigs, state.placedLines]);
 
   /**
-   * Get all errors for all sections.
-   * Returns a map of section index to array of errors.
+   * Get all errors for all lines.
+   * Returns a map of line index to array of errors.
    */
-  const getAllSectionErrors = useCallback((
-    existingSections: Section[]
+  const getAllLineErrors = useCallback((
+    existingLines: Line[]
   ): Map<number, ImportError[]> => {
     const allErrors = new Map<number, ImportError[]>();
 
-    for (const sectionIndex of selectedIndices) {
-      const errors = getSectionErrors(sectionIndex, existingSections);
+    for (const lineIndex of selectedIndices) {
+      const errors = getLineErrors(lineIndex, existingLines);
       if (errors.length > 0) {
-        allErrors.set(sectionIndex, errors);
+        allErrors.set(lineIndex, errors);
       }
     }
 
     return allErrors;
-  }, [selectedIndices, getSectionErrors]);
+  }, [selectedIndices, getLineErrors]);
 
   /**
-   * Get the error count for a specific section.
+   * Get the error count for a specific line.
    */
-  const getSectionErrorCount = useCallback((
-    sectionIndex: number,
-    existingSections: Section[]
+  const getLineErrorCount = useCallback((
+    lineIndex: number,
+    existingLines: Line[]
   ): number => {
-    return getSectionErrors(sectionIndex, existingSections).length;
-  }, [getSectionErrors]);
+    return getLineErrors(lineIndex, existingLines).length;
+  }, [getLineErrors]);
 
   /**
-   * Get the data error count for a specific section (excluding placement errors).
+   * Get the data error count for a specific line (excluding placement errors).
    * This is used to determine if the Place button should be enabled.
    */
-  const getSectionDataErrorCount = useCallback((
-    sectionIndex: number,
-    existingSections: Section[]
+  const getLineDataErrorCount = useCallback((
+    lineIndex: number,
+    existingLines: Line[]
   ): number => {
-    const errors = getSectionErrors(sectionIndex, existingSections);
+    const errors = getLineErrors(lineIndex, existingLines);
     // Filter out missingPlacement errors - those are expected before placing
     return errors.filter((e) => e.type !== 'missingPlacement').length;
-  }, [getSectionErrors]);
+  }, [getLineErrors]);
 
   /**
-   * Get the warning count for a specific section (azimuth/pitch discrepancies).
+   * Get the warning count for a specific line (azimuth/pitch discrepancies).
    * Counts discrepancy warnings across non-deleted shots; a single shot can
    * contribute up to 2 warnings (one azimuth, one pitch).
    * A threshold of 0 means that warning type is disabled.
    */
-  const getSectionWarningCount = useCallback((
-    sectionIndex: number,
+  const getLineWarningCount = useCallback((
+    lineIndex: number,
     valConfig: Pick<ValidationConfig, 'azimuth_diff_threshold' | 'pitch_diff_threshold'>
   ): number => {
-    const sectionConfig = state.sectionConfigs.get(sectionIndex);
-    if (!sectionConfig) return 0;
+    const lineConfig = state.lineConfigs.get(lineIndex);
+    if (!lineConfig) return 0;
     let warnings = 0;
-    for (const shot of sectionConfig.shots) {
+    for (const shot of lineConfig.shots) {
       if (shot.isDeleted) continue;
       if (valConfig.azimuth_diff_threshold > 0 && hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, valConfig.azimuth_diff_threshold)) warnings++;
       if (valConfig.pitch_diff_threshold > 0 && hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, valConfig.pitch_diff_threshold)) warnings++;
     }
     return warnings;
-  }, [state.sectionConfigs]);
+  }, [state.lineConfigs]);
 
   /**
-   * Get total error count across all sections.
+   * Get total error count across all lines.
    */
   const getTotalErrorCount = useCallback((
-    existingSections: Section[]
+    existingLines: Line[]
   ): number => {
     let total = 0;
-    for (const sectionIndex of selectedIndices) {
-      total += getSectionErrors(sectionIndex, existingSections).length;
+    for (const lineIndex of selectedIndices) {
+      total += getLineErrors(lineIndex, existingLines).length;
     }
     return total;
-  }, [selectedIndices, getSectionErrors]);
+  }, [selectedIndices, getLineErrors]);
 
   /**
-   * Get total data error count across all sections (excluding placement errors).
+   * Get total data error count across all lines (excluding placement errors).
    * Used for the error summary display.
    */
   const getTotalDataErrorCount = useCallback((
-    existingSections: Section[]
+    existingLines: Line[]
   ): number => {
     let total = 0;
-    for (const sectionIndex of selectedIndices) {
-      total += getSectionDataErrorCount(sectionIndex, existingSections);
+    for (const lineIndex of selectedIndices) {
+      total += getLineDataErrorCount(lineIndex, existingLines);
     }
     return total;
-  }, [selectedIndices, getSectionDataErrorCount]);
+  }, [selectedIndices, getLineDataErrorCount]);
 
   /**
-   * Check if all sections can be imported (no errors and all placed or excluded).
+   * Check if all lines can be imported (no errors and all placed or excluded).
    */
   const canImport = useCallback((
-    existingSections: Section[]
+    existingLines: Line[]
   ): boolean => {
-    // If all sections are excluded, we can't import (nothing to import)
-    if (state.excludedSections.size === selectedIndices.length) {
+    // If all lines are excluded, we can't import (nothing to import)
+    if (state.excludedLines.size === selectedIndices.length) {
       return false;
     }
 
-    for (const sectionIndex of selectedIndices) {
-      // Skip excluded sections - they don't need to be validated
-      if (state.excludedSections.has(sectionIndex)) continue;
+    for (const lineIndex of selectedIndices) {
+      // Skip excluded lines - they don't need to be validated
+      if (state.excludedLines.has(lineIndex)) continue;
 
-      const config = state.sectionConfigs.get(sectionIndex);
+      const config = state.lineConfigs.get(lineIndex);
       if (!config) return false;
 
       // Check for valid shots
@@ -1200,52 +1200,52 @@ export function useImportState(
       for (let i = 0; i < config.shots.length; i++) {
         const shot = config.shots[i];
         if (!shot || shot.isDeleted) continue;
-        const shotErrors = validateEditableShot(shot, i, sectionIndex);
+        const shotErrors = validateEditableShot(shot, i, lineIndex);
         if (shotErrors.length > 0) return false;
       }
 
       // Check if placed
-      if (!state.placedSections.has(sectionIndex)) return false;
+      if (!state.placedLines.has(lineIndex)) return false;
 
       // Check merge target validity
       if (config.placement.type === 'fromExisting') {
-        const existingSectionIds = new Set(existingSections.map((s) => s.id));
-        const targetSectionId = config.placement.existingStation.section_id;
+        const existingLineIds = new Set(existingLines.map((s) => s.id));
+        const targetLineId = config.placement.existingStation.line_id;
         const mergeError = validateMergeTarget(
           config.placement.type,
-          targetSectionId,
-          existingSectionIds,
-          state.placedSections,
-          sectionIndex
+          targetLineId,
+          existingLineIds,
+          state.placedLines,
+          lineIndex
         );
         if (mergeError) return false;
       }
     }
     return true;
-  }, [selectedIndices, state.sectionConfigs, state.placedSections, state.excludedSections]);
+  }, [selectedIndices, state.lineConfigs, state.placedLines, state.excludedLines]);
 
   return {
     // State
     state,
     currentConfig,
-    currentSectionIndex: state.currentSectionIndex,
+    currentLineIndex: state.currentLineIndex,
     currentArrayIndex,
     selectedIndices,
-    sectionConfigs: state.sectionConfigs,
-    placedSections: state.placedSections,
-    excludedSections: state.excludedSections,
+    lineConfigs: state.lineConfigs,
+    placedLines: state.placedLines,
+    excludedLines: state.excludedLines,
     canUndo,
     canRedo,
-    allSectionsHandled,
-    allSectionsExcluded,
+    allLinesHandled,
+    allLinesExcluded,
 
     // Navigation
-    navigateToSection,
+    navigateToLine,
     navigateToArrayIndex,
-    getNextUnplacedSection,
+    getNextUnplacedLine,
 
-    // Section field updates
-    updateSectionField,
+    // Line field updates
+    updateLineField,
 
     // Shot operations
     updateShot,
@@ -1260,37 +1260,37 @@ export function useImportState(
     unmarkPlaced,
 
     // Exclude/Include
-    excludeSection,
-    includeSection,
+    excludeLine,
+    includeLine,
 
     // Undo/Redo
     undo,
     redo,
 
     // Reset
-    resetSection,
+    resetLine,
 
     // State restoration
     restoreState,
 
     // Serialization
-    serializeSectionConfigs,
-    serializePlacedSections,
-    serializeExcludedSections,
+    serializeLineConfigs,
+    serializePlacedLines,
+    serializeExcludedLines,
 
     // Status
-    getSectionStatus,
+    getLineStatus,
 
     // Export
     getAllConfigs,
-    getPlacedSectionConfigs,
+    getPlacedLineConfigs,
 
     // Error validation
-    getSectionErrors,
-    getAllSectionErrors,
-    getSectionErrorCount,
-    getSectionDataErrorCount,
-    getSectionWarningCount,
+    getLineErrors,
+    getAllLineErrors,
+    getLineErrorCount,
+    getLineDataErrorCount,
+    getLineWarningCount,
     getTotalErrorCount,
     getTotalDataErrorCount,
     canImport,

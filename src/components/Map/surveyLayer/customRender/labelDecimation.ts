@@ -4,7 +4,7 @@
  * The stock shot- and station-label layers thin labels by a zoom-banded
  * `['%', ['get', 'index' | 'globalOrdinal'], N]` filter (SurveyLayer.tsx), with
  * the station layer additionally always showing the first station of each
- * section (`isFirstInSection`). Section names and comments are NOT decimated.
+ * line (`isFirstInLine`). Line names and comments are NOT decimated.
  *
  * REVEAL-ZOOM REWORK (deliberate stock-parity break): the stock bands are
  * `5 -> 2 -> 1`, which are NON-NESTED - `{index % 5 == 0}` is NOT a subset of
@@ -55,7 +55,7 @@ export function kindDecimates(kind: LabelKind): boolean {
 
 /**
  * Per-kind decimation modulus at `zoom`. Shot + station labels use the nested
- * zoom bands; section names and comments never decimate (modulus 1 = show all).
+ * zoom bands; line names and comments never decimate (modulus 1 = show all).
  */
 export function decimationModulusForKind(kind: LabelKind, zoom: number): number {
   return kindDecimates(kind) ? shotStationDecimationModulus(zoom) : 1;
@@ -81,7 +81,7 @@ export function decimationTier(ordinal: number): 0 | 1 | 2 {
 /**
  * The minimum zoom at which a label passes decimation - the floor of its reveal
  * zoom (`labelReveal.ts` takes `max(admitZoom, collisionClearanceZoom)`). A
- * first-in-section station label and every non-decimating kind (section names,
+ * first-in-line station label and every non-decimating kind (line names,
  * comments) are admitted at the kind's `minzoom`; otherwise the nested tier sets
  * the band edge: tier 0 -> minzoom, tier 1 -> z16, tier 2 -> z18. Monotone by
  * construction: a higher tier only ever RAISES the floor, never lowers it, so
@@ -90,10 +90,10 @@ export function decimationTier(ordinal: number): 0 | 1 | 2 {
 export function decimationAdmitZoom(
   kind: LabelKind,
   ordinal: number,
-  firstInSection: boolean,
+  firstInLine: boolean,
   minzoom: number,
 ): number {
-  if (firstInSection || !kindDecimates(kind)) return minzoom;
+  if (firstInLine || !kindDecimates(kind)) return minzoom;
   switch (decimationTier(ordinal)) {
     case 0:
       return minzoom;
@@ -107,12 +107,12 @@ export function decimationAdmitZoom(
 /**
  * Whether a label is thinned OUT by decimation at a given modulus - the CPU
  * predicate the reveal pass and the nested-monotonicity tests share. A
- * first-in-section station label always survives; a modulus <= 1 shows all.
+ * first-in-line station label always survives; a modulus <= 1 shows all.
  * (With the nested moduli this is monotone in zoom: as the modulus drops
  * 4 -> 2 -> 1 the kept set only grows.)
  */
-export function isLabelDecimatedOut(ordinal: number, modulus: number, firstInSection: boolean): boolean {
-  if (firstInSection) return false;
+export function isLabelDecimatedOut(ordinal: number, modulus: number, firstInLine: boolean): boolean {
+  if (firstInLine) return false;
   if (modulus <= 1.5) return false;
   return ordinal % modulus !== 0;
 }

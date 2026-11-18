@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { useUIStore } from '../uiStore';
 import { DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import type { ExportImageOptions } from '../../types/commands';
 
@@ -80,5 +81,45 @@ describe('projectStore.exportImage depth endpoints (#360)', () => {
     expect(sentOptions().dpi).toBe(600);
     // The store must not mutate the object the export UI holds in state.
     expect(options.depth_shallow).toBeUndefined();
+  });
+});
+
+/**
+ * #327: a hidden Section's lines are left out of the image export, as they
+ * are of the map. The store stamps them on the way out; `image.rs`'s
+ * `hidden_lines_are_not_drawn_but_still_measure_distances` pins that the
+ * backend honours them.
+ */
+describe('projectStore.exportImage hidden Sections (#327)', () => {
+  const sentOptions = (): ExportImageOptions => {
+    const calls = invokeIpcMock.mock.calls;
+    return (calls[calls.length - 1]![1] as { options: ExportImageOptions }).options;
+  };
+  const lines = [
+    { id: 1, cave_section_id: 10 },
+    { id: 2, cave_section_id: 11 },
+    { id: 3 },
+    { id: 4, cave_section_id: 10 },
+  ];
+
+  beforeEach(() => {
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockResolvedValue(undefined);
+    useProjectStore.setState({ project: { name: 'T', lines } as never });
+  });
+
+  it("sends the hidden Sections' lines, even a selected one", async () => {
+    useUIStore.setState({
+      hiddenSections: [10],
+      selection: { type: 'line', lineId: 1 } as never,
+    });
+    await useProjectStore.getState().exportImage('/tmp/a.png', DEFAULT_IMAGE_OPTIONS);
+    expect(sentOptions().hidden_line_ids).toEqual([1, 4]);
+  });
+
+  it('sends none when no Section is hidden', async () => {
+    useUIStore.setState({ hiddenSections: [], selection: null });
+    await useProjectStore.getState().exportImage('/tmp/a.png', DEFAULT_IMAGE_OPTIONS);
+    expect(sentOptions().hidden_line_ids).toBeUndefined();
   });
 });

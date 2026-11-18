@@ -1,4 +1,4 @@
-//! Cross-crate behaviour of the section north reference (#438).
+//! Cross-crate behaviour of the line north reference (#438).
 //!
 //! The model-layer half is `stalagmight_models::azimuth_reference_tests`; these
 //! are the assertions that need more than one crate to make: a station move and
@@ -7,11 +7,11 @@
 //!
 //! What each is trying to catch is a MISSING or MISDIRECTED correction - a
 //! write-back that forgot to remove it, a persistence hop that dropped it, an
-//! export that mislabelled it - so every assertion is written against a section
+//! export that mislabelled it - so every assertion is written against a line
 //! whose correction is large enough (10 degrees) that no tolerance hides it.
 
 use stalagmight_models::{
-    AzimuthReference, CorrectionSource, Project, SectionData, SectionId, ShotData, StationRef,
+    AzimuthReference, CorrectionSource, LineData, LineId, Project, ShotData, StationRef,
 };
 
 /// 10 degrees east: big enough that a dropped correction cannot pass as noise.
@@ -28,10 +28,10 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (Project, SectionId) {
+fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (Project, LineId) {
     let mut project = Project::new("declination".to_string(), None);
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("S".to_string()),
             surveyor: None,
             date: None,
@@ -41,14 +41,14 @@ fn project_with(shots: Vec<ShotData>, reference: Option<AzimuthReference>) -> (P
             shots,
         })
         .id;
-    project.get_section_mut(id).unwrap().azimuth_reference = reference;
+    project.get_line_mut(id).unwrap().azimuth_reference = reference;
     project.ensure_shot_uuids();
     (project, id)
 }
 
-fn station_xy(project: &Project, section_id: SectionId, index: u32) -> (f64, f64) {
+fn station_xy(project: &Project, line_id: LineId, index: u32) -> (f64, f64) {
     let coords = project
-        .compute_station_raw_coords(StationRef::new(section_id, index))
+        .compute_station_raw_coords(StationRef::new(line_id, index))
         .expect("station coords");
     (coords.x, coords.y)
 }
@@ -58,7 +58,7 @@ fn station_xy(project: &Project, section_id: SectionId, index: u32) -> (f64, f64
 /// and the station lands rotated away from where the user dropped it - by the
 /// declination, every time, and the move is repeatable.
 #[test]
-fn a_station_move_lands_where_it_was_dropped_on_a_corrected_section() {
+fn a_station_move_lands_where_it_was_dropped_on_a_corrected_line() {
     use crate::core::command::Command;
     use crate::core::state::AppState;
     use stalagmight_models::Coordinates;
@@ -84,7 +84,7 @@ fn a_station_move_lands_where_it_was_dropped_on_a_corrected_section() {
     );
 }
 
-/// Splitting a section produces a second section from the same survey. It must
+/// Splitting a line produces a second line from the same survey. It must
 /// inherit the reference, exactly as it inherits surveyor/date/colour.
 #[test]
 fn a_split_gives_both_halves_the_same_reference() {
@@ -94,7 +94,7 @@ fn a_split_gives_both_halves_the_same_reference() {
     let state = AppState::new().unwrap();
     let mut project = Project::new("split".to_string(), None);
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("S".to_string()),
             surveyor: None,
             date: None,
@@ -104,26 +104,22 @@ fn a_split_gives_both_halves_the_same_reference() {
             shots: vec![shot(0.0, 10.0), shot(10.0, 10.0), shot(20.0, 10.0)],
         })
         .id;
-    project.get_section_mut(id).unwrap().azimuth_reference = Some(reference);
+    project.get_line_mut(id).unwrap().azimuth_reference = Some(reference);
     project.ensure_shot_uuids();
-    let middle = project.get_section(id).unwrap().shots[1].id;
+    let middle = project.get_line(id).unwrap().shots[1].id;
     state.set_project_for_tests(project);
 
     let result = state.execute_delete_shot_and_split(id, middle, "A".to_string(), "B".to_string());
     assert!(result.success, "split failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.sections.len(),
-        2,
-        "the split should make two sections"
-    );
-    for section in &project.sections {
+    assert_eq!(project.lines.len(), 2, "the split should make two lines");
+    for line in &project.lines {
         assert_eq!(
-            section.azimuth_reference,
+            line.azimuth_reference,
             Some(reference),
-            "section {} lost the reference across the split",
-            section.id
+            "line {} lost the reference across the split",
+            line.id
         );
     }
 }
@@ -148,23 +144,21 @@ fn the_reference_and_its_provenance_survive_save_and_load() {
     db.save_project(&project).unwrap();
 
     let loaded = db.load_project().unwrap();
-    let section = loaded
-        .get_section(id)
-        .expect("section survives the round trip");
-    assert_eq!(section.azimuth_reference, Some(recorded));
+    let line = loaded.get_line(id).expect("line survives the round trip");
+    assert_eq!(line.azimuth_reference, Some(recorded));
     assert_eq!(
         loaded.default_azimuth_reference,
         Some(AzimuthReference::true_north(CorrectionSource::Manual))
     );
     assert_eq!(
-        section.shots[0].azimuth_in, 12.5,
+        line.shots[0].azimuth_in, 12.5,
         "the stored reading is still the measured one"
     );
 }
 
 /// The absent case is the one every existing file takes. It must load as "no
 /// reference recorded" - `None`, not `Some(default)` - so that a later project
-/// default can still reach the section.
+/// default can still reach the line.
 #[test]
 fn a_project_that_declares_nothing_round_trips_as_nothing() {
     use stalagmight_persistence::persistence::sqlite::Database;
@@ -180,7 +174,7 @@ fn a_project_that_declares_nothing_round_trips_as_nothing() {
 
     let loaded = db.load_project().unwrap();
     assert_eq!(
-        loaded.get_section(id).unwrap().azimuth_reference,
+        loaded.get_line(id).unwrap().azimuth_reference,
         None,
         "an unrecorded reference must not materialise as an explicit one"
     );
@@ -249,7 +243,7 @@ fn an_all_true_north_project_is_no_longer_declared_magnetic() {
 fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
     let mut project = Project::new("mixed".to_string(), None);
     let magnetic = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("Magnetic".to_string()),
             surveyor: None,
             date: None,
@@ -260,7 +254,7 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
         })
         .id;
     let true_north = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("True".to_string()),
             surveyor: None,
             date: None,
@@ -270,13 +264,12 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
             shots: vec![shot(200.0, 10.0)],
         })
         .id;
-    project.get_section_mut(magnetic).unwrap().azimuth_reference = Some(
-        AzimuthReference::magnetic(TEST_CORRECTION, CorrectionSource::FileDeclared),
-    );
-    project
-        .get_section_mut(true_north)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
+    project.get_line_mut(magnetic).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        TEST_CORRECTION,
+        CorrectionSource::FileDeclared,
+    ));
+    project.get_line_mut(true_north).unwrap().azimuth_reference =
+        Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
     project.ensure_shot_uuids();
 
     let xml = exported_xml(&project);
@@ -287,15 +280,15 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
     let azimuths = azimuths_in(&xml);
     assert!(
         azimuths.contains(&40.0),
-        "the magnetic section's 30 degrees should leave as 40: {azimuths:?}"
+        "the magnetic line's 30 degrees should leave as 40: {azimuths:?}"
     );
     assert!(
         azimuths.contains(&200.0),
-        "the true-north section must be written unchanged: {azimuths:?}"
+        "the true-north line must be written unchanged: {azimuths:?}"
     );
 
     assert_eq!(
-        project.get_section(magnetic).unwrap().shots[0].azimuth_in,
+        project.get_line(magnetic).unwrap().shots[0].azimuth_in,
         30.0,
         "export must not write the correction back into the project"
     );
@@ -305,15 +298,15 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
 /// georeference-carrying `.tml` (declared, IGRF) plus `.dmp` files from the same
 /// cave (raw magnetic, nothing declared).
 ///
-/// Counting the undeclared sections as "correction 0" made this MIXED, which
+/// Counting the undeclared lines as "correction 0" made this MIXED, which
 /// rewrote every bearing in the export and declared the whole file true north -
-/// asserting about the `.dmp` sections the one thing known to be false. The
+/// asserting about the `.dmp` lines the one thing known to be false. The
 /// document stays magnetic, and the readings stay the readings.
 #[test]
-fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
+fn undeclared_magnetic_lines_do_not_make_a_declared_one_mixed() {
     let mut project = Project::new("naharon".to_string(), None);
     let declared = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("From the .tml".to_string()),
             surveyor: None,
             date: None,
@@ -324,7 +317,7 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
         })
         .id;
     let undeclared = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("From a .dmp".to_string()),
             surveyor: None,
             date: None,
@@ -334,24 +327,23 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
             shots: vec![shot(200.0, 10.0)],
         })
         .id;
-    project.get_section_mut(declared).unwrap().azimuth_reference = Some(
-        AzimuthReference::magnetic(-2.13, CorrectionSource::IgrfAuto { epoch_year: 2025 }),
-    );
-    project
-        .get_section_mut(undeclared)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.get_line_mut(declared).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        -2.13,
+        CorrectionSource::IgrfAuto { epoch_year: 2025 },
+    ));
+    project.get_line_mut(undeclared).unwrap().azimuth_reference =
+        Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
     project.ensure_shot_uuids();
 
     let xml = exported_xml(&project);
     assert!(
         xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"),
-        "an undeclared magnetic section must not push the document off magnetic"
+        "an undeclared magnetic line must not push the document off magnetic"
     );
     let azimuths = azimuths_in(&xml);
     assert!(
         azimuths.contains(&30.0) && azimuths.contains(&200.0),
-        "both sections' readings must leave verbatim: {azimuths:?}"
+        "both lines' readings must leave verbatim: {azimuths:?}"
     );
 }
 
@@ -360,7 +352,7 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
 fn two_different_declared_corrections_are_mixed() {
     let mut project = Project::new("two declinations".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("A".to_string()),
             surveyor: None,
             date: None,
@@ -371,7 +363,7 @@ fn two_different_declared_corrections_are_mixed() {
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("B".to_string()),
             surveyor: None,
             date: None,
@@ -381,11 +373,11 @@ fn two_different_declared_corrections_are_mixed() {
             shots: vec![shot(30.0, 10.0)],
         })
         .id;
-    project.get_section_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+    project.get_line_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
         5.0,
         CorrectionSource::FileDeclared,
     ));
-    project.get_section_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+    project.get_line_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
         -3.0,
         CorrectionSource::FileDeclared,
     ));
@@ -396,23 +388,23 @@ fn two_different_declared_corrections_are_mixed() {
     let azimuths = azimuths_in(&xml);
     assert!(
         azimuths.contains(&35.0) && azimuths.contains(&27.0),
-        "each section's own correction should be applied: {azimuths:?}"
+        "each line's own correction should be applied: {azimuths:?}"
     );
 }
 
 /// #438 review item 4: the escape hatch used to emit a FALSE claim.
 ///
-/// A declared-true section beside one with no correction on record took the
-/// `MixedToTrue` arm, where the undeclared section's reference resolves to
+/// A declared-true line beside one with no correction on record took the
+/// `MixedToTrue` arm, where the undeclared line's reference resolves to
 /// identity - so its bearings went out UNROTATED under
 /// `useMagneticAzimuth=false`, which is exactly the claim the branch exists to
-/// prevent. A section whose offset from true north is unknown cannot be put
+/// prevent. A line whose offset from true north is unknown cannot be put
 /// into true north, so the rewrite is refused and the note says why.
 #[test]
 fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
     let mut project = Project::new("unresolvable".to_string(), None);
     let declared = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("True".to_string()),
             surveyor: None,
             date: None,
@@ -423,7 +415,7 @@ fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
         })
         .id;
     let unknown = project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some("Raw magnetic".to_string()),
             surveyor: None,
             date: None,
@@ -433,9 +425,9 @@ fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
             shots: vec![shot(200.0, 10.0)],
         })
         .id;
-    project.get_section_mut(declared).unwrap().azimuth_reference =
+    project.get_line_mut(declared).unwrap().azimuth_reference =
         Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
-    project.get_section_mut(unknown).unwrap().azimuth_reference =
+    project.get_line_mut(unknown).unwrap().azimuth_reference =
         Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
     project.ensure_shot_uuids();
 
@@ -460,7 +452,7 @@ fn a_disagreeing_pair_with_an_unknown_third_is_refused_rather_than_half_rotated(
     let mut project = Project::new("unresolvable mix".to_string(), None);
     let mut add = |name: &str, azimuth: f64| {
         project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some(name.to_string()),
                 surveyor: None,
                 date: None,
@@ -474,22 +466,22 @@ fn a_disagreeing_pair_with_an_unknown_third_is_refused_rather_than_half_rotated(
     let a = add("A", 30.0);
     let b = add("B", 30.0);
     let c = add("C", 30.0);
-    project.get_section_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+    project.get_line_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
         5.0,
         CorrectionSource::FileDeclared,
     ));
-    project.get_section_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+    project.get_line_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
         -3.0,
         CorrectionSource::FileDeclared,
     ));
-    project.get_section_mut(c).unwrap().azimuth_reference =
+    project.get_line_mut(c).unwrap().azimuth_reference =
         Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
     project.ensure_shot_uuids();
 
     let xml = exported_xml(&project);
     assert!(
         xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"),
-        "one section with no correction on record makes the rewrite impossible"
+        "one line with no correction on record makes the rewrite impossible"
     );
     let azimuths = azimuths_in(&xml);
     assert!(

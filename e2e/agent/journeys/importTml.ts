@@ -16,30 +16,30 @@ interface ParsedShot {
 }
 
 interface ParsedTml {
-  sections: { shots: ParsedShot[] }[];
+  lines: { shots: ParsedShot[] }[];
 }
 
 /**
  * Mirror of the import-side filter (`parsers/tml/mod.rs`, convert step): CLOSURE
  * shots never import, excluded shots import only with `includeExcluded`, and a
- * section left with zero shots after filtering is dropped entirely. Expected
+ * line left with zero shots after filtering is dropped entirely. Expected
  * counts must be derived through this filter or a fixture containing any of
  * those features reds the journey on CORRECT app behavior.
  */
-function importableCounts(parsed: ParsedTml): { sections: number; shots: number } {
-  let sections = 0;
+function importableCounts(parsed: ParsedTml): { lines: number; shots: number } {
+  let lines = 0;
   let shots = 0;
-  for (const section of parsed.sections) {
-    const kept = section.shots.filter((s) => s.shot_type !== 'Closure' && !s.excluded).length;
+  for (const line of parsed.lines) {
+    const kept = line.shots.filter((s) => s.shot_type !== 'Closure' && !s.excluded).length;
     if (kept === 0) continue;
-    sections += 1;
+    lines += 1;
     shots += kept;
   }
-  return { sections, shots };
+  return { lines, shots };
 }
 
 interface StoreCounts {
-  sections: number;
+  lines: number;
   shots: number;
 }
 
@@ -60,9 +60,9 @@ export const importTml: Journey = {
       throw new Error(`parseTml failed: ${parsedRes.error ?? 'unknown'}`);
     }
     const parsed = parsedRes.result;
-    const { sections: expectedSections, shots: expectedShots } = importableCounts(parsed);
-    ctx.expect('parse found importable survey data', expectedSections > 0 && expectedShots > 0,
-      `importable sections=${expectedSections} shots=${expectedShots}`);
+    const { lines: expectedLines, shots: expectedShots } = importableCounts(parsed);
+    ctx.expect('parse found importable survey data', expectedLines > 0 && expectedShots > 0,
+      `importable lines=${expectedLines} shots=${expectedShots}`);
 
     const before = await counts(ctx);
     const depthBefore = await undoDepth(ctx);
@@ -80,7 +80,7 @@ export const importTml: Journey = {
       result?: {
         success?: boolean;
         error?: string | null;
-        section_ids?: number[];
+        line_ids?: number[];
         import_receipt?: unknown;
       };
     };
@@ -89,17 +89,17 @@ export const importTml: Journey = {
     ctx.expect('import reported success', importRes.ok && importRes.result?.success === true,
       `error=${importRes.result?.error ?? 'none'}`);
     ctx.expect(
-      'one section id returned per parsed section',
-      (importRes.result?.section_ids?.length ?? 0) === expectedSections,
-      `section_ids=${importRes.result?.section_ids?.length ?? 'absent'} expected=${expectedSections}`,
+      'one line id returned per parsed line',
+      (importRes.result?.line_ids?.length ?? 0) === expectedLines,
+      `line_ids=${importRes.result?.line_ids?.length ?? 'absent'} expected=${expectedLines}`,
     );
     ctx.expect('an import receipt was returned', importRes.result?.import_receipt !== undefined,
       'import_receipt absent from CommandResult');
 
     const after = await counts(ctx);
-    ctx.expect('project gained exactly the parsed sections',
-      after.sections === before.sections + expectedSections,
-      `before=${before.sections} after=${after.sections} expected+=${expectedSections}`);
+    ctx.expect('project gained exactly the parsed lines',
+      after.lines === before.lines + expectedLines,
+      `before=${before.lines} after=${after.lines} expected+=${expectedLines}`);
     ctx.expect('project gained exactly the parsed shots',
       after.shots === before.shots + expectedShots,
       `before=${before.shots} after=${after.shots} expected+=${expectedShots}`);
@@ -111,17 +111,17 @@ export const importTml: Journey = {
     const undoRes = (await ctx.callAction('project', 'undo', [])) as { ok: boolean };
     const reverted = await counts(ctx);
     ctx.expect('undo removed the import completely',
-      undoRes.ok && reverted.sections === before.sections && reverted.shots === before.shots,
-      `after undo: sections=${reverted.sections}/${before.sections} shots=${reverted.shots}/${before.shots}`);
+      undoRes.ok && reverted.lines === before.lines && reverted.shots === before.shots,
+      `after undo: lines=${reverted.lines}/${before.lines} shots=${reverted.shots}/${before.shots}`);
   },
 };
 
 async function counts(ctx: Parameters<Journey['run']>[0]): Promise<StoreCounts> {
   return ctx.eval<StoreCounts>(`
     const p = window.__E2E_TEST__.projectStore.getState().project;
-    if (!p) return { sections: 0, shots: 0 };
-    const sections = (p.sections || []).length;
-    const shots = (p.sections || []).reduce((n, s) => n + ((s.shots || []).length), 0);
-    return { sections, shots };
+    if (!p) return { lines: 0, shots: 0 };
+    const lines = (p.lines || []).length;
+    const shots = (p.lines || []).reduce((n, s) => n + ((s.shots || []).length), 0);
+    return { lines, shots };
   `);
 }

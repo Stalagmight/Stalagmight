@@ -19,15 +19,15 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
- * Test data with multiple sections, shots, and stations.
+ * Test data with multiple lines, shots, and stations.
  */
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Tunnel',
     direction: 'in',
@@ -48,69 +48,69 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 /**
- * Helper to create a project with test sections.
+ * Helper to create a project with test lines.
  */
-async function createProjectWithSections(page: Page): Promise<void> {
+async function createProjectWithLines(page: Page): Promise<void> {
   await createProject(page, 'Detail Link Hover Test');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapIdle(page);
 }
 
 /**
- * Helper to get section ID by name from the project store.
- * This avoids assuming section ordering is stable.
+ * Helper to get line ID by name from the project store.
+ * This avoids assuming line ordering is stable.
  */
-async function getSectionIdByName(page: Page, name: string): Promise<number> {
-  const sectionId = await page.evaluate((sectionName) => {
+async function getLineIdByName(page: Page, name: string): Promise<number> {
+  const lineId = await page.evaluate((lineName) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
         projectStore: {
-          getState: () => { project: { sections: Array<{ id: number; name: string }> } | null };
+          getState: () => { project: { lines: Array<{ id: number; name: string }> } | null };
         };
       };
     }).__E2E_TEST__;
-    const section = stores?.projectStore.getState().project?.sections.find(s => s.name === sectionName);
-    return section?.id ?? -1;
+    const line = stores?.projectStore.getState().project?.lines.find(s => s.name === lineName);
+    return line?.id ?? -1;
   }, name);
-  expect(sectionId).toBeGreaterThan(0);
-  return sectionId;
+  expect(lineId).toBeGreaterThan(0);
+  return lineId;
 }
 
 /**
- * Helper to get shot IDs for a section.
+ * Helper to get shot IDs for a line.
  */
-async function getShotIdsForSection(page: Page, sectionId: number): Promise<number[]> {
+async function getShotIdsForLine(page: Page, lineId: number): Promise<number[]> {
   return page.evaluate((secId) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
         projectStore: {
           getState: () => {
-            project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+            project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
           };
         };
       };
     }).__E2E_TEST__;
-    const section = stores?.projectStore.getState().project?.sections.find(s => s.id === secId);
-    return section?.shots.map(shot => shot.id) ?? [];
-  }, sectionId);
+    const line = stores?.projectStore.getState().project?.lines.find(s => s.id === secId);
+    return line?.shots.map(shot => shot.id) ?? [];
+  }, lineId);
 }
 
 /**
  * Helper to get the current hover state from uiStore.
  */
 async function getHoverState(page: Page): Promise<{
-  hoveredStation: { section_id: number; station_index: number } | null;
-  hoveredShot: { sectionId: number; shotId: number } | null;
-  hoveredSectionId: number | null;
+  hoveredStation: { line_id: number; station_index: number } | null;
+  hoveredShot: { lineId: number; shotId: number } | null;
+  hoveredLineId: number | null;
 }> {
   return page.evaluate(() => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
         uiStore: {
           getState: () => {
-            hoveredStation: { section_id: number; station_index: number } | null;
-            hoveredShot: { sectionId: number; shotId: number } | null;
-            hoveredSectionId: number | null;
+            hoveredStation: { line_id: number; station_index: number } | null;
+            hoveredShot: { lineId: number; shotId: number } | null;
+            hoveredLineId: number | null;
           };
         };
       };
@@ -119,7 +119,7 @@ async function getHoverState(page: Page): Promise<{
     return {
       hoveredStation: state?.hoveredStation ?? null,
       hoveredShot: state?.hoveredShot ?? null,
-      hoveredSectionId: state?.hoveredSectionId ?? null,
+      hoveredLineId: state?.hoveredLineId ?? null,
     };
   });
 }
@@ -135,7 +135,7 @@ async function pollHoverState(
   let result: Awaited<ReturnType<typeof getHoverState>> = {
     hoveredStation: null,
     hoveredShot: null,
-    hoveredSectionId: null,
+    hoveredLineId: null,
   };
   await expect.poll(
     async () => {
@@ -156,8 +156,8 @@ async function pollHoverState(
  */
 async function getSelectionState(page: Page): Promise<{
   type: string;
-  sectionId?: number;
-  stationRef?: { section_id: number; station_index: number };
+  lineId?: number;
+  stationRef?: { line_id: number; station_index: number };
   shotId?: number;
 } | null> {
   return page.evaluate(() => {
@@ -168,8 +168,8 @@ async function getSelectionState(page: Page): Promise<{
     }).__E2E_TEST__;
     return stores?.uiStore.getState().selection as {
       type: string;
-      sectionId?: number;
-      stationRef?: { section_id: number; station_index: number };
+      lineId?: number;
+      stationRef?: { line_id: number; station_index: number };
       shotId?: number;
     } | null;
   });
@@ -201,7 +201,7 @@ async function pollSelectionState(
 /**
  * Helper to select a station via store.
  */
-async function selectStation(page: Page, sectionId: number, stationIndex: number): Promise<void> {
+async function selectStation(page: Page, lineId: number, stationIndex: number): Promise<void> {
   await page.evaluate(({ secId, idx }) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
@@ -211,17 +211,17 @@ async function selectStation(page: Page, sectionId: number, stationIndex: number
     if (stores) {
       stores.uiStore.getState().setSelection({
         type: 'station',
-        stationRef: { section_id: secId, station_index: idx },
+        stationRef: { line_id: secId, station_index: idx },
       });
     }
-  }, { secId: sectionId, idx: stationIndex });
+  }, { secId: lineId, idx: stationIndex });
 
   // Wait for selection to be set
   await pollSelectionState(
     page,
     (sel) =>
       sel?.type === 'station' &&
-      sel?.stationRef?.section_id === sectionId &&
+      sel?.stationRef?.line_id === lineId &&
       sel?.stationRef?.station_index === stationIndex
   );
 }
@@ -229,7 +229,7 @@ async function selectStation(page: Page, sectionId: number, stationIndex: number
 /**
  * Helper to select a shot via store.
  */
-async function selectShot(page: Page, sectionId: number, shotId: number): Promise<void> {
+async function selectShot(page: Page, lineId: number, shotId: number): Promise<void> {
   await page.evaluate(({ secId, sId }) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
@@ -239,29 +239,29 @@ async function selectShot(page: Page, sectionId: number, shotId: number): Promis
     if (stores) {
       stores.uiStore.getState().setSelection({
         type: 'shot',
-        sectionId: secId,
+        lineId: secId,
         shotId: sId,
       });
     }
-  }, { secId: sectionId, sId: shotId });
+  }, { secId: lineId, sId: shotId });
 
   // Wait for selection to be set
   await pollSelectionState(
     page,
-    (sel) => sel?.type === 'shot' && sel?.sectionId === sectionId && sel?.shotId === shotId
+    (sel) => sel?.type === 'shot' && sel?.lineId === lineId && sel?.shotId === shotId
   );
 }
 
 /**
- * Helper to select a section by clicking its row.
+ * Helper to select a line by clicking its row.
  */
-async function selectSectionById(page: Page, sectionId: number): Promise<void> {
-  const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
-  await expect(sectionRow).toBeVisible();
-  await sectionRow.click();
+async function selectLineById(page: Page, lineId: number): Promise<void> {
+  const lineRow = page.locator(`[data-testid="line-row-${lineId}"]`);
+  await expect(lineRow).toBeVisible();
+  await lineRow.click();
 
   // Wait for selection to be set
-  await pollSelectionState(page, (sel) => sel?.type === 'section' && sel?.sectionId === sectionId);
+  await pollSelectionState(page, (sel) => sel?.type === 'line' && sel?.lineId === lineId);
 }
 
 /**
@@ -303,17 +303,17 @@ test.describe('Detail Link Focus Highlighting', () => {
 
   test.describe('Station Link Focus', () => {
     test('focusing station link sets hoveredStation in uiStore', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show its detail panel with station links
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Find the Start Station link (station index 0, position 0, 0-indexed)
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const startStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await expect(startStationLink).toBeVisible();
 
       // Check initial hover state
@@ -331,25 +331,25 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(0);
     });
 
     test('blur clears hoveredStation', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show its detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Focus the Start Station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const startStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await startStationLink.focus();
 
       // Wait for hover state to be set - use specific predicate
@@ -357,7 +357,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
 
@@ -374,23 +374,23 @@ test.describe('Detail Link Focus Highlighting', () => {
     });
 
     test('focusing different station links updates hoveredStation', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select first shot to show detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Focus Start Station link (index 0)
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const startStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await startStationLink.focus();
 
       await pollHoverState(page, (state) => state.hoveredStation?.station_index === 0);
 
       // Now focus End Station link (index 1)
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const endStationLink = page.getByTestId(`station-${mainLineId}-1-link`);
       await endStationLink.focus();
 
       // Verify hoveredStation updated to the new station
@@ -398,23 +398,23 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) => state.hoveredStation?.station_index === 1
       );
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(1);
     });
   });
 
   test.describe('Shot Link Focus', () => {
     test('focusing shot link sets hoveredShot in uiStore', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
 
       // Select station at index 1 (has both Previous and Next shots)
-      await selectStation(page, mainSectionId, 1);
+      await selectStation(page, mainLineId, 1);
 
       // Find the Next Shot link (shot at index 1, position 2)
-      const nextShotLink = page.getByTestId(`shot-${mainSectionId}-2-link`);
+      const nextShotLink = page.getByTestId(`shot-${mainLineId}-2-link`);
       await expect(nextShotLink).toBeVisible();
 
       // Focus the shot link
@@ -429,24 +429,24 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredShot !== null &&
-          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.lineId === mainLineId &&
           state.hoveredShot.shotId === expectedShotId
       );
-      expect(hoverState.hoveredShot?.sectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredShot?.lineId).toBe(mainLineId);
       expect(hoverState.hoveredShot?.shotId).toBe(expectedShotId);
     });
 
     test('blur clears hoveredShot', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
 
       // Select station at index 1
-      await selectStation(page, mainSectionId, 1);
+      await selectStation(page, mainLineId, 1);
 
       // Focus the shot link
-      const shotLink = page.getByTestId(`shot-${mainSectionId}-2-link`);
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const shotLink = page.getByTestId(`shot-${mainLineId}-2-link`);
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const expectedShotId = shotIds[1]!;
       await shotLink.focus();
 
@@ -455,7 +455,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredShot !== null &&
-          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.lineId === mainLineId &&
           state.hoveredShot.shotId === expectedShotId
       );
 
@@ -469,75 +469,75 @@ test.describe('Detail Link Focus Highlighting', () => {
     });
   });
 
-  test.describe('Section Link Focus', () => {
-    test('focusing section link sets hoveredSectionId in uiStore', async ({ page }) => {
-      await createProjectWithSections(page);
+  test.describe('Line Link Focus', () => {
+    test('focusing line link sets hoveredLineId in uiStore', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
-      // Select a shot to show its detail panel with section link
-      await selectShot(page, mainSectionId, firstShotId);
+      // Select a shot to show its detail panel with line link
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Find the Section link
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await expect(sectionLink).toBeVisible();
+      // Find the Line link
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await expect(lineLink).toBeVisible();
 
-      // Focus the section link
-      await sectionLink.focus();
+      // Focus the line link
+      await lineLink.focus();
 
       // Verify link is focused
-      await expect(sectionLink).toBeFocused();
+      await expect(lineLink).toBeFocused();
 
-      // Verify hoveredSectionId is set correctly
+      // Verify hoveredLineId is set correctly
       const hoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === mainSectionId
+        (state) => state.hoveredLineId === mainLineId
       );
-      expect(hoverState.hoveredSectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredLineId).toBe(mainLineId);
     });
 
-    test('blur clears hoveredSectionId', async ({ page }) => {
-      await createProjectWithSections(page);
+    test('blur clears hoveredLineId', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Focus the section link
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
+      // Focus the line link
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.focus();
 
       // Wait for hover state to be set - use specific predicate
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
 
       // Blur by focusing a non-DetailLink element (the center button)
       const centerButton = page.getByTestId('center-shot-button');
       await centerButton.focus();
 
-      // Verify hoveredSectionId is cleared
-      const clearedState = await pollHoverState(page, (state) => state.hoveredSectionId === null);
-      expect(clearedState.hoveredSectionId).toBeNull();
+      // Verify hoveredLineId is cleared
+      const clearedState = await pollHoverState(page, (state) => state.hoveredLineId === null);
+      expect(clearedState.hoveredLineId).toBeNull();
     });
   });
 
   test.describe('Focus Does Not Interfere with Selection', () => {
     test('focusing link does not change selection state', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Focus a station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const startStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await startStationLink.focus();
 
       // Verify hover state is set - use specific predicate
@@ -545,7 +545,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
 
@@ -553,23 +553,23 @@ test.describe('Detail Link Focus Highlighting', () => {
       const selection = await getSelectionState(page);
       expect(selection).toMatchObject({
         type: 'shot',
-        sectionId: mainSectionId,
+        lineId: mainLineId,
         shotId: firstShotId,
       });
     });
   });
 
-  test.describe('Section Detail Station Links', () => {
-    test('focusing First Station link in section detail sets hover state', async ({ page }) => {
-      await createProjectWithSections(page);
+  test.describe('Line Detail Station Links', () => {
+    test('focusing First Station link in line detail sets hover state', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
 
-      // Select the section to show section detail
-      await selectSectionById(page, mainSectionId);
+      // Select the line to show line detail
+      await selectLineById(page, mainLineId);
 
       // Find the First Station link (station index 0, position 0, 0-indexed)
-      const firstStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const firstStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await expect(firstStationLink).toBeVisible();
 
       // Focus the link
@@ -580,21 +580,21 @@ test.describe('Detail Link Focus Highlighting', () => {
 
       // Verify hoveredStation is set
       const hoverState = await pollHoverState(page, (state) => state.hoveredStation !== null);
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(0);
     });
 
-    test('focusing Last Station link in section detail sets hover state', async ({ page }) => {
-      await createProjectWithSections(page);
+    test('focusing Last Station link in line detail sets hover state', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
 
-      // Select the section to show section detail
-      await selectSectionById(page, mainSectionId);
+      // Select the line to show line detail
+      await selectLineById(page, mainLineId);
 
-      // Main section has 3 shots, so 4 stations (indices 0-3)
+      // Main line has 3 shots, so 4 stations (indices 0-3)
       // Last Station is at index 3, position 3 (0-indexed)
-      const lastStationLink = page.getByTestId(`station-${mainSectionId}-3-link`);
+      const lastStationLink = page.getByTestId(`station-${mainLineId}-3-link`);
       await expect(lastStationLink).toBeVisible();
 
       // Focus the link
@@ -605,24 +605,24 @@ test.describe('Detail Link Focus Highlighting', () => {
 
       // Verify hoveredStation is set to the last station
       const hoverState = await pollHoverState(page, (state) => state.hoveredStation !== null);
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(3);
     });
   });
 
   test.describe('Focus Transitions', () => {
-    test('focusing from station to section link updates hover state correctly', async ({ page }) => {
-      await createProjectWithSections(page);
+    test('focusing from station to line link updates hover state correctly', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show detail panel with multiple links
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Focus station link first
-      const stationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const stationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await stationLink.focus();
 
       // Verify station hover state - use specific predicate
@@ -630,22 +630,22 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
       let hoverState = await getHoverState(page);
       expect(hoverState.hoveredStation).not.toBeNull();
-      expect(hoverState.hoveredSectionId).toBeNull();
+      expect(hoverState.hoveredLineId).toBeNull();
 
-      // Now focus section link
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
+      // Now focus line link
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.focus();
 
-      // Verify section hover state - station should clear, section should set
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      // Verify line hover state - station should clear, line should set
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
       hoverState = await getHoverState(page);
       expect(hoverState.hoveredStation).toBeNull();
-      expect(hoverState.hoveredSectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredLineId).toBe(mainLineId);
     });
   });
 
@@ -655,17 +655,17 @@ test.describe('Detail Link Focus Highlighting', () => {
     // We use triggerMouseHover/triggerMouseLeave helpers to dispatch proper events.
 
     test('hover on station link sets hoveredStation', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show its detail panel with station links
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Find the Start Station link (station index 0, position 0, 0-indexed)
-      const stationLinkTestId = `station-${mainSectionId}-0-link`;
+      const stationLinkTestId = `station-${mainLineId}-0-link`;
       const startStationLink = page.getByTestId(stationLinkTestId);
       await expect(startStationLink).toBeVisible();
 
@@ -681,24 +681,24 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(0);
     });
 
     test('mouse leave on station link clears hoveredStation', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
-      const stationLinkTestId = `station-${mainSectionId}-0-link`;
+      const stationLinkTestId = `station-${mainLineId}-0-link`;
       const startStationLink = page.getByTestId(stationLinkTestId);
       await expect(startStationLink).toBeVisible();
 
@@ -708,7 +708,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
 
@@ -721,16 +721,16 @@ test.describe('Detail Link Focus Highlighting', () => {
     });
 
     test('hover on shot link sets hoveredShot', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
 
       // Select station at index 1 (has both Previous and Next shots)
-      await selectStation(page, mainSectionId, 1);
+      await selectStation(page, mainLineId, 1);
 
       // Find the Next Shot link (shot at index 1, position 2)
-      const shotLinkTestId = `shot-${mainSectionId}-2-link`;
+      const shotLinkTestId = `shot-${mainLineId}-2-link`;
       const nextShotLink = page.getByTestId(shotLinkTestId);
       await expect(nextShotLink).toBeVisible();
 
@@ -747,24 +747,24 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredShot !== null &&
-          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.lineId === mainLineId &&
           state.hoveredShot.shotId === expectedShotId
       );
-      expect(hoverState.hoveredShot?.sectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredShot?.lineId).toBe(mainLineId);
       expect(hoverState.hoveredShot?.shotId).toBe(expectedShotId);
     });
 
     test('mouse leave on shot link clears hoveredShot', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const expectedShotId = shotIds[1]!;
 
       // Select station at index 1
-      await selectStation(page, mainSectionId, 1);
+      await selectStation(page, mainLineId, 1);
 
-      const shotLinkTestId = `shot-${mainSectionId}-2-link`;
+      const shotLinkTestId = `shot-${mainLineId}-2-link`;
       const nextShotLink = page.getByTestId(shotLinkTestId);
       await expect(nextShotLink).toBeVisible();
 
@@ -774,7 +774,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         page,
         (state) =>
           state.hoveredShot !== null &&
-          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.lineId === mainLineId &&
           state.hoveredShot.shotId === expectedShotId
       );
 
@@ -786,99 +786,99 @@ test.describe('Detail Link Focus Highlighting', () => {
       expect(clearedState.hoveredShot).toBeNull();
     });
 
-    test('hover on section link sets hoveredSectionId', async ({ page }) => {
-      await createProjectWithSections(page);
+    test('hover on line link sets hoveredLineId', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
-      // Select a shot to show detail panel with section link
-      await selectShot(page, mainSectionId, firstShotId);
+      // Select a shot to show detail panel with line link
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Find the section link
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await expect(sectionLink).toBeVisible();
+      // Find the line link
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await expect(lineLink).toBeVisible();
 
       // Check initial state
       const initialState = await getHoverState(page);
-      expect(initialState.hoveredSectionId).toBeNull();
+      expect(initialState.hoveredLineId).toBeNull();
 
-      // Hover the section link
-      await sectionLink.hover();
+      // Hover the line link
+      await lineLink.hover();
 
-      // Verify hoveredSectionId is set
+      // Verify hoveredLineId is set
       const hoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === mainSectionId
+        (state) => state.hoveredLineId === mainLineId
       );
-      expect(hoverState.hoveredSectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredLineId).toBe(mainLineId);
     });
 
-    test('mouse leave on section link clears hoveredSectionId', async ({ page }) => {
-      await createProjectWithSections(page);
+    test('mouse leave on line link clears hoveredLineId', async ({ page }) => {
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Hover the section link
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.hover();
+      // Hover the line link
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.hover();
 
       // Wait for hover state to be set
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
 
       // Move mouse away to trigger mouse leave
       const centerButton = page.getByTestId('center-shot-button');
       await centerButton.hover();
 
-      // Verify hoveredSectionId is cleared
-      const clearedState = await pollHoverState(page, (state) => state.hoveredSectionId === null);
-      expect(clearedState.hoveredSectionId).toBeNull();
+      // Verify hoveredLineId is cleared
+      const clearedState = await pollHoverState(page, (state) => state.hoveredLineId === null);
+      expect(clearedState.hoveredLineId).toBeNull();
     });
 
-    test('section row hover works (verifies panel hover behavior)', async ({ page }) => {
-      // Verify that section row hover in SectionsPanel works with page.hover()
+    test('line row hover works (verifies panel hover behavior)', async ({ page }) => {
+      // Verify that line row hover in SectionsPanel works with page.hover()
       // This demonstrates that Playwright hover() does work for React elements
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const sideSectionId = await getSectionIdByName(page, 'Side Passage');
+      const sideLineId = await getLineIdByName(page, 'Side Passage');
 
       // Initially no hover state
       const initialState = await getHoverState(page);
-      expect(initialState.hoveredSectionId).toBeNull();
+      expect(initialState.hoveredLineId).toBeNull();
 
-      // Hover over section row in Sections Panel
-      const sectionRow = page.locator(`[data-testid="section-row-${sideSectionId}"]`);
-      await expect(sectionRow).toBeVisible();
-      await sectionRow.hover();
+      // Hover over line row in Sections Panel
+      const lineRow = page.locator(`[data-testid="line-row-${sideLineId}"]`);
+      await expect(lineRow).toBeVisible();
+      await lineRow.hover();
 
-      // Verify hoveredSectionId is set
+      // Verify hoveredLineId is set
       const hoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === sideSectionId
+        (state) => state.hoveredLineId === sideLineId
       );
-      expect(hoverState.hoveredSectionId).toBe(sideSectionId);
+      expect(hoverState.hoveredLineId).toBe(sideLineId);
     });
   });
 
   test.describe('Keyboard Tab Navigation', () => {
     test('Tab navigates between DetailLinks and triggers hover', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show its detail panel with multiple links
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
       // Focus the first station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      const startStationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await startStationLink.focus();
 
       // Verify first station is hovered
@@ -893,7 +893,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await page.keyboard.press('Tab');
 
       // Verify End Station link is now focused
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const endStationLink = page.getByTestId(`station-${mainLineId}-1-link`);
       await expect(endStationLink).toBeFocused();
 
       // Verify hover state updated to station index 1
@@ -903,34 +903,34 @@ test.describe('Detail Link Focus Highlighting', () => {
           state.hoveredStation !== null &&
           state.hoveredStation.station_index === 1
       );
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(1);
     });
 
     test('Tab away from last link clears hover state', async ({ page }) => {
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // Select a shot to show its detail panel
-      await selectShot(page, mainSectionId, firstShotId);
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Focus the section link (last link in the panel)
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
+      // Focus the line link (last link in the panel)
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.focus();
 
-      // Verify section is hovered
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      // Verify line is hovered
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
 
       // Keep pressing Tab until we leave all DetailLinks
-      // The panel has: Start Station, End Station, Section links
-      // After Section link, Tab should go to action buttons
+      // The panel has: Start Station, End Station, Line links
+      // After Line link, Tab should go to action buttons
       await page.keyboard.press('Tab');
 
-      // Verify section link is no longer focused
-      await expect(sectionLink).not.toBeFocused();
+      // Verify line link is no longer focused
+      await expect(lineLink).not.toBeFocused();
 
       // Verify all hover states are cleared
       const clearedState = await pollHoverState(
@@ -938,78 +938,78 @@ test.describe('Detail Link Focus Highlighting', () => {
         (state) =>
           state.hoveredStation === null &&
           state.hoveredShot === null &&
-          state.hoveredSectionId === null
+          state.hoveredLineId === null
       );
       expect(clearedState.hoveredStation).toBeNull();
       expect(clearedState.hoveredShot).toBeNull();
-      expect(clearedState.hoveredSectionId).toBeNull();
+      expect(clearedState.hoveredLineId).toBeNull();
     });
   });
 
   test.describe('Coexistence with Other Hover Behaviors', () => {
-    test('section row hover still sets hoveredSectionId', async ({ page }) => {
-      // Verify that section row hover in SectionsPanel still works
+    test('line row hover still sets hoveredLineId', async ({ page }) => {
+      // Verify that line row hover in SectionsPanel still works
       // and doesn't interfere with DetailLink hover
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const sideSectionId = await getSectionIdByName(page, 'Side Passage');
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const sideLineId = await getLineIdByName(page, 'Side Passage');
 
       // Initially no hover state
       const initialState = await getHoverState(page);
-      expect(initialState.hoveredSectionId).toBeNull();
+      expect(initialState.hoveredLineId).toBeNull();
 
-      // Hover over section row in Sections Panel
-      const sectionRow = page.locator(`[data-testid="section-row-${sideSectionId}"]`);
-      await expect(sectionRow).toBeVisible();
-      await sectionRow.hover();
+      // Hover over line row in Sections Panel
+      const lineRow = page.locator(`[data-testid="line-row-${sideLineId}"]`);
+      await expect(lineRow).toBeVisible();
+      await lineRow.hover();
 
-      // Verify hoveredSectionId is set for the row we hovered
+      // Verify hoveredLineId is set for the row we hovered
       const hoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === sideSectionId
+        (state) => state.hoveredLineId === sideLineId
       );
-      expect(hoverState.hoveredSectionId).toBe(sideSectionId);
+      expect(hoverState.hoveredLineId).toBe(sideLineId);
 
       // Move mouse away to a neutral toolbar element (the workspace carousel in the
       // toolbar center; #38 replaced the active-tool label there).
       await page.getByTestId('mode-carousel').hover();
 
       // Verify hover state cleared
-      await pollHoverState(page, (state) => state.hoveredSectionId === null);
+      await pollHoverState(page, (state) => state.hoveredLineId === null);
     });
 
-    test('DetailLink hover and section row hover use same state', async ({ page }) => {
-      // Verify that both DetailLink and section row use the same
-      // hoveredSectionId state, not separate states
-      await createProjectWithSections(page);
+    test('DetailLink hover and line row hover use same state', async ({ page }) => {
+      // Verify that both DetailLink and line row use the same
+      // hoveredLineId state, not separate states
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
-      // Select a shot to show detail panel with section link
-      await selectShot(page, mainSectionId, firstShotId);
+      // Select a shot to show detail panel with line link
+      await selectShot(page, mainLineId, firstShotId);
 
-      // Focus section link in detail panel
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
+      // Focus line link in detail panel
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.focus();
 
-      // Verify section is hovered via detail link
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      // Verify line is hovered via detail link
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
 
-      // Now hover a different section row (sections panel)
-      const sideSectionId = await getSectionIdByName(page, 'Side Passage');
-      const sectionRow = page.locator(`[data-testid="section-row-${sideSectionId}"]`);
-      await sectionRow.hover();
+      // Now hover a different line row (sections panel)
+      const sideLineId = await getLineIdByName(page, 'Side Passage');
+      const lineRow = page.locator(`[data-testid="line-row-${sideLineId}"]`);
+      await lineRow.hover();
 
-      // Verify the hover state changed to the row's section
-      // (the section link lost focus when we moved to hover)
+      // Verify the hover state changed to the row's line
+      // (the line link lost focus when we moved to hover)
       const newHoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === sideSectionId
+        (state) => state.hoveredLineId === sideLineId
       );
-      expect(newHoverState.hoveredSectionId).toBe(sideSectionId);
+      expect(newHoverState.hoveredLineId).toBe(sideLineId);
     });
 
     test('map-sourced hover coexists with DetailLink hover (bidirectional state)', async ({ page }) => {
@@ -1019,82 +1019,82 @@ test.describe('Detail Link Focus Highlighting', () => {
       // that call uiStore setters. We simulate the "map hover" by calling the same store
       // setters that the SurveyLayer callbacks use.
       //
-      // This matches the test approach in section-highlighting.spec.ts which documents:
+      // This matches the test approach in line-highlighting.spec.ts which documents:
       // "simulating map hover via store manipulation, since MapLibre layer events are
       // challenging to trigger reliably in Playwright. The actual MapLibre event handlers
       // are covered by unit tests."
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const sideSectionId = await getSectionIdByName(page, 'Side Passage');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const sideLineId = await getLineIdByName(page, 'Side Passage');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // First, use DetailLink focus to set state (same callback as hover)
-      await selectShot(page, mainSectionId, firstShotId);
-      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      await selectShot(page, mainLineId, firstShotId);
+      const lineLink = page.getByTestId(`line-${mainLineId}-link`);
+      await lineLink.focus();
+      await pollHoverState(page, (state) => state.hoveredLineId === mainLineId);
 
       // Clear via blur
       const centerButton = page.getByTestId('center-shot-button');
       await centerButton.focus();
-      await pollHoverState(page, (state) => state.hoveredSectionId === null);
+      await pollHoverState(page, (state) => state.hoveredLineId === null);
 
       // Now simulate map hover by calling the same setter that SurveyLayer uses
-      // in its onFeatureHover callback (SurveyLayer -> onSectionHover -> setHoveredSectionId)
+      // in its onFeatureHover callback (SurveyLayer -> onLineHover -> setHoveredLineId)
       await page.evaluate((secId) => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
-            uiStore: { getState: () => { setHoveredSectionId: (id: number | null) => void } };
+            uiStore: { getState: () => { setHoveredLineId: (id: number | null) => void } };
           };
         }).__E2E_TEST__;
         if (stores) {
-          stores.uiStore.getState().setHoveredSectionId(secId);
+          stores.uiStore.getState().setHoveredLineId(secId);
         }
-      }, sideSectionId);
+      }, sideLineId);
 
       // Verify map-sourced hover state is set (proves same state path)
       const mapHoverState = await pollHoverState(
         page,
-        (state) => state.hoveredSectionId === sideSectionId
+        (state) => state.hoveredLineId === sideLineId
       );
-      expect(mapHoverState.hoveredSectionId).toBe(sideSectionId);
+      expect(mapHoverState.hoveredLineId).toBe(sideLineId);
 
       // Clear map hover
       await page.evaluate(() => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
-            uiStore: { getState: () => { setHoveredSectionId: (id: null) => void } };
+            uiStore: { getState: () => { setHoveredLineId: (id: null) => void } };
           };
         }).__E2E_TEST__;
         if (stores) {
-          stores.uiStore.getState().setHoveredSectionId(null);
+          stores.uiStore.getState().setHoveredLineId(null);
         }
       });
 
       // Verify clears
-      const clearedState = await pollHoverState(page, (state) => state.hoveredSectionId === null);
-      expect(clearedState.hoveredSectionId).toBeNull();
+      const clearedState = await pollHoverState(page, (state) => state.hoveredLineId === null);
+      expect(clearedState.hoveredLineId).toBeNull();
     });
 
     test('map-sourced station hover coexists with DetailLink station hover', async ({ page }) => {
       // Same approach as above - verify bidirectional state sharing for station hover
-      await createProjectWithSections(page);
+      await createProjectWithLines(page);
 
-      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
-      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const mainLineId = await getLineIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForLine(page, mainLineId);
       const firstShotId = shotIds[0]!;
 
       // First test DetailLink station focus (same callback as hover)
-      await selectShot(page, mainSectionId, firstShotId);
-      const stationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
+      await selectShot(page, mainLineId, firstShotId);
+      const stationLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await stationLink.focus();
       await pollHoverState(
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 0
       );
 
@@ -1109,25 +1109,25 @@ test.describe('Detail Link Focus Highlighting', () => {
           __E2E_TEST__?: {
             uiStore: {
               getState: () => {
-                setHoveredStation: (ref: { section_id: number; station_index: number } | null) => void;
+                setHoveredStation: (ref: { line_id: number; station_index: number } | null) => void;
               };
             };
           };
         }).__E2E_TEST__;
         if (stores) {
-          stores.uiStore.getState().setHoveredStation({ section_id: secId, station_index: 2 });
+          stores.uiStore.getState().setHoveredStation({ line_id: secId, station_index: 2 });
         }
-      }, { secId: mainSectionId });
+      }, { secId: mainLineId });
 
       // Verify map-sourced station hover is set
       const hoverState = await pollHoverState(
         page,
         (state) =>
           state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.line_id === mainLineId &&
           state.hoveredStation.station_index === 2
       );
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.line_id).toBe(mainLineId);
       expect(hoverState.hoveredStation?.station_index).toBe(2);
 
       // Clear via store

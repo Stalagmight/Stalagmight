@@ -1,23 +1,23 @@
 /**
- * The MNemo wizard's people reach the backend: every section config the batch
- * builds carries the section's Surveyors / Explorers pills (or the step-1
- * defaults when the section never got lists of its own) and its date as the
- * `ImportSectionConfig` overrides of every imported shot. The legacy
+ * The MNemo wizard's people reach the backend: every line config the batch
+ * builds carries the line's Surveyors / Explorers pills (or the step-1
+ * defaults when the line never got lists of its own) and its date as the
+ * `ImportLineConfig` overrides of every imported shot. The legacy
  * free-text `surveyor` is never sent.
  */
 import { describe, it, expect, vi } from 'vitest';
 
-// SectionPreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
+// LinePreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
 // execute. Stub it - this test exercises the batch builder, not the preview.
-vi.mock('../SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../SectionPreview')>()),
+vi.mock('../LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import { buildBatchImport } from '../DmpNewImportDialog';
 import type { EditableShot } from '../../common/ShotTableEditor';
-import type { SectionEditState } from '../../../utils/batchImportHelpers';
+import type { LineEditState } from '../../../utils/batchImportHelpers';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import type { Person } from '../../../types/ipc.generated';
@@ -62,29 +62,29 @@ const dmpSection = (name: string) => ({
 const DEFAULT_SURVEYORS: Person[] = [{ name: 'Default Surveyor' }];
 const DEFAULT_EXPLORERS: Person[] = [{ name: 'Default Explorer', email: 'de@example.org' }];
 
-function build(edits: Partial<SectionEditState> | undefined, defaultDate: string | null = null) {
-  const dmpFile = { version: 1, sections: [dmpSection('S')] } as unknown as DmpFile;
+function build(edits: Partial<LineEditState> | undefined, defaultDate: string | null = null) {
+  const dmpFile = { version: 1, lines: [dmpSection('S')] } as unknown as DmpFile;
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0]),
     defaultSurveyors: DEFAULT_SURVEYORS,
     defaultExplorers: DEFAULT_EXPLORERS,
     defaultDate,
     fileHash: null,
-    sectionHashes: [],
+    lineHashes: [],
   };
   const connections: VirtualConnection[] = [
     {
-      importSectionIndex: 0,
+      importLineIndex: 0,
       importStationIndex: 0,
       targetType: 'existing',
-      existingSectionId: 99,
+      existingLineId: 99,
       existingStationIndex: 0,
     },
   ];
-  const sectionEdits =
+  const lineEdits =
     edits === undefined
       ? undefined
-      : new Map<number, SectionEditState>([
+      : new Map<number, LineEditState>([
           [
             0,
             {
@@ -99,13 +99,13 @@ function build(edits: Partial<SectionEditState> | undefined, defaultDate: string
             },
           ],
         ]);
-  const { configs } = buildBatchImport(connections, null, dmpFile, selectionConfig, sectionEdits);
+  const { configs } = buildBatchImport(connections, null, dmpFile, selectionConfig, lineEdits);
   expect(configs).toHaveLength(1);
   return configs[0]!;
 }
 
 describe('buildBatchImport survey credit', () => {
-  it("sends the section's own pills as overrides, never the legacy text", () => {
+  it("sends the line's own pills as overrides, never the legacy text", () => {
     // Injection: build the config with `surveyor: <joined names>` and no
     // `...importCreditFields(...)`, and the people never reach a shot.
     const config = build({
@@ -118,7 +118,7 @@ describe('buildBatchImport survey credit', () => {
     expect(config.override_date).toBe('2026-01-01');
   });
 
-  it('falls back to the step-1 defaults for a section without edits', () => {
+  it('falls back to the step-1 defaults for a line without edits', () => {
     const config = build(undefined, '2026-03-02');
     expect(config.surveyors).toEqual(DEFAULT_SURVEYORS);
     expect(config.explorers).toEqual(DEFAULT_EXPLORERS);
@@ -129,7 +129,7 @@ describe('buildBatchImport survey credit', () => {
   it('keeps the defaults for an edit state without lists (one overlap treatment created)', () => {
     // Overlap treatment builds edit states that know nothing about people.
     // Injection: seed them with `surveyors: []` again and the defaults vanish
-    // from every overlap-treated section.
+    // from every overlap-treated line.
     const config = build({});
     expect(config.surveyors).toEqual(DEFAULT_SURVEYORS);
     expect(config.explorers).toEqual(DEFAULT_EXPLORERS);

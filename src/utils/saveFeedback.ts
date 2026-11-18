@@ -164,7 +164,7 @@ export interface ImportDialogUi {
 
 /**
  * A receipt carrying the raw count backing the toast's short-form
- * "N sections unanchored" line (#446). NOT part of the IPC contract - stamped
+ * "N lines unanchored" line (#446). NOT part of the IPC contract - stamped
  * locally by `finishImportWithoutOrphanSuggestions` alongside the full
  * sentence it pushes onto `info` (that one is for the modal path, which has
  * room for it). Optional, so a plain `ImportReceipt` from any other producer
@@ -189,7 +189,7 @@ export interface ImportReceiptWithUnanchoredCount extends ImportReceipt {
  *    without truncating the summary - so it rides the modal instead of being
  *    dropped or getting a second, second-class surface.
  *  - `zero_datum_created` is set (F12c): same reasoning as `unit_conversion`
- *    - naming the GPS-anchored section is a fact the toast's one-line budget
+ *    - naming the GPS-anchored line is a fact the toast's one-line budget
  *    has no room for, so it rides the modal too.
  */
 export function presentImportReceipt(
@@ -206,7 +206,7 @@ export function presentImportReceipt(
     return;
   }
   // Toast path: skip the full `info` sentence(s) (`includeInfo: false`) and
-  // append the short "N sections unanchored" scale instead - the toast's
+  // append the short "N lines unanchored" scale instead - the toast's
   // one-line budget has no room for the full sentence (the same reasoning
   // that already routes `unit_conversion` to the modal above). The modal
   // path (`ImportReceiptDialog`) calls `importReceiptSummaryParts` directly
@@ -225,14 +225,14 @@ export function presentImportReceipt(
 
 /**
  * Finish an import after the orphan-placement pass produced no suggestions.
- * If the import still left sections unanchored, appends the "N sections are
+ * If the import still left lines unanchored, appends the "N lines are
  * not connected to a zero datum" notice to the receipt as an INFO line
  * (#446) before running the normal exit sequence - an info line, not a
  * warning, so it rides `presentImportReceipt`'s existing routing rather than
  * promoting an otherwise clean receipt from toast to dialog. Non-fatal: if
  * the check itself fails, the import still finishes, just without the line.
  *
- * `newlyImportedSectionIds` scopes the unanchored-count check to components
+ * `newlyImportedLineIds` scopes the unanchored-count check to components
  * THIS import touched - otherwise a clean import into a project that already
  * had unrelated orphans would blame this receipt for orphans it didn't
  * create.
@@ -246,7 +246,7 @@ export function presentImportReceipt(
 export async function finishImportWithoutOrphanSuggestions(
   dialogName: string,
   ui: ImportDialogUi,
-  newlyImportedSectionIds: number[],
+  newlyImportedLineIds: number[],
   receipt?: ImportReceipt,
   stillCurrent?: () => boolean,
 ): Promise<void> {
@@ -254,9 +254,9 @@ export async function finishImportWithoutOrphanSuggestions(
   if (receipt) {
     try {
       const unanchoredCount = await invokeIpc<number>(
-        'count_unanchored_sections',
-        { newlyImportedSectionIds },
-        { purpose: 'check for unanchored sections after import' },
+        'count_unanchored_lines',
+        { newlyImportedLineIds },
+        { purpose: 'check for unanchored lines after import' },
       );
       if (unanchoredCount > 0) {
         finalReceipt = {

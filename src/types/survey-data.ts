@@ -1,8 +1,8 @@
 /**
  * Struct-of-Arrays representation of a survey's bulk numeric data.
  *
- * Background: the legacy in-memory shape is `Project.sections[].shots[]`
- * (75k+ JS `Shot` objects across 14k+ `Section` arrays) plus a parallel
+ * Background: the legacy in-memory shape is `Project.lines[].shots[]`
+ * (75k+ JS `Shot` objects across 14k+ `Line` arrays) plus a parallel
  * `Station[]` (89k+ `Station` objects). Each object has 5-16 named
  * fields and JSC's IsoHeap commits a per-class slab that doesn't
  * decommit on close. After loading 92.stalx once the WebProcess ends
@@ -37,24 +37,24 @@ import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
 import { displayStationName } from '../utils/formatters';
 
-/** Section metadata kept as small structured objects. ~14k items for
+/** Line metadata kept as small structured objects. ~14k items for
  *  92.stalx; total memory is tiny compared to the shot payload. The
  *  `shots[]` array is *gone* - shots live in `SurveyData` keyed by
  *  global index and looked up via `shotOffset` + `shotCount`.
  *
- *  Field names match the IPC `Section` shape minus `shots`. */
-export interface SectionMetadata {
+ *  Field names match the IPC `Line` shape minus `shots`. */
+export interface LineMetadata {
   id: number;
   name: string | null;
   color: string;
   direction: SurveyDirection;
   quality: number;
   next_shot_id: number;
-  /** This section's north reference (#438); `null` inherits the project's. */
+  /** This line's north reference (#438); `null` inherits the project's. */
   azimuth_reference?: AzimuthReference | null;
-  /** Offset into the flat shot arrays where this section's shots start. */
+  /** Offset into the flat shot arrays where this line's shots start. */
   shotOffset: number;
-  /** Number of shots in this section (== section.shots.length pre-SoA). */
+  /** Number of shots in this line (== line.shots.length pre-SoA). */
   shotCount: number;
 }
 
@@ -62,10 +62,10 @@ export interface SectionMetadata {
  *  fields live in typed arrays. Sparse / variable fields live in
  *  `Map`s keyed by global index. */
 export interface SurveyData {
-  // ─── Sections ──────────────────────────────────────────────────────
-  /** Sections in declaration order. Each entry's `shotOffset` /
+  // ─── Lines ──────────────────────────────────────────────────────
+  /** Lines in declaration order. Each entry's `shotOffset` /
    *  `shotCount` index into the flat shot arrays below. */
-  sections: SectionMetadata[];
+  lines: LineMetadata[];
 
   // ─── Shots (flat, one slot per shot) ───────────────────────────────
   /** Number of shots == length of each shot* array divided by stride. */
@@ -73,20 +73,20 @@ export interface SurveyData {
   /** Shot.id per global shot index.
    *
    *  UNSIGNED (#555). Rust mints shot ids as
-   *  `section_id * 100_000 + sequence_order` in `u32`, so a project with a
-   *  high section id reaches ids past 2^31 (section 21_474 already does).
+   *  `line_id * 100_000 + sequence_order` in `u32`, so a project with a
+   *  high line id reaches ids past 2^31 (line 21_474 already does).
    *  An `Int32Array` wrapped those to negative numbers here while every other
-   *  representation of the same id - `section.shots[j].id` off the lazy
+   *  representation of the same id - `line.shots[j].id` off the lazy
    *  materializer, `ProjectWarning.shotId`, the map's feature ids - stayed
    *  unsigned, so the two sides silently stopped matching. */
   shotIds: Uint32Array;
-  /** Section id per global shot index. Redundant with the section
+  /** Line id per global shot index. Redundant with the line
    *  metadata's shotOffset+shotCount but lets a consumer go from
-   *  shot index → section id without a binary search.
+   *  shot index → line id without a binary search.
    *
-   *  Unsigned for the same reason as `shotIds`: section ids are `u32` on the
+   *  Unsigned for the same reason as `shotIds`: line ids are `u32` on the
    *  wire and nothing here ever stores a negative sentinel. */
-  shotSectionIds: Uint32Array;
+  shotLineIds: Uint32Array;
   shotAzimuthIn: Float32Array;
   shotAzimuthOut: Float32Array;
   shotLength: Float32Array;
@@ -110,10 +110,10 @@ export interface SurveyData {
 
   // ─── Stations (flat, one slot per station) ─────────────────────────
   stationCount: number;
-  /** Section id per global station index. Unsigned (#555): `u32` on the wire,
+  /** Line id per global station index. Unsigned (#555): `u32` on the wire,
    *  no negative sentinel is ever stored, and it is compared/keyed against
-   *  section ids that come from unsigned sources. */
-  stationSectionIds: Uint32Array;
+   *  line ids that come from unsigned sources. */
+  stationLineIds: Uint32Array;
   stationIndices: Uint32Array;
   /** Stride-3 flat coordinates: [x0,y0,z0, x1,y1,z1, …]. */
   stationCoords: Float64Array;
@@ -124,19 +124,23 @@ export interface SurveyData {
   stationMergedWith: Map<number, StationRef[]>;
   stationClosuresWith: Map<number, ClosureRef[]>;
   stationComments: Map<number, string>;
-  /** Station names (e.g. the MNemo station number of a DMP import). */
+  /** Station names, unique within their line (e.g. `"17"`, `"4a"`, or the
+   *  MNemo station number of a DMP import). Every station of a loaded project
+   *  has one, so the map is dense; keyed by global station index. */
   stationNames: Map<number, string>;
+  /** The project-unique Station ID per global station index (dense). */
+  stationIds: Uint32Array;
 }
 
 /**
- * Global counter of lazy `section.shots` materializations.
+ * Global counter of lazy `line.shots` materializations.
  *
- * The binary loader installs a per-section lazy `shots` getter that
+ * The binary loader installs a per-line lazy `shots` getter that
  * materializes ~250 B `Shot` objects on first read. The whole point of the
  * SoA layout is that the *load / first-render* path never triggers those
  * getters for the whole project (75k+ objects). This counter lets a test or
  * the E2E harness assert that: after a settled load it must stay 0 (a single
- * section opened by the user afterwards is fine and expected to be nonzero).
+ * line opened by the user afterwards is fine and expected to be nonzero).
  *
  * Held in a mutable object so the value can be read live (a primitive export
  * would snapshot). `main.tsx` exposes it on `window.__shotMaterializations`
@@ -145,7 +149,7 @@ export interface SurveyData {
 export const shotMaterialization = { count: 0 };
 
 /** Increment the lazy-materialization counter. Called by the binary loader's
- *  `section.shots` getter on first access. Cheap enough to run unconditionally. */
+ *  `line.shots` getter on first access. Cheap enough to run unconditionally. */
 export function noteShotMaterialization(): void {
   shotMaterialization.count++;
 }
@@ -191,7 +195,7 @@ export function isVirtualKind(kind: ShotKind): boolean {
  * Reference; 3 is also the no-legs default): 0 real, 1 jump, 2 reference. A
  * station on both a Jump and a Reference ranks as a jump.
  *
- * Where the markers of several sections coincide (a jump or reference section
+ * Where the markers of several lines coincide (a jump or reference line
  * tied in at a real station), the better rank is drawn on top and takes the
  * click. The same ranks order the map's label declutter (`labelVirtualRank`).
  */
@@ -213,7 +217,7 @@ export function nanToNull(v: number): number | null {
 
 /**
  * Materialize a single `Shot` from a `SurveyData` at the given global
- * shot index (0-based across all sections). Cheap (one object alloc,
+ * shot index (0-based across all lines). Cheap (one object alloc,
  * ~250 B) but call it sparingly - calling for every shot in a 75k
  * project undoes the point of the SoA layout. Use raw typed-array
  * field access (`data.shotAzimuthIn[i]`) in hot iteration paths.
@@ -248,22 +252,22 @@ export function getShot(data: SurveyData, globalIndex: number): Shot {
 }
 
 /**
- * Look up a shot by `(section_id, shot_id)` - the natural identity for
+ * Look up a shot by `(line_id, shot_id)` - the natural identity for
  * UI handlers that receive these from MapLibre feature properties.
  * Returns `null` if not found.
  *
- * Iterates the section's shot range. For sections of typical size
- * (~5-100 shots) this is cheap; for a 5000-shot section it's still
+ * Iterates the line's shot range. For lines of typical size
+ * (~5-100 shots) this is cheap; for a 5000-shot line it's still
  * sub-millisecond. If lookups become a bottleneck, add an
- * `(sectionId, shotId) → globalIndex` Map at construction time.
+ * `(lineId, shotId) → globalIndex` Map at construction time.
  */
 export function findShotGlobalIndex(
   data: SurveyData,
-  sectionId: number,
+  lineId: number,
   shotId: number,
 ): number | null {
-  // Find the section's range.
-  const sec = data.sections.find((s) => s.id === sectionId);
+  // Find the line's range.
+  const sec = data.lines.find((s) => s.id === lineId);
   if (!sec) return null;
   for (let i = sec.shotOffset; i < sec.shotOffset + sec.shotCount; i++) {
     if (data.shotIds[i] === shotId) return i;
@@ -279,12 +283,12 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   if (globalIndex < 0 || globalIndex >= data.stationCount) {
     throw new RangeError(`station index ${globalIndex} out of range (0..${data.stationCount})`);
   }
-  const sectionId = data.stationSectionIds[globalIndex]!;
+  const lineId = data.stationLineIds[globalIndex]!;
   const stationIndex = data.stationIndices[globalIndex]!;
   const coordBase = globalIndex * 3;
   const station: Station = {
     station_ref: {
-      section_id: sectionId,
+      line_id: lineId,
       station_index: stationIndex,
     },
     coordinates: {
@@ -295,6 +299,8 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
     is_zero_datum: (data.stationFlags[globalIndex]! & STATION_FLAG_IS_ZERO_DATUM) !== 0,
     gps_coordinates: data.stationGps.get(globalIndex) ?? null,
     merged_with: data.stationMergedWith.get(globalIndex) ?? [],
+    id: data.stationIds[globalIndex] ?? 0,
+    name: '',
   };
   // `closures_with` is optional on the wire and the sparse map only holds
   // non-empty lists, so materialize the absence rather than an empty array -
@@ -304,8 +310,7 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
-  const name = data.stationNames.get(globalIndex);
-  if (name !== undefined) station.name = name;
+  station.name = data.stationNames.get(globalIndex) ?? '';
   return station;
 }
 
@@ -314,11 +319,12 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
 const showableNamesCache = new WeakMap<Map<number, string>, boolean>();
 
 /**
- * Whether any station has a name that would be drawn as a label (e.g. the MNemo
- * station numbers a DMP import records): non-empty once control and bidi
- * characters are stripped and it is trimmed - the rule the map label and the
- * image export apply. The Display menu and the export offer the "Station names"
- * labels only when this holds, because otherwise they would label nothing.
+ * Whether any station has a name that would be drawn as a label: non-empty
+ * once control and bidi characters are stripped and it is trimmed - the rule
+ * the map label and the image export apply. Every station of a loaded project
+ * has a name (SPEC 4.1), so this holds for any project with stations; the
+ * Display menu and the export still offer the "Station names" labels only when
+ * it does, because otherwise they would label nothing (an empty project).
  */
 export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | undefined): boolean {
   const names = data?.stationNames;
@@ -338,7 +344,7 @@ export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | 
 }
 
 /**
- * Find a station's global index by `(section_id, station_index)`.
+ * Find a station's global index by `(line_id, station_index)`.
  * Used by MapLibre click/hover handlers that get those two numbers
  * from feature properties.
  *
@@ -347,11 +353,11 @@ export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | 
  */
 export function findStationGlobalIndex(
   data: SurveyData,
-  sectionId: number,
+  lineId: number,
   stationIndex: number,
 ): number | null {
   for (let i = 0; i < data.stationCount; i++) {
-    if (data.stationSectionIds[i] === sectionId &&
+    if (data.stationLineIds[i] === lineId &&
         data.stationIndices[i] === stationIndex) {
       return i;
     }
@@ -372,7 +378,7 @@ export function withGpsFixFlags(
   const fixes = new Set<number>();
   for (const zd of zeroDatums) {
     if (zd.role !== 'GpsFix') continue;
-    const g = findStationGlobalIndex(data, zd.station_ref.section_id, zd.station_ref.station_index);
+    const g = findStationGlobalIndex(data, zd.station_ref.line_id, zd.station_ref.station_index);
     if (g !== null) fixes.add(g);
   }
   let flags: Uint8Array | null = null;
@@ -402,7 +408,7 @@ export function withGpsFixFlags(
  * Memory intent: no `Station` object is retained. Each index access
  * materializes a fresh object, so a full pass (e.g. fit-to-bounds)
  * produces garbage-collectable temporaries instead of a persistent
- * ~89 k-object array that duplicates `stationCoords` / `stationSectionIds`
+ * ~89 k-object array that duplicates `stationCoords` / `stationLineIds`
  * / `stationIndices` (the eager `Station[]` the binary loader used to
  * build). The proxy is read-only - the app never mutates the store
  * `stations` array - and its `set` / `deleteProperty` traps throw so an
@@ -465,7 +471,7 @@ export function lazyStationArray(data: SurveyData): Station[] {
 }
 
 /**
- * Construct `SurveyData` from the legacy `Project.sections[].shots[]` +
+ * Construct `SurveyData` from the legacy `Project.lines[].shots[]` +
  * `Station[]` shape that `refreshProjectState` still returns (it pulls
  * via JSON IPC, not the binary `load_project_full_binary` route).
  *
@@ -478,15 +484,15 @@ export function lazyStationArray(data: SurveyData): Station[] {
  * specific to that input shape).
  */
 export function surveyDataFromLegacy(
-  sections: import('./ipc/Section').Section[],
+  lines: import('./ipc/Line').Line[],
   stations: import('./ipc/Station').Station[],
 ): SurveyData {
-  const totalShots = sections.reduce((s, sec) => s + sec.shots.length, 0);
+  const totalShots = lines.reduce((s, sec) => s + sec.shots.length, 0);
   const data: SurveyData = {
-    sections: [],
+    lines: [],
     shotCount: totalShots,
     shotIds: new Uint32Array(totalShots),
-    shotSectionIds: new Uint32Array(totalShots),
+    shotLineIds: new Uint32Array(totalShots),
     shotAzimuthIn: new Float32Array(totalShots),
     shotAzimuthOut: new Float32Array(totalShots),
     shotLength: new Float32Array(totalShots),
@@ -503,7 +509,7 @@ export function surveyDataFromLegacy(
     shotMarkerIndex: new Int32Array(totalShots),
     shotComments: new Map(),
     stationCount: stations.length,
-    stationSectionIds: new Uint32Array(stations.length),
+    stationLineIds: new Uint32Array(stations.length),
     stationIndices: new Uint32Array(stations.length),
     stationCoords: new Float64Array(stations.length * 3),
     stationFlags: new Uint8Array(stations.length),
@@ -512,25 +518,26 @@ export function surveyDataFromLegacy(
     stationClosuresWith: new Map(),
     stationComments: new Map(),
     stationNames: new Map(),
+    stationIds: new Uint32Array(stations.length),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
 
   let cursor = 0;
-  for (const section of sections) {
-    data.sections.push({
-      id: section.id,
-      name: section.name,
-      color: section.color,
-      direction: section.direction,
-      quality: section.quality,
-      next_shot_id: section.next_shot_id,
+  for (const line of lines) {
+    data.lines.push({
+      id: line.id,
+      name: line.name,
+      color: line.color,
+      direction: line.direction,
+      quality: line.quality,
+      next_shot_id: line.next_shot_id,
       shotOffset: cursor,
-      shotCount: section.shots.length,
+      shotCount: line.shots.length,
     });
-    for (const shot of section.shots) {
+    for (const shot of line.shots) {
       data.shotIds[cursor] = shot.id;
-      data.shotSectionIds[cursor] = section.id;
+      data.shotLineIds[cursor] = line.id;
       data.shotAzimuthIn[cursor] = shot.azimuth_in;
       data.shotAzimuthOut[cursor] = shot.azimuth_out;
       data.shotLength[cursor] = shot.length;
@@ -551,7 +558,7 @@ export function surveyDataFromLegacy(
   }
 
   stations.forEach((s, i) => {
-    data.stationSectionIds[i] = s.station_ref.section_id;
+    data.stationLineIds[i] = s.station_ref.line_id;
     data.stationIndices[i] = s.station_ref.station_index;
     data.stationCoords[i * 3] = s.coordinates.x;
     data.stationCoords[i * 3 + 1] = s.coordinates.y;
@@ -576,6 +583,7 @@ export function surveyDataFromLegacy(
     }
     if (s.comment) data.stationComments.set(i, s.comment);
     if (s.name) data.stationNames.set(i, s.name);
+    data.stationIds[i] = s.id ?? 0;
   });
 
   return data;
@@ -583,15 +591,15 @@ export function surveyDataFromLegacy(
 
 /**
  * Build a `SurveyData` for the closure-adjusted geometry view by reusing the
- * measured `base`'s shot columns + section metadata verbatim and rebuilding
+ * measured `base`'s shot columns + line metadata verbatim and rebuilding
  * only the station columns from `adjustedStations`.
  *
  * Closure adjustment moves station *coordinates* only; shot ids, angles,
- * lengths, section shape and offsets are identical to the measured set. So the
+ * lengths, line shape and offsets are identical to the measured set. So the
  * adjusted view can share the base's (large) shot typed-arrays and just swap the
  * station arrays - an O(stations) pass that never touches the lazy
- * `section.shots` getters. The previous `surveyDataFromLegacy(project.sections,
- * adjusted)` walked every section's shots to rebuild shot columns it already had,
+ * `line.shots` getters. The previous `surveyDataFromLegacy(project.lines,
+ * adjusted)` walked every line's shots to rebuild shot columns it already had,
  * force-materializing ~75k `Shot` objects the moment the closure-adjusted mode
  * was entered (or restored from persisted UI state) on load.
  */
@@ -600,7 +608,7 @@ export function surveyDataWithAdjustedStations(
   adjustedStations: import('./ipc/Station').Station[],
 ): SurveyData {
   const SN = adjustedStations.length;
-  const stationSectionIds = new Uint32Array(SN);
+  const stationLineIds = new Uint32Array(SN);
   const stationIndices = new Uint32Array(SN);
   const stationCoords = new Float64Array(SN * 3);
   const stationFlags = new Uint8Array(SN);
@@ -609,9 +617,10 @@ export function surveyDataWithAdjustedStations(
   const stationClosuresWith = new Map<number, ClosureRef[]>();
   const stationComments = new Map<number, string>();
   const stationNames = new Map<number, string>();
+  const stationIds = new Uint32Array(SN);
 
   adjustedStations.forEach((s, i) => {
-    stationSectionIds[i] = s.station_ref.section_id;
+    stationLineIds[i] = s.station_ref.line_id;
     stationIndices[i] = s.station_ref.station_index;
     stationCoords[i * 3] = s.coordinates.x;
     stationCoords[i * 3 + 1] = s.coordinates.y;
@@ -624,12 +633,13 @@ export function surveyDataWithAdjustedStations(
     if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
     if (s.comment) stationComments.set(i, s.comment);
     if (s.name) stationNames.set(i, s.name);
+    stationIds[i] = s.id ?? 0;
   });
 
   return {
     ...base,
     stationCount: SN,
-    stationSectionIds,
+    stationLineIds,
     stationIndices,
     stationCoords,
     stationFlags,
@@ -638,19 +648,20 @@ export function surveyDataWithAdjustedStations(
     stationClosuresWith,
     stationComments,
     stationNames,
+    stationIds,
   };
 }
 
 /**
  * Build an empty `SurveyData` (zero shots, zero stations, zero
- * sections). Useful as the initial store value and for tests.
+ * lines). Useful as the initial store value and for tests.
  */
 export function emptySurveyData(): SurveyData {
   return {
-    sections: [],
+    lines: [],
     shotCount: 0,
     shotIds: new Uint32Array(0),
-    shotSectionIds: new Uint32Array(0),
+    shotLineIds: new Uint32Array(0),
     shotAzimuthIn: new Float32Array(0),
     shotAzimuthOut: new Float32Array(0),
     shotLength: new Float32Array(0),
@@ -667,7 +678,7 @@ export function emptySurveyData(): SurveyData {
     shotMarkerIndex: new Int32Array(0),
     shotComments: new Map(),
     stationCount: 0,
-    stationSectionIds: new Uint32Array(0),
+    stationLineIds: new Uint32Array(0),
     stationIndices: new Uint32Array(0),
     stationCoords: new Float64Array(0),
     stationFlags: new Uint8Array(0),
@@ -676,5 +687,6 @@ export function emptySurveyData(): SurveyData {
     stationClosuresWith: new Map(),
     stationComments: new Map(),
     stationNames: new Map(),
+    stationIds: new Uint32Array(0),
   };
 }

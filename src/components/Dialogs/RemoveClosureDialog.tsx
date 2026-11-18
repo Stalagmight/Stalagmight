@@ -3,7 +3,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -15,12 +15,13 @@ interface ClosureChoice {
 }
 
 function sameStationRef(a: StationRef, b: StationRef): boolean {
-  return a.section_id === b.section_id && a.station_index === b.station_index;
+  return a.line_id === b.line_id && a.station_index === b.station_index;
 }
 
 export default function RemoveClosureDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, removeLoopClosure } = useProjectStore();
+  const { stations, removeLoopClosure } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;
@@ -66,16 +67,9 @@ export default function RemoveClosureDialog() {
     [closures, selectedClosureId]
   );
 
-  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
-    const section = project?.sections.find((item) => item.id === ref.section_id);
-    const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
-    return (
-      <span className="inline-flex items-center gap-1.5 align-middle">
-        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
-        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
-      </span>
-    );
-  };
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => (
+    <EntityBlob entity="station">{labels.station(ref, true)}</EntityBlob>
+  );
 
   const handleConfirm = async () => {
     if (!selectedClosure) return;

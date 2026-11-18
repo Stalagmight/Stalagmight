@@ -3,7 +3,7 @@
  * what an element/tool acts on, the built-in presets (Default + colorblind-safe),
  * the tool→role mapping, and a resolver that layers user overrides on a preset.
  *
- * Object color encodes WHAT (segment/section/shot/station/comment); a shared
+ * Object color encodes WHAT (segment/line/shot/station/comment); a shared
  * modifier encodes the ACTION (delete = red, move = slate). See the
  * project's Cave Survey icon design spec.
  *
@@ -33,9 +33,9 @@ export function syntacticLevelAtLeast(
 
 /** Editable color roles, grouped for the settings list. */
 export type SyntacticRole =
-  // entities (cave geometry), ordered by hierarchy: segment > section > shot > station
+  // entities (cave geometry), ordered by hierarchy: segment > line > shot > station
   | 'segment'
-  | 'section'
+  | 'line'
   | 'shot'
   | 'station'
   | 'comment'
@@ -61,7 +61,7 @@ export interface SyntacticRoleDef {
 /** Ordered roles for the settings UI (entities first, then actions, then tools). */
 export const SYNTACTIC_ROLES: SyntacticRoleDef[] = [
   { id: 'segment', group: 'entity', labelKey: 'settings.syntactic.roles.segment' },
-  { id: 'section', group: 'entity', labelKey: 'settings.syntactic.roles.section' },
+  { id: 'line', group: 'entity', labelKey: 'settings.syntactic.roles.section' },
   { id: 'shot', group: 'entity', labelKey: 'settings.syntactic.roles.shot' },
   { id: 'station', group: 'entity', labelKey: 'settings.syntactic.roles.station' },
   { id: 'comment', group: 'entity', labelKey: 'settings.syntactic.roles.comment' },
@@ -83,7 +83,7 @@ export type SyntacticPalette = Record<SyntacticRole, string>;
  */
 const DEFAULT_PALETTE: SyntacticPalette = {
   segment: '#ff8000', // Legendary orange
-  section: '#a335ee', // Epic purple
+  line: '#a335ee', // Epic purple
   shot: '#0070dd', // Rare blue
   station: '#5fcf83', // Uncommon green  (oklch 0.77 0.15 152)
   comment: '#eab946', // amber           (oklch 0.81 0.14 85)
@@ -117,7 +117,7 @@ const OI = {
  */
 const DEUTERANOPIA_PALETTE: SyntacticPalette = {
   segment: OI.orange,
-  section: OI.purple,
+  line: OI.purple,
   shot: OI.blue,
   station: OI.sky,
   comment: OI.yellow,
@@ -137,7 +137,7 @@ const DEUTERANOPIA_PALETTE: SyntacticPalette = {
  */
 const PROTANOPIA_PALETTE: SyntacticPalette = {
   segment: OI.orange,
-  section: OI.purple,
+  line: OI.purple,
   shot: OI.blue,
   station: OI.green,
   comment: OI.yellow,
@@ -156,7 +156,7 @@ const PROTANOPIA_PALETTE: SyntacticPalette = {
  */
 const TRITANOPIA_PALETTE: SyntacticPalette = {
   segment: OI.vermillion,
-  section: OI.purple,
+  line: OI.purple,
   shot: OI.blue,
   station: OI.green,
   comment: OI.orange,
@@ -199,7 +199,7 @@ export const TOOL_ROLE_MAP: Record<ToolType, SyntacticRole> = {
 };
 
 /** Entities that can render a colored blob in Full mode. */
-export type BlobEntity = 'segment' | 'section' | 'shot' | 'station' | 'comment';
+export type BlobEntity = 'segment' | 'line' | 'shot' | 'station' | 'comment';
 
 /**
  * Resolve the effective palette for a preset, layering any user overrides on top

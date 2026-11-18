@@ -54,7 +54,7 @@ interface ToggleItem {
     | 'showReferenceShots'
     | 'showJumps'
     | 'showZeroDatum'
-    | 'showSectionNames'
+    | 'showLineNames'
     | 'showStationLabels'
     | 'showStationNames'
     | 'showStationComments'
@@ -94,7 +94,7 @@ const OVERLAYS: ToggleItem[] = [
 // PARENT entity's color - station comments read as station-colored, etc. -
 // rather than the generic 'comment' role color.
 const COMMENTS_LABELS: ToggleItem[] = [
-  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section', symbol: 'label' },
+  { key: 'showLineNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'line', symbol: 'label' },
   { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels', entity: 'station', symbol: 'label' },
   // Exclusive with Station IDs (toggleDisplay turns the other one off).
   { key: 'showStationNames', labelKey: 'displayMenu.items.stationNames', descriptionKey: 'displayMenu.descriptions.stationNames', entity: 'station', symbol: 'label', needsStationNames: true },
@@ -242,7 +242,7 @@ export default function DisplayMenu({
         showReferenceShots: s.showReferenceShots,
         showJumps: s.showJumps,
         showZeroDatum: s.showZeroDatum,
-        showSectionNames: s.showSectionNames,
+        showLineNames: s.showLineNames,
         showStationLabels: s.showStationLabels,
         showStationNames: s.showStationNames,
         showStationComments: s.showStationComments,
@@ -417,7 +417,7 @@ export default function DisplayMenu({
                 be a confusing no-op (it still shows in Survey + Export). */}
             {appMode !== 'plan' && (
               <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
-                <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
+                <Pill label={t('displayMenu.items.section')} active={colorMode === 'line'} onClick={() => selectColorMode('line')} testId="display-color-section" />
                 <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
                 <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
                 <Pill label={t('displayMenu.items.issueSeverity')} title={autoColor ? `${t('displayMenu.descriptions.issueSeverity')}. ${t('displayMenu.warningsVisit.pillHint')}` : t('displayMenu.descriptions.issueSeverity')} auto={autoColor} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />

@@ -6,11 +6,11 @@
 //! a zero-length CLOSURE. Synthetic data only.
 
 use super::*;
-use crate::models::{GpsCoordinates, SectionData, ShotData, StationMerge, ZeroDatum};
+use crate::models::{GpsCoordinates, LineData, ShotData, StationMerge, ZeroDatum};
 
 const PLACEMENT: (f64, f64) = (20.0, -87.5);
-const FIX_AT_SECTION_START: (f64, f64) = (20.0003, -87.4995);
-const FIX_MID_SECTION: (f64, f64) = (20.0006, -87.4985);
+const FIX_AT_LINE_START: (f64, f64) = (20.0003, -87.4995);
+const FIX_MID_LINE: (f64, f64) = (20.0006, -87.4985);
 
 fn shots(count: usize, azimuth_in: f64) -> Vec<ShotData> {
     (0..count)
@@ -43,12 +43,12 @@ fn datum(project: &mut Project, sr: StationRef, (lat, lon): (f64, f64)) {
 /// Main runs 4 x 50 m east (M0..M4). Side runs 3 x 50 m north off M2 (S0 is
 /// merged onto M2), and Loop runs 4 x 50 m north off M4 (L0 merged onto M4).
 /// One merge-connected cave with a placement datum on M0, a GPS fix on S0 (a
-/// section start, which the merge aliases onto M2) and a GPS fix on L2 (the
-/// middle of a section).
+/// line start, which the merge aliases onto M2) and a GPS fix on L2 (the
+/// middle of a line).
 fn three_entrance_cave(with_fixes: bool) -> Project {
     let mut project = Project::new("Three entrances".to_string(), None);
     for (name, count, azimuth) in [("Main", 4, 90.0), ("Side", 3, 0.0), ("Loop", 4, 0.0)] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(count, azimuth),
@@ -59,8 +59,8 @@ fn three_entrance_cave(with_fixes: bool) -> Project {
     merge(&mut project, StationRef::new(0, 4), StationRef::new(2, 0));
     datum(&mut project, StationRef::new(0, 0), PLACEMENT);
     if with_fixes {
-        datum(&mut project, StationRef::new(1, 0), FIX_AT_SECTION_START);
-        datum(&mut project, StationRef::new(2, 2), FIX_MID_SECTION);
+        datum(&mut project, StationRef::new(1, 0), FIX_AT_LINE_START);
+        datum(&mut project, StationRef::new(2, 2), FIX_MID_LINE);
         assert_eq!(
             project.gps_fix_datums().len(),
             2,
@@ -74,8 +74,8 @@ fn export(project: &Project, profile: TmlProfile) -> (Vec<ExportShot>, usize) {
     build_export_shots_with_report(project, profile, AzimuthExport::decide(project))
 }
 
-fn uuid_of(project: &Project, section: usize, shot: usize) -> Option<String> {
-    project.sections[section].shots[shot].uuid.clone()
+fn uuid_of(project: &Project, line: usize, shot: usize) -> Option<String> {
+    project.lines[line].shots[shot].uuid.clone()
 }
 
 fn start_at(shots: &[ExportShot], (lat, lon): (f64, f64)) -> Vec<&ExportShot> {
@@ -110,7 +110,7 @@ fn every_datum_gets_a_start_carrying_its_own_gps() {
     let (shots, unwritten) = export(&project, TmlProfile::User);
 
     assert_eq!(unwritten, 0, "every datum is written");
-    for gps in [PLACEMENT, FIX_AT_SECTION_START, FIX_MID_SECTION] {
+    for gps in [PLACEMENT, FIX_AT_LINE_START, FIX_MID_LINE] {
         assert_eq!(start_at(&shots, gps).len(), 1, "one START at {gps:?}");
     }
     assert_eq!(
@@ -129,10 +129,10 @@ fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
     let (shots, _) = export(&project, TmlProfile::User);
 
     // S0 is merged onto M2, so its node is the Main row that ends at M2.
-    let (start, tie, row) = fix_shape(&shots, FIX_AT_SECTION_START);
+    let (start, tie, row) = fix_shape(&shots, FIX_AT_LINE_START);
     assert_eq!(row.uuid, uuid_of(&project, 0, 1));
     // L2 is the end of Loop's second shot.
-    let (mid_start, mid_tie, mid_row) = fix_shape(&shots, FIX_MID_SECTION);
+    let (mid_start, mid_tie, mid_row) = fix_shape(&shots, FIX_MID_LINE);
     assert_eq!(mid_row.uuid, uuid_of(&project, 2, 1));
 
     for (start, tie, row) in [(start, tie, row), (mid_start, mid_tie, mid_row)] {
@@ -148,7 +148,7 @@ fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
             (tie.length, tie.depth_in, tie.depth),
             (0.0, row.depth, row.depth)
         );
-        assert_eq!(tie.section, row.section);
+        assert_eq!(tie.line, row.line);
         // Both are minted after every other row, so nothing hangs off them.
         assert!(shots
             .iter()
@@ -156,13 +156,13 @@ fn a_fix_start_is_tied_to_its_station_by_a_zero_length_closure() {
     }
 }
 
-/// A (placement on A0, a GPS fix on A1), then an empty section E bridging a
+/// A (placement on A0, a GPS fix on A1), then an empty line E bridging a
 /// merge from A1 to B0. E has no row, so B's first shot is left parentless: an
 /// orphan root the builder produces on its own, with no project closure.
 fn orphaned_cave_with_a_fix() -> Project {
     let mut project = Project::new("Orphan".to_string(), None);
     for (name, count) in [("A", 2), ("E", 0), ("B", 2)] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(count, 90.0),
@@ -172,7 +172,7 @@ fn orphaned_cave_with_a_fix() -> Project {
     merge(&mut project, StationRef::new(0, 1), StationRef::new(1, 0));
     merge(&mut project, StationRef::new(1, 0), StationRef::new(2, 0));
     datum(&mut project, StationRef::new(0, 0), PLACEMENT);
-    datum(&mut project, StationRef::new(0, 1), FIX_MID_SECTION);
+    datum(&mut project, StationRef::new(0, 1), FIX_MID_LINE);
     assert_eq!(
         project.gps_fix_datums().len(),
         1,
@@ -194,7 +194,7 @@ fn an_orphan_with_a_fix_and_no_closures_still_exports() {
         "fixture rot: the builder must leave B orphaned, or this proves nothing"
     );
     assert!(shots.iter().all(|s| s.shot_type != "CLOSURE"));
-    assert!(start_at(&shots, FIX_MID_SECTION).is_empty());
+    assert!(start_at(&shots, FIX_MID_LINE).is_empty());
     assert_eq!(unwritten, 1, "the left-out fix is reported");
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -234,9 +234,9 @@ fn a_fix_start_sits_at_its_rows_repaired_depth() {
     // takes the written depth; appended before it, the START would keep the
     // survey's depth and the zero-length tie would measure a 4 m drop.
     let project = three_entrance_cave(true);
-    let surveyed = project.sections[2].shots[1].depth_out;
+    let surveyed = project.lines[2].shots[1].depth_out;
     let (shots, _) = export(&project, TmlProfile::User);
-    let (start, tie, row) = fix_shape(&shots, FIX_MID_SECTION);
+    let (start, tie, row) = fix_shape(&shots, FIX_MID_LINE);
     assert_eq!(row.uuid, uuid_of(&project, 2, 1));
     assert_eq!(
         (surveyed, row.depth),
@@ -269,7 +269,7 @@ fn two_datums_on_one_station_still_count_one_as_unwritten() {
     let (shots, unwritten) = export(&project, TmlProfile::User);
     assert_eq!(unwritten, 1);
     assert!(start_at(&shots, (20.1, -87.1)).is_empty());
-    assert_eq!(start_at(&shots, FIX_AT_SECTION_START).len(), 1);
+    assert_eq!(start_at(&shots, FIX_AT_LINE_START).len(), 1);
 }
 
 #[test]
@@ -285,14 +285,14 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
         let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
         let (configs, closures, warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&parsed, false, true).unwrap();
-        let sections: Vec<(Option<String>, Vec<(f64, f64)>)> = configs
+        let lines: Vec<(Option<String>, Vec<(f64, f64)>)> = configs
             .iter()
             .map(|c| {
                 let legs = c.shots.iter().map(|s| (s.length, s.azimuth_in)).collect();
                 (c.name.clone(), legs)
             })
             .collect();
-        ((sections, closures.len()), warnings)
+        ((lines, closures.len()), warnings)
     };
 
     let (with_fixes, fix_warnings) = read_back(&three_entrance_cave(true));
@@ -319,7 +319,7 @@ fn the_fix_shape_round_trips_to_the_same_stations() {
     assert_eq!(
         fix_warnings,
         [
-            "2 sections had no shots after filtering and were dropped",
+            "2 lines had no shots after filtering and were dropped",
             "2 loop closures referenced excluded stations and were skipped",
         ]
     );
@@ -332,10 +332,10 @@ fn local_of(start: &ExportShot) -> (f64, f64) {
     crate::models::gps_to_local(&at, &origin)
 }
 
-fn start_of<'a>(shots: &'a [ExportShot], section: &str) -> &'a ExportShot {
+fn start_of<'a>(shots: &'a [ExportShot], line: &str) -> &'a ExportShot {
     shots
         .iter()
-        .find(|s| s.shot_type == "START" && s.section == section)
+        .find(|s| s.shot_type == "START" && s.line == line)
         .unwrap()
 }
 
@@ -348,14 +348,14 @@ fn a_datumless_entrance_start_sits_where_the_survey_puts_it() {
     use crate::models::{ClosureStrategy, LoopClosure};
     let mut project = Project::new("Datumless entrance".to_string(), None);
     for name in ["Main", "Detached"] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(2, 90.0),
             ..Default::default()
         });
     }
-    project.section_offsets.insert(1, (100.0, 50.0));
+    project.line_offsets.insert(1, (100.0, 50.0));
     datum(&mut project, StationRef::new(0, 0), PLACEMENT);
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -395,7 +395,7 @@ fn an_unmerged_piece_with_a_closure_back_keeps_its_own_start_position() {
     use crate::models::ClosureStrategy;
     let mut project = Project::new("Unmerged".to_string(), None);
     for (name, azimuth) in [("A", 90.0), ("B", 0.0)] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(2, azimuth),
@@ -503,14 +503,14 @@ fn a_fix_gps_off_the_globe_is_unwritten() {
 fn an_entrance_datum_off_the_globe_is_unwritten_and_its_start_is_surveyed() {
     let mut project = Project::new("Bad entrance".to_string(), None);
     for name in ["Main", "Detached"] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(2, 90.0),
             ..Default::default()
         });
     }
-    project.section_offsets.insert(1, (100.0, 50.0));
+    project.line_offsets.insert(1, (100.0, 50.0));
     datum(&mut project, StationRef::new(0, 0), PLACEMENT);
     raw_datum(&mut project, StationRef::new(1, 0), 500.0, -87.0);
 
@@ -531,15 +531,15 @@ fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
     // A legacy project need not keep the frame datum's station on raw (0, 0).
     let mut project = Project::new("Offset frame".to_string(), None);
     for name in ["Main", "Detached"] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             shots: shots(2, 90.0),
             ..Default::default()
         });
     }
-    project.section_offsets.insert(0, (30.0, -20.0));
-    project.section_offsets.insert(1, (130.0, 30.0));
+    project.line_offsets.insert(0, (30.0, -20.0));
+    project.line_offsets.insert(1, (130.0, 30.0));
     datum(&mut project, StationRef::new(0, 0), PLACEMENT);
     assert_eq!(
         project.compute_station_raw_xy(StationRef::new(0, 0)),
@@ -557,12 +557,12 @@ fn a_datumless_start_is_measured_from_the_frame_station_not_the_origin() {
 
 /// Main and Side dated 2015-06-01 by Ann: a loop closure from Side's middle
 /// back onto Main, and a GPS fix on Side's middle. Both CLOSURE rows hang off a
-/// mid-section row, so each re-imports as a branch section of its own.
-fn dated_cave_with_mid_section_closures() -> Project {
+/// mid-line row, so each re-imports as a branch line of its own.
+fn dated_cave_with_mid_line_closures() -> Project {
     let date = chrono::NaiveDate::from_ymd_opt(2015, 6, 1).unwrap();
     let mut project = Project::new("Dated".to_string(), None);
     for (name, count, azimuth) in [("Main", 4, 90.0), ("Side", 3, 0.0)] {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some(name.to_string()),
             color: "#3366ff".to_string(),
             date: Some(date),
@@ -586,7 +586,7 @@ fn dated_cave_with_mid_section_closures() -> Project {
         )
         .unwrap();
     project
-        .set_zero_datum(StationRef::new(1, 1), gps(FIX_MID_SECTION))
+        .set_zero_datum(StationRef::new(1, 1), gps(FIX_MID_LINE))
         .unwrap();
     assert_eq!(
         project.gps_fix_datums().len(),
@@ -598,7 +598,7 @@ fn dated_cave_with_mid_section_closures() -> Project {
 
 #[test]
 fn closure_rows_carry_the_date_and_people_of_their_row() {
-    let project = dated_cave_with_mid_section_closures();
+    let project = dated_cave_with_mid_line_closures();
     let (shots, _) = export(&project, TmlProfile::User);
     let closures: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "CLOSURE").collect();
     assert_eq!(closures.len(), 2, "the loop closure and the fix's tie");
@@ -616,12 +616,12 @@ fn closure_rows_carry_the_date_and_people_of_their_row() {
 }
 
 #[test]
-fn a_mid_section_closure_does_not_move_the_reimport_declination_epoch() {
-    // Each CLOSURE off a mid-section row re-imports as a branch section, and the
-    // importer evaluates the declination at the earliest section date. Written
+fn a_mid_line_closure_does_not_move_the_reimport_declination_epoch() {
+    // Each CLOSURE off a mid-line row re-imports as a branch line, and the
+    // importer evaluates the declination at the earliest line date. Written
     // undated, the rows took the 2000-01-01 stand-in and turned the whole
     // re-imported survey by the 2000-vs-2015 declination difference.
-    let project = dated_cave_with_mid_section_closures();
+    let project = dated_cave_with_mid_line_closures();
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("dated.tml");
     export_tml(&project, &path).unwrap();
@@ -631,10 +631,10 @@ fn a_mid_section_closure_does_not_move_the_reimport_declination_epoch() {
         "fixture rot: needs a magnetic file"
     );
     assert!(
-        parsed.sections.len() > 1,
-        "fixture rot: the closures must re-import as branch sections"
+        parsed.lines.len() > 1,
+        "fixture rot: the closures must re-import as branch lines"
     );
-    let dates: Vec<_> = parsed.sections.iter().map(|s| s.date).collect();
+    let dates: Vec<_> = parsed.lines.iter().map(|s| s.date).collect();
     assert!(
         dates
             .iter()
@@ -659,7 +659,7 @@ fn a_frame_gps_off_the_globe_leaves_the_fixes_out() {
     // the same survey, would have Ariane bend it across the globe.
     let mut project = three_entrance_cave(false);
     project.zero_datums[0].gps.latitude = 95.0;
-    datum(&mut project, StationRef::new(2, 2), FIX_MID_SECTION);
+    datum(&mut project, StationRef::new(2, 2), FIX_MID_LINE);
     assert_eq!(
         project.gps_fix_datums().len(),
         1,

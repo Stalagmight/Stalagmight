@@ -435,8 +435,8 @@ async function traceMenuClose(page: Page, failFirst: false | 'release' | 'other'
         w.__menuCloseRequests.push(args);
         if (fail && w.__menuCloseRequests.length === 1) {
           return fail === 'release'
-            ? { success: false, error: 'The SpeleoDB lock could not be handed back: synthetic 503', warnings: [], section_ids: [], lock_release: 'failed' }
-            : { success: false, error: 'Synthetic close failure. The project is still open.', warnings: [], section_ids: [] };
+            ? { success: false, error: 'The SpeleoDB lock could not be handed back: synthetic 503', warnings: [], line_ids: [], lock_release: 'failed' }
+            : { success: false, error: 'Synthetic close failure. The project is still open.', warnings: [], line_ids: [] };
         }
       }
       return invoke(command, args);

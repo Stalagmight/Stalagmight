@@ -1,4 +1,4 @@
-//! Combine Sections and the alignment the combined project gives each `Move`
+//! Combine Lines and the alignment the combined project gives each `Move`
 //! closure (#736, `combine_alignment.rs`). The app re-measures every snap's
 //! alignment after each command, and since #736 a snap's flag decides what
 //! the Closures Computed solve ties; so the combine's plan predicts what the
@@ -12,18 +12,18 @@ use super::combine_closure_tests::{
     shot, xy,
 };
 use crate::{
-    ClosureStrategy, CombineJoinEnds, CombinePlan, CombineRemovedKind, Project, SectionEnd,
-    SectionId, StationRef, TornTie, TornTieKind, TornTieReason,
+    ClosureStrategy, CombineJoinEnds, CombinePlan, CombineRemovedKind, LineEnd, LineId, Project,
+    StationRef, TornTie, TornTieKind, TornTieReason,
 };
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 /// Move `id` so its station `index` sits exactly on `target`, as shown.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, st(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
 /// One shot from `from` to `to`, as a bearing and a length.
@@ -60,8 +60,8 @@ fn torn_between(plan: &CombinePlan, a: StationRef, b: StationRef) -> Option<Torn
 /// every structural invariant. Returns the plan and the combined project.
 fn combine_checked(
     project: &Project,
-    (kept, kept_end): (SectionId, SectionEnd),
-    (other, other_end): (SectionId, SectionEnd),
+    (kept, kept_end): (LineId, LineEnd),
+    (other, other_end): (LineId, LineEnd),
     what: &str,
 ) -> (CombinePlan, Project) {
     let join = CombineJoinEnds {
@@ -72,14 +72,14 @@ fn combine_checked(
         .combine_candidate_joining(kept, other, Some(join))
         .unwrap();
     assert!(candidate.blocked_reason.is_none(), "{what}: {candidate:?}");
-    let plan = if candidate.section_a == kept {
+    let plan = if candidate.line_a == kept {
         candidate.plan_keeping_a.clone()
     } else {
         candidate.plan_keeping_b.clone()
     };
     let mut after = project.clone();
     let outcome = after
-        .combine_sections_reporting(kept, other, &options(Some(join)))
+        .combine_lines_reporting(kept, other, &options(Some(join)))
         .unwrap();
     check_removed_across_one_shot(
         project,
@@ -96,7 +96,7 @@ fn combine_checked(
 
 /// A passage P from `from` to `to` by way of `via`, merged at both ends: the
 /// loop the combine closes.
-fn passage(project: &mut Project, from: StationRef, via: (f64, f64), to: StationRef) -> SectionId {
+fn passage(project: &mut Project, from: StationRef, via: (f64, f64), to: StationRef) -> LineId {
     let (a, b) = (xy(project, from), xy(project, to));
     let p = add(project, "P", vec![toward(a, via), toward(via, b)]);
     place(project, p, 0, a);
@@ -111,7 +111,7 @@ fn passage(project: &mut Project, from: StationRef, via: (f64, f64), to: Station
 /// at K's start, ends 2 m north of where O's end lands; C, merged at O's end,
 /// runs 2 m north. B's end and C's end are a snap the 0.3 m tore: the `Move`
 /// closure between them is not aligned.
-fn reclosed_across_the_sides() -> (Project, [SectionId; 4]) {
+fn reclosed_across_the_sides() -> (Project, [LineId; 4]) {
     let mut project = Project::new("Across".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(90.0, 5.0)]);
@@ -134,7 +134,7 @@ fn reclosed_across_the_sides() -> (Project, [SectionId; 4]) {
 
 /// A torn snap the combine's move re-closes across the two sides (#736): the
 /// shift brings C's end back onto B's, where the `Move` closure would be
-/// aligned again by the next re-measure and tie the combined section to
+/// aligned again by the next re-measure and tie the combined line to
 /// itself through B and C. It becomes an ordinary loop closure, as a snap
 /// there does, and the dialog lists it as the loop closure left from a snap
 /// it is, not as a snapped closure. Before, the plan left it alone and the
@@ -148,9 +148,8 @@ fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closu
         "{snap:?}"
     );
     let what = "re-closed across the sides";
-    let (plan, after) =
-        combine_checked(&project, (k, SectionEnd::End), (o, SectionEnd::Start), what);
-    assert_eq!(plan.moving_section, Some(o), "{plan:?}");
+    let (plan, after) = combine_checked(&project, (k, LineEnd::End), (o, LineEnd::Start), what);
+    assert_eq!(plan.moving_line, Some(o), "{plan:?}");
     assert!((plan.shift_m - 0.3).abs() < 1e-9, "{plan:?}");
     let torn = torn_between(&plan, st(b, 1), st(c, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
@@ -170,7 +169,7 @@ fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closu
 /// east of K's station 1. A passage P from K's start to O's end closes the
 /// loop by merges. A `Move` closure ties O's end to K's station 1, torn by
 /// the 0.3 m.
-fn reclosed_inside() -> (Project, [SectionId; 2]) {
+fn reclosed_inside() -> (Project, [LineId; 2]) {
     let mut project = Project::new("Inside".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0), shot(0.0, 2.0)]);
     let o = add(&mut project, "O", vec![shot(180.0, 2.0)]);
@@ -186,13 +185,13 @@ fn reclosed_inside() -> (Project, [SectionId; 2]) {
     (project, [k, o])
 }
 
-/// A torn snap between the two sections the combine's move re-closes
+/// A torn snap between the two lines the combine's move re-closes
 /// (#736): left a `Move` closure, it would be aligned by the next re-measure,
-/// a snapped closure inside the combined section, which ties the section to
-/// itself. It becomes an ordinary loop closure inside the combined section,
-/// as a snap between the two sections does, and the dialog lists it.
+/// a snapped closure inside the combined line, which ties the line to
+/// itself. It becomes an ordinary loop closure inside the combined line,
+/// as a snap between the two lines does, and the dialog lists it.
 #[test]
-fn a_torn_snap_the_shift_recloses_inside_the_combined_section_becomes_an_ordinary_closure() {
+fn a_torn_snap_the_shift_recloses_inside_the_combined_line_becomes_an_ordinary_closure() {
     let (project, [k, o]) = reclosed_inside();
     let snap = closure_between(&project, st(o, 1), st(k, 1)).unwrap();
     assert!(
@@ -200,14 +199,13 @@ fn a_torn_snap_the_shift_recloses_inside_the_combined_section_becomes_an_ordinar
         "{snap:?}"
     );
     let what = "re-closed inside";
-    let (plan, after) =
-        combine_checked(&project, (k, SectionEnd::End), (o, SectionEnd::Start), what);
+    let (plan, after) = combine_checked(&project, (k, LineEnd::End), (o, LineEnd::Start), what);
     let torn = torn_between(&plan, st(o, 1), st(k, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
         (torn.kind, torn.reason),
         (TornTieKind::FormerSnappedClosure, TornTieReason::Loop)
     );
-    // O's end is the combined section's station 3 now.
+    // O's end is the combined line's station 3 now.
     let now = closure_between(&after, st(k, 3), st(k, 1)).unwrap();
     assert_eq!(
         (now.strategy, now.is_aligned),
@@ -220,7 +218,7 @@ fn a_torn_snap_the_shift_recloses_inside_the_combined_section_becomes_an_ordinar
 /// back, so combining moves O by the 0.4 m residual (#740). B, merged at the
 /// join, runs 3 m north in two shots. O runs 3 m north, its end 0.4 m east of
 /// B's: a torn snap. A loop closure ties B's middle station to O's end.
-fn reclosed_beside_a_merged_join() -> (Project, [SectionId; 3]) {
+fn reclosed_beside_a_merged_join() -> (Project, [LineId; 3]) {
     let mut project = Project::new("Beside".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(0.0, 3.0)]);
@@ -259,9 +257,8 @@ fn a_torn_snap_a_merged_join_recloses_beside_it_snaps_again() {
     );
     assert!(project.closures_across_one_shot().is_empty());
     let what = "re-closed beside a merged join";
-    let (plan, after) =
-        combine_checked(&project, (k, SectionEnd::End), (o, SectionEnd::Start), what);
-    assert_eq!(plan.moving_section, Some(o), "{plan:?}");
+    let (plan, after) = combine_checked(&project, (k, LineEnd::End), (o, LineEnd::Start), what);
+    assert_eq!(plan.moving_line, Some(o), "{plan:?}");
     assert!(plan.torn_ties.is_empty(), "{plan:?}");
     let removed = plan.closures_removed_across_one_shot.unwrap_or_default();
     assert_eq!(removed.len(), 1, "{removed:?}");
@@ -274,7 +271,7 @@ fn a_torn_snap_a_merged_join_recloses_beside_it_snaps_again() {
         .contains(&(st(b, 1), st(o, 1))),
         "{removed:?}"
     );
-    // O's end is the combined section's station 2; the snap holds there.
+    // O's end is the combined line's station 2; the snap holds there.
     let now = closure_between(&after, st(k, 2), st(b, 2)).unwrap();
     assert_eq!(
         (now.strategy, now.is_aligned),
@@ -287,7 +284,7 @@ fn a_torn_snap_a_merged_join_recloses_beside_it_snaps_again() {
 /// but a hand move shows it 0.5 m north; O runs 5 m east. S, merged at O's
 /// end, runs back to O's start as shown, where a `Move` closure snaps the
 /// two: a loop through O.
-fn pulled_apart() -> (Project, [SectionId; 3]) {
+fn pulled_apart() -> (Project, [LineId; 3]) {
     let mut project = Project::new("Apart".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(90.0, 5.0)]);
@@ -310,7 +307,7 @@ fn pulled_apart() -> (Project, [SectionId; 3]) {
 /// the plan tears it into an ordinary loop closure instead, as it tears a
 /// snap a moving side pulls apart, and the dialog lists it with that reason
 /// (the joined station moves), not as a tie that would tie the combined
-/// section to itself. Before, the plan swept it as a snap and the epilogue
+/// line to itself. Before, the plan swept it as a snap and the epilogue
 /// tore it unannounced.
 #[test]
 fn a_snap_a_dropped_hand_move_pulls_apart_becomes_an_ordinary_closure() {
@@ -321,9 +318,8 @@ fn a_snap_a_dropped_hand_move_pulls_apart_becomes_an_ordinary_closure() {
         "{snap:?}"
     );
     let what = "pulled apart";
-    let (plan, after) =
-        combine_checked(&project, (k, SectionEnd::End), (o, SectionEnd::Start), what);
-    assert_eq!(plan.moving_section, None, "{plan:?}");
+    let (plan, after) = combine_checked(&project, (k, LineEnd::End), (o, LineEnd::Start), what);
+    assert_eq!(plan.moving_line, None, "{plan:?}");
     let torn = torn_between(&plan, st(o, 0), st(s, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
         (torn.kind, torn.reason),

@@ -9,12 +9,12 @@ import type { UIStore } from './uiStore';
 /**
  * Shot/station coloring mode. The three overlay flags (showDepthGradient /
  * showDistanceGradient / showIssueSeverity) are mutually exclusive - all paint the
- * shots/stations layer - so this enum is the single-select view of them. `section`
- * = none of the overlays (the default per-section coloring). Read via
+ * shots/stations layer - so this enum is the single-select view of them. `line`
+ * = none of the overlays (the default per-line coloring). Read via
  * {@link colorModeOf}; set via the store's `setColorMode` (the one place that owns
  * the select-one mapping).
  */
-export type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
+export type ColorMode = 'line' | 'depth' | 'distance' | 'issues';
 
 /** Derive the single-select coloring mode from the three mutually-exclusive
  *  overlay flags. Use as a zustand selector: `useUIStore(colorModeOf)`. */
@@ -27,7 +27,7 @@ export function colorModeOf(
       ? 'distance'
       : s.showDepthGradient
         ? 'depth'
-        : 'section';
+        : 'line';
 }
 
 /**

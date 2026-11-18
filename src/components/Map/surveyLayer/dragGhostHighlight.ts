@@ -45,8 +45,8 @@ export interface GhostHighlightHost {
   movingEndForShot: (id: string) => MovingEnd | undefined;
   isMovingStation: (id: string) => boolean;
   parseFid: (id: string) => number | null;
-  /** Anchored check keyed by the feature's "sectionId:scopedId" id, not its fid:
-   *  a shot fid is not decodable back to a section id (#301). */
+  /** Anchored check keyed by the feature's "lineId:scopedId" id, not its fid:
+   *  a shot fid is not decodable back to a line id (#301). */
   isAnchored: (id: string) => boolean;
   isShotImmovable: (fid: number) => boolean;
   isStationImmovable: (fid: number) => boolean;

@@ -77,7 +77,7 @@ export function useDismissableLayer({
     // which `Select` sets to the listbox's id whenever it's open) and test THAT
     // element against `contains`, rather than treating any `role="listbox"` as
     // inside unconditionally - other, unrelated listboxes exist in the app (e.g.
-    // SectionsPanel's own `role="listbox"` section list), and accepting all of them
+    // SectionsPanel's own `role="listbox"` line list), and accepting all of them
     // would suppress a legitimate outside-click dismiss for every open layer.
     const isInside = (refs: Array<RefObject<HTMLElement | null>>, node: Node | null) => {
       if (node === null) return false;
@@ -103,7 +103,7 @@ export function useDismissableLayer({
       //
       // It used to dismiss on ANY scroll in the document, which made a map
       // right-click close its own menu: selecting the station scrolls the data
-      // table's row and the sections panel's section into view, and that scroll
+      // table's row and the sections panel's line into view, and that scroll
       // arrived while the menu was opening. The menu flashed and vanished, and
       // only a second right-click - by which point the row was already in view,
       // so nothing scrolled - would stay open.

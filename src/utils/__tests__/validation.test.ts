@@ -3,7 +3,7 @@ import {
   hasAzimuthDiscrepancy,
   hasPitchDiscrepancy,
   validateShot,
-  validateSection,
+  validateLine,
   getHighestSeverity,
   countIssues,
   countUnresolvedErrors,
@@ -221,13 +221,13 @@ describe('validateShot', () => {
 });
 
 // ---------------------------------------------------------------------------
-// validateSection
+// validateLine
 // ---------------------------------------------------------------------------
 
-describe('validateSection', () => {
+describe('validateLine', () => {
   it('returns empty map for valid shots', () => {
     const shots = [makeShot(), makeShot({ heading_in: 90, heading_out: 90, marker_index: 1 })];
-    const issues = validateSection(shots);
+    const issues = validateLine(shots);
     expect(issues.size).toBe(0);
   });
 
@@ -236,7 +236,7 @@ describe('validateSection', () => {
       makeShot({ marker_index: 5 }),
       makeShot({ marker_index: 5 }),
     ];
-    const issues = validateSection(shots);
+    const issues = validateLine(shots);
     // Both shots should have a duplicate marker warning
     expect(issues.get(0)?.some((i) => i.field === 'general')).toBe(true);
     expect(issues.get(1)?.some((i) => i.field === 'general')).toBe(true);
@@ -247,7 +247,7 @@ describe('validateSection', () => {
       makeShot({ marker_index: 0 }),
       makeShot({ marker_index: 1 }),
     ];
-    const issues = validateSection(shots);
+    const issues = validateLine(shots);
     // No general issues
     for (const shotIssues of issues.values()) {
       expect(shotIssues.some((i) => i.field === 'general')).toBe(false);
@@ -259,7 +259,7 @@ describe('validateSection', () => {
       makeShot({ marker_index: 1, length: 0 }),
       makeShot({ marker_index: 1 }),
     ];
-    const issues = validateSection(shots);
+    const issues = validateLine(shots);
     const shot0Issues = issues.get(0) ?? [];
     // Should have both the duplicate marker warning and the length error
     expect(shot0Issues.some((i) => i.field === 'general')).toBe(true);
@@ -271,7 +271,7 @@ describe('validateSection', () => {
       makeShot({ shot_type: 'CsA', marker_index: 1 }),
       makeShot({ marker_index: 1 }),
     ];
-    const issues = validateSection(shots);
+    const issues = validateLine(shots);
     // Only one Standard shot with marker_index 1, so no duplicate
     expect(issues.size).toBe(0);
   });
@@ -311,7 +311,7 @@ describe('countIssues', () => {
     expect(countIssues(new Map())).toEqual({ errors: 0, warnings: 0 });
   });
 
-  it('counts errors and warnings across sections and shots', () => {
+  it('counts errors and warnings across lines and shots', () => {
     const innerMap = new Map<number, ValidationIssue[]>();
     innerMap.set(0, [
       { field: 'length', severity: 'error', message: 'e1' },
@@ -363,9 +363,9 @@ describe('validateEditableShot', () => {
     expect(errors.some((e) => e.field === 'azimuth_out')).toBe(true);
   });
 
-  it('includes sectionIndex and shotIndex in errors', () => {
+  it('includes lineIndex and shotIndex in errors', () => {
     const errors = validateEditableShot({ length: 0, azimuth_in: 45, azimuth_out: 45 }, 3, 7);
-    expect(errors[0]!.sectionIndex).toBe(7);
+    expect(errors[0]!.lineIndex).toBe(7);
     expect(errors[0]!.shotIndex).toBe(3);
   });
 });
@@ -383,7 +383,7 @@ describe('validatePlacement', () => {
     const error = validatePlacement(false, 2);
     expect(error).not.toBeNull();
     expect(error!.type).toBe('missingPlacement');
-    expect(error!.sectionIndex).toBe(2);
+    expect(error!.lineIndex).toBe(2);
   });
 });
 
@@ -397,17 +397,17 @@ describe('validateMergeTarget', () => {
     expect(validateMergeTarget('manual', undefined, new Set(), new Set(), 0)).toBeNull();
   });
 
-  it('returns mergeConflict when targetSectionId is undefined', () => {
+  it('returns mergeConflict when targetLineId is undefined', () => {
     const error = validateMergeTarget('fromExisting', undefined, new Set([1, 2]), new Set(), 0);
     expect(error).not.toBeNull();
     expect(error!.type).toBe('mergeConflict');
   });
 
-  it('returns null when target exists in existing sections', () => {
+  it('returns null when target exists in existing lines', () => {
     expect(validateMergeTarget('fromExisting', 5, new Set([5, 6]), new Set(), 0)).toBeNull();
   });
 
-  it('returns null when target exists in placed sections', () => {
+  it('returns null when target exists in placed lines', () => {
     expect(validateMergeTarget('fromExisting', 5, new Set(), new Set([5]), 0)).toBeNull();
   });
 
@@ -420,7 +420,7 @@ describe('validateMergeTarget', () => {
 
 describe('countUnresolvedErrors (#737 closure warnings)', () => {
   const warning = (code: string, severity: 'error' | 'warning', isResolved = false): ProjectWarning => ({
-    sectionId: 0,
+    lineId: 0,
     shotId: 1,
     shotIndex: 0,
     code,

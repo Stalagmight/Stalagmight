@@ -5,7 +5,7 @@ import type { ProjectMetadata } from '../../../types/project';
 import type { SpeleoProjectSummary } from '../../../types/ipc.generated';
 
 const local = { name: 'Bravo', file_path: '/local', modified_at: '2026-02-01T00:00:00Z',
-  section_count: 3, total_length: 100 } as ProjectMetadata;
+  line_count: 3, total_length: 100 } as ProjectMetadata;
 const cached = { ...local, name: 'Alpha', file_path: '/cache', is_remote: true,
   speleodb_project_id: 'remote', modified_at: '2099-01-01T00:00:00Z' };
 const remote = (id: string, name: string, modified_date?: string): SpeleoProjectSummary => ({

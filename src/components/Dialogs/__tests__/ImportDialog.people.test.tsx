@@ -1,7 +1,7 @@
 /**
- * New Section's Surveyors / Explorers pills: prefilled from the session's last
+ * New Line's Surveyors / Explorers pills: prefilled from the session's last
  * used people (and not "dirty" for that), applied to EVERY shot entered, and
- * remembered for the next section.
+ * remembered for the next line.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
@@ -28,8 +28,8 @@ import ImportDialog from '../ImportDialog';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
-import { SECTION_COLORS } from '../../../utils/colors';
-import type { SectionData, ShotData } from '../../../types/project';
+import { LINE_COLORS } from '../../../utils/colors';
+import type { LineData, ShotData } from '../../../types/project';
 import type { ShotDraft } from '../../SingleSystemView/dataTableDrafts';
 
 const byTestId = (id: string): HTMLElement => {
@@ -47,10 +47,10 @@ function renderWithShots(count: number) {
   useUIStore.setState({
     dialogData: {
       savedFormState: {
-        name: '',
+        name: 'Line 1',
         people: { surveyors: [], explorers: [] },
         date: '',
-        color: SECTION_COLORS[0]!,
+        color: LINE_COLORS[0]!,
         drafts,
         nextKey: count + 1,
       },
@@ -60,12 +60,12 @@ function renderWithShots(count: number) {
 }
 
 function typePerson(field: 'surveyors' | 'explorers', name: string) {
-  const input = byTestId(`import-section-${field}-input`) as HTMLInputElement;
+  const input = byTestId(`import-line-${field}-input`) as HTMLInputElement;
   fireEvent.change(input, { target: { value: name } });
   fireEvent.keyDown(input, { key: 'Enter' });
 }
 
-let placed: SectionData | null = null;
+let placed: LineData | null = null;
 
 beforeEach(() => {
   placed = null;
@@ -75,7 +75,7 @@ beforeEach(() => {
     appMode: 'survey',
     geometryMode: 'measured',
     lastUsedCredit: { surveyors: [], explorers: [] },
-    startPlacementMode: ((data: SectionData) => {
+    startPlacementMode: ((data: LineData) => {
       placed = data;
     }) as never,
     closeDialog: vi.fn(),
@@ -84,22 +84,22 @@ beforeEach(() => {
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
 });
 
-describe('New Section people', () => {
+describe('New Line people', () => {
   it('prefills the last used surveyors and explorers without counting them as a change', () => {
     useUIStore.setState({ lastUsedCredit: { surveyors: [{ name: 'Ann Diver' }], explorers: [{ name: 'Bo Lead' }] } });
     render(<ImportDialog />);
-    expect(byTestId('import-section-surveyors-pill-0-label')).toHaveTextContent('Ann Diver');
-    expect(byTestId('import-section-explorers-pill-0-label')).toHaveTextContent('Bo Lead');
+    expect(byTestId('import-line-surveyors-pill-0-label')).toHaveTextContent('Ann Diver');
+    expect(byTestId('import-line-explorers-pill-0-label')).toHaveTextContent('Bo Lead');
     // Closing asks nothing: the dialog is not dirty.
-    fireEvent.click(byTestId('import-section-dialog-close'));
+    fireEvent.click(byTestId('import-line-dialog-close'));
     expect(queryTestId('dirty-dialog-discard')).toBeNull();
     expect(useUIStore.getState().closeDialog).toHaveBeenCalled();
   });
 
   it('counts a name still being typed as a change', () => {
     render(<ImportDialog />);
-    fireEvent.change(byTestId('import-section-surveyors-input'), { target: { value: 'Half typ' } });
-    fireEvent.click(byTestId('import-section-dialog-close'));
+    fireEvent.change(byTestId('import-line-surveyors-input'), { target: { value: 'Half typ' } });
+    fireEvent.click(byTestId('import-line-dialog-close'));
     expect(queryTestId('dirty-dialog-discard')).not.toBeNull();
   });
 
@@ -108,10 +108,10 @@ describe('New Section people', () => {
     typePerson('surveyors', 'Ann Diver');
     typePerson('surveyors', 'Cy Survey');
     typePerson('explorers', 'Bo Lead');
-    fireEvent.click(byTestId('import-section-date-input-empty'));
-    fireEvent.change(byTestId('import-section-date-input'), { target: { value: '2026-03-02' } });
+    fireEvent.click(byTestId('import-line-date-input-empty'));
+    fireEvent.change(byTestId('import-line-date-input'), { target: { value: '2026-03-02' } });
     act(() => {
-      byTestId('import-section-create').click();
+      byTestId('import-line-create').click();
     });
     expect(placed).not.toBeNull();
     expect(placed!.surveyor).toBeNull();
@@ -132,7 +132,7 @@ describe('New Section people', () => {
   it('leaves the shots uncredited when no people and no date were given', () => {
     renderWithShots(2);
     act(() => {
-      byTestId('import-section-create').click();
+      byTestId('import-line-create').click();
     });
     expect(placed!.shots.every((shot) => shot.credit === undefined)).toBe(true);
   });
@@ -141,8 +141,8 @@ describe('New Section people', () => {
     renderWithShots(1);
     typePerson('surveyors', 'Ann Diver');
     typePerson('surveyors', 'Cy Survey');
-    fireEvent.click(byTestId('import-section-surveyors-pill-0-remove'));
-    expect(byTestId('import-section-surveyors-pill-0-label')).toHaveTextContent('Cy Survey');
-    expect(queryTestId('import-section-surveyors-pill-1')).toBeNull();
+    fireEvent.click(byTestId('import-line-surveyors-pill-0-remove'));
+    expect(byTestId('import-line-surveyors-pill-0-label')).toHaveTextContent('Cy Survey');
+    expect(queryTestId('import-line-surveyors-pill-1')).toBeNull();
   });
 });

@@ -3,7 +3,7 @@
  *
  * The grid is deliberately i18next-free (see `gridLabels.ts`), so every host has
  * to hand it a `t()`-backed `GridLabels`. Extracted from DataTable once a second
- * host appeared (the new-section dialog): the strings are identical everywhere
+ * host appeared (the new-line dialog): the strings are identical everywhere
  * except the domain row noun, which is what makes a context menu say "Delete
  * shot" rather than "Delete row".
  */

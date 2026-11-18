@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::{SectionId, StationAnchor, StationKey, StationRef};
+use crate::{LineId, StationAnchor, StationKey, StationRef};
 
 use super::Project;
 
@@ -12,7 +12,7 @@ pub enum ViolationSeverity {
     /// corruption if used (e.g. a merge pointing at a deleted station).
     Critical,
     /// A stale/orphaned entry that is ignored by lookups but signals an
-    /// inconsistent project (e.g. an offset keyed by a deleted section).
+    /// inconsistent project (e.g. an offset keyed by a deleted line).
     Warning,
 }
 
@@ -28,33 +28,39 @@ pub struct IntegrityViolation {
 }
 
 impl Project {
-    /// Reason a stored [`StationKey`] is invalid - it names a section that no
+    /// Reason a stored [`StationKey`] is invalid - it names a line that no
     /// longer exists, or its anchor no longer resolves to a real station (its
     /// anchoring shot was deleted) - or `None` if it points at a real station.
     /// With stable identity this catches a *dangling* anchor (the integrity win
     /// over positional refs, which could only ever be out-of-range, never
     /// silently mispointed at the wrong in-range station).
     fn station_ref_violation(&self, key: &StationKey) -> Option<String> {
-        match self.get_section(key.section_id) {
-            None => Some(format!("references missing section {}", key.section_id)),
+        match self.get_line(key.line_id) {
+            None => Some("references a missing line".to_string()),
             Some(_) => {
                 if self.resolve_key(key).is_some() {
                     None
                 } else {
                     Some(format!(
-                        "anchor no longer resolves in section {} (its anchoring shot was deleted)",
-                        key.section_id
+                        "anchor no longer resolves in line {} (its anchoring shot was deleted)",
+                        self.quoted_line(key.line_id)
                     ))
                 }
             }
         }
     }
 
+    /// A line as integrity messages name it: `"Main Line"`, quoted, never by
+    /// its numeric id.
+    fn quoted_line(&self, line_id: LineId) -> String {
+        format!("\"{}\"", self.line_label(line_id).unwrap_or_default())
+    }
+
     /// Audit every cross-reference in the project and return all structural
     /// violations (an empty vec means the project is structurally sound). This
     /// does not mutate the project and does not look at shot geometry - it only
     /// checks that merges, loop closures, zero datums, and the offset/comment
-    /// maps point at stations and sections that actually exist.
+    /// maps point at stations and lines that actually exist.
     ///
     /// Used to (a) block commands that would introduce corruption and (b) warn
     /// about - and repair - corruption already present in a loaded project.
@@ -64,27 +70,32 @@ impl Project {
         // Non-finite (NaN/inf) shot geometry - loaded from an older/corrupt file
         // or an unguarded import. It silently poisons coordinates (NaN passes the
         // tolerance comparisons in the alignment checks), so surface it.
-        for section in &self.sections {
-            if let Some(pos) = section.shots.iter().position(|s| !s.all_finite()) {
+        for line in &self.lines {
+            if let Some(pos) = line.shots.iter().position(|s| !s.all_finite()) {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Critical,
                     category: "non_finite_geometry".to_string(),
-                    message: format!(
-                        "Section {} has a shot with a non-finite (NaN/inf) value (at index {pos})",
-                        section.id
-                    ),
+                    message: match self.shot_label_at(line.id, pos) {
+                        Some(shot) => {
+                            format!("Shot {shot} has a non-finite (NaN/inf) value")
+                        }
+                        None => format!(
+                            "Line {} has a shot with a non-finite (NaN/inf) value",
+                            self.quoted_line(line.id)
+                        ),
+                    },
                 });
             }
         }
 
         // One pass over every shot UUID, for both kinds of repeat.
         //
-        // Within a section: two shots sharing a UUID make AfterShot anchors
+        // Within a line: two shots sharing a UUID make AfterShot anchors
         // mis-resolve - resolve_key takes the FIRST match via position(), so a
         // merge/closure/datum pointing at the second station silently snaps to
         // the first, geometrically wrong with no other signal.
         //
-        // Across sections: shot UUIDs are unique across the whole project.
+        // Across lines: shot UUIDs are unique across the whole project.
         // Every door that brings foreign ids in renames the newcomers
         // (`reassign_repeated_shot_uuids`) and the load heals a file saved
         // before that (`make_shot_uuids_project_unique`). A repeat therefore
@@ -96,11 +107,11 @@ impl Project {
         //
         // Both Critical. Empty UUIDs are "no identity yet" (ensure_shot_uuids
         // fills them) so they don't count.
-        let mut holders: HashMap<&str, SectionId> = HashMap::new();
+        let mut holders: HashMap<&str, LineId> = HashMap::new();
         let mut reported_across: HashSet<&str> = HashSet::new();
-        for section in &self.sections {
+        for line in &self.lines {
             let mut seen: HashSet<&str> = HashSet::new();
-            for u in section.shots.iter().filter_map(|shot| shot.uuid.as_deref()) {
+            for u in line.shots.iter().filter_map(|shot| shot.uuid.as_deref()) {
                 if u.is_empty() {
                     continue;
                 }
@@ -108,21 +119,25 @@ impl Project {
                     violations.push(IntegrityViolation {
                         severity: ViolationSeverity::Critical,
                         category: "duplicate_shot_uuid".to_string(),
-                        message: format!("Section {} has two shots sharing UUID {u}", section.id),
+                        message: format!(
+                            "Line {} has two shots sharing UUID {u}",
+                            self.quoted_line(line.id)
+                        ),
                     });
                     continue;
                 }
                 match holders.get(u) {
                     None => {
-                        holders.insert(u, section.id);
+                        holders.insert(u, line.id);
                     }
                     Some(&other) if reported_across.insert(u) => {
                         violations.push(IntegrityViolation {
                             severity: ViolationSeverity::Critical,
-                            category: "duplicate_shot_uuid_across_sections".to_string(),
+                            category: "duplicate_shot_uuid_across_lines".to_string(),
                             message: format!(
-                                "Sections {other} and {} both hold shot UUID {u}",
-                                section.id
+                                "Lines {} and {} both hold shot UUID {u}",
+                                self.quoted_line(other),
+                                self.quoted_line(line.id)
                             ),
                         });
                     }
@@ -145,6 +160,7 @@ impl Project {
                 "loop closure" => (ViolationSeverity::Critical, "dangling_closure_ref"),
                 "zero datum" => (ViolationSeverity::Critical, "dangling_zero_datum_ref"),
                 "station offset" => (ViolationSeverity::Warning, "orphan_station_offset"),
+                "station id" => (ViolationSeverity::Warning, "orphan_station_id"),
                 _ => (ViolationSeverity::Warning, "orphan_station_comment"),
             };
             let mut subject = label.to_string();
@@ -158,14 +174,14 @@ impl Project {
             });
         });
 
-        // section_offsets is keyed by SectionId (not a StationRef), so it isn't
-        // covered by for_each_station_ref - check it for a missing section here.
-        for section_id in self.section_offsets.keys() {
-            if self.get_section(*section_id).is_none() {
+        // line_offsets is keyed by LineId (not a StationRef), so it isn't
+        // covered by for_each_station_ref - check it for a missing line here.
+        for line_id in self.line_offsets.keys() {
+            if self.get_line(*line_id).is_none() {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
-                    category: "orphan_section_offset".to_string(),
-                    message: format!("Section offset for missing section {section_id}"),
+                    category: "orphan_line_offset".to_string(),
+                    message: "A line offset names a missing line".to_string(),
                 });
             }
         }
@@ -189,9 +205,9 @@ impl Project {
 
     /// True if ANY persisted cross-reference (a merge/closure/datum endpoint, or
     /// an offset/comment key) no longer resolves - its anchoring shot was deleted
-    /// or its section is gone. These are precisely the keys that would otherwise
-    /// be collapsed to a phantom `(section, 0)` ref on save and can collide on the
-    /// `(section_id, station_index)` PRIMARY KEY. The save path blocks on this so
+    /// or its line is gone. These are precisely the keys that would otherwise
+    /// be collapsed to a phantom `(line, 0)` ref on save and can collide on the
+    /// `(line_id, station_index)` PRIMARY KEY. The save path blocks on this so
     /// corruption is never persisted; `repair_structural_integrity` drops exactly
     /// these keys, so repair unblocks the save. Includes Warning-severity orphan
     /// offsets/comments (they cause the same PK collision), so this is broader
@@ -217,18 +233,18 @@ impl Project {
         }
 
         // Re-mint duplicate shot UUIDs first (keeping the first occurrence), so
-        // the per-section UUID snapshot below reflects the de-duplicated set and
+        // the per-line UUID snapshot below reflects the de-duplicated set and
         // AfterShot anchors that pointed at the kept shot stay valid.
         self.ensure_unique_shot_uuids();
-        // Then across sections, rewriting the station keys of every renamed shot.
+        // Then across lines, rewriting the station keys of every renamed shot.
         self.make_shot_uuids_project_unique();
 
-        // Snapshot, per section, the station count and the set of shot UUIDs, so
+        // Snapshot, per line, the station count and the set of shot UUIDs, so
         // the retain closures can validate a stored `StationKey` without
         // borrowing `self` while mutating its fields. Owns the UUID strings so no
-        // borrow of `self.sections` outlives into the mutating retains.
-        let sect_info: HashMap<SectionId, (u32, HashSet<String>)> = self
-            .sections
+        // borrow of `self.lines` outlives into the mutating retains.
+        let sect_info: HashMap<LineId, (u32, HashSet<String>)> = self
+            .lines
             .iter()
             .map(|s| {
                 let uuids = s.shots.iter().filter_map(|sh| sh.uuid.clone()).collect();
@@ -236,10 +252,10 @@ impl Project {
             })
             .collect();
         let key_valid = |key: &StationKey| -> bool {
-            match sect_info.get(&key.section_id) {
+            match sect_info.get(&key.line_id) {
                 None => false,
                 Some((count, uuids)) => match &key.anchor {
-                    StationAnchor::SectionStart => true,
+                    StationAnchor::LineStart => true,
                     StationAnchor::AfterShot(u) => uuids.contains(u),
                     StationAnchor::Index(i) => *i <= *count,
                 },
@@ -251,11 +267,12 @@ impl Project {
         self.loop_closures
             .retain(|c| key_valid(&c.station_a) && key_valid(&c.station_b));
         self.zero_datums.retain(|z| key_valid(&z.station_ref));
-        self.section_offsets
-            .retain(|section_id, _| sect_info.contains_key(section_id));
+        self.line_offsets
+            .retain(|line_id, _| sect_info.contains_key(line_id));
         self.station_offsets.retain(|key, _| key_valid(key));
         self.station_comments.retain(|key, _| key_valid(key));
         self.station_names.retain(|key, _| key_valid(key));
+        self.station_ids.retain(|key, _| key_valid(key));
 
         self.touch();
 
@@ -281,7 +298,7 @@ impl Project {
         &self,
         key_a: &StationKey,
         key_b: &StationKey,
-        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        local: &HashMap<LineId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
     ) -> Option<(StationRef, StationRef, f64)> {
         let a = self.resolve_key(key_a)?;
@@ -292,8 +309,8 @@ impl Project {
         dist.is_finite().then_some((a, b, dist))
     }
 
-    /// Cross-section merges whose two stations have drifted apart - the
-    /// references are valid but the geometry is wrong (a stale section offset
+    /// Cross-line merges whose two stations have drifted apart - the
+    /// references are valid but the geometry is wrong (a stale line offset
     /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
     /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
     /// by dropping data.
@@ -308,12 +325,12 @@ impl Project {
     /// about" and "is this a state the code considers valid" - and #413 finding
     /// 20 is what happens when one is used for both.
     pub fn merge_alignment_beyond(&self, threshold: f64) -> Vec<IntegrityViolation> {
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
         let mut violations = Vec::new();
         for merge in &self.station_merges {
-            // Same-section merges are physically meaningless (test-only).
-            if merge.station_a.section_id == merge.station_b.section_id {
+            // Same-line merges are physically meaningless (test-only).
+            if merge.station_a.line_id == merge.station_b.line_id {
                 continue;
             }
             let Some((a, b, dist)) =
@@ -326,8 +343,10 @@ impl Project {
                     severity: ViolationSeverity::Critical,
                     category: "merge_misaligned".to_string(),
                     message: format!(
-                        "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
-                        a.section_id, a.station_index, b.section_id, b.station_index, dist
+                        "Merged stations {} and {} are {:.2} m apart but should be the same point",
+                        self.station_text(a),
+                        self.station_text(b),
+                        dist
                     ),
                 });
             }
@@ -335,7 +354,7 @@ impl Project {
         violations
     }
 
-    /// Cross-section *aligned* loop closures whose two stations have drifted
+    /// Cross-line *aligned* loop closures whose two stations have drifted
     /// apart. An aligned closure (`is_aligned == true`) asserts its loop is
     /// closed - its endpoints coincide - and the offset solver enforces it as a
     /// rigid edge, so a stale claim silently rigidifies geometry that is metres
@@ -365,11 +384,11 @@ impl Project {
     /// Their shots were rewritten to make the claim true, so a torn one here is a
     /// real finding about a real file rather than a stamp the app got wrong.
     pub fn check_closure_alignment(&self) -> Vec<IntegrityViolation> {
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
         let mut violations = Vec::new();
         for closure in &self.loop_closures {
-            if !closure.is_aligned || closure.station_a.section_id == closure.station_b.section_id {
+            if !closure.is_aligned || closure.station_a.line_id == closure.station_b.line_id {
                 continue;
             }
             let Some((a, b, dist)) = self.endpoint_gap(
@@ -385,12 +404,9 @@ impl Project {
                     severity: ViolationSeverity::Critical,
                     category: "closure_misaligned".to_string(),
                     message: format!(
-                        "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart - recompute or remove it",
-                        closure.id,
-                        a.section_id,
-                        a.station_index,
-                        b.section_id,
-                        b.station_index,
+                        "Loop closure {} ↔ {} is marked closed but its ends are {:.2} m apart - recompute or remove it",
+                        self.station_text(a),
+                        self.station_text(b),
                         dist
                     ),
                 });
@@ -408,7 +424,7 @@ impl Project {
     pub fn check_orphan_closures(&self) -> Vec<IntegrityViolation> {
         let mut violations = Vec::new();
         for closure in &self.loop_closures {
-            if closure.station_a.section_id == closure.station_b.section_id {
+            if closure.station_a.line_id == closure.station_b.line_id {
                 continue;
             }
             let (Some(a), Some(b)) = (
@@ -426,19 +442,16 @@ impl Project {
                 // Repair could never clear it, since the converter correctly refuses
                 // to merge it. The same `merge_would_double_anchor` predicate keeps the
                 // checker and the converter in agreement.
-                if self.merge_would_double_anchor(a.section_id, b.section_id) {
+                if self.merge_would_double_anchor(a.line_id, b.line_id) {
                     continue;
                 }
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),
                     message: format!(
-                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its sections - it should be a merge, not a loop",
-                        closure.id,
-                        a.section_id,
-                        a.station_index,
-                        b.section_id,
-                        b.station_index
+                        "Loop closure {} ↔ {} is the only connection between its lines - it should be a merge, not a loop",
+                        self.station_text(a),
+                        self.station_text(b)
                     ),
                 });
             }

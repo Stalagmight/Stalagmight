@@ -2,7 +2,7 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  createSectionViaStore,
+  createLineViaStore,
 } from './helpers/app';
 
 type MockSuggestion = {
@@ -13,17 +13,17 @@ type MockSuggestion = {
   direction: 'forward' | 'reverse';
   isPartial: boolean;
   confidence: 'high' | 'medium' | 'low';
-  existingSectionName: string;
-  importSectionIndex: number;
-  importSectionName: string;
+  existingLineName: string;
+  importLineIndex: number;
+  importLineName: string;
   targetType: 'existing' | 'importing';
-  existingSectionId: number | null;
+  existingLineId: number | null;
   targetImportIndex: number | null;
 };
 
 interface MockDmpOptions {
   /**
-   * Append a zero-length shot to the unanchored section.
+   * Append a zero-length shot to the unanchored line.
    *
    * The DMP parser clamps a negative raw length to exactly 0.0, the shot
    * survives `isImportableDmpShot` (which only drops the length-1 default), and
@@ -37,7 +37,7 @@ interface MockDmpOptions {
 function buildMockDmpFile(options: MockDmpOptions = {}) {
   return {
     version: 5,
-    sections: [
+    lines: [
       {
         name: 'Anchor Candidate',
         direction: 'in',
@@ -131,11 +131,11 @@ const defaultSuggestions: MockSuggestion[] = [
     direction: 'forward',
     isPartial: false,
     confidence: 'high',
-    existingSectionName: 'Anchor Section',
-    importSectionIndex: 0,
-    importSectionName: 'Anchor Candidate',
+    existingLineName: 'Anchor Line',
+    importLineIndex: 0,
+    importLineName: 'Anchor Candidate',
     targetType: 'existing',
-    existingSectionId: 1,
+    existingLineId: 1,
     targetImportIndex: null,
   },
 ];
@@ -173,7 +173,7 @@ async function openDmpWizard(page: Page, dmpFile = buildMockDmpFile()): Promise<
       defaultExplorers: [],
       defaultDate: null,
       fileHash: 'mock_dmp_hash_flow',
-      sectionHashes: ['hash-anchor-candidate', 'hash-unanchored-segment'],
+      lineHashes: ['hash-anchor-candidate', 'hash-unanchored-segment'],
     };
 
     e2e.uiStore.getState().openDialog('dmp-import-new', {
@@ -250,8 +250,8 @@ test.describe('Import Placement Flow', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Placement Wizard Test');
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [{ azimuth_in: 40, azimuth_out: 40, length: 10, depth_in: -1, depth_out: -2 }],
     });
     await setImportSuggestions(page, defaultSuggestions);
@@ -332,7 +332,7 @@ test.describe('Import Placement Flow', () => {
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
   });
 
-  test('from-existing mode requires selecting target section before place is enabled', async ({ page }) => {
+  test('from-existing mode requires selecting target line before place is enabled', async ({ page }) => {
     await openDmpWizard(page);
     await openManualPlacing(page);
 
@@ -341,12 +341,12 @@ test.describe('Import Placement Flow', () => {
     const placeButton = page.getByTestId('segment-place-button');
     await expect(placeButton).toBeDisabled();
 
-    await page.getByTestId('from-existing-section-select').click();
+    await page.getByTestId('from-existing-line-select').click();
     const dropdownListbox = page
       .locator('[role="listbox"]')
-      .filter({ has: page.getByRole('option', { name: 'Anchor Section', exact: true }) })
+      .filter({ has: page.getByRole('option', { name: 'Anchor Line', exact: true }) })
       .last();
-    await dropdownListbox.getByRole('option', { name: 'Anchor Section', exact: true }).click();
+    await dropdownListbox.getByRole('option', { name: 'Anchor Line', exact: true }).click();
 
     await expect(placeButton).toBeEnabled();
   });
@@ -439,12 +439,12 @@ test.describe('Import Placement Flow', () => {
   /**
    * A zero-length shot the FILE brought with it must not strand the wizard.
    *
-   * Confirming the only suggestion anchors section 0 and leaves section 1 with
+   * Confirming the only suggestion anchors line 0 and leaves line 1 with
    * nowhere to attach, so the wizard moves itself to manual placing and
    * auto-starts the handoff - a window during which the whole dialog is
    * `display:none`. That handoff used to run the payload guard first, and
-   * `refuseIncompleteShots` walks EVERY selected section, so the zero-length
-   * row in section 1 refused it. The refusal returned before the one line that
+   * `refuseIncompleteShots` walks EVERY selected line, so the zero-length
+   * row in line 1 refused it. The refusal returned before the one line that
    * closed the hidden window, and nothing in the effect's dependencies changes
    * on a refusal, so it never retried: an invisible modal, `activeDialog` still
    * set, the rest of the app `inert`, no mouse affordance and no way back
@@ -488,11 +488,11 @@ test.describe('Import Placement Flow', () => {
    * The other half of the same fix: the guard MOVED, it was not deleted.
    *
    * "Place on Map" is a deliberate step toward an import, taken with the dialog
-   * visible, so refusing there names a section the user can go and fix. Taking
+   * visible, so refusing there names a line the user can go and fix. Taking
    * the guard off both paths would pass the test above and send the NaN-shaped
    * row on to the backend instead.
    */
-  test('the Place on Map button still refuses while a section is incomplete', async ({ page }) => {
+  test('the Place on Map button still refuses while a line is incomplete', async ({ page }) => {
     await openDmpWizard(page, buildMockDmpFile({ zeroLengthInUnanchored: true }));
     await page.getByTestId('confirm-button').click();
 
@@ -509,7 +509,7 @@ test.describe('Import Placement Flow', () => {
     await page.getByTestId('segment-place-on-map-button').click();
 
     // By dedup key, not by test ID: the placement hint toast is still on
-    // screen, and the refusal is the one that names the section.
+    // screen, and the refusal is the one that names the line.
     const refusal = page.locator('[data-toast-key="dmp-wizard-incomplete"]');
     await expect(refusal).toContainText('Unanchored Segment', { timeout: 10000 });
     await expect(refusal).toContainText('missing required values');

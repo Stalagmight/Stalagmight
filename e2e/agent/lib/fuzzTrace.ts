@@ -1003,7 +1003,7 @@ export function defaultTracePath(artifactsDir: string, scenario: string, seed: n
  *
  * Digits are normalized out of the headline and the error line, and array
  * indices out of the path, for one reason: removing a mutation MOVES things. The
- * depth a failure happens at, the iteration number, the section index in a diff
+ * depth a failure happens at, the iteration number, the line index in a diff
  * path - all of them shift when an earlier action goes away, while the defect is
  * the same defect. A signature that pinned them would reject every genuine
  * reduction and the shrinker would never make progress.

@@ -18,7 +18,7 @@
  * A replay RESTORES the environment the recording ran under (fixture, tolerance,
  * stream, the persistence knobs) before the scenario modules are imported, and
  * refuses a trace recorded by a different scenario. Both matter: the recorded
- * steps carry RESOLVED section and shot ids, so replaying them against another
+ * steps carry RESOLVED line and shot ids, so replaying them against another
  * fixture drives moves at ids that do not exist there and reports an invented
  * failure - or passes green - while the operator believes they are looking at
  * the recorded bug.

@@ -6,12 +6,12 @@ use super::station_names_tests::dump;
 use super::*;
 use crate::models::{ShotData, StationRef};
 
-/// One section of four shots; datums on A0 (placement) and A2 and A4 (fixes),
+/// One line of four shots; datums on A0 (placement) and A2 and A4 (fixes),
 /// with the given entrance answers.
 fn project_with(answers: [Option<bool>; 3]) -> Project {
     let mut project = Project::new("Entrances".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: (0..4)
                 .map(|_| ShotData {
                     length: 10.0,

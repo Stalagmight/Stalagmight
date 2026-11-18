@@ -4,10 +4,10 @@
  * exact framing `parse_dmp`, `parse_tml` and the Rust `zip` crate read. Two
  * things pin that here:
  *
- *   - a TS mirror of `parse_dmp`'s tokenizer and section walk, so a framing
+ *   - a TS mirror of `parse_dmp`'s tokenizer and line walk, so a framing
  *     mistake (a wrong magic, a v3 terminator sized like a v3 shot, a signed
  *     token that does not cast back) fails as a round-trip mismatch rather than
- *     as a mysterious "0 sections" hours later inside the app;
+ *     as a mysterious "0 lines" hours later inside the app;
  *   - a byte-for-byte pin of a one-entry STORED archive, derived by hand from
  *     APPNOTE rather than from this module's own output, so the pin cannot
  *     ratify a bug it inherited.
@@ -27,7 +27,7 @@ import {
   type TmlSpec,
   dmpFileBytes,
   dmpShotByteLength,
-  endOfSectionBytes,
+  endOfLineBytes,
   escapeXmlText,
   writeDmpBytes,
   writeDmpText,
@@ -53,23 +53,23 @@ function tokenizeDmp(text: string): number[] {
     });
 }
 
-/** `split_into_sections`: cut after every window matching an end-of-section pattern. */
-function splitSections(bytes: readonly number[], version: number): number[][] {
-  const patterns = [endOfSectionBytes(version, 'normal')];
-  if (version === 5) patterns.push(endOfSectionBytes(version, 'buggy'));
+/** `split_into_lines`: cut after every window matching an end-of-line pattern. */
+function splitLines(bytes: readonly number[], version: number): number[][] {
+  const patterns = [endOfLineBytes(version, 'normal')];
+  if (version === 5) patterns.push(endOfLineBytes(version, 'buggy'));
   const patternLength = patterns[0].length;
   if (patternLength === 0 || bytes.length < patternLength) return [];
 
-  const sections: number[][] = [];
+  const lines: number[][] = [];
   let start = 0;
   for (let index = 0; index + patternLength <= bytes.length; index++) {
     const window = bytes.slice(index, index + patternLength);
     if (patterns.some((pattern) => pattern.every((value, offset) => value === window[offset]))) {
-      sections.push(bytes.slice(start, index + patternLength));
+      lines.push(bytes.slice(start, index + patternLength));
       start = index + patternLength;
     }
   }
-  return sections;
+  return lines;
 }
 
 interface MirroredShot {
@@ -78,7 +78,7 @@ interface MirroredShot {
   markerIndex: number;
 }
 
-interface MirroredSection {
+interface MirroredLine {
   version: number;
   year: number;
   month: number;
@@ -91,7 +91,7 @@ interface MirroredSection {
 }
 
 /** `parse_section` + `parse_shot`, minus the validation and the pitch flip. */
-function parseSection(bytes: readonly number[]): MirroredSection {
+function parseLine(bytes: readonly number[]): MirroredLine {
   let cursor = 0;
   const read = (): number => {
     if (cursor >= bytes.length) throw new Error('read beyond buffer');
@@ -106,7 +106,7 @@ function parseSection(bytes: readonly number[]): MirroredSection {
   if (version > 2) {
     const magic = [read(), read(), read()];
     if (!magic.every((value, index) => value === DMP_SECTION_MAGIC[index])) {
-      throw new Error(`invalid section magic ${magic.join(',')}`);
+      throw new Error(`invalid line magic ${magic.join(',')}`);
     }
   }
   const year = read();
@@ -153,8 +153,8 @@ function parseSection(bytes: readonly number[]): MirroredSection {
   return { version, year, month, day, hour, minute, name, direction, shots };
 }
 
-function parseDmp(text: string, version: number): MirroredSection[] {
-  return splitSections(tokenizeDmp(text), version).map(parseSection);
+function parseDmp(text: string, version: number): MirroredLine[] {
+  return splitLines(tokenizeDmp(text), version).map(parseLine);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ function shot(overrides: Partial<DmpShotSpec> = {}): DmpShotSpec {
 function dmpSpec(version: number, overrides: Partial<DmpSpec> = {}): DmpSpec {
   return {
     version,
-    sections: [
+    lines: [
       {
         name: 'TST',
         direction: 0,
@@ -207,7 +207,7 @@ const TML_SHOT = {
   id: 1,
   fromId: 0,
   type: 'REAL',
-  section: 'Main',
+  line: 'Main',
   azimuth: 90,
   length: 10,
   depth: 5,
@@ -282,12 +282,12 @@ describe('crc32', () => {
 
 describe('writeDmpText framing', () => {
   for (const version of [2, 3, 4, 5]) {
-    it(`round trips a v${version} section through a mirror of parse_dmp`, () => {
+    it(`round trips a v${version} line through a mirror of parse_dmp`, () => {
       const spec = dmpSpec(version);
-      const sections = parseDmp(writeDmpText(spec), version);
+      const lines = parseDmp(writeDmpText(spec), version);
 
-      expect(sections).toHaveLength(1);
-      const parsed = sections[0];
+      expect(lines).toHaveLength(1);
+      const parsed = lines[0];
       expect(parsed.version).toBe(version);
       expect(parsed.name).toBe('TST');
       expect(parsed.direction).toBe(0);
@@ -312,54 +312,54 @@ describe('writeDmpText framing', () => {
 
   it('sizes a v3 record like parse_shot (16) and its terminator like shot_size (21)', () => {
     // The one place the parser disagrees with itself. Getting this backwards
-    // yields a file that splits into zero sections.
+    // yields a file that splits into zero lines.
     expect(dmpShotByteLength(3)).toBe(16);
-    expect(endOfSectionBytes(3)).toHaveLength(21);
-    expect(dmpShotByteLength(2)).toBe(endOfSectionBytes(2).length);
-    expect(dmpShotByteLength(4)).toBe(endOfSectionBytes(4).length);
-    expect(dmpShotByteLength(5)).toBe(endOfSectionBytes(5).length);
-    expect(endOfSectionBytes(5, 'buggy')).toHaveLength(35);
-    expect(endOfSectionBytes(5, 'none')).toEqual([]);
+    expect(endOfLineBytes(3)).toHaveLength(21);
+    expect(dmpShotByteLength(2)).toBe(endOfLineBytes(2).length);
+    expect(dmpShotByteLength(4)).toBe(endOfLineBytes(4).length);
+    expect(dmpShotByteLength(5)).toBe(endOfLineBytes(5).length);
+    expect(endOfLineBytes(5, 'buggy')).toHaveLength(35);
+    expect(endOfLineBytes(5, 'none')).toEqual([]);
   });
 
-  it('repeats the version byte at the head of every section', () => {
+  it('repeats the version byte at the head of every line', () => {
     const spec: DmpSpec = {
       version: 4,
-      sections: [
-        { ...dmpSpec(4).sections[0], name: 'AAA' },
-        { ...dmpSpec(4).sections[0], name: 'BBB', direction: 1, day: 16 },
+      lines: [
+        { ...dmpSpec(4).lines[0], name: 'AAA' },
+        { ...dmpSpec(4).lines[0], name: 'BBB', direction: 1, day: 16 },
       ],
     };
-    const sections = parseDmp(writeDmpText(spec), 4);
-    expect(sections.map((s) => s.name)).toEqual(['AAA', 'BBB']);
-    expect(sections.map((s) => s.version)).toEqual([4, 4]);
-    expect(sections[1].direction).toBe(1);
+    const lines = parseDmp(writeDmpText(spec), 4);
+    expect(lines.map((s) => s.name)).toEqual(['AAA', 'BBB']);
+    expect(lines.map((s) => s.version)).toEqual([4, 4]);
+    expect(lines[1].direction).toBe(1);
   });
 
   it('sameContentAs clones the fields the content hash covers, not the date', () => {
-    const base = dmpSpec(5).sections[0];
+    const base = dmpSpec(5).lines[0];
     const spec: DmpSpec = {
       version: 5,
-      sections: [
+      lines: [
         { ...base, name: 'DUP', direction: 1 },
         { ...base, name: 'zzz', direction: 0, day: 28, sameContentAs: 0 },
       ],
     };
-    const sections = parseDmp(writeDmpText(spec), 5);
-    expect(sections[1].name).toBe('DUP');
-    expect(sections[1].direction).toBe(1);
-    expect(sections[1].shots).toEqual(sections[0].shots);
-    // The date is the section's own: that is what makes it a duplicate the
-    // preview shows twice while `compute_section_hash` collapses them.
-    expect(sections[0].day).toBe(15);
-    expect(sections[1].day).toBe(28);
+    const lines = parseDmp(writeDmpText(spec), 5);
+    expect(lines[1].name).toBe('DUP');
+    expect(lines[1].direction).toBe(1);
+    expect(lines[1].shots).toEqual(lines[0].shots);
+    // The date is the line's own: that is what makes it a duplicate the
+    // preview shows twice while `compute_line_hash` collapses them.
+    expect(lines[0].day).toBe(15);
+    expect(lines[1].day).toBe(28);
   });
 
-  it('ignores a sameContentAs that is not an earlier section', () => {
-    const base = dmpSpec(4).sections[0];
+  it('ignores a sameContentAs that is not an earlier line', () => {
+    const base = dmpSpec(4).lines[0];
     const spec: DmpSpec = {
       version: 4,
-      sections: [
+      lines: [
         { ...base, name: 'AAA', sameContentAs: 0 },
         { ...base, name: 'BBB', sameContentAs: 7 },
       ],
@@ -406,31 +406,31 @@ describe('writeDmpText framing', () => {
 
     const noEos: DmpSpec = {
       version: 4,
-      sections: [{ ...spec.sections[0], endOfSection: 'none' }],
+      lines: [{ ...spec.lines[0], endOfLine: 'none' }],
     };
     expect(parseDmp(writeDmpText(noEos), 4)).toEqual([]);
 
     const badMagic: DmpSpec = {
       version: 4,
-      sections: [{ ...spec.sections[0], sectionMagic: [99, 99, 99] }],
+      lines: [{ ...spec.lines[0], lineMagic: [99, 99, 99] }],
     };
-    expect(() => parseSection(tokenizeDmp(writeDmpText(badMagic)))).toThrow(/invalid section magic/);
+    expect(() => parseLine(tokenizeDmp(writeDmpText(badMagic)))).toThrow(/invalid line magic/);
   });
 
-  it('takes the v5 buggy terminator as a section end too', () => {
+  it('takes the v5 buggy terminator as a line end too', () => {
     const spec: DmpSpec = {
       version: 5,
-      sections: [{ ...dmpSpec(5).sections[0], endOfSection: 'buggy' }],
+      lines: [{ ...dmpSpec(5).lines[0], endOfLine: 'buggy' }],
     };
-    const sections = parseDmp(writeDmpText(spec), 5);
-    expect(sections).toHaveLength(1);
-    expect(sections[0].shots.map((s) => s.shotType)).toEqual([2, 2, 3]);
+    const lines = parseDmp(writeDmpText(spec), 5);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].shots.map((s) => s.shotType)).toEqual([2, 2, 3]);
   });
 
   /**
    * The strongest check available without running cargo: reproduce, token for
    * token, the two synthetic files the Rust parser's OWN tests assert it parses
-   * (`build_v3_section_data` and `build_v4_section_data` in
+   * (`build_v3_line_data` and `build_v4_line_data` in
    * `src-tauri/src/parsers/dmp.rs`, consumed by `test_parse_dmp_v3_format` and
    * `test_parse_dmp_v4_with_lrud`).
    *
@@ -438,10 +438,10 @@ describe('writeDmpText framing', () => {
    * this module's author wrote. These strings are the real parser's accepted
    * input, transcribed - so a shared misreading of the format shows up here.
    */
-  it('reproduces build_v3_section_data token for token', () => {
+  it('reproduces build_v3_line_data token for token', () => {
     const spec: DmpSpec = {
       version: 3,
-      sections: [
+      lines: [
         {
           name: 'TST',
           direction: 0,
@@ -468,7 +468,7 @@ describe('writeDmpText framing', () => {
     };
     const expected = [
       '3', // version
-      '68;89;101', // section magic
+      '68;89;101', // line magic
       '24;6;15;10;30', // date
       '84;83;84', // "TST"
       '0', // direction: In
@@ -480,10 +480,10 @@ describe('writeDmpText framing', () => {
     expect(writeDmpText(spec)).toBe(expected);
   });
 
-  it('reproduces build_v4_section_data token for token', () => {
+  it('reproduces build_v4_line_data token for token', () => {
     const spec: DmpSpec = {
       version: 4,
-      sections: [
+      lines: [
         {
           name: 'V4S',
           direction: 1,
@@ -539,14 +539,14 @@ describe('writeDmpText framing', () => {
       ['ABCD', 'ABC'],
       ['', '   '],
     ] as const) {
-      const spec: DmpSpec = { version: 4, sections: [{ ...dmpSpec(4).sections[0], name }] };
+      const spec: DmpSpec = { version: 4, lines: [{ ...dmpSpec(4).lines[0], name }] };
       expect(parseDmp(writeDmpText(spec), 4)[0].name).toBe(expected);
     }
     // A non-ASCII name still occupies three bytes; the parser falls back to a
     // numeric spelling when they are not valid UTF-8 on their own.
     const highBytes: DmpSpec = {
       version: 4,
-      sections: [{ ...dmpSpec(4).sections[0], name: [0xc3, 0x28, 0xff] }],
+      lines: [{ ...dmpSpec(4).lines[0], name: [0xc3, 0x28, 0xff] }],
     };
     expect(dmpFileBytes(highBytes).slice(9, 12)).toEqual([0xc3, 0x28, 0xff]);
   });

@@ -12,17 +12,17 @@ import { surveyDataFromLegacy, type SurveyData } from '../../../../../types/surv
 import { getMapThemeColors } from '../../../../../utils/themeColors';
 import { resolveChoice, type ColorScaleInput } from '../../../../../utils/palettes';
 import type { DisplayColorContext } from '../../displayColor';
-import type { Section } from '../../../../../types/ipc/Section';
+import type { Line } from '../../../../../types/ipc/Line';
 import type { Station } from '../../../../../types/ipc/Station';
 
 const theme = getMapThemeColors();
 
-function synthetic(sectionCount: number, shotsPerSection: number): SurveyData {
-  const sections: Section[] = [];
+function synthetic(lineCount: number, shotsPerLine: number): SurveyData {
+  const lines: Line[] = [];
   const stations: Station[] = [];
-  for (let s = 1; s <= sectionCount; s++) {
+  for (let s = 1; s <= lineCount; s++) {
     const shots = [];
-    for (let i = 0; i < shotsPerSection; i++) {
+    for (let i = 0; i < shotsPerLine; i++) {
       const d0 = -((s * 7 + i) % 120) - Math.sin(i) * 3;
       shots.push({
         id: s * 100_000 + i, azimuth_in: 0, azimuth_out: 0, length: 4, depth_in: d0, depth_out: d0 - 1.5,
@@ -30,25 +30,25 @@ function synthetic(sectionCount: number, shotsPerSection: number): SurveyData {
         kind: 'Normal' as const, marker_index: null, temperature: null,
       });
     }
-    sections.push({
+    lines.push({
       id: s, name: `S${s}`, color: '#ff0000', direction: 'in', quality: 1,
-      next_shot_id: shotsPerSection, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+      next_shot_id: shotsPerLine, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots,
     });
-    for (let i = 0; i <= shotsPerSection; i++) {
+    for (let i = 0; i <= shotsPerLine; i++) {
       stations.push({
-        station_ref: { section_id: s, station_index: i }, coordinates: { x: i * 4, y: s * 10, z: -((s * 7 + i) % 120) },
-        is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+        station_ref: { line_id: s, station_index: i }, coordinates: { x: i * 4, y: s * 10, z: -((s * 7 + i) % 120) },
+        is_zero_datum: false, gps_coordinates: null, merged_with: [], id: 0, name: '', closures_with: [],
       });
     }
   }
-  return surveyDataFromLegacy(sections, stations);
+  return surveyDataFromLegacy(lines, stations);
 }
 
 function lookupOf(data: SurveyData): Map<number, Map<number, number>> {
   const lookup = new Map<number, Map<number, number>>();
   for (let g = 0; g < data.stationCount; g++) {
-    const sid = data.stationSectionIds[g]!;
+    const sid = data.stationLineIds[g]!;
     let inner = lookup.get(sid);
     if (!inner) lookup.set(sid, (inner = new Map()));
     inner.set(data.stationIndices[g]!, g);

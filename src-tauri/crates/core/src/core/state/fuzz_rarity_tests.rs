@@ -31,7 +31,7 @@
 //! | `datums-2+` | 7.7% | 6.5% | 0.6% |
 //! | `loop-closure` | 0.0% | 27.3% | 50.0% |
 //! | `diverged-ids` | 80.8% | 51.9% | 74.4% |
-//! | `section-offset` | 100.0% | 68.8% | 99.6% |
+//! | `line-offset` | 100.0% | 68.8% | 99.6% |
 //!
 //! Two things fall out before any arm runs. `loop-closure`, `closures-2+` and
 //! `cyclic-merges` are IDENTICALLY ZERO under the plain plan - the generators
@@ -130,7 +130,7 @@
 //! each arm reaches 3 to 5 buckets of a 6-bucket union in the plain regime and 3
 //! to 5 of a 5-bucket union in the closures one, and the arm holding the extra
 //! bucket is a different one each time: `novel` alone reaches
-//! `undo at section_offsets.#` and `prefix` alone `undo at station_merges.length`
+//! `undo at line_offsets.#` and `prefix` alone `undo at station_merges.length`
 //! in plain, while in closures it is `unguided` that reaches one neither `novel`
 //! nor `rare` does. Every extra bucket is a depth-collapsed variant of a family
 //! every arm already reaches. Only 2 to 6 runs in 80 fail at all here, so this
@@ -267,18 +267,18 @@ struct BitSpec {
 /// The thirteen candidate bits.
 ///
 /// Chosen from what this programme has actually needed: findings 4 and 10 need
-/// a second closure and an orphaned one, finding 3 needs an EMPTY section,
+/// a second closure and an orphaned one, finding 3 needs an EMPTY line,
 /// findings 8, 12 and 13 need ids that have diverged from positional order, and
 /// findings 14 and 20 need a merge graph with somewhere for an alignment to go
 /// wrong. Whether any of them is RARE is measured, not assumed.
 const BITS: [BitSpec; 13] = [
     BitSpec {
-        name: "empty-section",
+        name: "empty-line",
         feature: 1,
         least: 1,
     },
     BitSpec {
-        name: "one-shot-section",
+        name: "one-shot-line",
         feature: 2,
         least: 1,
     },
@@ -323,7 +323,7 @@ const BITS: [BitSpec; 13] = [
         least: 2,
     },
     BitSpec {
-        name: "section-offset",
+        name: "line-offset",
         feature: 9,
         least: 1,
     },
@@ -1216,7 +1216,7 @@ fn the_rarity_bits_read_the_topology_signature() {
     assert_eq!(
         bit_names(bits_of("s0e1o0h0m0d0c2y1z0g0k0v1")),
         vec![
-            "empty-section",
+            "empty-line",
             "loop-closure",
             "closures-2+",
             "cyclic-merges",

@@ -2,15 +2,15 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
 } from './helpers/app';
 
-async function openEditSectionDialog(page: Page): Promise<void> {
+async function openEditLineDialog(page: Page): Promise<void> {
   await page.evaluate(() => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
         uiStore: { getState: () => { openDialog: (dialog: string, data?: Record<string, unknown>) => void } };
-        projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } };
+        projectStore: { getState: () => { project: { lines: Array<{ id: number }> } | null } };
       };
     }).__E2E_TEST__;
 
@@ -18,18 +18,18 @@ async function openEditSectionDialog(page: Page): Promise<void> {
       throw new Error('E2E stores not available on window');
     }
 
-    const sectionId = e2e.projectStore.getState().project?.sections?.[0]?.id ?? 0;
-    e2e.uiStore.getState().openDialog('edit-section', { sectionId });
+    const lineId = e2e.projectStore.getState().project?.lines?.[0]?.id ?? 0;
+    e2e.uiStore.getState().openDialog('edit-line', { lineId });
   });
 
-  await expect(page.getByTestId('edit-section-dialog')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByTestId('edit-line-dialog')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Dialog Shortcut Guards', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Shortcut Guard');
-    await seedProjectWithSections(page, [
+    await seedProjectWithLines(page, [
       {
         name: 'Main Passage',
         direction: 'in',
@@ -47,7 +47,7 @@ test.describe('Dialog Shortcut Guards', () => {
   });
 
   test('tool shortcuts do not fire when a dialog is open', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
     const mapCanvas = page.getByTestId('map-canvas');
     const beforeTool = await mapCanvas.getAttribute('data-active-tool');
@@ -58,15 +58,15 @@ test.describe('Dialog Shortcut Guards', () => {
     await page.keyboard.press('M');
 
     await expect(mapCanvas).toHaveAttribute('data-active-tool', beforeTool ?? 'select');
-    await expect(page.getByTestId('edit-section-dialog')).toBeVisible();
+    await expect(page.getByTestId('edit-line-dialog')).toBeVisible();
   });
 
   test('file shortcuts do not replace the active dialog', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
     await page.keyboard.press('Control+I');
 
     await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
-    await expect(page.getByTestId('edit-section-dialog')).toBeVisible();
+    await expect(page.getByTestId('edit-line-dialog')).toBeVisible();
   });
 });

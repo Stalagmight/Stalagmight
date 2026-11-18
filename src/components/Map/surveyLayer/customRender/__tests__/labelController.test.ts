@@ -120,7 +120,7 @@ const CUSTOM_ID = 'survey-custom-labels';
 const STOCK_LAYERS: Record<number, string> = {
   [LABEL_KIND.SHOT_LABEL]: 'survey-shot-labels',
   [LABEL_KIND.STATION_LABEL]: 'survey-station-labels',
-  [LABEL_KIND.SECTION_NAME]: 'survey-labels',
+  [LABEL_KIND.LINE_NAME]: 'survey-labels',
   [LABEL_KIND.STATION_COMMENT]: 'survey-station-comments',
   [LABEL_KIND.SHOT_COMMENT]: 'survey-shot-comments',
 };
@@ -161,17 +161,20 @@ const THEME = { textHalo: '#111111', textHaloAlt: '#222222', depthShallow: '#00b
 
 function makeFixture(): SurveyData {
   const d = emptySurveyData();
-  d.sections = [
+  d.lines = [
     { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
     { id: 2, name: 'B', color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
   ];
   d.shotCount = 3;
   d.shotIds = new Uint32Array([0, 1, 0]);
-  d.shotSectionIds = new Uint32Array([1, 1, 2]);
+  d.shotLineIds = new Uint32Array([1, 1, 2]);
   d.shotFlags = new Uint8Array([0, 0, 0]);
   d.stationCount = 4;
-  d.stationSectionIds = new Uint32Array([1, 1, 1, 2]);
+  d.stationLineIds = new Uint32Array([1, 1, 1, 2]);
   d.stationIndices = new Uint32Array([0, 1, 2, 0]);
+  // Station IDs (what the IDs labels draw): one digit each, like the indices,
+  // so glyph counts stay the same, but never equal to the index.
+  d.stationIds = new Uint32Array([7, 8, 9, 6]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 100, 100, 0]);
   d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0]);
   return d;
@@ -441,8 +444,8 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
 
     c.setShotLabelsVisible(true);
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_LABEL]).toBe(true);
-    c.setSectionNamesVisible(false);
-    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SECTION_NAME]).toBe(false);
+    c.setLineNamesVisible(false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.LINE_NAME]).toBe(false);
     c.setStationCommentsVisible(true);
     expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_COMMENT]).toBe(true);
     c.setShotCommentsVisible(true);
@@ -714,20 +717,20 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
     const c = cameraController(cam.map);
     c.sync(makeParams());
     const kinds = builtKinds(h.layerState.last!);
-    // Fixture has shot labels, station labels, section names (no comments).
+    // Fixture has shot labels, station labels, line names (no comments).
     expect(kinds.has(LABEL_KIND.SHOT_LABEL)).toBe(true);
     expect(kinds.has(LABEL_KIND.STATION_LABEL)).toBe(true);
-    expect(kinds.has(LABEL_KIND.SECTION_NAME)).toBe(true);
+    expect(kinds.has(LABEL_KIND.LINE_NAME)).toBe(true);
   });
 
-  it('builds ONLY section names between section-minzoom (10) and the build band', () => {
+  it('builds ONLY line names between line-minzoom (10) and the build band', () => {
     const cam = zoomOnlyMap(12);
     const c = cameraController(cam.map);
     c.sync(makeParams());
-    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
+    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.LINE_NAME]));
   });
 
-  it('builds nothing below section minzoom (10)', () => {
+  it('builds nothing below line minzoom (10)', () => {
     const cam = zoomOnlyMap(8);
     const c = cameraController(cam.map);
     c.sync(makeParams());
@@ -743,10 +746,10 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
     c.sync(makeParams());
     // Hysteresis: already-built stays full (shot labels present at 13.2).
     expect(builtKinds(h.layerState.last!).has(LABEL_KIND.SHOT_LABEL)).toBe(true);
-    // A FRESH controller at the same 13.2 builds section-only (below build 13.5).
+    // A FRESH controller at the same 13.2 builds line-only (below build 13.5).
     const fresh = cameraController(zoomOnlyMap(13.2).map);
     fresh.sync(makeParams());
-    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
+    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.LINE_NAME]));
   });
 });
 
@@ -850,26 +853,26 @@ describe('SurveyLabelController camera-settle rebuild (conditional)', () => {
     expect(layer.updateCalls).toBe(after);
   });
 
-  it('rebuilds when a settle crosses the section-name minzoom (below 10 → into [10, band)) so section names appear', () => {
-    // A build below SECTION_NAME_MIN_ZOOM (10) emits NO section names (empty
+  it('rebuilds when a settle crosses the line-name minzoom (below 10 → into [10, band)) so line names appear', () => {
+    // A build below LINE_NAME_MIN_ZOOM (10) emits NO line names (empty
     // set). Zooming into [10, 13.5) stays inside the larger low-zoom padded
     // viewport, and wantFull is false on both sides of 10, so checks 1-3 all
     // miss it; without the minzoom-crossing check the settle would NOT rebuild
-    // and section names would stay absent until 13.5 / an edit / a big pan.
+    // and line names would stay absent until 13.5 / an edit / a big pan.
     const cam = makeCameraMap(8);
     const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
     c.sync(makeParams());
     const layer = h.layerState.last!;
     expect((layer.data as LabelRenderData).buffers.glyphCount).toBe(0); // nothing below 10
-    expect(builtKinds(layer).has(LABEL_KIND.SECTION_NAME)).toBe(false);
+    expect(builtKinds(layer).has(LABEL_KIND.LINE_NAME)).toBe(false);
     const before = layer.updateCalls;
     cam.state.zoom = 11; // into [10, band): still inside the padded z8 viewport
     cam.fire('zoomend');
     expect(layer.updateCalls).toBe(before + 1); // the crossing forced a rebuild
-    expect(builtKinds(layer).has(LABEL_KIND.SECTION_NAME)).toBe(true); // names now present
+    expect(builtKinds(layer).has(LABEL_KIND.LINE_NAME)).toBe(true); // names now present
   });
 
-  it('does NOT rebuild on a settle that stays below the section-name minzoom', () => {
+  it('does NOT rebuild on a settle that stays below the line-name minzoom', () => {
     // Both builds are below 10 (same band) → no crossing, and the smaller z9
     // viewport is still inside the padded z8 box → no rebuild.
     const cam = makeCameraMap(8);
@@ -1054,22 +1057,22 @@ function stationLabelFlag(layer: FakeLabelLayer, params: LabelSyncParams, g: num
   return 0;
 }
 
-/** Flag byte of the SECTION NAME anchored at the section's first station
+/** Flag byte of the LINE NAME anchored at the line's first station
  *  `firstStationG` (names anchor at the first non-reference station); 0 if
- *  absent. Lets a test target one section's name among several. */
-function sectionNameFlag(layer: FakeLabelLayer, params: LabelSyncParams, firstStationG: number): number {
+ *  absent. Lets a test target one line's name among several. */
+function lineNameFlag(layer: FakeLabelLayer, params: LabelSyncParams, firstStationG: number): number {
   const [ax, ay] = stationAnchor(params, firstStationG);
   const d = layer.data as LabelRenderData;
   const { kind, flags, anchor } = d.buffers;
   for (let v = 0; v < kind.length; v++) {
-    if (kind[v] !== LABEL_KIND.SECTION_NAME) continue;
+    if (kind[v] !== LABEL_KIND.LINE_NAME) continue;
     if (Math.abs(anchor[v * 2]! - ax) < 1e-9 && Math.abs(anchor[v * 2 + 1]! - ay) < 1e-9) return flags[v]!;
   }
   return 0;
 }
 
 const EMPTY_DIM = {
-  anchoredSectionIds: new Set<number>(),
+  anchoredLineIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
   immovableShotFeatureIds: new Set<number>(),
   gasDimStationFeatureIds: new Set<number>(),
@@ -1077,7 +1080,7 @@ const EMPTY_DIM = {
   planIdleDim: false,
 };
 
-/** Fixture + a station comment on g0 (section 1) and a shot comment on shot 0. */
+/** Fixture + a station comment on g0 (line 1) and a shot comment on shot 0. */
 function commentParams(): LabelSyncParams {
   const p = makeParams();
   p.surveyData.stationComments = new Map([[0, 'stn']]);
@@ -1094,37 +1097,37 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('anchored dim: shot/station/section labels dim, comments do NOT (stock parity)', () => {
+  it('anchored dim: shot/station/line labels dim, comments do NOT (stock parity)', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    // Anchor BOTH sections so every label of a dimmable kind is covered.
-    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1, 2]) });
+    // Anchor BOTH lines so every label of a dimmable kind is covered.
+    c.setDimming({ ...EMPTY_DIM, anchoredLineIds: new Set([1, 2]) });
     expect(layer.flagsCalls).toBeGreaterThan(0); // cheap flags-only refresh, no rebuild
     expect(allKindHaveBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
     expect(allKindHaveBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DIM)).toBe(true);
-    expect(allKindHaveBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.LINE_NAME, LABEL_FLAG.DIM)).toBe(true);
     // Comments are never dimmed by stock label expressions.
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(false);
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DIM)).toBe(false);
   });
 
-  it('immovable dim: only the immovable station label dims; section names never do', () => {
+  it('immovable dim: only the immovable station label dims; line names never do', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    // Immovable station g0 == section 1, station index 0.
+    // Immovable station g0 == line 1, station index 0.
     c.setDimming({
       ...EMPTY_DIM,
       immovableStationFeatureIds: new Set([1 * FEATURE_ID_STRIDE + 0]),
     });
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM); // g0 dims
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DIM).toBe(0); // g1 does not
-    // Section names are not immovable-dimmed.
-    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(false);
+    // Line names are not immovable-dimmed.
+    expect(anyKindHasBit(layer, LABEL_KIND.LINE_NAME, LABEL_FLAG.DIM)).toBe(false);
   });
 
   it('plan-idle tint (#395 revision): EVERY label dims, including comments', () => {
@@ -1135,7 +1138,7 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
     c.setDimming({ ...EMPTY_DIM, planIdleDim: true });
     expect(allKindHaveBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
     expect(allKindHaveBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DIM)).toBe(true);
-    expect(allKindHaveBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.LINE_NAME, LABEL_FLAG.DIM)).toBe(true);
     // Unlike anchored dim, the idle tint reaches comments too - it mirrors the
     // "whole survey tints" geometry behavior, so nothing stays full-bright.
     expect(allKindHaveBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(true);
@@ -1151,7 +1154,7 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1, 2]) });
+    c.setDimming({ ...EMPTY_DIM, anchoredLineIds: new Set([1, 2]) });
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
     c.setDimming(EMPTY_DIM);
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(false);
@@ -1168,39 +1171,39 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   // PARITY BREAK (deliberate): stock left `survey-labels` out of the drag hide
-  // layers, so a section name stayed pinned at its old anchor while the geometry
+  // layers, so a line name stayed pinned at its old anchor while the geometry
   // moved (reads as stuck). The custom label layer now DRAG_HIDEs the name of
-  // every AFFECTED section - the whole-section drag via `sectionIds`, a partial
-  // station / shot drag via the `affectedSectionIds` set SurveyLayer threads in.
-  it('hides the dragged station label + its comment + its section name; leaves other stations and unaffected section names', () => {
+  // every AFFECTED line - the whole-line drag via `lineIds`, a partial
+  // station / shot drag via the `affectedLineIds` set SurveyLayer threads in.
+  it('hides the dragged station label + its comment + its line name; leaves other stations and unaffected line names', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    // Drag station g0 (section 1); SurveyLayer marks section 1 as affected.
-    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
+    // Drag station g0 (line 1); SurveyLayer marks line 1 as affected.
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedLineIds: new Set([1]) });
     expect(layer.flagsCalls).toBeGreaterThan(0);
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
     // The station comment (only g0 has one) hides with its station.
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
-    // Section 1's name (first station g0) hides; section 2's name (g3) does not.
-    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(sectionNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+    // Line 1's name (first station g0) hides; line 2's name (g3) does not.
+    expect(lineNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(lineNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 
-  it('does NOT hide a section name whose section is not in affectedSectionIds', () => {
+  it('does NOT hide a line name whose line is not in affectedLineIds', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    // Drag station g0 but omit the affected-section set (station-only exclusion):
-    // the station label hides, its section name does NOT.
+    // Drag station g0 but omit the affected-line set (station-only exclusion):
+    // the station label hides, its line name does NOT.
     c.setDragHide({ stationGlobalIndices: new Set([0]) });
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+    expect(lineNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 
   it('hides the dragged shot label + its comment', () => {
@@ -1213,32 +1216,32 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
   });
 
-  it('a whole-section drag hides that section labels AND its section name', () => {
+  it('a whole-line drag hides that line labels AND its line name', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ sectionIds: new Set([1]) });
+    c.setDragHide({ lineIds: new Set([1]) });
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
-    // Section 1's name hides with the whole section; section 2's stays visible.
-    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(sectionNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+    // Line 1's name hides with the whole line; line 2's stays visible.
+    expect(lineNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(lineNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 
-  it('setDragHide(null) clears every DRAG_HIDE incl section names (drag end)', () => {
+  it('setDragHide(null) clears every DRAG_HIDE incl line names (drag end)', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedLineIds: new Set([1]) });
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(lineNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     c.setDragHide(null);
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(false);
-    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.LINE_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
   });
 
   it('DIM and DRAG_HIDE compose without disturbing each other', () => {
@@ -1247,13 +1250,13 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1]) });
+    c.setDimming({ ...EMPTY_DIM, anchoredLineIds: new Set([1]) });
     c.setDragHide({ stationGlobalIndices: new Set([0]) });
     // g0 has both bits; the dim persists through the drag flag upload.
     const f0 = stationLabelFlag(layer, p, 0);
     expect(f0 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
     expect(f0 & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    // g1 (section 1, not dragged) keeps DIM but not DRAG_HIDE.
+    // g1 (line 1, not dragged) keeps DIM but not DRAG_HIDE.
     const f1 = stationLabelFlag(layer, p, 1);
     expect(f1 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
     expect(f1 & LABEL_FLAG.DRAG_HIDE).toBe(0);
@@ -1265,18 +1268,18 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedLineIds: new Set([1]) });
     // A mid-drag geometry flush re-syncs; the fresh build must re-bake DRAG_HIDE
-    // for both the dragged station label AND its affected section name.
+    // for both the dragged station label AND its affected line name.
     c.sync(commentParams());
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(lineNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
   });
 });
 
-// The fixture puts a station comment on station g0 (section 1, station index 0)
-// and a shot comment on shot global 0 (section 1, shot id 0), so the hidden-comment
-// identity is {sectionId:1, id:0} for both kinds.
+// The fixture puts a station comment on station g0 (line 1, station index 0)
+// and a shot comment on shot global 0 (line 1, shot id 0), so the hidden-comment
+// identity is {lineId:1, id:0} for both kinds.
 describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
@@ -1291,7 +1294,7 @@ describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', 
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    c.setHiddenComment({ type: 'shot', lineId: 1, id: 0 });
     expect(layer.flagsCalls).toBeGreaterThan(0); // cheap flags-only refresh, no rebuild
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
     // A station/shot LABEL sharing the anchor, and the OTHER comment kind, never hide.
@@ -1305,17 +1308,17 @@ describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', 
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setHiddenComment({ type: 'station', sectionId: 1, id: 0 });
+    c.setHiddenComment({ type: 'station', lineId: 1, id: 0 });
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
   });
 
-  it('does not match a comment in a different section (id/section keyed)', () => {
+  it('does not match a comment in a different line (id/line keyed)', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setHiddenComment({ type: 'shot', sectionId: 2, id: 0 }); // section 2 has no comment here
+    c.setHiddenComment({ type: 'shot', lineId: 2, id: 0 }); // line 2 has no comment here
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
   });
 
@@ -1324,7 +1327,7 @@ describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', 
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    c.setHiddenComment({ type: 'shot', lineId: 1, id: 0 });
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
     c.setHiddenComment(null);
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
@@ -1335,7 +1338,7 @@ describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', 
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
-    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    c.setHiddenComment({ type: 'shot', lineId: 1, id: 0 });
     c.sync(commentParams()); // a geometry flush during pickup
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
   });
@@ -1414,14 +1417,15 @@ describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => 
   });
   afterEach(() => vi.restoreAllMocks());
 
-  /** Section B's one shot is a Jump laid exactly over section A's first (real)
+  /** Line B's one shot is a Jump laid exactly over line A's first (real)
    *  shot, so their shot labels share an anchor and overlap at every zoom. */
   function jumpOverRealParams(): LabelSyncParams {
     const params = makeParams();
     const d = params.surveyData;
     d.stationCount = 5;
-    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([7, 8, 9, 6, 5]);
     d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 0, 0, 0, 10, 0, -1]);
     d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
     d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
@@ -1463,7 +1467,7 @@ describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => 
   });
 });
 
-describe('SurveyLabelController jump section names below the label band', () => {
+describe('SurveyLabelController jump line names below the label band', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
@@ -1472,33 +1476,34 @@ describe('SurveyLabelController jump section names below the label band', () => 
   });
   afterEach(() => vi.restoreAllMocks());
 
-  /** Real section A (stations at x = -3000, 0, 10) and a jump section J tied in at
+  /** Real line A (stations at x = -3000, 0, 10) and a jump line J tied in at
    *  A's middle station: J's name sits on A's station label there. */
   function tiedJumpParams(): LabelSyncParams {
     const params = makeParams();
     const d = params.surveyData;
-    d.sections = [
+    d.lines = [
       { id: 1, name: 'A', color: '#ff0000', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
       { id: 2, name: 'Jump to the downstream sump', color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
     ];
     d.shotCount = 3;
     d.shotIds = new Uint32Array([0, 1, 0]);
-    d.shotSectionIds = new Uint32Array([1, 1, 2]);
+    d.shotLineIds = new Uint32Array([1, 1, 2]);
     d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
     d.stationCount = 5;
-    d.stationSectionIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([7, 8, 9, 6, 5]);
     d.stationCoords = new Float64Array([-3000, 0, 0, 0, 0, -1, 10, 0, -2, 0, 0, -1, 0, 30, -1]);
     d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
     return params;
   }
 
-  /** Reveal zooms of J's section name (the all-jump one), [] when not emitted. */
+  /** Reveal zooms of J's line name (the all-jump one), [] when not emitted. */
   function jumpNameReveals(layer: FakeLabelLayer): number[] {
     const { kind, revealZoom, flags } = vfl(layer);
     const out: number[] = [];
     for (let v = 0; v < kind.length; v++) {
-      if (kind[v] === LABEL_KIND.SECTION_NAME && (flags[v]! & LABEL_FLAG.ALL_JUMP) !== 0) out.push(revealZoom[v]!);
+      if (kind[v] === LABEL_KIND.LINE_NAME && (flags[v]! & LABEL_FLAG.ALL_JUMP) !== 0) out.push(revealZoom[v]!);
     }
     return out;
   }
@@ -1604,7 +1609,7 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
     const p = namedParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    expect(stationGlyphs(layer)).toBe(4); // "0", "1", "2", "0"
+    expect(stationGlyphs(layer)).toBe(4); // the Station IDs "7", "8", "9", "6"
     const updates = layer.updateCalls;
 
     c.setStationLabelMode('name');
@@ -1667,7 +1672,7 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
     const p = namedParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    // Dim station g1 (section 1, index 1) while IDs show, then switch to names:
+    // Dim station g1 (line 1, index 1) while IDs show, then switch to names:
     // the rebuild recomputes the full flag byte, so the name label is dimmed too.
     c.setDimming({ ...EMPTY_DIM, immovableStationFeatureIds: new Set([1 * FEATURE_ID_STRIDE + 1]) });
     c.setStationLabelMode('name');
@@ -1676,5 +1681,21 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
     c.setDragHide({ stationGlobalIndices: new Set([3]) });
     expect(stationLabelFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+  });
+
+  it("a merge group's one label drag-hides when any member is dragged", () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    const p = makeParams();
+    // B's start (g3) is merged onto A's middle station (g1): g1 labels both.
+    p.surveyData.stationMergedWith = new Map([
+      [1, [{ line_id: 2, station_index: 0 }]],
+      [3, [{ line_id: 1, station_index: 1 }]],
+    ]);
+    c.sync(p);
+    const layer = h.layerState.last!;
+    expect(vfl(layer).kind.filter((k) => k === LABEL_KIND.STATION_LABEL).length / 4).toBe(3);
+    c.setDragHide({ stationGlobalIndices: new Set([3]) });
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 2) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 });

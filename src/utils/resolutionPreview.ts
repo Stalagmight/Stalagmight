@@ -23,7 +23,7 @@ export function horizontalLength(slopeLength: number, depthChange: number): numb
 /**
  * Ghost endpoint for a proposed shot edit, or `null` when the planar model
  * can't reproduce the current solved endpoint within tolerance - e.g. a
- * rotated/offset section whose solved frame differs from raw azimuths. The
+ * rotated/offset line whose solved frame differs from raw azimuths. The
  * caller shows no ghost in that case rather than a misleading one.
  *
  * @param start          solved coords of the shot's start station (meters)

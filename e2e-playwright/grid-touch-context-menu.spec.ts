@@ -3,10 +3,10 @@ import type { CDPSession } from '@playwright/test';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -26,9 +26,9 @@ import {
 
 test.use({ hasTouch: true });
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Touch Grid Section',
+    name: 'Touch Grid Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -105,7 +105,7 @@ async function touchEndPrevented(page: Page): Promise<boolean | null | undefined
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // 3 shots + the end draft row (auto-selects first section)
+  // 3 shots + the end draft row (auto-selects first line)
   await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/, { timeout: 5000 });
 }
 
@@ -117,7 +117,7 @@ test.describe('Grid touch context menu', () => {
     cdp = await page.context().newCDPSession(page);
     await setupMockedPage(page);
     await createProject(page, 'Grid Touch Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);

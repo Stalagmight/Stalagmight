@@ -2,7 +2,7 @@
  * Regression test for #162 (Regression 2): data-table sub-header dropdowns must
  * stay fully visible and clickable when they flip UPWARD.
  *
- * The section picker and the column eye-menu open above their trigger when the
+ * The line picker and the column eye-menu open above their trigger when the
  * data table is docked low. Before the fix they used `position:absolute` and
  * were clipped by the Dock's `overflow-hidden` box, so clicks on their items
  * fell through to the MapLibre canvas behind the clip and did nothing. The fix
@@ -22,13 +22,13 @@ import { test, expect, type Page, type Locator } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Alpha Passage',
     direction: 'in',
@@ -102,31 +102,31 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Clip Regression');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await shrinkDataTable(page);
     await openDataTable(page);
     // Wait for the panel to settle low (its sub-header in the bottom of the
     // window) before measuring/opening menus, so the flip-up is deterministic.
-    const pill = page.getByTestId('data-table-section-pill');
+    const pill = page.getByTestId('data-table-line-pill');
     await expect.poll(async () => (await pill.boundingBox())?.y ?? 0).toBeGreaterThan(
       page.viewportSize()!.height / 2,
     );
   });
 
-  test('section picker flips up, stays on screen, and a pick selects app-wide', async ({ page }) => {
-    const pill = page.getByTestId('data-table-section-pill');
+  test('line picker flips up, stays on screen, and a pick selects app-wide', async ({ page }) => {
+    const pill = page.getByTestId('data-table-line-pill');
     await expect(pill).toContainText('Alpha Passage');
 
     await pill.click();
-    const list = page.getByTestId('data-table-section-menu-list');
+    const list = page.getByTestId('data-table-line-menu-list');
     await expect(list).toBeVisible();
 
     await expectFlippedUpAndOnScreen(page, list, pill);
 
     const betaItem = list.getByRole('button', { name: 'Beta Tunnel' });
-    await expectItemHitsMenu(page, betaItem, 'data-table-section-menu-list');
+    await expectItemHitsMenu(page, betaItem, 'data-table-line-menu-list');
 
     // The real repro: the click must land on the item, not the map behind it.
     await betaItem.click();
@@ -141,27 +141,27 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
           return stores?.uiStore.getState().selection?.type ?? null;
         }),
       )
-      .toBe('section');
+      .toBe('line');
   });
 
   test('a tall picker is bounded below the toolbar (not hidden behind it)', async ({ page }) => {
-    // Many sections make the list taller than the space between the sub-header
+    // Many lines make the list taller than the space between the sub-header
     // and the toolbar; in a short window that forces the flipped-up list to be
     // capped at the toolbar's bottom instead of sliding up under the opaque bar.
     const many = Array.from({ length: 20 }, (_, i) => ({
-      name: `Section ${String(i).padStart(2, '0')}`,
+      name: `Line ${String(i).padStart(2, '0')}`,
       direction: 'in' as const,
       shots: [{ azimuth_in: 45, azimuth_out: 225, length: 5, depth_in: -1, depth_out: -2 }],
     }));
-    await seedProjectWithSections(page, many);
+    await seedProjectWithLines(page, many);
     await waitForNoDialogs(page);
     await page.setViewportSize({ width: 900, height: 460 });
     await shrinkDataTable(page);
-    const pill = page.getByTestId('data-table-section-pill');
+    const pill = page.getByTestId('data-table-line-pill');
     await expect.poll(async () => (await pill.boundingBox())?.y ?? 0).toBeGreaterThan(230);
 
     await pill.click();
-    const list = page.getByTestId('data-table-section-menu-list');
+    const list = page.getByTestId('data-table-line-menu-list');
     await expect(list).toBeVisible();
 
     const m = (await list.boundingBox())!;
@@ -171,7 +171,7 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
     expect(m.y + m.height).toBeLessThanOrEqual((await pill.boundingBox())!.y + 1);
     expect(m.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height + 8 - 1);
     // The topmost item must be clickable (under the toolbar it would not be).
-    await expectItemHitsMenu(page, list.getByRole('button').first(), 'data-table-section-menu-list');
+    await expectItemHitsMenu(page, list.getByRole('button').first(), 'data-table-line-menu-list');
   });
 
   test('column eye-menu flips up, stays on screen, and a toggle changes the grid', async ({ page }) => {
@@ -194,9 +194,9 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
   test('resizing the window while a picker is open dismisses it (no stale fixed position)', async ({
     page,
   }) => {
-    const pill = page.getByTestId('data-table-section-pill');
+    const pill = page.getByTestId('data-table-line-pill');
     await pill.click();
-    const list = page.getByTestId('data-table-section-menu-list');
+    const list = page.getByTestId('data-table-line-menu-list');
     await expect(list).toBeVisible();
     // The list is position:fixed at a rect captured ON OPEN; useAnchoredFixedMenu
     // deliberately does NOT reposition on resize/scroll - it delegates stale-position
@@ -209,12 +209,12 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
 
   // The THIRD migrated dropdown - the raw-table picker (`data-table-raw-table-pill`)
   // - is intentionally not covered here. It is the very same `SubHeaderPickerMenu`
-  // (and thus the same `useAnchoredFixedMenu` positioning) as the section picker
+  // (and thus the same `useAnchoredFixedMenu` positioning) as the line picker
   // tested above; only its options/trigger content differ. Its real options are
   // also fetched only in fullscreen mode (DataTable's `get_raw_table_names` effect
   // is gated on `dataTableFullScreen`), so in the windowed docked-low layout this
   // suite exercises it would show only a disabled "loading" row - no click-through
-  // to assert. The shared positioning path is fully covered by the section-picker
+  // to assert. The shared positioning path is fully covered by the line-picker
   // flip-up / flip-down / toolbar-clamp tests in this file.
 });
 
@@ -222,13 +222,13 @@ test.describe('#162 a downward-flipping picker is bounded above the status bar',
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Clip Bottom Regression');
-    // Many sections → a tall picker that would reach the bottom status bar.
+    // Many lines → a tall picker that would reach the bottom status bar.
     const many = Array.from({ length: 40 }, (_, i) => ({
-      name: `Section ${String(i).padStart(2, '0')}`,
+      name: `Line ${String(i).padStart(2, '0')}`,
       direction: 'in' as const,
       shots: [{ azimuth_in: 45, azimuth_out: 225, length: 5, depth_in: -1, depth_out: -2 }],
     }));
-    await seedProjectWithSections(page, many);
+    await seedProjectWithLines(page, many);
     await waitForNoDialogs(page);
     await waitForMapReady(page);
     await page.setViewportSize({ width: 900, height: 560 });
@@ -237,7 +237,7 @@ test.describe('#162 a downward-flipping picker is bounded above the status bar',
     // will grant, deliberately: it asks for the tallest panel available.
     await setDataTableHeight(page, 440);
     await openDataTable(page);
-    const pill = page.getByTestId('data-table-section-pill');
+    const pill = page.getByTestId('data-table-line-pill');
     // #260 clamps the panel so the map row keeps MAP_MIN_HEIGHT, capping it at
     // `main - 200` however much was asked for. That pins the sub-header near
     // `toolbar + 200` no matter how short the viewport is, so the original fixed
@@ -253,9 +253,9 @@ test.describe('#162 a downward-flipping picker is bounded above the status bar',
   });
 
   test('flips down and stops above the status bar (not clipped behind it)', async ({ page }) => {
-    const pill = page.getByTestId('data-table-section-pill');
+    const pill = page.getByTestId('data-table-line-pill');
     await pill.click();
-    const list = page.getByTestId('data-table-section-menu-list');
+    const list = page.getByTestId('data-table-line-menu-list');
     await expect(list).toBeVisible();
 
     const m = (await list.boundingBox())!;

@@ -5,7 +5,7 @@ export type RecentSortField =
   | 'last_opened'
   | 'last_edited'
   | 'name'
-  | 'sections'
+  | 'lines'
   | 'length';
 
 /** Sort direction. */
@@ -18,7 +18,7 @@ const FIELDS: RecentSortField[] = [
   'last_opened',
   'last_edited',
   'name',
-  'sections',
+  'lines',
   'length',
 ];
 
@@ -36,7 +36,9 @@ export function defaultDirectionForField(field: RecentSortField): RecentSortDire
 
 function readField(): RecentSortField {
   try {
-    const stored = localStorage.getItem(FIELD_KEY);
+    const raw = localStorage.getItem(FIELD_KEY);
+    // Stored before the Section -> Line rename.
+    const stored = raw === 'sections' ? 'lines' : raw;
     if (stored && (FIELDS as string[]).includes(stored)) {
       return stored as RecentSortField;
     }
@@ -109,7 +111,7 @@ export function useRecentSort(): RecentSort {
 
 /**
  * Returns a new array of projects sorted by the given field and direction.
- * `last_edited`/`sections`/`length` sort numerically; `name` uses a
+ * `last_edited`/`lines`/`length` sort numerically; `name` uses a
  * locale-aware comparison; `last_opened` preserves the backend's recency order
  * (the input array is already most-recently-opened first - there is no
  * per-project "opened at" timestamp, so the original position is the signal).
@@ -120,7 +122,7 @@ export function sortRecentProjects<
     name: string;
     file_path: string;
     modified_at: string;
-    section_count: number;
+    line_count: number;
     total_length: number;
   }
 >(projects: T[], field: RecentSortField, direction: RecentSortDirection): T[] {
@@ -142,8 +144,8 @@ export function sortRecentProjects<
       case 'name':
         cmp = a.name.localeCompare(b.name);
         break;
-      case 'sections':
-        cmp = a.section_count - b.section_count;
+      case 'lines':
+        cmp = a.line_count - b.line_count;
         break;
       case 'length':
         cmp = a.total_length - b.total_length;

@@ -2,7 +2,7 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  createSectionViaStore,
+  createLineViaStore,
 } from './helpers/app';
 
 /**
@@ -10,7 +10,7 @@ import {
  */
 async function createProjectWithData(page: import('./fixtures/coverage').Page) {
   await createProject(page, 'Export Test Project');
-  await createSectionViaStore(page, {
+  await createLineViaStore(page, {
     name: 'Main Passage',
     shots: [
       { azimuth_in: 10, azimuth_out: 10, length: 12, depth_in: -1.0, depth_out: -1.8 },
@@ -18,7 +18,7 @@ async function createProjectWithData(page: import('./fixtures/coverage').Page) {
       { azimuth_in: 40, azimuth_out: 40, length: 8, depth_in: -2.4, depth_out: -3.0 },
     ],
   });
-  await createSectionViaStore(page, {
+  await createLineViaStore(page, {
     name: 'Side Tunnel',
     shots: [
       { azimuth_in: 95, azimuth_out: 95, length: 6, depth_in: -2.4, depth_out: -2.6 },

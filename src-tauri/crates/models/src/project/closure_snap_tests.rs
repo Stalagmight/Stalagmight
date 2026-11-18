@@ -12,16 +12,16 @@ use super::closure_hand_move_tests::{
 use super::combine_closure_tests::{add, dist, shot, xy};
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LoopClosure, Project, SectionId,
+    local_to_gps, ClosureStrategy, DatumRole, GpsCoordinates, LineId, LoopClosure, Project,
     ShotData, Station, StationRef, ZeroDatum,
 };
 
 /// The parts of `project` the Closures Computed View solves without failing:
-/// every section of each.
-fn solved_sections(project: &Project, failed: &HashSet<SectionId>) -> HashSet<SectionId> {
+/// every line of each.
+fn solved_lines(project: &Project, failed: &HashSet<LineId>) -> HashSet<LineId> {
     let mut solved = HashSet::new();
     for anchor in project.adjustment_anchors_for_tests() {
-        let component = project.get_connected_section_ids(anchor.section_id);
+        let component = project.get_connected_line_ids(anchor.line_id);
         if !component.iter().any(|id| failed.contains(id)) {
             solved.extend(component);
         }
@@ -32,8 +32,8 @@ fn solved_sections(project: &Project, failed: &HashSet<SectionId>) -> HashSet<Se
 /// Every snap the solve ties (an aligned closure it does not take as an
 /// eligible one, and does not skip as across one shot) in a part the view
 /// solves without failing is shown on ONE point in the Closures Computed
-/// View, to 1e-6 m: the tolerance the solve's own section realignment holds
-/// the stations of one group to ("inconsistent section translation"), far
+/// View, to 1e-6 m: the tolerance the solve's own line realignment holds
+/// the stations of one group to ("inconsistent line translation"), far
 /// above the float dust the shot update leaves. Returns how many snapped
 /// pairs it checked.
 pub(super) fn assert_snaps_held(project: &Project, what: &str) -> usize {
@@ -43,12 +43,12 @@ pub(super) fn assert_snaps_held(project: &Project, what: &str) -> usize {
         .iter()
         .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
         .collect();
-    let failed: HashSet<SectionId> = adjusted
+    let failed: HashSet<LineId> = adjusted
         .failures
         .iter()
-        .flat_map(|f| f.section_ids.iter().copied())
+        .flat_map(|f| f.line_ids.iter().copied())
         .collect();
-    let solved = solved_sections(project, &failed);
+    let solved = solved_lines(project, &failed);
     let skipped: HashSet<u64> = project
         .closures_across_one_shot()
         .into_iter()
@@ -67,11 +67,11 @@ pub(super) fn assert_snaps_held(project: &Project, what: &str) -> usize {
         ) else {
             continue;
         };
-        if !(solved.contains(&a.section_id) && solved.contains(&b.section_id)) {
+        if !(solved.contains(&a.line_id) && solved.contains(&b.line_id)) {
             continue;
         }
         let apart = dist(view[&a], view[&b]);
-        // The solve accepts each section's realignment within 1e-6 m per axis
+        // The solve accepts each line's realignment within 1e-6 m per axis
         // (`adjust_least_squares`), so two stations of a tie group can be
         // shown up to that apart on the diagonal: 1e-6 * sqrt(2), rounded up.
         assert!(
@@ -140,13 +140,13 @@ fn adjusted_view_keeps_a_snapped_pair_together() {
     );
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 /// Every station's closure-adjusted position (the Plan and Export geometry),
-/// and the sections of the parts whose solve failed.
-fn view_of(project: &Project) -> (HashMap<StationRef, (f64, f64)>, HashSet<SectionId>) {
+/// and the lines of the parts whose solve failed.
+fn view_of(project: &Project) -> (HashMap<StationRef, (f64, f64)>, HashSet<LineId>) {
     let adjusted = project.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
     let view = adjusted
         .stations
@@ -156,7 +156,7 @@ fn view_of(project: &Project) -> (HashMap<StationRef, (f64, f64)>, HashSet<Secti
     let failed = adjusted
         .failures
         .iter()
-        .flat_map(|f| f.section_ids.iter().copied())
+        .flat_map(|f| f.line_ids.iter().copied())
         .collect();
     (view, failed)
 }
@@ -179,8 +179,8 @@ pub(super) fn without_snaps(project: &Project) -> Project {
 /// The issue's square with D's end `short` metres short of A's start, snapped
 /// there by a `Move` closure (aligned while `short` is under 1 cm), and the
 /// diagonal E closed 0.5 m off C's end by a `Batch` closure. Returns the
-/// sections A, B, C, D, E.
-fn square(short: f64) -> (Project, [SectionId; 5]) {
+/// lines A, B, C, D, E.
+fn square(short: f64) -> (Project, [LineId; 5]) {
     let mut p = Project::new("Square".to_string(), None);
     let a = add(&mut p, "A", vec![shot(90.0, 10.0)]);
     let b = add(&mut p, "B", vec![shot(0.0, 10.0)]);
@@ -250,11 +250,11 @@ fn a_part_with_only_snaps_is_shown_as_measured() {
     assert!(view.contains_key(&st(e, 1)));
 }
 
-/// A section with a near-vertical shot (4 mm across, 4 m down) on a loop
+/// A line with a near-vertical shot (4 mm across, 4 m down) on a loop
 /// closed by a `Batch` closure, its two ends snapped (#736, decision c): a
 /// snap across one shot. Creation refuses it; one a file carries is skipped
 /// and reported like any closure across one shot (#737), instead of being
-/// tied and failing the whole part with "inconsistent section translation"
+/// tied and failing the whole part with "inconsistent line translation"
 /// (the solve would keep that shot at its measured 4 mm and put both its
 /// ends on one point).
 #[test]
@@ -294,7 +294,7 @@ fn a_snap_across_a_near_vertical_shot_is_skipped_and_reported() {
         ],
     );
     let at = xy(&p, st(v, 3));
-    p.set_section_offset(w, at);
+    p.set_line_offset(w, at);
     p.merge_stations(st(v, 3), st(w, 0)).unwrap();
     p.create_loop_closure(st(w, 2), st(v, 0), ClosureStrategy::Batch)
         .unwrap();
@@ -327,7 +327,7 @@ fn a_closure_squeezing_a_shot_through_a_snap_is_refused_and_skipped() {
     let refused = p.create_loop_closure(st(d, 1), st(a, 1), ClosureStrategy::Batch);
     assert_eq!(
         refused.unwrap_err(),
-        super::closure_shots::closure_across_one_shot_refusal((a, 0))
+        p.closure_across_one_shot_message((a, 0))
     );
     let squeeze = plant(&mut p, st(d, 1), st(a, 1), ClosureStrategy::Batch, false);
     let skipped = p.closures_across_one_shot();
@@ -344,13 +344,13 @@ fn a_closure_squeezing_a_shot_through_a_snap_is_refused_and_skipped() {
     assert!(dist(was[&st(d, 1)], was[&st(a, 0)]) > 9.0);
 }
 
-/// A section whose end is snapped onto its own start (#736, decision c): the
-/// two ends of one section, on a loop of their own. The snap closes the
+/// A line whose end is snapped onto its own start (#736, decision c): the
+/// two ends of one line, on a loop of their own. The snap closes the
 /// loop, so every shot of it is adjusted and the two ends stay on one point;
 /// before #736 the loop was a spur and its shots kept their vectors while
 /// the shot it shares with a solved loop changed, tearing the pair.
 #[test]
-fn a_section_snapped_onto_its_own_start_stays_closed() {
+fn a_line_snapped_onto_its_own_start_stays_closed() {
     let mut p = Project::new("Ring".to_string(), None);
     let s = add(
         &mut p,
@@ -372,7 +372,7 @@ fn a_section_snapped_onto_its_own_start_stays_closed() {
         vec![shot(90.0, 10.0), shot(180.0, 10.0), shot(270.0, 9.5)],
     );
     let at = xy(&p, st(s, 2));
-    p.set_section_offset(t, at);
+    p.set_line_offset(t, at);
     p.merge_stations(st(s, 2), st(t, 0)).unwrap();
     p.create_loop_closure(st(t, 3), st(s, 1), ClosureStrategy::Batch)
         .unwrap();
@@ -399,7 +399,7 @@ fn a_batch_loop_closed_only_through_a_snap_is_adjusted() {
         vec![shot(0.0, 10.0), shot(270.0, 10.0), shot(180.0, 9.7)],
     );
     let at = xy(&p, st(pp, 1));
-    p.set_section_offset(q, at);
+    p.set_line_offset(q, at);
     plant(&mut p, st(pp, 1), st(q, 0), ClosureStrategy::Move, true);
     plant(&mut p, st(q, 3), st(pp, 0), ClosureStrategy::Batch, false);
     let (view, failed) = view_of(&p);
@@ -411,17 +411,17 @@ fn a_batch_loop_closed_only_through_a_snap_is_adjusted() {
     assert!((dist(was[&st(q, 3)], was[&st(pp, 0)]) - 0.3).abs() < 1e-6);
 }
 
-/// A section that hangs off the survey by a snap alone (a state built
+/// A line that hangs off the survey by a snap alone (a state built
 /// directly, like the variant above): all of it is spur, so the solve moves
 /// it as a block through its attachment point, and a snap is one as a merge
 /// is (#736). Before, nothing attached it, it stayed where it was measured,
 /// and the point it is snapped to moved away with its loop's correction.
 #[test]
-fn a_section_hanging_off_a_snap_alone_follows_it() {
+fn a_line_hanging_off_a_snap_alone_follows_it() {
     let (mut p, [_, b, _, _, _]) = square(0.0);
     let x = add(&mut p, "X", vec![shot(30.0, 6.0), shot(60.0, 4.0)]);
     let at = xy(&p, st(b, 1));
-    p.set_section_offset(x, at);
+    p.set_line_offset(x, at);
     plant(&mut p, st(x, 0), st(b, 1), ClosureStrategy::Move, true);
     let (view, failed) = view_of(&p);
     assert!(failed.is_empty(), "{failed:?}");
@@ -574,7 +574,7 @@ fn two_datums_tied_through_a_snap_are_a_reported_failure() {
     assert!(gap_in(&old.stations, st(d, 1), st(a, 0)) > 30.0);
 }
 
-/// Combine Sections' model of the joined survey (`joined_sweep`) with a snap
+/// Combine Lines' model of the joined survey (`joined_sweep`) with a snap
 /// its dedupe drops (#736): K's end and O's start side by side at the
 /// origin, Z merged at O's far end and back to the origin, where Z's end is
 /// snapped onto O's start (X). A `Batch` closure C ties O's second station to
@@ -590,11 +590,11 @@ fn two_datums_tied_through_a_snap_are_a_reported_failure() {
 fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
     let mut p = Project::new("Dedupe".to_string(), None);
     let k = add(&mut p, "K", vec![shot(90.0, 10.0)]);
-    p.set_section_offset(k, (-10.0, 0.0));
+    p.set_line_offset(k, (-10.0, 0.0));
     let o = add(&mut p, "O", vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
     let z = add(&mut p, "Z", vec![shot(225.0, 200f64.sqrt())]);
     let at = xy(&p, st(o, 2));
-    p.set_section_offset(z, at);
+    p.set_line_offset(z, at);
     p.merge_stations(st(o, 2), st(z, 0)).unwrap();
     let x = p
         .create_loop_closure(st(o, 0), st(z, 1), ClosureStrategy::Move)
@@ -613,12 +613,10 @@ fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
     let candidate = p
         .combine_candidates_at_point(st(k, 1))
         .into_iter()
-        .find(|cand| {
-            [cand.section_a, cand.section_b] == [k, o] || [cand.section_a, cand.section_b] == [o, k]
-        })
+        .find(|cand| [cand.line_a, cand.line_b] == [k, o] || [cand.line_a, cand.line_b] == [o, k])
         .unwrap();
     assert!(candidate.blocked_reason.is_none(), "{candidate:?}");
-    let plan = if candidate.section_a == k {
+    let plan = if candidate.line_a == k {
         &candidate.plan_keeping_a
     } else {
         &candidate.plan_keeping_b
@@ -645,13 +643,13 @@ fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
     let mut after = p.clone();
     let end = |cand_end| crate::CombineJoinEnds {
         kept: cand_end,
-        other: if candidate.section_a == k {
+        other: if candidate.line_a == k {
             candidate.end_b
         } else {
             candidate.end_a
         },
     };
-    let kept_end = if candidate.section_a == k {
+    let kept_end = if candidate.line_a == k {
         candidate.end_a
     } else {
         candidate.end_b
@@ -659,7 +657,7 @@ fn a_combine_ties_a_pair_its_dedupe_keeps_where_the_kept_closure_stands() {
     // In a debug build the combine's backstop asserts that it left no
     // closure across one shot its plan did not list.
     let outcome = after
-        .combine_sections_reporting(
+        .combine_lines_reporting(
             k,
             o,
             &super::combine_closure_tests::options(Some(end(kept_end))),
@@ -726,7 +724,7 @@ fn plant(
 /// `Batch` closure (the destructive adjust before 0.5.0 wrote those), a
 /// closure across one shot (skipped), a hand move on a loop station, and a
 /// second, datum-less part with a loop of its own. Depths vary.
-fn snap_free_survey() -> (Project, [SectionId; 6]) {
+fn snap_free_survey() -> (Project, [LineId; 6]) {
     let mut p = Project::new("Snap-free".to_string(), None);
     let a = add(
         &mut p,
@@ -739,7 +737,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
             deep(330.0, 4.1, 3.6, 2.2),
         ],
     );
-    p.set_section_offset(a, (12.0, -7.5));
+    p.set_line_offset(a, (12.0, -7.5));
     p.zero_datums.push(ZeroDatum::new(
         p.key_for_ref(StationRef::new(a, 0)).unwrap(),
         origin(),
@@ -760,7 +758,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
         ],
     );
     let at = xy(&p, StationRef::new(a, 2));
-    p.set_section_offset(b, at);
+    p.set_line_offset(b, at);
     p.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
         .unwrap();
     p.create_loop_closure(
@@ -775,7 +773,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
         vec![deep(60.0, 3.3, 6.2, 7.0), deep(20.0, 4.8, 7.0, 7.7)],
     );
     let at = xy(&p, StationRef::new(b, 1));
-    p.set_section_offset(c, at);
+    p.set_line_offset(c, at);
     p.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
         .unwrap();
     // D from A:3 towards A:0, its end 0.3 m off: the Move closure measures
@@ -787,7 +785,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
         .rem_euclid(360.0);
     let length = (to.0 - from.0).hypot(to.1 - from.1);
     let d = add(&mut p, "D", vec![deep(bearing + 2.0, length, 3.6, 2.0)]);
-    p.set_section_offset(d, from);
+    p.set_line_offset(d, from);
     p.merge_stations(StationRef::new(a, 3), StationRef::new(d, 0))
         .unwrap();
     let torn = p
@@ -813,7 +811,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
             deep(272.0, 8.8, 1.9, 1.2),
         ],
     );
-    p.set_section_offset(g, (140.0, 90.0));
+    p.set_line_offset(g, (140.0, 90.0));
     p.create_loop_closure(
         StationRef::new(g, 4),
         StationRef::new(g, 0),
@@ -822,7 +820,7 @@ fn snap_free_survey() -> (Project, [SectionId; 6]) {
     .unwrap();
     let h = add(&mut p, "H", vec![deep(135.0, 9.0, 1.5, 2.0)]);
     let at = xy(&p, StationRef::new(g, 1));
-    p.set_section_offset(h, at);
+    p.set_line_offset(h, at);
     p.merge_stations(StationRef::new(g, 1), StationRef::new(h, 0))
         .unwrap();
     // Legacy and odd closures, as a file carries them.
@@ -874,7 +872,7 @@ fn view_bits(project: &Project) -> Vec<(u32, u32, [u64; 3])> {
         .into_iter()
         .map(|s| {
             (
-                s.station_ref.section_id,
+                s.station_ref.line_id,
                 s.station_ref.station_index,
                 [
                     s.coordinates.x.to_bits(),
@@ -1122,9 +1120,9 @@ fn a_survey_without_a_snap_keeps_its_closures_computed_view() {
 }
 
 /// Move `id` so its station `index` sits exactly on `target`.
-fn place_at(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place_at(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, st(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
 /// The bearing from `from` to `to`, in degrees.
@@ -1150,8 +1148,8 @@ fn add_snaps(project: &mut Project, rng: &mut Rng) {
         let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
         if p == q
             || !project
-                .get_connected_section_ids(p.section_id)
-                .contains(&q.section_id)
+                .get_connected_line_ids(p.line_id)
+                .contains(&q.line_id)
         {
             continue;
         }
@@ -1209,7 +1207,7 @@ fn add_snaps(project: &mut Project, rng: &mut Rng) {
         let all = super::combine_closure_tests::every_station(project);
         let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
         let (pp, qq) = (xy(project, p), xy(project, q));
-        if p.section_id != q.section_id && dist(pp, qq) >= 1.0 {
+        if p.line_id != q.line_id && dist(pp, qq) >= 1.0 {
             let l = add(
                 project,
                 "Loop",
@@ -1301,18 +1299,18 @@ fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
     // nothing.
     let now = p.compute_adjusted_stations(&config);
     let old = without_snaps(p).compute_adjusted_stations(&config);
-    let sections_of = |failures: &[super::AdjustmentFailure]| -> HashSet<SectionId> {
+    let lines_of = |failures: &[super::AdjustmentFailure]| -> HashSet<LineId> {
         failures
             .iter()
-            .flat_map(|f| f.section_ids.iter().copied())
+            .flat_map(|f| f.line_ids.iter().copied())
             .collect()
     };
-    let (failed_now, failed_old) = (sections_of(&now.failures), sections_of(&old.failures));
+    let (failed_now, failed_old) = (lines_of(&now.failures), lines_of(&old.failures));
     // No part fails that solved before, but one whose snap ties two
     // placement datums into one group: a closure between the two would fail
     // it the same way (reported, with its plain reason).
     for failure in &now.failures {
-        if failure.section_ids.iter().any(|s| failed_old.contains(s)) {
+        if failure.line_ids.iter().any(|s| failed_old.contains(s)) {
             continue;
         }
         assert_eq!(
@@ -1322,7 +1320,7 @@ fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
         assert!(
             snaps
                 .iter()
-                .any(|(_, a, _)| failure.section_ids.contains(&a.section_id)),
+                .any(|(_, a, _)| failure.line_ids.contains(&a.line_id)),
             "{what}: a part with no snap fails now: {failure:?}"
         );
         stats.new_failures += 1;
@@ -1330,7 +1328,7 @@ fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
     stats.fixed_failures += old
         .failures
         .iter()
-        .filter(|f| !f.section_ids.iter().any(|s| failed_now.contains(s)))
+        .filter(|f| !f.line_ids.iter().any(|s| failed_now.contains(s)))
         .count();
     let at = |stations: &[Station]| -> HashMap<StationRef, [u64; 3]> {
         stations
@@ -1350,15 +1348,14 @@ fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
     let (view_now, view_old) = (at(&now.stations), at(&old.stations));
     let xy_of = |bits: [u64; 3]| (f64::from_bits(bits[0]), f64::from_bits(bits[1]));
     for (id, a, b) in &snaps {
-        if skipped.contains(id) || failed_now.contains(&a.section_id) {
+        if skipped.contains(id) || failed_now.contains(&a.line_id) {
             continue;
         }
         let tear = dist(xy_of(view_old[a]), xy_of(view_old[b]));
         if tear > 1e-3
-            && p.adjustment_anchors_for_tests().iter().any(|h| {
-                p.get_connected_section_ids(h.section_id)
-                    .contains(&a.section_id)
-            })
+            && p.adjustment_anchors_for_tests()
+                .iter()
+                .any(|h| p.get_connected_line_ids(h.line_id).contains(&a.line_id))
         {
             stats.torn_before += 1;
             stats.worst_tear = stats.worst_tear.max(tear);
@@ -1367,17 +1364,17 @@ fn check_snapped_survey(p: &Project, what: &str, stats: &mut SnapSweep) {
     // A part holding no snap is solved exactly as before #736, bit for bit
     // (each part is solved on its own, and nothing a snap does reaches
     // another part's knots).
-    let mut seen: HashSet<SectionId> = HashSet::new();
-    for section in &p.sections {
-        if seen.contains(&section.id) {
+    let mut seen: HashSet<LineId> = HashSet::new();
+    for line in &p.lines {
+        if seen.contains(&line.id) {
             continue;
         }
-        let part = p.get_connected_section_ids(section.id);
+        let part = p.get_connected_line_ids(line.id);
         seen.extend(part.iter().copied());
-        if snaps.iter().any(|(_, a, _)| part.contains(&a.section_id)) {
+        if snaps.iter().any(|(_, a, _)| part.contains(&a.line_id)) {
             continue;
         }
-        for s in p.sections.iter().filter(|s| part.contains(&s.id)) {
+        for s in p.lines.iter().filter(|s| part.contains(&s.id)) {
             for i in 0..=s.shots.len() as u32 {
                 let at = st(s.id, i);
                 assert_eq!(

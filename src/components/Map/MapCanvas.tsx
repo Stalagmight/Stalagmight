@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as maplibregl from 'maplibre-gl';
-import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
+import type { LineId, ShotId, Station, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
@@ -13,6 +13,10 @@ import {
 import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
+import { mapHiddenLines } from '../../store/sectionVisibility';
+import { surveyFrameBounds } from '../../utils/surveyFrame';
+import { withHiddenColocated } from './hiddenColocated';
+import { heldSnapStation, nearestSnapStation } from './dragSnapTarget';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
@@ -89,10 +93,10 @@ interface ZoomBoxState {
 
 interface MoveDragState {
   type: 'station' | 'segment' | 'shot';
-  sectionId?: number;
-  stationRef?: { section_id: number; station_index: number };
+  lineId?: number;
+  stationRef?: { line_id: number; station_index: number };
   shotIndex?: number;
-  connectedSectionIds?: number[];
+  connectedLineIds?: number[];
   startLngLat: { lng: number; lat: number };
   currentLngLat: { lng: number; lat: number };
 }
@@ -117,32 +121,32 @@ const pixelsPerMeterAt = (map: maplibregl.Map): number => {
 function MapHoverSync({
   surveyLayerRef,
   mapLoaded,
-  anchoredSectionIds,
-  getConnectedSectionIds,
+  anchoredLineIds,
+  getConnectedLineIds,
   logMapInteractions,
 }: {
   surveyLayerRef: React.RefObject<SurveyLayer | null>;
   mapLoaded: boolean;
-  anchoredSectionIds: Set<number>;
-  getConnectedSectionIds: (id: number) => Promise<number[]>;
+  anchoredLineIds: Set<number>;
+  getConnectedLineIds: (id: number) => Promise<number[]>;
   logMapInteractions: boolean;
 }) {
   const hoveredStation = useUIStore((s) => s.hoveredStation);
   const hoveredShot = useUIStore((s) => s.hoveredShot);
-  const hoveredSectionId = useUIStore((s) => s.hoveredSectionId);
+  const hoveredLineId = useUIStore((s) => s.hoveredLineId);
   const activeTool = useUIStore((s) => s.activeTool);
 
-  // Sync hoveredSectionId to SurveyLayer
+  // Sync hoveredLineId to SurveyLayer
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setHoveredSection(hoveredSectionId);
-  }, [hoveredSectionId, mapLoaded, surveyLayerRef]);
+    surveyLayerRef.current.setHoveredLine(hoveredLineId);
+  }, [hoveredLineId, mapLoaded, surveyLayerRef]);
 
   // Sync hoveredShot to SurveyLayer (for DataTable row hover)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setHoveredShot(
-      hoveredShot?.sectionId ?? null,
+      hoveredShot?.lineId ?? null,
       hoveredShot?.shotId ?? null
     );
   }, [hoveredShot, mapLoaded, surveyLayerRef]);
@@ -168,9 +172,9 @@ function MapHoverSync({
       return undefined;
     }
 
-    const sectionId = hoveredStation?.section_id ?? hoveredShot?.sectionId ?? null;
+    const lineId = hoveredStation?.line_id ?? hoveredShot?.lineId ?? null;
 
-    if (sectionId === null) {
+    if (lineId === null) {
       segmentHoverTokenRef.current++;
       if (logMapInteractions) {
         console.debug('[Highlight] Segment hover pending clear (no hovered feature)', {});
@@ -181,10 +185,10 @@ function MapHoverSync({
       return () => clearTimeout(timer);
     }
 
-    if (anchoredSectionIds.has(sectionId)) {
+    if (anchoredLineIds.has(lineId)) {
       if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover suppressed (anchored section)', {
-          sectionId,
+        console.debug('[Highlight] Segment hover suppressed (anchored line)', {
+          lineId,
         });
       }
       surveyLayerRef.current.setHoveredSegment([]);
@@ -192,12 +196,12 @@ function MapHoverSync({
     }
 
     const token = ++segmentHoverTokenRef.current;
-    getConnectedSectionIds(sectionId).then((ids) => {
+    getConnectedLineIds(lineId).then((ids) => {
       if (segmentHoverTokenRef.current !== token) return;
-      const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+      const movable = ids.filter((id) => !anchoredLineIds.has(id));
       if (logMapInteractions) {
         console.debug('[Highlight] Segment hover resolved', {
-          sectionId,
+          lineId,
           connectedCount: ids.length,
           movableCount: movable.length,
         });
@@ -207,13 +211,13 @@ function MapHoverSync({
       if (segmentHoverTokenRef.current !== token) return;
       if (logMapInteractions) {
         console.debug('[Highlight] Segment hover fallback (IPC failed)', {
-          sectionId,
+          lineId,
         });
       }
-      surveyLayerRef.current?.setHoveredSegment([sectionId]);
+      surveyLayerRef.current?.setHoveredSegment([lineId]);
     });
     return undefined;
-  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded, logMapInteractions, surveyLayerRef]);
+  }, [activeTool, hoveredStation, hoveredShot, anchoredLineIds, getConnectedLineIds, mapLoaded, logMapInteractions, surveyLayerRef]);
 
   return null;
 }
@@ -222,7 +226,7 @@ function MapHoverSync({
  * The uiStore keys MapCanvas reads (#430). Explicit, so the subscription costs a
  * 63-key shallow compare instead of a ~180-key one and can actually bail out
  * while the camera moves. The hover keys (hoveredStation / hoveredShot /
- * hoveredSectionId) are deliberately ABSENT: they change ~60x/s during mouse
+ * hoveredLineId) are deliberately ABSENT: they change ~60x/s during mouse
  * movement and would re-render this 4000-line component every frame - MapHoverSync
  * subscribes to them instead. measureSnapShot is absent for the same reason (the
  * live shot-snap `t` is rewritten on every mousemove over a shot and the cursor dot
@@ -237,7 +241,7 @@ const MAP_CANVAS_UI_KEYS = [
   'activeTool',
   'showSatellite',
   'showShotData',
-  'showSectionNames',
+  'showLineNames',
   'showStationLabels',
   'showStationNames',
   'showStationComments',
@@ -280,8 +284,8 @@ const MAP_CANVAS_UI_KEYS = [
   'cancelPlacementMode',
   'confirmPlacement',
   'showToast',
-  'requestZoomToSection',
-  'clearZoomToSectionRequest',
+  'requestZoomToLine',
+  'clearZoomToLineRequest',
   'requestPanToShot',
   'clearPanToShotRequest',
   'requestCenterOnStation',
@@ -333,19 +337,19 @@ function MapCanvas() {
   const snappedStationRef = useRef<StationRef | null>(null);
   // Ref mirror of the measure shot-snap candidate (#26) + its live cursor marker,
   // updated imperatively in the snap hot path like the station snap.
-  const measureSnapShotRef = useRef<{ section_id: number; shot_id: number; t: number; lng: number; lat: number } | null>(null);
+  const measureSnapShotRef = useRef<{ line_id: number; shot_id: number; t: number; lng: number; lat: number } | null>(null);
   const shotSnapMarkerRef = useRef<maplibregl.Marker | null>(null);
-  // Pending section zoom request (stored when map not loaded, processed when it loads)
-  const pendingZoomToSectionRef = useRef<number | null>(null);
+  // Pending line zoom request (stored when map not loaded, processed when it loads)
+  const pendingZoomToLineRef = useRef<number | readonly number[] | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
-  const pendingPanToShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
+  const pendingPanToShotRef = useRef<{ lineId: number; shotId: number } | null>(null);
   // Pending center-on-station request (stored when map not loaded, processed when it loads)
   const pendingCenterOnStationRef = useRef<StationRef | null>(null);
   // Pending center-on-shot request (stored when map not loaded, processed when it loads)
-  const pendingCenterOnShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
-  // Anchored section IDs (cached when Move Segment tool is active)
-  const [anchoredSectionIds, setAnchoredSectionIds] = useState<Set<number>>(new Set());
-  // Whether anchored section IDs have been loaded for the current move_segment activation
+  const pendingCenterOnShotRef = useRef<{ lineId: number; shotId: number } | null>(null);
+  // Anchored line IDs (cached when Move Segment tool is active)
+  const [anchoredLineIds, setAnchoredLineIds] = useState<Set<number>>(new Set());
+  // Whether anchored line IDs have been loaded for the current move_segment activation
   // Blocks segment drag until the set is populated to prevent moving anchored segments
   const [anchoredIdsLoaded, setAnchoredIdsLoaded] = useState(false);
   // Clear-on-failure flags for the analytical overlays (#34 distance / #38 gas):
@@ -354,7 +358,7 @@ function MapCanvas() {
   // inputs indefinitely. Reset on the next successful field (see the fetch effects).
   const [distanceFieldFailed, setDistanceFieldFailed] = useState(false);
   const [gasFieldFailed, setGasFieldFailed] = useState(false);
-  // Token to invalidate stale getConnectedSectionIds results (incremented on each drag start,
+  // Token to invalidate stale getConnectedLineIds results (incremented on each drag start,
   // checked in .then()/.catch() to discard late async results after mouseup)
   const segmentDragTokenRef = useRef(0);
   // --- Drag hot-path refs (bypass React state to avoid re-render per mousemove) ---
@@ -363,8 +367,8 @@ function MapCanvas() {
   // Last cursor position (client coords) during a move-drag - lets us re-apply the
   // preview on map zoom (when no pointer event fires) so it tracks across zoom (#79).
   const lastCursorClientRef = useRef<{ clientX: number; clientY: number } | null>(null);
-  // Connected section IDs being dragged (used by rAF callback for segment preview)
-  const dragConnectedSectionIdsRef = useRef<Set<number>>(new Set());
+  // Connected line IDs being dragged (used by rAF callback for segment preview)
+  const dragConnectedLineIdsRef = useRef<Set<number>>(new Set());
   // Origin station that initiated the segment drag (for snap-to-merge)
   const dragOriginStationRef = useRef<StationRef | null>(null);
   // Current snap target during drag (ref, not state - updated per mousemove)
@@ -385,7 +389,7 @@ function MapCanvas() {
   const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedLineIds, getAnchoredLineIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).
@@ -402,10 +406,10 @@ function MapCanvas() {
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
-  // #50: section-focus mode - show an exit-focus control at the map's top-left
+  // #50: line-focus mode - show an exit-focus control at the map's top-left
   // while focused.
-  const focusedSectionId = useUIStore((s) => s.focusedSectionId);
-  const exitSectionFocus = useUIStore((s) => s.exitSectionFocus);
+  const focusedLineId = useUIStore((s) => s.focusedLineId);
+  const exitLineFocus = useUIStore((s) => s.exitLineFocus);
 
   // Station coordinates for the active display mode. The map renders the active
   // geometry; coordinate-derived editing tools are disabled in the adjusted
@@ -435,8 +439,8 @@ function MapCanvas() {
   // Including shot depths avoids a flat scale when station Z isn't populated yet.
   const depthRange = useMemo(() => {
     // SoA iteration: walks typed arrays instead of triggering the
-    // lazy `section.shots` getter (which would materialize Shot
-    // objects for every section). For 75k shots + 89k stations
+    // lazy `line.shots` getter (which would materialize Shot
+    // objects for every line). For 75k shots + 89k stations
     // this drops from "force-materialize all" to a 3 × O(N) typed
     // array pass. When `surveyData` isn't available (very early in
     // initial load or unusual init paths), fall back to the legacy
@@ -470,9 +474,9 @@ function MapCanvas() {
           if (z > max) max = z;
         }
       }
-      const sections = project?.sections ?? [];
-      for (const section of sections) {
-        for (const shot of section.shots) {
+      const lines = project?.lines ?? [];
+      for (const line of lines) {
+        for (const shot of line.shots) {
           if (shot.depth_in < min) min = shot.depth_in;
           if (shot.depth_in > max) max = shot.depth_in;
           if (shot.depth_out < min) min = shot.depth_out;
@@ -482,7 +486,7 @@ function MapCanvas() {
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 50 };
     return { min, max };
-  }, [activeSurveyData, activeStations, project?.sections]);
+  }, [activeSurveyData, activeStations, project?.lines]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
@@ -490,7 +494,7 @@ function MapCanvas() {
   const zoomMax = config?.map.zoom_max ?? 22;
 
   // Performance: subscribe to an EXPLICIT key list (MAP_CANVAS_UI_KEYS above), which
-  // excludes the hover values (hoveredStation, hoveredShot, hoveredSectionId) and
+  // excludes the hover values (hoveredStation, hoveredShot, hoveredLineId) and
   // measureSnapShot. Those change ~60 times/sec during mouse movement and would cause
   // this 4000-line component to re-render every frame. Hover sync is handled by the
   // <MapHoverSync> child component instead; measureSnapShot is read via getState().
@@ -499,7 +503,7 @@ function MapCanvas() {
     activeTool,
     showSatellite,
     showShotData,
-    showSectionNames,
+    showLineNames,
     showStationLabels,
     showStationNames,
     showStationComments,
@@ -542,8 +546,8 @@ function MapCanvas() {
     cancelPlacementMode,
     confirmPlacement,
     showToast,
-    requestZoomToSection,
-    clearZoomToSectionRequest,
+    requestZoomToLine,
+    clearZoomToLineRequest,
     requestPanToShot,
     clearPanToShotRequest,
     requestCenterOnStation,
@@ -649,18 +653,18 @@ function MapCanvas() {
     }
     const shotIds = new Set<number>();
     if (activeTool === 'move_shot') {
-      for (const section of project?.sections ?? []) {
-        for (let i = 0; i < section.shots.length; i++) {
-          const fromKey = `${section.id}:${i}`;
-          const toKey = `${section.id}:${i + 1}`;
+      for (const line of project?.lines ?? []) {
+        for (let i = 0; i < line.shots.length; i++) {
+          const fromKey = `${line.id}:${i}`;
+          const toKey = `${line.id}:${i + 1}`;
           if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) {
-            shotIds.add(section.id * FEATURE_ID_STRIDE + section.shots[i]!.id);
+            shotIds.add(line.id * FEATURE_ID_STRIDE + line.shots[i]!.id);
           }
         }
       }
     }
     return { stationIds, shotIds };
-  }, [immovableStationKeys, activeTool, project?.sections]);
+  }, [immovableStationKeys, activeTool, project?.lines]);
 
   // Clear selection from both the Zustand store and the SurveyLayer map visuals.
   // The direct SurveyLayer calls are needed because the useEffect that syncs
@@ -671,7 +675,7 @@ function MapCanvas() {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
-      surveyLayerRef.current.setSelectedSection(null);
+      surveyLayerRef.current.setSelectedLine(null);
     }
   }, [clearSelection]);
 
@@ -734,7 +738,7 @@ function MapCanvas() {
       if (nearestStation) {
         if (
           !prev ||
-          prev.section_id !== nearestStation.section_id ||
+          prev.line_id !== nearestStation.line_id ||
           prev.station_index !== nearestStation.station_index
         ) {
           snappedStationRef.current = nearestStation;
@@ -766,14 +770,14 @@ function MapCanvas() {
         const prevShot = measureSnapShotRef.current;
         if (
           !prevShot ||
-          prevShot.section_id !== nearestShot.section_id ||
+          prevShot.line_id !== nearestShot.line_id ||
           prevShot.shot_id !== nearestShot.shot_id ||
           prevShot.t !== nearestShot.t
         ) {
           measureSnapShotRef.current = nearestShot;
           startTransition(() =>
             setMeasureSnapShot({
-              section_id: nearestShot.section_id,
+              line_id: nearestShot.line_id,
               shot_id: nearestShot.shot_id,
               t: nearestShot.t,
             })
@@ -880,29 +884,29 @@ function MapCanvas() {
   // null-ness effect above then removes the marker + ref (#26, Codex).
   useEffect(() => {
     // Nothing is hidden -> nothing to drop. Bail before the lookup: reading
-    // `section.shots` force-materializes the lazy per-section shot array
+    // `line.shots` force-materializes the lazy per-line shot array
     // (`noteShotMaterialization` in loadProjectBinary.ts), and the default
     // all-visible state must not pay that on every project refresh.
     if (showShots && showJumps && showReferenceShots) return;
     const snap = useUIStore.getState().measureSnapShot;
     if (!snap) return;
-    const kind = project?.sections
-      .find((s) => s.id === snap.section_id)
+    const kind = project?.lines
+      .find((s) => s.id === snap.line_id)
       ?.shots.find((sh) => sh.id === snap.shot_id)?.kind;
     if (!isShotKindVisible(kind, showShots, showJumps, showReferenceShots)) {
       setMeasureSnapShot(null);
     }
-  }, [showShots, showJumps, showReferenceShots, project?.sections, setMeasureSnapShot]);
+  }, [showShots, showJumps, showReferenceShots, project?.lines, setMeasureSnapShot]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
-    (data: { type: 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
+    (data: { type: 'station' | 'segment' | 'shot'; lineId?: number; stationRef?: { line_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
       if (!map.current) return;
 
       // Guard: when dragPan is disabled (move_segment tool), MapLibre's `click`
       // event fires even after long drags. After a snap-to-merge mouseup, the
       // click event hits the snap-target station and would start a spurious drag
-      // for the target section. Block it while the merge dialog is pending.
+      // for the target line. Block it while the merge dialog is pending.
       if (snapMergeDialogPendingRef.current) return;
 
       // Use actual click position if available, otherwise fall back to map center
@@ -934,7 +938,7 @@ function MapCanvas() {
       if (data.stationRef) {
         const st = activeStations?.find(
           (s) =>
-            s.station_ref.section_id === data.stationRef!.section_id &&
+            s.station_ref.line_id === data.stationRef!.line_id &&
             s.station_ref.station_index === data.stationRef!.station_index,
         );
         if (st) {
@@ -972,7 +976,7 @@ function MapCanvas() {
       // Build the drag state conditionally to avoid undefined values
       if (data.type === 'station' && data.stationRef !== undefined) {
         // Guard: block drag on immovable stations (zero-datum or transitively connected)
-        const stationKey = `${data.stationRef.section_id}:${data.stationRef.station_index}`;
+        const stationKey = `${data.stationRef.line_id}:${data.stationRef.station_index}`;
         if (immovableStationKeys.has(stationKey)) return;
 
         // Store origin station for snap-to-merge during drag
@@ -980,12 +984,12 @@ function MapCanvas() {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
         // Begin drag preview - returns co-located stations (merged/closured at same coords)
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
-          data.stationRef.section_id,
+          data.stationRef.line_id,
           data.stationRef.station_index
         ) ?? [];
-        stationDragColocatedRefsRef.current = colocated;
-      } else if (data.type === 'segment' && data.sectionId !== undefined) {
-        const segmentSectionId = data.sectionId;
+        stationDragColocatedRefsRef.current = withHiddenColocated(colocated);
+      } else if (data.type === 'segment' && data.lineId !== undefined) {
+        const segmentLineId = data.lineId;
         // Always clear selection on any segment click, even if drag is blocked
         clearSelectionAndVisuals();
         // Store origin station for snap-to-merge during drag
@@ -993,21 +997,21 @@ function MapCanvas() {
         // Block segment drag until anchored IDs have been fetched (prevents
         // moving anchored segments during the window after tool activation)
         if (!anchoredIdsLoaded) return;
-        // Check if section is anchored - silent no-op if so
-        if (anchoredSectionIds.has(segmentSectionId)) return;
+        // Check if line is anchored - silent no-op if so
+        if (anchoredLineIds.has(segmentLineId)) return;
 
         // Set a pending drag token to detect stale async results
         const dragToken = ++segmentDragTokenRef.current;
 
-        // Fetch connected section IDs at drag start
-        getConnectedSectionIds(segmentSectionId).then((ids) => {
+        // Fetch connected line IDs at drag start
+        getConnectedLineIds(segmentLineId).then((ids) => {
           // Discard late results if a newer drag started or drag was cancelled
           if (segmentDragTokenRef.current !== dragToken) return;
 
-          // Filter out anchored sections
-          const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+          // Filter out anchored lines
+          const movable = ids.filter((id) => !anchoredLineIds.has(id));
           const connectedSet = new Set(movable);
-          dragConnectedSectionIdsRef.current = connectedSet;
+          dragConnectedLineIdsRef.current = connectedSet;
           // Clear segment hover before starting drag preview (temp layers take over)
           surveyLayerRef.current?.setHoveredSegment([]);
           // Begin drag preview - creates temp layers with *-translate paint property
@@ -1015,47 +1019,47 @@ function MapCanvas() {
           setMoveDrag({
             ...baseDragState,
             type: 'segment',
-            sectionId: segmentSectionId,
-            connectedSectionIds: movable,
+            lineId: segmentLineId,
+            connectedLineIds: movable,
           });
         }).catch(() => {
           // Discard late results if a newer drag started or drag was cancelled
           if (segmentDragTokenRef.current !== dragToken) return;
 
-          // On failure, just move the single section
-          const fallbackSet = new Set([segmentSectionId]);
-          dragConnectedSectionIdsRef.current = fallbackSet;
+          // On failure, just move the single line
+          const fallbackSet = new Set([segmentLineId]);
+          dragConnectedLineIdsRef.current = fallbackSet;
           surveyLayerRef.current?.setHoveredSegment([]);
           surveyLayerRef.current?.beginDragPreview(fallbackSet);
           setMoveDrag({
             ...baseDragState,
             type: 'segment',
-            sectionId: segmentSectionId,
-            connectedSectionIds: [segmentSectionId],
+            lineId: segmentLineId,
+            connectedLineIds: [segmentLineId],
           });
         });
-      } else if (data.type === 'shot' && data.sectionId !== undefined && data.shotIndex !== undefined) {
+      } else if (data.type === 'shot' && data.lineId !== undefined && data.shotIndex !== undefined) {
         // Guard: block drag if either endpoint is immovable
-        const fromKey = `${data.sectionId}:${data.shotIndex}`;
-        const toKey = `${data.sectionId}:${data.shotIndex + 1}`;
+        const fromKey = `${data.lineId}:${data.shotIndex}`;
+        const toKey = `${data.lineId}:${data.shotIndex + 1}`;
         if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) return;
 
         setMoveDrag({
           ...baseDragState,
           type: 'shot',
-          sectionId: data.sectionId,
+          lineId: data.lineId,
           shotIndex: data.shotIndex,
         });
         // Begin drag preview seeded from both shot endpoints - returns all co-located stations
         // (merged/closured at same coordinates) that should move together
-        const otherEndpoint = { section_id: data.sectionId, station_index: data.shotIndex + 1 };
+        const otherEndpoint = { line_id: data.lineId, station_index: data.shotIndex + 1 };
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
-          data.sectionId, data.shotIndex, [otherEndpoint]
+          data.lineId, data.shotIndex, [otherEndpoint]
         ) ?? [];
-        stationDragColocatedRefsRef.current = colocated;
+        stationDragColocatedRefsRef.current = withHiddenColocated(colocated);
       }
     },
-    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
+    [anchoredLineIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedLineIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
   );
 
   // Get map tool callbacks
@@ -1070,7 +1074,7 @@ function MapCanvas() {
       if (station) return { kind: 'station' as const, station };
       const shot = surveyLayerRef.current.queryNearestShotPoint(screenX, screenY, snapConfig.threshold);
       return shot
-        ? { kind: 'shot' as const, section_id: shot.section_id, shot_id: shot.shot_id, t: shot.t }
+        ? { kind: 'shot' as const, line_id: shot.line_id, shot_id: shot.shot_id, t: shot.t }
         : null;
     },
     [config?.map.snap]
@@ -1096,9 +1100,9 @@ function MapCanvas() {
         noteMapInteraction();
         baseToolCallbacks.onStationClick?.(ref, event);
       },
-      onShotClick: (sectionId, shotId, event) => {
+      onShotClick: (lineId, shotId, event) => {
         noteMapInteraction();
-        baseToolCallbacks.onShotClick?.(sectionId, shotId, event);
+        baseToolCallbacks.onShotClick?.(lineId, shotId, event);
       },
       onEmptyClick: (event) => {
         noteMapInteraction();
@@ -1235,79 +1239,51 @@ function MapCanvas() {
       const dy = y - grabScreen.y;
       lastRawDragOffsetRef.current = { dx, dy };
 
-      // Station drag preview - translate station circles/labels + rebuild shot geometries
-      if (moveDrag.type === 'station' && surveyLayerRef.current) {
+      // Snap the drag's origin station onto the nearest other station the map
+      // draws (`dragSnapTarget.ts`); a segment drag snaps only when it started
+      // from a station. Returns the offset that puts the origin on the target,
+      // or null for no snap (the raw offset applies).
+      const snapOffset = (skip: (st: Station) => boolean): { dx: number; dy: number } | null => {
         const snapThreshold = config?.map.snap.threshold ?? 10;
+        const origin = dragOriginStationRef.current;
         // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
-        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
-          const originSt = stations.find(
-            (s) =>
-              s.station_ref.section_id === dragOriginStationRef.current!.section_id &&
-              s.station_ref.station_index === dragOriginStationRef.current!.station_index
-          );
-          if (originSt) {
-            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords);
-
-            let nearestRef: StationRef | null = dragSnapRef.current;
-            if (!skipSnapScan) {
-              const projectedX = originScreen.x + dx;
-              const projectedY = originScreen.y + dy;
-
-              // Find nearest non-co-located station to the projected origin position
-              nearestRef = null;
-              let nearestDist = Infinity;
-              const colocatedKeys = new Set(
-                stationDragColocatedRefsRef.current.map(r => `${r.section_id}:${r.station_index}`)
-              );
-              for (const st of stations) {
-                const key = `${st.station_ref.section_id}:${st.station_ref.station_index}`;
-                if (colocatedKeys.has(key)) continue;
-                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-                const sp = map.current!.project(mc);
-                const sdx = sp.x - projectedX;
-                const sdy = sp.y - projectedY;
-                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-                if (dist < snapThreshold && dist < nearestDist) {
-                  nearestDist = dist;
-                  nearestRef = st.station_ref;
-                }
-              }
-
-              // Update snap state only when target changes (avoids React churn)
-              const prev = dragSnapRef.current;
-              if (
-                nearestRef?.section_id !== prev?.section_id ||
-                nearestRef?.station_index !== prev?.station_index
-              ) {
-                dragSnapRef.current = nearestRef;
-                setSnappedStation(nearestRef);
-              }
-            }
-
-            // If snapped, align the origin station onto the target. Recomputed at the
-            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
-            // the scan above was skipped.
-            if (nearestRef) {
-              const targetSt = stations.find(
-                (s) =>
-                  s.station_ref.section_id === nearestRef!.section_id &&
-                  s.station_ref.station_index === nearestRef!.station_index
-              );
-              if (targetSt) {
-                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords);
-                const snapDx = targetScreen.x - originScreen.x;
-                const snapDy = targetScreen.y - originScreen.y;
-                surveyLayerRef.current.updateStationDragPreview(snapDx, snapDy);
-                return;
-              }
-            }
-          }
+        if ((skipSnapScan && !dragSnapRef.current) || !origin || snapThreshold <= 0) return null;
+        const originSt = stations.find(
+          (s) => s.station_ref.line_id === origin.line_id && s.station_ref.station_index === origin.station_index
+        );
+        if (!originSt) return null;
+        const m = map.current!;
+        const toScreen = (st: Station) => m.project(metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin));
+        const originScreen = toScreen(originSt);
+        // Hidden Sections' lines (#327) are never a target - nor a held one
+        // whose line was hidden since.
+        const hiddenLines = mapHiddenLines(useProjectStore.getState().project?.lines, useUIStore.getState()).ids;
+        let nearestRef: StationRef | null = skipSnapScan
+          ? dragSnapRef.current
+          : nearestSnapStation(stations, toScreen, { x: originScreen.x + dx, y: originScreen.y + dy }, snapThreshold, hiddenLines, skip);
+        const targetSt = nearestRef ? heldSnapStation(stations, nearestRef, hiddenLines) : undefined;
+        if (!targetSt) nearestRef = null;
+        // Update snap state only when target changes (avoids React churn)
+        const prev = dragSnapRef.current;
+        if (nearestRef?.line_id !== prev?.line_id || nearestRef?.station_index !== prev?.station_index) {
+          dragSnapRef.current = nearestRef;
+          setSnappedStation(nearestRef);
         }
+        if (!targetSt) return null;
+        // Recomputed at the CURRENT zoom (O(1)), so the snap holds through a
+        // mid-drag zoom even when the scan was skipped.
+        const targetScreen = toScreen(targetSt);
+        return { dx: targetScreen.x - originScreen.x, dy: targetScreen.y - originScreen.y };
+      };
 
-        // No snap (or no origin station): use raw offset
-        surveyLayerRef.current.updateStationDragPreview(dx, dy);
+      // Station drag preview - translate station circles/labels + rebuild shot
+      // geometries. Never snaps onto its own co-located stations.
+      if (moveDrag.type === 'station' && surveyLayerRef.current) {
+        const colocatedKeys = new Set(
+          stationDragColocatedRefsRef.current.map(r => `${r.line_id}:${r.station_index}`)
+        );
+        const snap = snapOffset((st) => colocatedKeys.has(`${st.station_ref.line_id}:${st.station_ref.station_index}`));
+        surveyLayerRef.current.updateStationDragPreview(snap?.dx ?? dx, snap?.dy ?? dy);
       }
 
       // Shot drag preview - same pipeline as station drag (both endpoints + co-located stations move)
@@ -1317,78 +1293,12 @@ function MapCanvas() {
 
       // For segment drags, update preview synchronously (no rAF needed). dx/dy comes
       // from the re-projected grab point above, so the *-translate (viewport anchor)
-      // tracks the cursor across zoom changes mid-drag (#79).
+      // tracks the cursor across zoom changes mid-drag (#79). Never snaps onto a
+      // station of the dragged segment's own lines.
       if (moveDrag.type === 'segment' && surveyLayerRef.current) {
-        // Snap-to-station detection during segment drag (only if drag started from a station)
-        const snapThreshold = config?.map.snap.threshold ?? 10;
-        // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
-        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
-          // Find origin station's screen position and apply drag offset
-          const originSt = stations.find(
-            (s) =>
-              s.station_ref.section_id === dragOriginStationRef.current!.section_id &&
-              s.station_ref.station_index === dragOriginStationRef.current!.station_index
-          );
-          if (originSt) {
-            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords);
-
-            let nearestRef: StationRef | null = dragSnapRef.current;
-            if (!skipSnapScan) {
-              const projectedX = originScreen.x + dx;
-              const projectedY = originScreen.y + dy;
-
-              // Find nearest non-segment station to the projected origin position
-              nearestRef = null;
-              let nearestDist = Infinity;
-              const connectedIds = dragConnectedSectionIdsRef.current;
-              for (const st of stations) {
-                if (connectedIds.has(st.station_ref.section_id)) continue;
-                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-                const sp = map.current!.project(mc);
-                const sdx = sp.x - projectedX;
-                const sdy = sp.y - projectedY;
-                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-                if (dist < snapThreshold && dist < nearestDist) {
-                  nearestDist = dist;
-                  nearestRef = st.station_ref;
-                }
-              }
-
-              // Update snap state only when target changes (avoids React churn)
-              const prev = dragSnapRef.current;
-              if (
-                nearestRef?.section_id !== prev?.section_id ||
-                nearestRef?.station_index !== prev?.station_index
-              ) {
-                dragSnapRef.current = nearestRef;
-                setSnappedStation(nearestRef);
-              }
-            }
-
-            // If snapped, align the origin station onto the target. Recomputed at the
-            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
-            // the scan above was skipped.
-            if (nearestRef) {
-              const targetSt = stations.find(
-                (s) =>
-                  s.station_ref.section_id === nearestRef!.section_id &&
-                  s.station_ref.station_index === nearestRef!.station_index
-              );
-              if (targetSt) {
-                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords);
-                const snapDx = targetScreen.x - originScreen.x;
-                const snapDy = targetScreen.y - originScreen.y;
-                surveyLayerRef.current.updateDragPreview(snapDx, snapDy);
-                return;
-              }
-            }
-          }
-        }
-
-        // No snap (or no origin station): use raw offset
-        surveyLayerRef.current.updateDragPreview(dx, dy);
+        const connectedIds = dragConnectedLineIdsRef.current;
+        const snap = snapOffset((st) => connectedIds.has(st.station_ref.line_id));
+        surveyLayerRef.current.updateDragPreview(snap?.dx ?? dx, snap?.dy ?? dy);
       }
     },
     [moveDrag, config, stations, gpsOrigin, setSnappedStation]
@@ -1473,7 +1383,7 @@ function MapCanvas() {
       return;
     }
 
-    // Invalidate any pending getConnectedSectionIds async results so late
+    // Invalidate any pending getConnectedLineIds async results so late
     // .then() callbacks cannot call setMoveDrag after drag has ended.
     segmentDragTokenRef.current++;
 
@@ -1490,7 +1400,7 @@ function MapCanvas() {
       stationDragColocatedRefsRef.current = [];
       if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
       setMoveDrag(null);
-      dragConnectedSectionIdsRef.current = new Set();
+      dragConnectedLineIdsRef.current = new Set();
       moveDragLngLatRef.current = null;
       lastCursorClientRef.current = null;
       if (snapTarget) setSnappedStation(null);
@@ -1499,15 +1409,15 @@ function MapCanvas() {
 
     // Snap-to-merge path: keep the entire drag state alive so that Cancel
     // simply dismisses the dialog and the user can continue dragging.
-    if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined && snapTarget && originStationRef) {
+    if (moveDrag.type === 'segment' && moveDrag.lineId !== undefined && snapTarget && originStationRef) {
       const originSt = stations.find(
         (s) =>
-          s.station_ref.section_id === originStationRef.section_id &&
+          s.station_ref.line_id === originStationRef.line_id &&
           s.station_ref.station_index === originStationRef.station_index
       );
       const targetSt = stations.find(
         (s) =>
-          s.station_ref.section_id === snapTarget.section_id &&
+          s.station_ref.line_id === snapTarget.line_id &&
           s.station_ref.station_index === snapTarget.station_index
       );
 
@@ -1517,14 +1427,14 @@ function MapCanvas() {
           y: targetSt.coordinates.y - originSt.coordinates.y,
           z: 0,
         };
-        const sectionId = moveDrag.sectionId;
+        const lineId = moveDrag.lineId;
         setSnappedStation(null);
         snapMergeDialogPendingRef.current = true;
 
         // Build move command for batching with merge/closure (single undo entry)
-        const segmentMoveCmd: BatchCommand = { type: 'move_segment', section_id: sectionId, offset: snapOffset };
+        const segmentMoveCmd: BatchCommand = { type: 'move_segment', line_id: lineId, offset: snapOffset };
 
-        // Don't clear moveDrag, dragConnectedSectionIdsRef, or dragOriginStationRef
+        // Don't clear moveDrag, dragConnectedLineIdsRef, or dragOriginStationRef
         // - these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: [segmentMoveCmd],
@@ -1539,7 +1449,7 @@ function MapCanvas() {
             // Clear the overlay follow-offset synchronously (see the non-snap
             // segment branch) so the post-merge rebuild never doubles the offset.
             surveyLayerRef.current?.commitDragPreview();
-            dragConnectedSectionIdsRef.current = new Set();
+            dragConnectedLineIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
             lastCursorClientRef.current = null;
             setMoveDrag(null);
@@ -1562,12 +1472,12 @@ function MapCanvas() {
     if (moveDrag.type === 'station' && moveDrag.stationRef && snapTarget && originStationRef) {
       const originSt = stations.find(
         (s) =>
-          s.station_ref.section_id === originStationRef.section_id &&
+          s.station_ref.line_id === originStationRef.line_id &&
           s.station_ref.station_index === originStationRef.station_index
       );
       const targetSt = stations.find(
         (s) =>
-          s.station_ref.section_id === snapTarget.section_id &&
+          s.station_ref.line_id === snapTarget.line_id &&
           s.station_ref.station_index === snapTarget.station_index
       );
 
@@ -1621,7 +1531,7 @@ function MapCanvas() {
     // --- Normal (non-snap) path: clear everything and commit ---
     dragOriginStationRef.current = null;
     lastRawDragOffsetRef.current = null;
-    dragConnectedSectionIdsRef.current = new Set();
+    dragConnectedLineIdsRef.current = new Set();
 
     // Read final position from ref (updated imperatively during drag)
     const endLngLat = moveDragLngLatRef.current ?? moveDrag.currentLngLat;
@@ -1661,7 +1571,7 @@ function MapCanvas() {
         if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
-      } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
+      } else if (moveDrag.type === 'segment' && moveDrag.lineId !== undefined) {
         // Non-snap segment move
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
@@ -1672,12 +1582,12 @@ function MapCanvas() {
         // stale drag offset. Without this the highlight briefly renders at
         // newPosition + dragOffset (a one-frame double-distance flash).
         surveyLayerRef.current?.commitDragPreview();
-        const res = await moveSegment(moveDrag.sectionId, offset);
+        const res = await moveSegment(moveDrag.lineId, offset);
         // Rejected move (read-only gate): restore now - see the station branch.
         if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
-      } else if (moveDrag.type === 'shot' && moveDrag.sectionId !== undefined && moveDrag.shotIndex !== undefined) {
+      } else if (moveDrag.type === 'shot' && moveDrag.lineId !== undefined && moveDrag.shotIndex !== undefined) {
         // Commit preview: remove temp layers but keep exclusion filters so
         // features stay hidden until React re-renders with new coordinates.
         surveyLayerRef.current?.onNextUpdate(() => {
@@ -1713,7 +1623,9 @@ function MapCanvas() {
     // Calculate initial center from stations (in meters). Read the SoA coord
     // buffer directly so load does not materialize the whole ~89k Station graph
     // through the lazy proxy just to size the initial view (#mem).
-    const bounds = getBoundsFromStationCoords(surveyData?.stationCoords ?? new Float64Array(0));
+    const bounds = surveyData
+      ? surveyFrameBounds(surveyData, mapHiddenLines(project?.lines, useUIStore.getState()).ids)
+      : getBoundsFromStationCoords(new Float64Array(0));
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     // Transform to map coordinates
@@ -1961,13 +1873,17 @@ function MapCanvas() {
     [surveyLayerRef, mapLoaded, gpsOrigin],
   );
 
+  // Lines of hidden Sections (#327) the map leaves out; SurveyLayer reads the
+  // set itself, this key only re-runs the update below when it changes.
+  const mapHiddenKey = useUIStore((s) => mapHiddenLines(project?.lines, s).key);
+
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints - critical
   // for drag commit where endDragPreview() must fire in the same frame as setData().
   useLayoutEffect(() => {
     if (surveyLayerRef.current && project) {
       surveyLayerRef.current.update(
-        project.sections,
+        project.lines,
         activeStations,
         // Closure overlays are drawn from the active coordinates, so an adjusted
         // (closed) loop collapses to a zero-length, invisible line, while a loop
@@ -1983,7 +1899,7 @@ function MapCanvas() {
         issueInput
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput, mapHiddenKey]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
   // above - no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
@@ -2147,7 +2063,7 @@ function MapCanvas() {
     if (!surveyLayerRef.current || !mapLoaded) return;
     if (effectiveDistance && distanceField && surveyData) {
       // Measured SoA: distances use surveyed geometry, and the builder only needs
-      // section metadata + shot ids - never the lazy `section.shots` objects.
+      // line metadata + shot ids - never the lazy `line.shots` objects.
       const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
     } else if (overlayApplyAction(effectiveDistance, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
@@ -2165,7 +2081,7 @@ function MapCanvas() {
     if (!surveyLayerRef.current || !mapLoaded) return;
     if (showGasPlan && gasReachField && surveyData) {
       // Measured SoA (see distance-gradient effect): builder reads shot ids from
-      // typed arrays, never the lazy `section.shots` objects.
+      // typed arrays, never the lazy `line.shots` objects.
       const state = buildGasReachFeatureState(surveyData, gasReachField);
       surveyLayerRef.current.setGasReach(true, state);
     } else if (overlayApplyAction(showGasPlan, gasReachField != null, surveyData != null, gasFieldFailed) === 'off') {
@@ -2178,7 +2094,7 @@ function MapCanvas() {
 
   // Plan-mode idle tint (#395 revision): while Plan is active but no gas origin has
   // been chosen yet, tint the whole survey the gas ramp's dim far color instead of
-  // leaking section colors under the gas color scheme. Driven purely off
+  // leaking line colors under the gas color scheme. Driven purely off
   // `gasOriginChosen`, not off `gasReachField` - SurveyLayer itself yields to a real
   // field the moment one is set (see setGasReach / isPlanIdleActive), so this clears
   // the instant an origin is chosen even before the field's first fetch resolves.
@@ -2233,7 +2149,7 @@ function MapCanvas() {
     }
     const originStation = activeStations.find(
       (s) =>
-        s.station_ref.section_id === distanceGradientOrigin.section_id &&
+        s.station_ref.line_id === distanceGradientOrigin.line_id &&
         s.station_ref.station_index === distanceGradientOrigin.station_index
     );
     if (!originStation) return undefined;
@@ -2267,7 +2183,7 @@ function MapCanvas() {
     if (!map.current || !mapLoaded || !showGasPlan || !gasOrigin) return undefined;
     const originStation = activeStations.find(
       (s) =>
-        s.station_ref.section_id === gasOrigin.section_id &&
+        s.station_ref.line_id === gasOrigin.line_id &&
         s.station_ref.station_index === gasOrigin.station_index
     );
     if (!originStation) return undefined;
@@ -2406,12 +2322,12 @@ function MapCanvas() {
   // useLayoutEffect (not useEffect) so it clears before paint, in the same commit
   // as the geometry-apply layout effect above. On a project switch the geometry
   // rebuild runs first and re-applies the controller's stored highlight; because
-  // section ids are per-project sequential (they collide across projects), a
-  // regular useEffect would let the colliding section flash highlighted for one
+  // line ids are per-project sequential (they collide across projects), a
+  // regular useEffect would let the colliding line flash highlighted for one
   // frame before this cleared it.
   //
   // Each branch sets the new target BEFORE clearing the other two: every setter
-  // re-raises the selection's section (`raisedSectionOf`, section > station >
+  // re-raises the selection's line (`raisedLineOf`, line > station >
   // shot), and this order moves the draw order at most once per change instead
   // of rewriting it for an intermediate empty selection.
   useLayoutEffect(() => {
@@ -2420,20 +2336,20 @@ function MapCanvas() {
     if (selection?.type === 'station' && selection.stationRef) {
       surveyLayerRef.current.setSelectedStation(selection.stationRef);
       surveyLayerRef.current.setSelectedShot(null, null);
-      surveyLayerRef.current.setSelectedSection(null);
-    } else if (selection?.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
-      surveyLayerRef.current.setSelectedShot(selection.sectionId, selection.shotId);
+      surveyLayerRef.current.setSelectedLine(null);
+    } else if (selection?.type === 'shot' && selection.lineId !== undefined && selection.shotId !== undefined) {
+      surveyLayerRef.current.setSelectedShot(selection.lineId, selection.shotId);
       surveyLayerRef.current.setSelectedStation(null);
-      surveyLayerRef.current.setSelectedSection(null);
-    } else if (selection?.type === 'section' && selection.sectionId !== undefined) {
-      // Section selection
-      surveyLayerRef.current.setSelectedSection(selection.sectionId);
+      surveyLayerRef.current.setSelectedLine(null);
+    } else if (selection?.type === 'line' && selection.lineId !== undefined) {
+      // Line selection
+      surveyLayerRef.current.setSelectedLine(selection.lineId);
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
     } else {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
-      surveyLayerRef.current.setSelectedSection(null);
+      surveyLayerRef.current.setSelectedLine(null);
     }
   }, [selection]);
 
@@ -2462,11 +2378,11 @@ function MapCanvas() {
     surveyLayerRef.current?.setShowErrorLabels(effectiveShowShotErrors && showShots, effectiveShowShotErrors && showStations);
   }, [effectiveShowShotErrors, showShots, showStations, mapLoaded]);
 
-  // Sync section name labels visibility with SurveyLayer
+  // Sync line name labels visibility with SurveyLayer
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowSectionNames(showSectionNames);
-  }, [showSectionNames, mapLoaded]);
+    surveyLayerRef.current.setShowLineNames(showLineNames);
+  }, [showLineNames, mapLoaded]);
 
   // Sync the station labels (off / IDs / names) with SurveyLayer
   useEffect(() => {
@@ -2493,13 +2409,13 @@ function MapCanvas() {
       if (moveCommentSource.type === 'station' && moveCommentSource.stationRef) {
         surveyLayerRef.current.setHiddenComment({
           type: 'station',
-          sectionId: moveCommentSource.stationRef.section_id,
+          lineId: moveCommentSource.stationRef.line_id,
           id: moveCommentSource.stationRef.station_index,
         });
-      } else if (moveCommentSource.type === 'shot' && moveCommentSource.sectionId !== undefined && moveCommentSource.shotId !== undefined) {
+      } else if (moveCommentSource.type === 'shot' && moveCommentSource.lineId !== undefined && moveCommentSource.shotId !== undefined) {
         surveyLayerRef.current.setHiddenComment({
           type: 'shot',
-          sectionId: moveCommentSource.sectionId,
+          lineId: moveCommentSource.lineId,
           id: moveCommentSource.shotId,
         });
       }
@@ -2532,16 +2448,16 @@ function MapCanvas() {
     surveyLayerRef.current.setShowJumps(getEffectiveShowJumps(showShots, showJumps));
   }, [showJumps, showShots, mapLoaded]);
 
-  // Sync anchored section IDs with SurveyLayer for fading.
+  // Sync anchored line IDs with SurveyLayer for fading.
   // useLayoutEffect (not useEffect) for the same reason as the selection sync
   // above: the controller retains its dim state across a project switch, and
-  // section/feature ids collide across projects. A post-paint useEffect would
+  // line/feature ids collide across projects. A post-paint useEffect would
   // let the pre-paint geometry rebuild re-apply the previous project's dim to
   // the new project's colliding ids for one frame before this cleared it.
   useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setAnchoredSections(anchoredSectionIds);
-  }, [anchoredSectionIds, mapLoaded]);
+    surveyLayerRef.current.setAnchoredLines(anchoredLineIds);
+  }, [anchoredLineIds, mapLoaded]);
 
   // Sync immovable feature IDs with SurveyLayer for disabled visual.
   // useLayoutEffect for the same cross-project-flash reason as above; immovable
@@ -2587,23 +2503,23 @@ function MapCanvas() {
   // are independent (#27), so this has to run for either going OFF and has to
   // judge each selected shot by its own kind - keying the whole effect off the
   // reference toggle deselected still-visible jumps.
-  // Keyed on `project?.sections`, not a project-identity string: a shot's kind
+  // Keyed on `project?.lines`, not a project-identity string: a shot's kind
   // is editable (context menu, the J/R table cell, a fill-drag), and those go
   // through executeCommand, which bumps `modified_at` but never `file_path` /
   // `created_at`. Keying on identity meant marking the SELECTED shot as a Jump
   // while Jumps were hidden left it selected and in the Detail panel after it
   // vanished from the map. The measure-snap effect above already keys this way.
   useEffect(() => {
-    if ((showReferenceShots && showJumps) || !project?.sections) return;
+    if ((showReferenceShots && showJumps) || !project?.lines) return;
     filterSelection((s) => {
       if (s.type !== 'shot') return true;
-      const section = project.sections.find((sec) => sec.id === s.sectionId);
-      const shot = section?.shots.find((sh) => sh.id === s.shotId);
+      const line = project.lines.find((sec) => sec.id === s.lineId);
+      const shot = line?.shots.find((sh) => sh.id === s.shotId);
       return isShotKindVisible(shot?.kind, showShots, showJumps, showReferenceShots);
     });
     surveyLayerRef.current?.clearShotHover();
     setHoveredShot(null);
-  }, [showShots, showJumps, showReferenceShots, project?.sections, filterSelection, setHoveredShot]);
+  }, [showShots, showJumps, showReferenceShots, project?.lines, filterSelection, setHoveredShot]);
 
   // The scale bar is always shown. Add the control once the map is loaded.
   useEffect(() => {
@@ -2688,7 +2604,7 @@ function MapCanvas() {
     }
   }, [activeTool]);
 
-  // Fetch anchored section IDs when Move Segment tool becomes active.
+  // Fetch anchored line IDs when Move Segment tool becomes active.
   // Sets anchoredIdsLoaded=false immediately on activation, then true once fetched,
   // so drag start is blocked until the anchored set is populated.
   // Uses a cancelled flag to ignore stale results from late promise resolution
@@ -2698,23 +2614,23 @@ function MapCanvas() {
     if (activeTool === 'move_segment') {
       clearSelectionAndVisuals();
       setAnchoredIdsLoaded(false);
-      getAnchoredSectionIds().then((ids) => {
+      getAnchoredLineIds().then((ids) => {
         if (cancelled) return;
-        setAnchoredSectionIds(new Set(ids));
+        setAnchoredLineIds(new Set(ids));
         setAnchoredIdsLoaded(true);
       }).catch(() => {
         if (cancelled) return;
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
-        setAnchoredSectionIds(new Set());
+        setAnchoredLineIds(new Set());
         showToast(t('map.toasts.anchoredSegmentsError'), TOAST_KEYS.ANCHORED_IDS_ERROR, 'error');
       });
     } else {
-      setAnchoredSectionIds(new Set());
+      setAnchoredLineIds(new Set());
       setAnchoredIdsLoaded(false);
     }
     return () => { cancelled = true; };
-  }, [activeTool, clearSelectionAndVisuals, getAnchoredSectionIds, project, showToast]);
+  }, [activeTool, clearSelectionAndVisuals, getAnchoredLineIds, project, showToast]);
 
   // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
   useEffect(() => {
@@ -2840,7 +2756,7 @@ function MapCanvas() {
         dragOriginStationRef.current = null;
         lastRawDragOffsetRef.current = null;
         stationDragColocatedRefsRef.current = [];
-        dragConnectedSectionIdsRef.current = new Set();
+        dragConnectedLineIdsRef.current = new Set();
         moveDragLngLatRef.current = null;
         lastCursorClientRef.current = null;
         dragSnapRef.current = null;
@@ -3289,27 +3205,16 @@ function MapCanvas() {
     // fit computes X/Y bounds without materializing the ~89k-object lazy
     // `activeStations` view - this callback runs on every load via the
     // requestFitToBounds effect. Fall back to `activeStations` only when
-    // surveyData isn't available yet (unusual early-init paths).
+    // surveyData isn't available yet (unusual early-init paths). Either way
+    // the hidden Sections' lines are left out while any line is shown (#327).
     let bounds: { minX: number; maxX: number; minY: number; maxY: number };
-    const coordsArr = activeSurveyData?.stationCoords;
-    if (coordsArr && coordsArr.length > 0) {
-      let minX = Infinity;
-      let maxX = -Infinity;
-      let minY = Infinity;
-      let maxY = -Infinity;
-      for (let i = 0; i + 2 < coordsArr.length; i += 3) {
-        const x = coordsArr[i]!;
-        const y = coordsArr[i + 1]!;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-      bounds = { minX, maxX, minY, maxY };
+    const hidden = mapHiddenLines(project?.lines, useUIStore.getState()).ids;
+    if (activeSurveyData && activeSurveyData.stationCoords.length > 0) {
+      bounds = surveyFrameBounds(activeSurveyData, hidden);
     } else {
       if (activeStations.length === 0) return;
-      const coords = activeStations.map((s) => s.coordinates);
-      bounds = getBounds(coords);
+      const shown = activeStations.filter((s) => !hidden.has(s.station_ref.line_id));
+      bounds = getBounds((shown.length > 0 ? shown : activeStations).map((s) => s.coordinates));
     }
 
     // Transform bounds to map coordinates
@@ -3323,7 +3228,7 @@ function MapCanvas() {
     const container = map.current.getContainer();
     const padding = calcPadding(container);
 
-    // Respect the configured animation speed (matches fitToSection / center moves).
+    // Respect the configured animation speed (matches fitToLine / center moves).
     // `snap` forces an instant jump regardless of the setting.
     const animationConfig = config?.map.animation;
     const animationDuration = animationConfig && !animationConfig.enabled ? 0 : (animationConfig?.duration ?? 300);
@@ -3334,50 +3239,54 @@ function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : { duration: animationDuration }),
     });
-  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config]);
+  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config, project?.lines]);
 
-  // Fit to a specific section's bounds
-  const fitToSection = useCallback(
-    (sectionId: number) => {
+  // Fit to a specific line's bounds, or several lines' together (a Section, #327)
+  const fitToLine = useCallback(
+    (lineIds: number | readonly number[]) => {
       if (!map.current || !config) return;
+      const ids = new Set(typeof lineIds === 'number' ? [lineIds] : lineIds);
 
-      // Filter stations belonging to this section
-      const sectionStations = activeStations.filter((s) => s.station_ref.section_id === sectionId);
+      // Filter stations belonging to these lines
+      const lineStations = activeStations.filter((s) => ids.has(s.station_ref.line_id));
 
-      // Empty section: nothing to zoom to
-      if (sectionStations.length === 0) {
+      // Empty line: nothing to zoom to
+      if (lineStations.length === 0) {
         return;
       }
 
       // Fit to *rendered* geometry: endpoints of drawn shots plus zero-datum
       // stations, falling back to all stations when nothing matches. A hidden
       // connector or a station only a hidden shot touches shouldn't inflate the
-      // bounds and shrink the section; a *visible* one must be included, or it
+      // bounds and shrink the line; a *visible* one must be included, or it
       // could be left off-screen. Jumps and References are independent toggles
       // (#27), so this is per-kind - judging both by the reference toggle alone
       // got it backwards in each direction.
-      const byIndex = new Map<number, (typeof sectionStations)[number]>();
-      for (const s of sectionStations) byIndex.set(s.station_ref.station_index, s);
-      const section = project?.sections.find((s) => s.id === sectionId);
-      const rendered: typeof sectionStations = [];
-      const seenIdx = new Set<number>();
-      const includeIdx = (idx: number) => {
-        if (seenIdx.has(idx)) return;
-        const st = byIndex.get(idx);
+      const byIndex = new Map<string, (typeof lineStations)[number]>();
+      for (const s of lineStations) byIndex.set(`${s.station_ref.line_id}:${s.station_ref.station_index}`, s);
+      const rendered: typeof lineStations = [];
+      const seenIdx = new Set<string>();
+      const includeIdx = (lineId: number, idx: number) => {
+        const key = `${lineId}:${idx}`;
+        if (seenIdx.has(key)) return;
+        const st = byIndex.get(key);
         if (st) {
           rendered.push(st);
-          seenIdx.add(idx);
+          seenIdx.add(key);
         }
       };
-      section?.shots.forEach((shot, i) => {
-        if (!isShotKindVisible(shot.kind, showShots, showJumps, showReferenceShots)) return;
-        includeIdx(i);
-        includeIdx(i + 1);
-      });
-      for (const s of sectionStations) {
-        if (s.is_zero_datum) includeIdx(s.station_ref.station_index);
+      for (const line of project?.lines ?? []) {
+        if (!ids.has(line.id)) continue;
+        line.shots.forEach((shot, i) => {
+          if (!isShotKindVisible(shot.kind, showShots, showJumps, showReferenceShots)) return;
+          includeIdx(line.id, i);
+          includeIdx(line.id, i + 1);
+        });
       }
-      const fitStations = rendered.length > 0 ? rendered : sectionStations;
+      for (const s of lineStations) {
+        if (s.is_zero_datum) includeIdx(s.station_ref.line_id, s.station_ref.station_index);
+      }
+      const fitStations = rendered.length > 0 ? rendered : lineStations;
 
       // Stop any running animation before starting a new one
       map.current.stop();
@@ -3391,7 +3300,7 @@ function MapCanvas() {
 
       // Padding: 10% margins only. The map container is the central flex
       // column, so it already excludes the side panels - adding the panel
-      // widths here double-counts and squeezes the section into a sliver
+      // widths here double-counts and squeezes the line into a sliver
       // (e.g. a 730px map minus 250+300px panels left ~34px usable). Matches
       // fitToBounds.
       const container = map.current.getContainer();
@@ -3431,12 +3340,12 @@ function MapCanvas() {
       const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
       const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
-      // Always fit the section's bounds. fitBounds depends only on the bounds,
+      // Always fit the line's bounds. fitBounds depends only on the bounds,
       // padding and container - not the live (possibly mid-animation) camera -
-      // so rapidly clicking between different sections can't drift the zoom.
+      // so rapidly clicking between different lines can't drift the zoom.
       // (The previous skip-zoom-in heuristic read the transitional camera via
       // map.project() and accumulated across interrupted animations.) Re-fitting
-      // an already-framed section is idempotent (same target zoom).
+      // an already-framed line is idempotent (same target zoom).
       map.current.fitBounds([sw, ne], {
         padding,
         linear: true,
@@ -3444,20 +3353,20 @@ function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [activeStations, project?.sections, config, gpsOrigin, showShots, showJumps, showReferenceShots, calcPadding]
+    [activeStations, project?.lines, config, gpsOrigin, showShots, showJumps, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
   const panToShotMidpoint = useCallback(
-    (sectionId: SectionId, shotId: ShotId) => {
+    (lineId: LineId, shotId: ShotId) => {
       if (!map.current || !config || !project) return;
 
-      // Find the section
-      const section = project.sections.find((s) => s.id === sectionId);
-      if (!section) return;
+      // Find the line
+      const line = project.lines.find((s) => s.id === lineId);
+      if (!line) return;
 
       // Find the shot index (shot position - 1, since shots connect stations)
-      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      const shotIndex = line.shots.findIndex((s) => s.id === shotId);
       if (shotIndex === -1) return;
 
       // Shot at index N connects station_index N (from) to station_index N+1 (to)
@@ -3466,10 +3375,10 @@ function MapCanvas() {
 
       // Find the two stations
       const fromStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === fromStationIndex
       );
       const toStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === toStationIndex
       );
 
       if (!fromStation || !toStation) return;
@@ -3498,17 +3407,17 @@ function MapCanvas() {
   // zooms one step closer (capped at zoom_max). Drives the resolve view's zoom
   // button (#57) - clicking repeatedly closes in on the problematic shot.
   const zoomToShotMidpoint = useCallback(
-    (sectionId: SectionId, shotId: ShotId) => {
+    (lineId: LineId, shotId: ShotId) => {
       if (!map.current || !config || !project) return;
-      const section = project.sections.find((s) => s.id === sectionId);
-      if (!section) return;
-      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      const line = project.lines.find((s) => s.id === lineId);
+      if (!line) return;
+      const shotIndex = line.shots.findIndex((s) => s.id === shotId);
       if (shotIndex === -1) return;
       const fromStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex,
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === shotIndex,
       );
       const toStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex + 1,
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === shotIndex + 1,
       );
       if (!fromStation || !toStation) return;
       const midpointX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
@@ -3536,7 +3445,7 @@ function MapCanvas() {
       // Find the station
       const station = activeStations.find(
         (s) =>
-          s.station_ref.section_id === stationRef.section_id &&
+          s.station_ref.line_id === stationRef.line_id &&
           s.station_ref.station_index === stationRef.station_index
       );
       if (!station) return false;
@@ -3544,7 +3453,7 @@ function MapCanvas() {
       // Stop any running animation before starting a new one
       map.current.stop();
 
-      // Reset padding to avoid MapLibre accumulation bug (follows fitToSection pattern)
+      // Reset padding to avoid MapLibre accumulation bug (follows fitToLine pattern)
       map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
 
       // Convert to map coordinates
@@ -3569,15 +3478,15 @@ function MapCanvas() {
   // Center on a shot's midpoint (used by DetailLink)
   // Returns true if centering was performed, false if prerequisites not met
   const fitToShot = useCallback(
-    (sectionId: SectionId, shotId: ShotId): boolean => {
+    (lineId: LineId, shotId: ShotId): boolean => {
       if (!map.current || !config || !project) return false;
 
-      // Find the section
-      const section = project.sections.find((s) => s.id === sectionId);
-      if (!section) return false;
+      // Find the line
+      const line = project.lines.find((s) => s.id === lineId);
+      if (!line) return false;
 
       // Find the shot index
-      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      const shotIndex = line.shots.findIndex((s) => s.id === shotId);
       if (shotIndex === -1) return false;
 
       // Shot at index N connects station_index N (from) to station_index N+1 (to)
@@ -3586,10 +3495,10 @@ function MapCanvas() {
 
       // Find the two stations
       const fromStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === fromStationIndex
       );
       const toStation = activeStations.find(
-        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
+        (s) => s.station_ref.line_id === lineId && s.station_ref.station_index === toStationIndex
       );
 
       if (!fromStation || !toStation) return false;
@@ -3597,7 +3506,7 @@ function MapCanvas() {
       // Stop any running animation before starting a new one
       map.current.stop();
 
-      // Reset padding to avoid MapLibre accumulation bug (follows fitToSection pattern)
+      // Reset padding to avoid MapLibre accumulation bug (follows fitToLine pattern)
       map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
 
       // Calculate midpoint in project coordinates (meters)
@@ -3652,41 +3561,41 @@ function MapCanvas() {
     }
   }, [requestFitToBounds, mapLoaded, stations.length, fitToBounds, clearFitToBoundsRequest]);
 
-  // Fit to section when requested (e.g., from sections panel double-click)
+  // Fit to line when requested (e.g., from sections panel double-click)
   useEffect(() => {
     // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
-    if (requestZoomToSection !== null) {
-      const sectionId = requestZoomToSection;
-      clearZoomToSectionRequest();
+    if (requestZoomToLine !== null) {
+      const lineId = requestZoomToLine;
+      clearZoomToLineRequest();
       // If map is loaded, process immediately; otherwise store for later
       if (mapLoaded) {
-        fitToSection(sectionId);
+        fitToLine(lineId);
       } else {
-        pendingZoomToSectionRef.current = sectionId;
+        pendingZoomToLineRef.current = lineId;
       }
     }
-  }, [requestZoomToSection, mapLoaded, clearZoomToSectionRequest, fitToSection]);
+  }, [requestZoomToLine, mapLoaded, clearZoomToLineRequest, fitToLine]);
 
-  // Process pending section zoom request when map loads
+  // Process pending line zoom request when map loads
   useEffect(() => {
-    if (mapLoaded && pendingZoomToSectionRef.current !== null) {
-      const sectionId = pendingZoomToSectionRef.current;
-      pendingZoomToSectionRef.current = null;
-      fitToSection(sectionId);
+    if (mapLoaded && pendingZoomToLineRef.current !== null) {
+      const lineId = pendingZoomToLineRef.current;
+      pendingZoomToLineRef.current = null;
+      fitToLine(lineId);
     }
-  }, [mapLoaded, fitToSection]);
+  }, [mapLoaded, fitToLine]);
 
   // Pan to shot midpoint when requested (e.g., from DataTable double-click)
   useEffect(() => {
     // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
     if (requestPanToShot !== null) {
-      const { sectionId, shotId } = requestPanToShot;
+      const { lineId, shotId } = requestPanToShot;
       clearPanToShotRequest();
       // If map is loaded, process immediately; otherwise store for later
       if (mapLoaded) {
-        panToShotMidpoint(sectionId, shotId);
+        panToShotMidpoint(lineId, shotId);
       } else {
-        pendingPanToShotRef.current = { sectionId, shotId };
+        pendingPanToShotRef.current = { lineId, shotId };
       }
     }
   }, [requestPanToShot, mapLoaded, clearPanToShotRequest, panToShotMidpoint]);
@@ -3694,9 +3603,9 @@ function MapCanvas() {
   // Process pending pan-to-shot request when map loads
   useEffect(() => {
     if (mapLoaded && pendingPanToShotRef.current !== null) {
-      const { sectionId, shotId } = pendingPanToShotRef.current;
+      const { lineId, shotId } = pendingPanToShotRef.current;
       pendingPanToShotRef.current = null;
-      panToShotMidpoint(sectionId, shotId);
+      panToShotMidpoint(lineId, shotId);
     }
   }, [mapLoaded, panToShotMidpoint]);
 
@@ -3730,41 +3639,41 @@ function MapCanvas() {
   useEffect(() => {
     // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
     if (requestCenterOnShot !== null) {
-      const { sectionId, shotId } = requestCenterOnShot;
+      const { lineId, shotId } = requestCenterOnShot;
       clearCenterOnShotRequest();
       // If map is loaded, process immediately; otherwise store for later
       if (mapLoaded) {
-        fitToShot(sectionId, shotId);
+        fitToShot(lineId, shotId);
       } else {
-        pendingCenterOnShotRef.current = { sectionId, shotId };
+        pendingCenterOnShotRef.current = { lineId, shotId };
       }
     }
   }, [requestCenterOnShot, mapLoaded, clearCenterOnShotRequest, fitToShot]);
 
   // Render the transient geometry preview (issue #57): the warning-resolution
   // flow pushes a proposed ghost shot here as the user tries options, drawn via
-  // the survey layer's ghost overlay (setGhostSection).
+  // the survey layer's ghost overlay (setGhostLine).
   useEffect(() => {
     if (!mapLoaded) return;
-    surveyLayerRef.current?.setGhostSection(geometryPreview ?? null);
+    surveyLayerRef.current?.setGhostLine(geometryPreview ?? null);
   }, [geometryPreview, mapLoaded]);
 
   // Progressive zoom-in onto a shot (resolve view's zoom button, #57). Each
   // request recenters and zooms one step closer.
   useEffect(() => {
     if (requestZoomToShot !== null) {
-      const { sectionId, shotId } = requestZoomToShot;
+      const { lineId, shotId } = requestZoomToShot;
       clearZoomToShotRequest();
-      if (mapLoaded) zoomToShotMidpoint(sectionId, shotId);
+      if (mapLoaded) zoomToShotMidpoint(lineId, shotId);
     }
   }, [requestZoomToShot, mapLoaded, clearZoomToShotRequest, zoomToShotMidpoint]);
 
   // Process pending center-on-shot request when map loads
   useEffect(() => {
     if (mapLoaded && pendingCenterOnShotRef.current !== null) {
-      const { sectionId, shotId } = pendingCenterOnShotRef.current;
+      const { lineId, shotId } = pendingCenterOnShotRef.current;
       // Only clear pending ref if centering was successful
-      if (fitToShot(sectionId, shotId)) {
+      if (fitToShot(lineId, shotId)) {
         pendingCenterOnShotRef.current = null;
       }
     }
@@ -4100,12 +4009,12 @@ function MapCanvas() {
       {/* Placement mode overlay */}
       {placementMode && placementCursor && (
         <PlacementOverlay
-          sectionData={placementMode.sectionData}
+          lineData={placementMode.lineData}
           alignStationIndex={placementMode.alignStationIndex}
           cursorPosition={placementCursor}
           isSnapped={placementMode.snappedToStation !== null}
           pixelsPerMeter={pixelsPerMeter}
-          additionalSections={placementMode.additionalSections}
+          additionalLines={placementMode.additionalLines}
           onCancel={handlePlacementCancel}
         />
       )}
@@ -4115,8 +4024,8 @@ function MapCanvas() {
           - Survey only, and only when nothing else already explains the read-only
           state - live in `showsClosureAdjustedNotice`, next to `isMapReadOnly`. */}
       <MapTopLeftOverlay
-        focused={focusedSectionId !== null}
-        onFitOrExitFocus={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
+        focused={focusedLineId !== null}
+        onFitOrExitFocus={() => (focusedLineId !== null ? exitLineFocus() : fitToBounds())}
         showSpeleoReadOnly={speleoReadOnly && !placementMode && appMode === 'survey'}
         showClosureReadOnly={showsClosureAdjustedNotice({
           geometryMode,
@@ -4237,8 +4146,8 @@ function MapCanvas() {
       <MapHoverSync
         surveyLayerRef={surveyLayerRef}
         mapLoaded={mapLoaded}
-        anchoredSectionIds={anchoredSectionIds}
-        getConnectedSectionIds={getConnectedSectionIds}
+        anchoredLineIds={anchoredLineIds}
+        getConnectedLineIds={getConnectedLineIds}
         logMapInteractions={logMapInteractions}
       />
     </div>

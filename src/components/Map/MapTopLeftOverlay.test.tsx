@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 
 // `t` resolves against the REAL shipped locale file rather than a hand-copied
@@ -135,7 +136,7 @@ describe('MapTopLeftOverlay', () => {
         showClosureReadOnly
         adjustmentReport={{
           skipped_closures: [],
-          failures: [{ anchor: { section_id: 0, station_index: 0 }, section_ids: [0], reason: 'x' }],
+          failures: [{ anchor: { line_id: 0, station_index: 0 }, line_ids: [0], reason: 'x' }],
           far_gps_fixes: [],
         }}
       />
@@ -156,14 +157,14 @@ describe('MapTopLeftOverlay', () => {
   describe('adjustment notice (#737)', () => {
     const skipped = (closure_id: number) => ({
       closure_id,
-      station_a: { section_id: 0, station_index: 1 },
-      station_b: { section_id: 0, station_index: 2 },
-      shot_section_id: 0,
+      station_a: { line_id: 0, station_index: 1 },
+      station_b: { line_id: 0, station_index: 2 },
+      shot_line_id: 0,
       shot_index: 1,
     });
     const failure = {
-      anchor: { section_id: 2, station_index: 0 },
-      section_ids: [2, 3],
+      anchor: { line_id: 2, station_index: 0 },
+      line_ids: [2, 3],
       reason: 'loop closures tie two zero datums to the same point.',
     };
     const report = (over: Partial<AdjustmentReport>): AdjustmentReport => ({
@@ -219,8 +220,18 @@ describe('MapTopLeftOverlay', () => {
     });
 
     it('names the GPS fix the computed view is bent to, and how far off it is (#741)', () => {
-      const fix = (section_id: number, station_index: number, gap_m: number) => ({
-        station: { section_id, station_index },
+      // The station is named with its line (`Main Line / A7`), never by its
+      // positional `line:index` handle.
+      useProjectStore.setState({
+        surveyData: null,
+        stations: [
+          { station_ref: { line_id: 2, station_index: 5 }, name: 'A7', id: 31 },
+          { station_ref: { line_id: 3, station_index: 1 }, name: '12', id: 40 },
+        ],
+        project: { lines: [{ id: 2, name: 'Main Line' }, { id: 3, name: 'Side' }] },
+      } as never);
+      const fix = (line_id: number, station_index: number, gap_m: number) => ({
+        station: { line_id, station_index },
         gap_m,
         threshold_m: 25,
       });
@@ -228,7 +239,7 @@ describe('MapTopLeftOverlay', () => {
         <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ far_gps_fixes: [fix(2, 5, 43.2)] })} />
       );
       expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
-        'Bent to a GPS fix at 2:5, 43 m from its surveyed position. Check it.'
+        'Bent to a GPS fix at Main Line / A7, 43 m from its surveyed position. Check it.'
       );
       expect(screen.queryByTestId('adjustment-notice-skipped')).toBeNull();
       // The backend sorts the largest gap first; the notice names it.
@@ -239,7 +250,7 @@ describe('MapTopLeftOverlay', () => {
         />
       );
       expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
-        'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at 3:1. Check them.'
+        'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at Side / 12. Check them.'
       );
     });
 

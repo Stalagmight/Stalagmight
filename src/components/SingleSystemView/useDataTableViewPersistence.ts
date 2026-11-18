@@ -16,7 +16,7 @@ type AngleMode = 'avg' | 'inout' | 'off';
  * reports a change that isn't one, costing a redundant save-and-resync cycle. The
  * sibling hidden-column lists are `.sort()`ed just above for the same reason.
  *
- * Exported for `useNewSectionViewPersistence`, which persists the new-section
+ * Exported for `useNewLineViewPersistence`, which persists the new-line
  * dialog's grid layout through the same seed/snapshot/debounce machinery and so
  * needs the identical normalization - two copies would be free to drift into
  * exactly the spurious-save bug this exists to prevent.

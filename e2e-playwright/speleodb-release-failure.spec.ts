@@ -18,10 +18,10 @@ const FAILED = {
   success: false,
   warnings: [],
   error: 'The SpeleoDB lock could not be handed back: Network error talking to SpeleoDB: synthetic timeout',
-  section_ids: [],
+  line_ids: [],
   lock_release: 'failed',
 };
-const RELEASED = { success: true, warnings: [], error: null, section_ids: [], lock_release: 'released' };
+const RELEASED = { success: true, warnings: [], error: null, line_ids: [], lock_release: 'released' };
 
 type Call = { cmd: string; args: Record<string, unknown> | null };
 

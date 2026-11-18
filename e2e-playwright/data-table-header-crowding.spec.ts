@@ -2,7 +2,7 @@
  * Regression test for #429 item 6: the data-table sub-header controls must not
  * overlap at small window sizes.
  *
- * The centered section pill used to be an absolutely positioned band spanning the
+ * The centered line pill used to be an absolutely positioned band spanning the
  * full header width, so it took no part in the header's flex layout. In a narrow
  * window it simply grew over the controls on its right: at 1024x640 the pill ran
  * to x=559 while the "Shots" button started at x=543, which rendered the label as
@@ -20,15 +20,15 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-// A section name of realistic length: the overlap is a function of how much room
-// the centered pill asks for, and cave sections are not called "A".
-const sectionSeeds: SectionSeed[] = [
+// A line name of realistic length: the overlap is a function of how much room
+// the centered pill asks for, and cave lines are not called "A".
+const lineSeeds: LineSeed[] = [
   {
     name: 'Cenote Dos Ojos - Upstream Main Line',
     direction: 'in',
@@ -47,7 +47,7 @@ const sectionSeeds: SectionSeed[] = [
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  await expect(page.getByTestId('data-table-section-pill')).toBeVisible();
+  await expect(page.getByTestId('data-table-line-pill')).toBeVisible();
 }
 
 /** Horizontal overlap of two boxes in px (0 when they are clear of each other). */
@@ -106,15 +106,15 @@ test.describe('#429 data-table sub-header at small window sizes', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Header Crowding');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);
     await waitForHeaderSettled(page);
   });
 
-  test('the section pill never overlaps the controls beside it', async ({ page }) => {
-    const pill = (await page.getByTestId('data-table-section-pill').boundingBox())!;
+  test('the line pill never overlaps the controls beside it', async ({ page }) => {
+    const pill = (await page.getByTestId('data-table-line-pill').boundingBox())!;
     const viewSelect = (await page.getByTestId('data-table-view-select').boundingBox())!;
     const columnsMenu = (await page.getByTestId('data-table-columns-menu').boundingBox())!;
     const title = (await page.getByTestId('data-table-title').boundingBox())!;
@@ -155,7 +155,7 @@ test.describe('#429 data-table sub-header at small window sizes', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await waitForHeaderSettled(page);
     const header = (await page.getByTestId('data-table-sub-header').boundingBox())!;
-    const pill = (await page.getByTestId('data-table-section-pill').boundingBox())!;
+    const pill = (await page.getByTestId('data-table-line-pill').boundingBox())!;
 
     // Centering is what the absolute band bought and what the grid has to keep:
     // the pill sits on the header's midpoint, not on the midpoint of whatever

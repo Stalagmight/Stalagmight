@@ -4,9 +4,7 @@
 //! more changed datums than it aligns. Synthetic surveys only.
 
 use super::datum_placement::align;
-use crate::{
-    gps_to_local, local_to_gps, GpsCoordinates, Project, SectionData, ShotData, StationRef,
-};
+use crate::{gps_to_local, local_to_gps, GpsCoordinates, LineData, Project, ShotData, StationRef};
 
 /// `align` over a table of ranks: `ranks[i][j]` for earlier datum `i` and
 /// current datum `j`.
@@ -108,7 +106,7 @@ fn gps_at(east: f64, north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-fn north_section(project: &mut Project, shots: usize) -> crate::SectionId {
+fn north_line(project: &mut Project, shots: usize) -> crate::LineId {
     let shots = (0..shots)
         .map(|_| ShotData {
             azimuth_in: 0.0,
@@ -118,7 +116,7 @@ fn north_section(project: &mut Project, shots: usize) -> crate::SectionId {
         })
         .collect();
     let id = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -136,11 +134,11 @@ fn a_placement_datum_as_alike_to_a_dropped_fix_is_placed() {
     // placement datum, but the dropped one was a fix, so S:1's datum is
     // placed all the same: on its GPS, which is right whichever it was.
     let mut project = Project::new("Twins".to_string(), None);
-    let e = north_section(&mut project, 1);
+    let e = north_line(&mut project, 1);
     project
         .set_zero_datum(StationRef::new(e, 0), origin())
         .unwrap();
-    let s = north_section(&mut project, 2);
+    let s = north_line(&mut project, 2);
     let twin = gps_at(100.0, 0.0);
     project.set_zero_datum(StationRef::new(s, 0), twin).unwrap();
     project.set_zero_datum(StationRef::new(s, 2), twin).unwrap();
@@ -171,17 +169,17 @@ fn a_fix_re_keyed_onto_its_moved_twins_key_is_placed() {
     // other datum out: the alignment keeps both, in list order, so S:0's
     // datum, the placement datum now, was the fix, and it is placed.
     let mut project = Project::new("TwinsMoved".to_string(), None);
-    let e = north_section(&mut project, 1);
+    let e = north_line(&mut project, 1);
     project
         .set_zero_datum(StationRef::new(e, 0), origin())
         .unwrap();
-    let s = north_section(&mut project, 2);
+    let s = north_line(&mut project, 2);
     let twin = gps_at(100.0, 0.0);
     project.set_zero_datum(StationRef::new(e, 1), twin).unwrap();
     project.set_zero_datum(StationRef::new(s, 0), twin).unwrap();
     let before = project.datum_layout();
 
-    project.adjust_section_offset(s, 0.0, 50.0);
+    project.adjust_line_offset(s, 0.0, 50.0);
     let s0 = project.key_for_ref(StationRef::new(s, 0)).unwrap();
     let s1 = project.key_for_ref(StationRef::new(s, 1)).unwrap();
     project.zero_datums[1].station_ref = s0;
@@ -208,17 +206,17 @@ fn a_moved_placement_datum_whose_twin_fix_went_is_placed() {
     // went was its twin and could be it, re-keyed onto S:0: S:0's datum is
     // placed, which is right whichever it was.
     let mut project = Project::new("TwinGone".to_string(), None);
-    let e = north_section(&mut project, 1);
+    let e = north_line(&mut project, 1);
     project
         .set_zero_datum(StationRef::new(e, 0), origin())
         .unwrap();
-    let s = north_section(&mut project, 2);
+    let s = north_line(&mut project, 2);
     let twin = gps_at(100.0, 0.0);
     project.set_zero_datum(StationRef::new(e, 1), twin).unwrap();
     project.set_zero_datum(StationRef::new(s, 0), twin).unwrap();
     let before = project.datum_layout();
 
-    project.adjust_section_offset(s, 0.0, 50.0);
+    project.adjust_line_offset(s, 0.0, 50.0);
     project.zero_datums.remove(1);
     assert!(project.settle_datum_layout(&before));
 
@@ -234,9 +232,9 @@ fn a_moved_placement_datum_whose_twin_fix_went_is_placed() {
 
 #[test]
 fn thousands_of_moved_datums_still_settle_by_placing_the_placement_datum() {
-    // One section of 2100 one-metre shots with a datum on every station: the
+    // One line of 2100 one-metre shots with a datum on every station: the
     // frame on S:0 and a fix on its GPS at every other station. Moving the
-    // whole section moves every datum, too many to align (2100 x 2100 cells),
+    // whole line moves every datum, too many to align (2100 x 2100 cells),
     // so every placement datum among them is placed: S goes back onto its
     // frame GPS, and nothing is aligned.
     const STATIONS: u32 = 2100;
@@ -250,7 +248,7 @@ fn thousands_of_moved_datums_still_settle_by_placing_the_placement_datum() {
         })
         .collect();
     let s = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -265,7 +263,7 @@ fn thousands_of_moved_datums_still_settle_by_placing_the_placement_datum() {
     }
     let before = project.datum_layout();
 
-    project.adjust_section_offset(s, 0.0, 10.0);
+    project.adjust_line_offset(s, 0.0, 10.0);
     assert!(project.settle_datum_layout(&before));
 
     let (x, y) = project
