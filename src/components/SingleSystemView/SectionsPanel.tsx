@@ -650,6 +650,9 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     // Only handle keyboard events when the row itself is focused, not when
     // focus is on nested controls (like the rename field)
     if (e.target !== e.currentTarget) return;
+    // A context menu opened over the list keeps the focus on its row; its keys
+    // (Escape closes it) are the menu's.
+    if (useUIStore.getState().activeDialog === 'context-menu') return;
     const row = rows[currentIndex];
     if (!row) return;
     const handled = () => {
