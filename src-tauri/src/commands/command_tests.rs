@@ -5953,6 +5953,7 @@ fn test_create_line_and_merge_fails_without_project() {
         0,
         StationRef::new(0, 0),
         ClosureStrategy::Batch,
+        None,
     );
     assert_failure_contains(&result, "No project open");
 }
@@ -5974,6 +5975,7 @@ fn test_create_line_and_merge_success() {
         0,
         StationRef::new(existing_line_id, 0),
         ClosureStrategy::Batch,
+        None,
     );
 
     assert_success(&result);

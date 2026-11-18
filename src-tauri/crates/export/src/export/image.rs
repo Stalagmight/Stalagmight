@@ -626,8 +626,13 @@ pub fn generate_svg_string_with_stations(
     // The hidden Sections' lines are left out (`image_scope`).
     match image_scope::without_hidden_lines(project, options.hidden_line_ids.as_deref(), &stations)
     {
-        None => render_svg(project, None, options, stations),
-        Some((drawn, shown)) => render_svg(&drawn, Some((project, &stations)), options, shown),
+        None => Ok(render_svg(project, None, options, stations)),
+        Some((drawn, shown)) => Ok(render_svg(
+            &drawn,
+            Some((project, &stations)),
+            options,
+            shown,
+        )),
     }
 }
 
@@ -640,7 +645,7 @@ fn render_svg(
     whole: image_scope::Whole<'_>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
-) -> Result<String> {
+) -> String {
     // ---- Bounds and scale ---------------------------------------------------
     // Bounds come from *rendered* geometry only - endpoints of non-reference
     // shots plus zero-datum stations. Reference shots aren't drawn, so a
@@ -1819,7 +1824,7 @@ fn render_svg(
     }
 
     svg.push_str("</svg>\n");
-    Ok(svg)
+    svg
 }
 
 /// Sum of edge lengths along the polyline.
