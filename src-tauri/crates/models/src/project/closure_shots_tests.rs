@@ -5,8 +5,8 @@
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    closure_across_one_shot_refusal, ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates,
-    LineData, LineId, LoopClosure, Project, ShotData, Station, StationRef,
+    ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project,
+    ShotData, Station, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -280,8 +280,6 @@ fn creation_refuses_a_closure_across_one_shot_for_every_strategy() {
     assert_eq!(p.loop_closures.len(), 1, "nothing was created");
     assert_eq!(p.closure_spans_one_shot(st(a, 1), st(a, 2)), Some((a, 1)));
     assert_eq!(p.closure_across_one_shot_message((a, 1)), SPANS_A1_A2);
-    // The positional form survives only for a caller with no project.
-    assert!(closure_across_one_shot_refusal((a, 1)).contains("(0:1 to 0:2)"));
 }
 
 /// Positions of every station, keyed for comparison.

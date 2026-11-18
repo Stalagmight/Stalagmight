@@ -39,7 +39,7 @@ const shot = {
 const acrossOneShot = {
   code: 'CLOSURE_ACROSS_ONE_SHOT',
   message:
-    'Shot 0:2 has both ends joined by loop closure 0:1 to 0:2, which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
+    'Shot Main Line: A1 \u2192 A2 has both ends joined by loop closure Main Line / A1 to Main Line / A2, which would squeeze the shot to zero length, so the Closures Computed View skips that closure.',
   severity: 'error',
   lineId: 0,
   shotId: 2,
@@ -115,12 +115,10 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     expect(screen.queryByText(/ignore/i)).not.toBeInTheDocument();
   });
 
-  it('names the shot in the warning text instead of the positional prefix', () => {
+  it("shows the backend's message, which names the shot by its line and stations", () => {
     renderResolution(acrossOneShot);
     const message = screen.getByTestId('warning-resolution-message');
-    // shotIndex 1 runs from station 1 to station 2 of its line.
     expect(message.textContent).toMatch(/^Shot Main Line: A1 \u2192 A2 has both ends joined/);
-    expect(message).not.toHaveTextContent('Shot 0:2');
   });
 
   it('removes exactly the closure the warning names', async () => {

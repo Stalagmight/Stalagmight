@@ -189,31 +189,17 @@ export function identityLabels(src: IdentitySource): IdentityLabels {
 }
 
 /**
- * The positional `Shot <line id>:<position> ` prefix the backend's survey
- * validation still opens its messages with. The structured `lineId` /
- * `shotIndex` beside the message say which shot it is, so the prefix is never
- * shown: {@link warningMessageBody} drops it and {@link warningMessageText}
- * names the shot instead.
+ * A survey warning's message without the shot it opens with ("has zero
+ * length"), for a view that shows the shot itself (the Warnings tab's shot
+ * pill). The backend names the shot by its line and stations
+ * (`Shot Main Line: 4 → 5 has zero length`), so the prefix is matched against
+ * the same label; a message that does not open with it (a datum warning, or
+ * one computed before a rename) is returned unchanged.
  */
-const POSITIONAL_SHOT_PREFIX = /^Shot \d+:\d+\s*/;
-
-/** A survey warning's message without its positional shot prefix ("has zero length"). */
-export function warningMessageBody(message: string): string {
-  return message.replace(POSITIONAL_SHOT_PREFIX, '');
-}
-
-/**
- * A survey warning's message for display: `Shot 4 → 5 has zero length` (with
- * `withLine`, `Shot Main Line: 4 → 5 has zero length`). A message without the
- * positional prefix is returned unchanged.
- */
-export function warningMessageText(
+export function warningMessageBody(
   labels: Pick<IdentityLabels, 'shotAt'>,
   warning: { lineId: number; shotIndex: number; message: string },
-  withLine = false,
 ): string {
-  if (!POSITIONAL_SHOT_PREFIX.test(warning.message)) return warning.message;
-  const body = warningMessageBody(warning.message);
-  const shot = labels.shotAt(warning.lineId, warning.shotIndex, withLine);
-  return body ? `Shot ${shot} ${body}` : `Shot ${shot}`;
+  const prefix = `Shot ${labels.shotAt(warning.lineId, warning.shotIndex, true)} `;
+  return warning.message.startsWith(prefix) ? warning.message.slice(prefix.length) : warning.message;
 }

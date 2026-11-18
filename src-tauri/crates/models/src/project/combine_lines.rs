@@ -121,7 +121,7 @@ impl Project {
         if let Some(reason) = self.combine_refusal(kept, other, join) {
             return Err(reason);
         }
-        let fail = || format!("Lines {kept} and {other} cannot be combined");
+        let fail = || self.cannot_combine_message(kept, other);
         let candidate = self
             .combine_candidate_joining(kept, other, join)
             .ok_or_else(fail)?;

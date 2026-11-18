@@ -18,7 +18,7 @@ import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import type { ShotKind } from '../../types/ipc/ShotKind';
-import { warningMessageText, type IdentityLabels } from '../../utils/stationIdentity';
+import { type IdentityLabels } from '../../utils/stationIdentity';
 import {
   SHOT_KIND_CLASS,
   SHOT_KIND_LABEL_KEY,
@@ -157,7 +157,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         const hasError = shotWarnings.some((w) => w.severity === 'error');
         const tooltip = [
           ...(frozen ? [t('dataTable.frozen')] : []),
-          ...shotWarnings.map((w) => (labels ? warningMessageText(labels, w) : w.message)),
+          ...shotWarnings.map((w) => w.message),
         ].join('\n');
         const testId = frozen ? `frozen-${lineId}-${shot.id}` : `warning-${lineId}-${shot.id}`;
         const colorClass = hasError

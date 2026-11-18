@@ -72,21 +72,6 @@ impl ClosureAcrossOneShot {
     }
 }
 
-/// The user-facing refusal for a new closure that would tie the two ends of
-/// the shot `(line, shot index)` together. Shared by every creation path
-/// and the closure dialog's connectivity check, so the dialog shows exactly
-/// what the backend says.
-///
-/// This is the ONLY creation-time refusal the helper makes. A closure between
-/// two stations that other merges and closures already tie together is
-/// accepted as before: uniting two stations already in one knot changes
-/// nothing for the solve, and refusing it would drop closures from imported
-/// files.
-pub fn closure_across_one_shot_refusal(shot: (LineId, usize)) -> String {
-    let (from, to) = shot_ends(shot);
-    across_one_shot_text(&station_id_label(from), &station_id_label(to))
-}
-
 fn across_one_shot_text(from: &str, to: &str) -> String {
     format!(
         "This closure would join the two ends of one shot ({from} to {to}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot."
@@ -94,22 +79,21 @@ fn across_one_shot_text(from: &str, to: &str) -> String {
 }
 
 impl Project {
-    /// [`closure_across_one_shot_refusal`] with the two stations named the
-    /// way the user reads them (`Main Line / 4`), falling back to the
-    /// positional label only for a station no name can be read for.
+    /// The user-facing refusal for a new closure that would tie the two ends
+    /// of the shot `(line, shot index)` together, with the two stations named
+    /// the way the user reads them (`Main Line / 4`). Shared by every creation
+    /// path and the closure dialog's connectivity check, so the dialog shows
+    /// exactly what the backend says.
+    ///
+    /// This is the ONLY creation-time refusal the helper makes. A closure
+    /// between two stations that other merges and closures already tie
+    /// together is accepted as before: uniting two stations already in one
+    /// knot changes nothing for the solve, and refusing it would drop closures
+    /// from imported files.
     pub fn closure_across_one_shot_message(&self, shot: (LineId, usize)) -> String {
         let (from, to) = shot_ends(shot);
-        let label = |station: StationRef| {
-            self.station_label(station)
-                .unwrap_or_else(|| station_id_label(station))
-        };
-        across_one_shot_text(&label(from), &label(to))
+        across_one_shot_text(&self.station_text(from), &self.station_text(to))
     }
-}
-
-/// `S:I`, the station id the UI shows (`formatStationId`).
-pub fn station_id_label(station: StationRef) -> String {
-    format!("{}:{}", station.line_id, station.station_index)
 }
 
 fn shot_ends((line_id, shot_index): (LineId, usize)) -> (StationRef, StationRef) {
@@ -362,12 +346,25 @@ impl Project {
 /// What an edit needs to know, BEFORE it runs, to name the closures it leaves
 /// across one shot (#737): which eligible closures already were (an edit only
 /// answers for what it causes), and every eligible closure's two stations as
-/// they resolve now. A gap-close renumbers stations, so closure 0:1-0:5 can
-/// come out as 0:1-0:2; the user created it as 0:1-0:5 and is told so.
+/// they resolve now, with the names the user reads them by then. A gap-close
+/// renumbers stations, so closure 0:1-0:5 can come out as 0:1-0:2; the user
+/// created it between `Main / 1` and `Main / 5` and is told so.
 #[derive(Debug, Clone, Default)]
 pub struct ClosuresBeforeEdit {
     across: HashSet<u64>,
     ends: HashMap<u64, (StationRef, StationRef)>,
+    labels: HashMap<u64, (String, String)>,
+}
+
+impl ClosuresBeforeEdit {
+    /// The two stations of closure `closure_id` as the user read them before
+    /// the edit (`Main Line / 4`), if it was an eligible closure with both
+    /// ends resolved then.
+    pub fn labels(&self, closure_id: u64) -> Option<(&str, &str)> {
+        self.labels
+            .get(&closure_id)
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+    }
 }
 
 impl Project {
@@ -392,8 +389,16 @@ impl Project {
                     ),
                 ))
             })
+            .collect::<HashMap<_, _>>();
+        let labels = ends
+            .iter()
+            .map(|(&id, &(a, b))| (id, (self.station_text(a), self.station_text(b))))
             .collect();
-        ClosuresBeforeEdit { across, ends }
+        ClosuresBeforeEdit {
+            across,
+            ends,
+            labels,
+        }
     }
 
     /// The closures that tie the two ends of one shot together now but did

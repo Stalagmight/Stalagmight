@@ -260,6 +260,8 @@ struct ClosureBefore {
     id: u64,
     keys: (StationKey, StationKey),
     ends: Option<(StationRef, StationRef)>,
+    /// `ends` as the user read them before the edit (`Main Line / 4`).
+    labels: Option<(String, String)>,
     one_point: bool,
 }
 
@@ -274,12 +276,15 @@ pub struct ClosuresBeforeSweep {
 }
 
 /// A closure the sweep removed, named for the user (#738).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovedClosure {
     /// By the stations it had before the edit, the ids the user created it
     /// with (its stations after the edit only if it cannot be matched to a
     /// closure the edit started with).
     pub pair: ClosurePair,
+    /// `pair`'s two stations as the user read them when `pair` was taken
+    /// (`Main Line / 4`): before the edit, which can rename or renumber them.
+    pub labels: (String, String),
     /// Its two stations were one point BEFORE the edit, so the edit did not
     /// cause the removal: the sweep only cleaned up a closure a file or an undo
     /// history from before #738 still held. Otherwise the edit's own promotion
@@ -1173,13 +1178,17 @@ impl Project {
             closures: self
                 .loop_closures
                 .iter()
-                .map(|c| ClosureBefore {
-                    id: c.id,
-                    keys: (c.station_a.clone(), c.station_b.clone()),
-                    ends: self
+                .map(|c| {
+                    let ends = self
                         .resolve_key(&c.station_a)
-                        .zip(self.resolve_key(&c.station_b)),
-                    one_point: self.closure_ends_are_one_point(c, &mut components),
+                        .zip(self.resolve_key(&c.station_b));
+                    ClosureBefore {
+                        id: c.id,
+                        keys: (c.station_a.clone(), c.station_b.clone()),
+                        ends,
+                        labels: ends.map(|(a, b)| (self.station_text(a), self.station_text(b))),
+                        one_point: self.closure_ends_are_one_point(c, &mut components),
+                    }
                 })
                 .collect(),
         }
@@ -1244,24 +1253,35 @@ impl Project {
                         .find(|e| e.keys == (closure.station_a.clone(), closure.station_b.clone()))
                         .copied(),
                 });
-                let (station_a, station_b) = entry
-                    .and_then(|e| e.ends)
-                    .or_else(|| {
-                        self.resolve_key(&closure.station_a)
-                            .zip(self.resolve_key(&closure.station_b))
-                    })
-                    .unwrap_or_else(|| {
-                        (
-                            StationRef::new(closure.station_a.line_id, 0),
-                            StationRef::new(closure.station_b.line_id, 0),
+                let before_ends = entry.and_then(|e| e.ends.zip(e.labels.clone()));
+                let ((station_a, station_b), labels) = before_ends.unwrap_or_else(|| {
+                    // Not matched to a closure the edit started with: named
+                    // by its stations now.
+                    if let Some((a, b)) = self
+                        .resolve_key(&closure.station_a)
+                        .zip(self.resolve_key(&closure.station_b))
+                    {
+                        return ((a, b), (self.station_text(a), self.station_text(b)));
+                    }
+                    let (a, b) = (closure.station_a.line_id, closure.station_b.line_id);
+                    let unknown = |line_id| {
+                        self.line_label(line_id).map_or_else(
+                            || "a station".to_string(),
+                            |l| format!("a station of {l}"),
                         )
-                    });
+                    };
+                    (
+                        (StationRef::new(a, 0), StationRef::new(b, 0)),
+                        (unknown(a), unknown(b)),
+                    )
+                });
                 RemovedClosure {
                     pair: ClosurePair {
                         closure_id: closure.id,
                         station_a,
                         station_b,
                     },
+                    labels,
                     already_one_point: entry.is_some_and(|e| e.one_point),
                 }
             })

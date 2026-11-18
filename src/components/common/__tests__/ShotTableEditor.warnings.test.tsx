@@ -1,8 +1,7 @@
 /**
  * The editor's warning column lists the project's warnings for each saved
- * shot. The backend still opens them with a positional `Shot <line>:<position>`
- * prefix, which is never shown: the shot is named by its stations instead
- * (SPEC 4.2).
+ * shot, as the backend words them: the shot named by its line and stations
+ * (SPEC 4.2), never by a positional id.
  *
  * `.tsx` for jsdom, with the virtualizer shimmed like the sibling suites.
  */
@@ -89,12 +88,11 @@ function renderEditor() {
 }
 
 describe('ShotTableEditor warnings', () => {
-  it('names the shot by its stations, never by the positional prefix', () => {
-    useProjectStore.setState({ warnings: [warning(11, 1, 'Shot 3:2 has zero length')] });
+  it("shows the backend's message, which names the shot by its stations", () => {
+    useProjectStore.setState({ warnings: [warning(11, 1, 'Shot Main: A1 \u2192 A2 has zero length')] });
     renderEditor();
     const title = screen.getByTestId('shot-warning-1').getAttribute('title') ?? '';
-    expect(title).toContain('Shot A1 → A2 has zero length');
-    expect(title).not.toContain('3:2');
+    expect(title).toContain('Shot Main: A1 → A2 has zero length');
     expect(screen.queryByTestId('shot-warning-0')).toBeNull();
   });
 

@@ -10,7 +10,6 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { warningMessageText } from '../../utils/stationIdentity';
 import { normalizeAzimuth, averageAzimuth } from '../../utils/azimuth';
 import {
   computeGhostEnd,
@@ -846,9 +845,9 @@ export function WarningResolution({
 
       {/* The warning + current values */}
       <div className="px-1 mb-3">
-        {/* Names the shot (`Shot Main Line: 4 → 5 ...`), never the backend's positional prefix. */}
+        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`). */}
         <div className="text-sm text-text-primary" data-testid="warning-resolution-message">
-          {warningMessageText(identity, warning, true)}
+          {warning.message}
         </div>
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">

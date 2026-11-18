@@ -138,15 +138,16 @@ fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
     ));
     assert_eq!(
         w.message,
-        format!(
-            "Shot {a}:2 has both ends joined by loop closure {a}:1 to {a}:2, which would squeeze \
-             the shot to zero length, so the Closures Computed View skips that closure. Remove \
-             the closure, or close the loop at two stations that are not the ends of a single \
-             shot."
-        )
+        "Shot Line 1: 1 \u{2192} 2 has both ends joined by loop closure Line 1 / 1 to Line 1 / 2, \
+         which would squeeze the shot to zero length, so the Closures Computed View skips that \
+         closure. Remove the closure, or close the loop at two stations that are not the ends of \
+         a single shot."
     );
-    // The DetailPanel pill parses the leading shot reference.
-    assert!(w.message.starts_with(&format!("Shot {a}:2 ")));
+    // The DetailPanel pill splits the leading shot off by its name.
+    assert!(w.message.starts_with(&format!(
+        "Shot {} ",
+        project(&state).shot_label_at(a, 1).unwrap()
+    )));
 }
 
 #[test]
@@ -329,9 +330,10 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     assert!(!w.is_resolved);
     assert!(
         w.message.starts_with(&format!(
-            "Shot {}:{} is in a part of the survey (2 lines)",
-            w.line_id,
-            w.shot_index + 1
+            "Shot {} is in a part of the survey (2 lines)",
+            project(&state)
+                .shot_label_at(w.line_id, w.shot_index)
+                .unwrap()
         )),
         "{}",
         w.message
@@ -489,7 +491,7 @@ fn a_range_gap_close_removes_a_closure_it_leaves_across_one_shot_and_one_undo_re
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
     // Named by the stations it was created with, not the renumbered A:1-A:2.
-    assert_removed(&result, &[&format!("{a}:1 to {a}:4")]);
+    assert_removed(&result, &["Line 1 / 1 to Line 1 / 4"]);
     let after = project(&state);
     assert_eq!(after.get_line(a).unwrap().shots.len(), 3);
     assert!(after.loop_closures.iter().all(|lc| lc.id != id));
@@ -540,7 +542,7 @@ fn a_one_shot_range_does_what_the_single_delete_refuses() {
 
     let range = state.execute_delete_shot_range_shift(a, middle, middle);
     assert!(range.success, "{:?}", range.error);
-    assert_removed(&range, &[&format!("{a}:1 to {a}:3")]);
+    assert_removed(&range, &["Line 1 / 1 to Line 1 / 3"]);
     assert!(project(&state).loop_closures.is_empty());
     assert!(state.undo().success);
     assert_eq!(
@@ -565,7 +567,7 @@ fn a_closure_through_a_merge_is_removed_by_the_shot_it_collapses() {
     let (s1, s2) = (shot_id(&state, a, 1), shot_id(&state, a, 2));
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{b}:0 to {a}:4")]);
+    assert_removed(&result, &["Line 2 / 0 to Line 1 / 4"]);
     assert!(project(&state).loop_closures.iter().all(|lc| lc.id != id));
     assert!(state.undo().success);
     assert_eq!(
@@ -670,12 +672,13 @@ fn the_range_preview_lists_the_closure_the_gap_close_removes_by_its_pre_delete_i
         5
     );
 
+    let before = project(&state);
     let result = state.execute_delete_shot_range_shift(c, first, last);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{c}:1 to {c}:5")]);
+    assert_removed(&result, &["Line 1 / 1 to Line 1 / 5"]);
     assert_eq!(
         result.warnings[0].message,
-        closure_removed_message(&predicted[0])
+        closure_removed_message(&before, &before.closures_before_edit(), &predicted[0])
     );
     assert!(project(&state).loop_closures.is_empty());
     // Undo puts it back as C:1-C:5.
@@ -803,7 +806,11 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         // The preview predicts exactly what the gap-close removed, by the same
         // pre-delete names (#737).
         if let Some(predicted) = predicted {
-            let shown: Vec<String> = predicted.iter().map(closure_removed_message).collect();
+            let before_edit = before.closures_before_edit();
+            let shown: Vec<String> = predicted
+                .iter()
+                .map(|closure| closure_removed_message(&before, &before_edit, closure))
+                .collect();
             let removed: Vec<String> = result
                 .warnings
                 .iter()

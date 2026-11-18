@@ -1011,8 +1011,15 @@ fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
     let warning = &result.warnings[0];
     assert_eq!(warning.code, "INCLINATION_DEPTH_MISMATCH");
     assert!(
-        warning.message.starts_with(&format!("Shot {line_id}:1 ")),
-        "the mismatched shot is now FIRST, so the warning must name row 1: {}",
+        warning.message.starts_with(&format!(
+            "Shot {} ",
+            state
+                .get_project_state()
+                .unwrap()
+                .shot_label_at(line_id, 0)
+                .unwrap()
+        )),
+        "the mismatched shot is now FIRST, so the warning must name the first shot: {}",
         warning.message
     );
     assert!(

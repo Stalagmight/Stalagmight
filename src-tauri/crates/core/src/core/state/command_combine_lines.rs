@@ -2,29 +2,33 @@
 //! Here (`command_split_line.rs`), and built the same way.
 
 use super::AppState;
+use crate::core::undo::history_names::NameBook;
 use crate::core::{Command, CommandResult, ValidationWarning, WarningSeverity};
-use std::collections::HashMap;
 
 use crate::models::{
-    line_label, station_id_label, CombineCandidate, CombineLinesOptions, CombineRemovedClosure,
-    CombineRemovedKind, LineId, LineUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+    CombineCandidate, CombineLinesOptions, CombineRemovedClosure, CombineRemovedKind, LineId,
+    LineUpdates, StationRef, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
 /// The warnings a combine reports for the ties it removed because, combined,
 /// the loop closure each is or would become joins the two ends of one shot
 /// (#746). Named as the Combine dialog listed them, by the stations they had
-/// BEFORE the combine, each with its line's name then (`labels`, taken
-/// before the combine): the other line is gone afterwards, and the kept
-/// one may be renamed, so a bare "2:0" would name a line the user cannot
-/// find. The frontend shows them in one toast with the other removed-closure
-/// warnings (`notifyRemovedClosures`).
+/// BEFORE the combine, each with its line's name then (`names`, read before
+/// the combine): the other line is gone afterwards, the kept one may be
+/// renamed and a combine may letter both lines' station names, so a station
+/// named after the combine would name one the user cannot find. The frontend
+/// shows them in one toast with the other removed-closure warnings
+/// (`notifyRemovedClosures`).
 pub(super) fn combine_removed_warnings(
     removed: &[CombineRemovedClosure],
-    labels: &HashMap<LineId, String>,
+    names: &NameBook,
 ) -> Vec<ValidationWarning> {
-    let station = |at: StationRef| match labels.get(&at.line_id) {
-        Some(name) => format!("{name} {}", station_id_label(at)),
-        None => station_id_label(at),
+    let station = |at: StationRef| {
+        names.station(at).unwrap_or_else(|| {
+            names
+                .line(at.line_id)
+                .map_or_else(|| "a station".to_string(), |l| format!("a station of {l}"))
+        })
     };
     removed
         .iter()
@@ -142,13 +146,9 @@ impl AppState {
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            // Every line's name as it is now, for the warnings below: they
+            // Every station's name as it is now, for the warnings below: they
             // name stations as they were before the combine.
-            let labels: HashMap<LineId, String> = project
-                .lines
-                .iter()
-                .map(|s| (s.id, line_label(s)))
-                .collect();
+            let names = NameBook::of(project, project.lines.iter().map(|l| l.id));
             let outcome = match project.combine_lines_reporting(kept, other, &options) {
                 Ok(outcome) => outcome,
                 Err(e) => {
@@ -187,7 +187,7 @@ impl AppState {
                     "Combine replaced a loop closure with one on the same two stations"
                 );
             }
-            warnings = combine_removed_warnings(&outcome.removed_across_one_shot, &labels);
+            warnings = combine_removed_warnings(&outcome.removed_across_one_shot, &names);
             project.touch();
         }
 

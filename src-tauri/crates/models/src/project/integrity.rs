@@ -36,18 +36,24 @@ impl Project {
     /// silently mispointed at the wrong in-range station).
     fn station_ref_violation(&self, key: &StationKey) -> Option<String> {
         match self.get_line(key.line_id) {
-            None => Some(format!("references missing line {}", key.line_id)),
+            None => Some("references a missing line".to_string()),
             Some(_) => {
                 if self.resolve_key(key).is_some() {
                     None
                 } else {
                     Some(format!(
                         "anchor no longer resolves in line {} (its anchoring shot was deleted)",
-                        key.line_id
+                        self.quoted_line(key.line_id)
                     ))
                 }
             }
         }
+    }
+
+    /// A line as integrity messages name it: `"Main Line"`, quoted, never by
+    /// its numeric id.
+    fn quoted_line(&self, line_id: LineId) -> String {
+        format!("\"{}\"", self.line_label(line_id).unwrap_or_default())
     }
 
     /// Audit every cross-reference in the project and return all structural
@@ -69,10 +75,15 @@ impl Project {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Critical,
                     category: "non_finite_geometry".to_string(),
-                    message: format!(
-                        "Line {} has a shot with a non-finite (NaN/inf) value (at index {pos})",
-                        line.id
-                    ),
+                    message: match self.shot_label_at(line.id, pos) {
+                        Some(shot) => {
+                            format!("Shot {shot} has a non-finite (NaN/inf) value")
+                        }
+                        None => format!(
+                            "Line {} has a shot with a non-finite (NaN/inf) value",
+                            self.quoted_line(line.id)
+                        ),
+                    },
                 });
             }
         }
@@ -108,7 +119,10 @@ impl Project {
                     violations.push(IntegrityViolation {
                         severity: ViolationSeverity::Critical,
                         category: "duplicate_shot_uuid".to_string(),
-                        message: format!("Line {} has two shots sharing UUID {u}", line.id),
+                        message: format!(
+                            "Line {} has two shots sharing UUID {u}",
+                            self.quoted_line(line.id)
+                        ),
                     });
                     continue;
                 }
@@ -121,8 +135,9 @@ impl Project {
                             severity: ViolationSeverity::Critical,
                             category: "duplicate_shot_uuid_across_lines".to_string(),
                             message: format!(
-                                "Lines {other} and {} both hold shot UUID {u}",
-                                line.id
+                                "Lines {} and {} both hold shot UUID {u}",
+                                self.quoted_line(other),
+                                self.quoted_line(line.id)
                             ),
                         });
                     }
@@ -166,7 +181,7 @@ impl Project {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_line_offset".to_string(),
-                    message: format!("Line offset for missing line {line_id}"),
+                    message: "A line offset names a missing line".to_string(),
                 });
             }
         }
@@ -328,8 +343,10 @@ impl Project {
                     severity: ViolationSeverity::Critical,
                     category: "merge_misaligned".to_string(),
                     message: format!(
-                        "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
-                        a.line_id, a.station_index, b.line_id, b.station_index, dist
+                        "Merged stations {} and {} are {:.2} m apart but should be the same point",
+                        self.station_text(a),
+                        self.station_text(b),
+                        dist
                     ),
                 });
             }
@@ -387,12 +404,9 @@ impl Project {
                     severity: ViolationSeverity::Critical,
                     category: "closure_misaligned".to_string(),
                     message: format!(
-                        "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart - recompute or remove it",
-                        closure.id,
-                        a.line_id,
-                        a.station_index,
-                        b.line_id,
-                        b.station_index,
+                        "Loop closure {} ↔ {} is marked closed but its ends are {:.2} m apart - recompute or remove it",
+                        self.station_text(a),
+                        self.station_text(b),
                         dist
                     ),
                 });
@@ -435,12 +449,9 @@ impl Project {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),
                     message: format!(
-                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its lines - it should be a merge, not a loop",
-                        closure.id,
-                        a.line_id,
-                        a.station_index,
-                        b.line_id,
-                        b.station_index
+                        "Loop closure {} ↔ {} is the only connection between its lines - it should be a merge, not a loop",
+                        self.station_text(a),
+                        self.station_text(b)
                     ),
                 });
             }

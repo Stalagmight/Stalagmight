@@ -546,8 +546,8 @@ fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
         .lines
         .iter()
         .flat_map(|line| {
-            line.shots.iter().enumerate().flat_map(|(i, shot)| {
-                Validator::validate_shot(&shot.to_shot_data(), &config, line.id, i)
+            line.shots.iter().flat_map(|shot| {
+                Validator::validate_shot(&shot.to_shot_data(), &config, String::new)
             })
         })
         .filter(|w| w.code == "INCLINATION_DEPTH_MISMATCH")

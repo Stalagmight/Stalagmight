@@ -341,7 +341,7 @@ fn delete_shot_and_split_leaves_no_closure_between_merged_stations() {
     assert_eq!(
         merged_ends_messages(&result),
         [
-            "Removed loop closure 1:0 to 0:3: another loop closure became a merge, which made its \
+            "Removed loop closure T / 0 to S / 3: another loop closure became a merge, which made its \
           two stations one point."
         ]
     );
@@ -524,7 +524,7 @@ fn delete_shot_range_and_split_reports_the_closure_it_removes() {
     assert_eq!(
         merged_ends_messages(&result),
         [
-            "Removed loop closure 1:0 to 0:3: another loop closure became a merge, which made its \
+            "Removed loop closure T / 0 to S / 3: another loop closure became a merge, which made its \
           two stations one point."
         ]
     );
@@ -567,7 +567,7 @@ fn branch_survey() -> (Project, [LineId; 4]) {
 #[test]
 fn every_command_that_removes_one_reports_it_by_its_stations_before_the_edit() {
     let expected = [
-        "Removed loop closure 1:0 to 2:3: another loop closure became a merge, \
+        "Removed loop closure M / 0 to X / 3: another loop closure became a merge, \
                      which made its two stations one point.",
     ];
     for what in ["unmerge", "delete line", "delete shot", "delete last shot"] {
@@ -627,7 +627,7 @@ fn removing_a_zero_datum_reports_the_closure_its_sweep_removes() {
     assert_eq!(
         merged_ends_messages(&result),
         [
-            "Removed loop closure 1:0 to 2:1: another loop closure became a merge, which made its \
+            "Removed loop closure C / 0 to B / 1: another loop closure became a merge, which made its \
           two stations one point."
         ]
     );
@@ -651,7 +651,7 @@ fn a_closure_that_already_was_between_merged_stations_is_reported_as_such() {
     assert!(result.success, "{:?}", result.error);
     assert_eq!(
         merged_ends_messages(&result),
-        ["Removed loop closure 1:0 to 0:2: its two stations were already one point."]
+        ["Removed loop closure M / 0 to N / 2: its two stations were already one point."]
     );
 }
 
@@ -707,7 +707,7 @@ fn merging_two_placed_pieces_removes_and_reports_the_closure_it_folds() {
         assert!(closures_between_merged_stations(&after).is_empty());
         assert_eq!(
             merged_ends_messages(&result),
-            ["Removed loop closure 0:1 to 1:1: the merge made its two stations one point."],
+            ["Removed loop closure A / 1 to B / 1: the merge made its two stations one point."],
             "batched {batched}"
         );
 

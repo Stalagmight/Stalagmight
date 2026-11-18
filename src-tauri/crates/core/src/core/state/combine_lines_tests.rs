@@ -1237,10 +1237,11 @@ fn a_combine_removes_the_merge_it_would_tear_across_one_shot() {
         (o, LineEnd::Start),
         &[(a, b, CombineRemovedKind::Merge)],
     );
-    // Each station with its line's name: O is gone after the combine.
+    // Each station by its line's and its own name before the combine (seeded
+    // from its position): O is gone after the combine.
     let name = |at: StationRef| {
         let line = if at.line_id == x { "X" } else { "O" };
-        format!("{line} {}", crate::models::station_id_label(at))
+        format!("{line} / {}", at.station_index)
     };
     assert_eq!(
         warnings,
@@ -1304,10 +1305,11 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
     assert_eq!(
         warnings,
         // By the names before the combine: K is "Joined" now, O is gone.
-        vec![format!(
-            "Removed loop closure K {k}:1 to O {o}:0: combining the lines left its two \
+        vec![
+            "Removed loop closure K / 1 to O / 0: combining the lines left its two \
              stations at the two ends of one shot."
-        )]
+                .to_string()
+        ]
     );
     let project = state.get_project_state().unwrap();
     assert!(project.station_merges.is_empty());

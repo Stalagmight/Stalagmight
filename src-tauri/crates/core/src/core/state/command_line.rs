@@ -48,32 +48,33 @@ impl AppState {
             );
         }
 
-        // Validate shots using the line_id that will be assigned
-        let line_id_for_validation = project.next_line_id;
+        // Name the new line's shots the way the user will read them: its
+        // stations are named by position until the normalization names them
+        // (`Main Line: 4 → 5`), never by the positional id it will get.
+        let line_name = data
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or("New line")
+            .to_string();
+        let shot_label = |i: usize| format!("{line_name}: {i} \u{2192} {}", i + 1);
         let mut warnings = Vec::new();
         for (i, shot) in data.shots.iter().enumerate() {
             if shot.length == 0.0 {
-                return CommandResult::failure(format!(
-                    "Shot {}:{} has zero length",
-                    line_id_for_validation,
-                    i + 1
-                ));
+                return CommandResult::failure(format!("Shot {} has zero length", shot_label(i)));
             }
             if shot.length < 0.0 {
                 return CommandResult::failure(format!(
-                    "Shot {}:{} has negative length: {:.1}m",
-                    line_id_for_validation,
-                    i + 1,
+                    "Shot {} has negative length: {:.1}m",
+                    shot_label(i),
                     shot.length
                 ));
             }
             // Per-project thresholds (#57) so create-time warnings match the panel.
-            warnings.extend(Validator::validate_shot(
-                shot,
-                &project.validation,
-                line_id_for_validation,
-                i,
-            ));
+            warnings.extend(Validator::validate_shot(shot, &project.validation, || {
+                shot_label(i)
+            }));
         }
 
         let line = project.add_line(data);
@@ -145,8 +146,7 @@ impl AppState {
                             Validator::validate_shot(
                                 &shot.to_shot_data(),
                                 &project.validation,
-                                line_id,
-                                i,
+                                || project.shot_label_at(line_id, i).unwrap_or_default(),
                             )
                         })
                         .collect()

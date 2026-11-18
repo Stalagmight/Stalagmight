@@ -66,7 +66,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     // Two different projects can produce byte-identical issue messages (line
     // ids start at 0 in every project), so a dismissal must NOT leak across a
     // switch and suppress the new project's real banner.
-    const msg = 'Line 0 has a shot with a non-finite (NaN/inf) value (at index 0)';
+    const msg = 'Shot Line 1: 0 \u2192 1 has a non-finite (NaN/inf) value';
     issues = [msg];
     await useProjectStore.getState().checkProjectIntegrity();
     useProjectStore.getState().dismissIntegrityIssues();
@@ -135,7 +135,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     // Undoing the Repair restores the dangling ref: the next integrity check
     // reports it, and undo must re-run that check (otherwise the banner stays
     // stale showing "clean" while the project is broken).
-    issues = ['Merge anchor no longer resolves in line 0'];
+    issues = ['Merge anchor no longer resolves in line "Line 1" (its anchoring shot was deleted)'];
     saveBlocked = true;
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'undo') return { success: true };
@@ -147,7 +147,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     await useProjectStore.getState().undo();
 
     expect(useProjectStore.getState().integrityIssues).toEqual([
-      'Merge anchor no longer resolves in line 0',
+      'Merge anchor no longer resolves in line "Line 1" (its anchoring shot was deleted)',
     ]);
     expect(useProjectStore.getState().integritySaveBlocked).toBe(true);
   });

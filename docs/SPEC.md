@@ -3123,21 +3123,26 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 ## Appendix B: Validation Rules
 
+`{shot}` names the shot by its line and stations, `Main Line: 4 → 5`
+(section 4.2), never by a positional id. The structured `lineId` /
+`shotIndex` of a warning say which shot it is; the Warnings tab's Full level
+turns the leading `Shot {shot}` into a shot pill.
+
 | Rule | Severity | Message |
 |------|----------|---------|
-| Shot length < 0.3m (default; configurable) | Warning | "Shot {line_id}:{position} length {length}m below minimum threshold {threshold}m" |
-| Shot length > 50m | Warning | "Shot {line_id}:{position} length {length}m above maximum threshold {threshold}m" |
-| Depth change > 10m per shot | Warning | "Shot {line_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
-| Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {line_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
-| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {line_id}:{position} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
-| Zero length shot | Error | "Shot {line_id}:{position} has zero length" |
-| Negative length | Error | "Shot {line_id}:{position} has negative length: {length}m" |
-| Negative LRUD | Error | "Shot {line_id}:{position} has negative {direction} distance: {value}m" |
-| Invalid azimuth | Error | "Shot {line_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
-| Shot length < depth change | Error | "Shot {line_id}:{position} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
-| Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {line_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
-| Non-finite field value | Error | "Shot {line_id}:{position} has non-finite value(s) in: {fields}" |
-| Inclination outside -90 to 90 degrees | Error | "Shot {line_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
+| Shot length < 0.3m (default; configurable) | Warning | "Shot {shot} length {length}m below minimum threshold {threshold}m" |
+| Shot length > 50m | Warning | "Shot {shot} length {length}m above maximum threshold {threshold}m" |
+| Depth change > 10m per shot | Warning | "Shot {shot} depth change {change}m exceeds threshold {threshold}m" |
+| Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {shot} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
+| Inclination in/out difference > 10 degrees (default `pitch_diff_threshold`; configurable; only when both are recorded and in range) | Warning | "Shot {shot} inclination in/out difference {dev}° exceeds threshold {threshold}°" |
+| Zero length shot | Error | "Shot {shot} has zero length" |
+| Negative length | Error | "Shot {shot} has negative length: {length}m" |
+| Negative LRUD | Error | "Shot {shot} has negative {direction} distance: {value}m" |
+| Invalid azimuth | Error | "Shot {shot} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
+| Shot length < depth change | Error | "Shot {shot} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
+| Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {shot} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
+| Non-finite field value | Error | "Shot {shot} has non-finite value(s) in: {fields}" |
+| Inclination outside -90 to 90 degrees | Error | "Shot {shot} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
 | GPS fix far from its surveyed position (gap > 15 m + 2% of the survey distance from the placement datum of its piece) | Warning | "The GPS position of this zero datum is {gap} m from where the survey puts it (bearing {bearing} degrees), more than the {threshold} m expected. ..." Ignore covers that GPS reading only: a new GPS on the datum brings the warning back, and undoing that change brings the Ignore back. |
 | Duplicate station merge | Error | "These stations are already merged" |
 

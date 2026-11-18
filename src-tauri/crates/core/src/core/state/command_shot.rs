@@ -1,21 +1,34 @@
 use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, Validator, WarningSeverity};
 use crate::models::{
-    shot_display_position, station_id_label, ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep,
-    LineId, Project, RemovedClosure, ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit,
-    CLOSURE_REMOVED_ACROSS_ONE_SHOT, CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
+    ClosurePair, ClosuresBeforeEdit, ClosuresBeforeSweep, LineId, Project, RemovedClosure,
+    ShotData, ShotId, ShotKind, ShotUpdates, SurveyCredit, CLOSURE_REMOVED_ACROSS_ONE_SHOT,
+    CLOSURE_REMOVED_MERGED_ENDS, FEATURE_ID_STRIDE,
 };
 
 /// The warning a delete reports for a loop closure it removed because the
 /// delete left it spanning a single shot (#737). Names the closure by its
-/// stations BEFORE the delete (`ClosurePair` from
-/// `Project::closures_newly_across_one_shot`): a gap-close renumbers stations,
-/// and the user created closure 0:1-0:5, not the 0:1-0:2 it became.
-pub(super) fn closure_removed_message(closure: &ClosurePair) -> String {
+/// stations as the user read them BEFORE the delete (`before`, from
+/// `Project::closures_before_edit`): a gap-close renumbers stations, and the
+/// user created the closure between `Main / 1` and `Main / 5`, not whatever
+/// the delete made of them. A closure `before` cannot name (it had no
+/// resolved ends then) is named by its stations now.
+pub(super) fn closure_removed_message(
+    project: &Project,
+    before: &ClosuresBeforeEdit,
+    closure: &ClosurePair,
+) -> String {
+    let (a, b) = before.labels(closure.closure_id).map_or_else(
+        || {
+            (
+                project.station_text(closure.station_a),
+                project.station_text(closure.station_b),
+            )
+        },
+        |(a, b)| (a.to_string(), b.to_string()),
+    );
     format!(
-        "Removed loop closure {} to {}: closing the gap left its two stations at the two ends of one shot.",
-        station_id_label(closure.station_a),
-        station_id_label(closure.station_b)
+        "Removed loop closure {a} to {b}: closing the gap left its two stations at the two ends of one shot."
     )
 }
 
@@ -54,8 +67,8 @@ pub(super) fn merged_ends_warnings(
             code: CLOSURE_REMOVED_MERGED_ENDS.to_string(),
             message: format!(
                 "Removed loop closure {} to {}: {}",
-                station_id_label(removed.pair.station_a),
-                station_id_label(removed.pair.station_b),
+                removed.labels.0,
+                removed.labels.1,
                 match (removed.already_one_point, cause) {
                     (true, _) => "its two stations were already one point.",
                     (false, OnePointCause::Promotion) => {
@@ -121,7 +134,7 @@ pub(super) fn remove_closures_newly_across_one_shot(
         );
         warnings.push(ValidationWarning {
             code: CLOSURE_REMOVED_ACROSS_ONE_SHOT.to_string(),
-            message: closure_removed_message(&closure),
+            message: closure_removed_message(project, before, &closure),
             severity: WarningSeverity::Warning,
         });
     }
@@ -176,7 +189,8 @@ impl AppState {
 
             if line.shots.len() >= max_shots {
                 return CommandResult::failure(format!(
-                    "Line {line_id} has reached the maximum of {max_shots} shots"
+                    "Line \"{}\" has reached the maximum of {max_shots} shots",
+                    project.line_label(line_id).unwrap_or_default()
                 ));
             }
 
@@ -195,18 +209,21 @@ impl AppState {
             }
         };
 
+        // The shot does not exist yet, so it has no station names to go by:
+        // a refusal names its line (never a positional id).
+        let new_shot = || {
+            project.line_label(line_id).map_or_else(
+                || "The new shot".to_string(),
+                |l| format!("The new shot in line \"{l}\""),
+            )
+        };
         if data.length == 0.0 {
-            return CommandResult::failure(format!(
-                "Shot {}:{} has zero length",
-                line_id,
-                shot_index + 1
-            ));
+            return CommandResult::failure(format!("{} has zero length", new_shot()));
         }
         if data.length < 0.0 {
             return CommandResult::failure(format!(
-                "Shot {}:{} has negative length: {:.1}m",
-                line_id,
-                shot_index + 1,
+                "{} has negative length: {:.1}m",
+                new_shot(),
                 data.length
             ));
         }
@@ -241,14 +258,9 @@ impl AppState {
             }
         }
 
-        let mut warnings = Vec::new();
-        // Per-project thresholds (#57) so create-time warnings match the panel.
-        warnings.extend(Validator::validate_shot(
-            &data,
-            &project.validation,
-            line_id,
-            shot_index,
-        ));
+        // Validated after the insert below, which names the new station, so
+        // the warnings name the shot as the user will read it.
+        let validated = data.clone();
 
         let shot = if let Some(before_id) = before_shot_id {
             project.insert_shot_before(line_id, before_id, data, None, None)
@@ -264,6 +276,10 @@ impl AppState {
                 line.legacy_surveyor = None;
                 line.legacy_date = None;
             }
+            // Per-project thresholds (#57) so create-time warnings match the panel.
+            let warnings = Validator::validate_shot(&validated, &project.validation, || {
+                project.shot_label(line_id, new_shot_id).unwrap_or_default()
+            });
             tracing::debug!(
                 line_id,
                 shot_id = new_shot_id,
@@ -358,18 +374,14 @@ impl AppState {
         if let Some(line) = project.lines.iter().find(|s| s.id == line_id) {
             if line.shots.iter().any(|s| s.id == shot_id) {
                 if let Some(new_length) = updates.length {
+                    let shot = || project.shot_label(line_id, shot_id).unwrap_or_default();
                     if new_length == 0.0 {
-                        return CommandResult::failure(format!(
-                            "Shot {}:{} has zero length",
-                            line_id,
-                            shot_display_position(shot_id, line_id)
-                        ));
+                        return CommandResult::failure(format!("Shot {} has zero length", shot()));
                     }
                     if new_length < 0.0 {
                         return CommandResult::failure(format!(
-                            "Shot {}:{} has negative length: {:.1}m",
-                            line_id,
-                            shot_display_position(shot_id, line_id),
+                            "Shot {} has negative length: {:.1}m",
+                            shot(),
                             new_length
                         ));
                     }

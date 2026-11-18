@@ -1,7 +1,7 @@
 use crate::config::ValidationConfig;
 use crate::models::shot::implied_pitch_deg;
 use crate::models::warning::severity_for_code;
-use crate::models::{LineId, ShotData};
+use crate::models::ShotData;
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -23,23 +23,38 @@ const DEPTH_ROUNDING_EPSILON_M: f64 = 1e-6;
 pub struct Validator;
 
 impl Validator {
-    /// Validate a shot and return any warnings
+    /// Validate a shot and return any warnings, each opening with the shot as
+    /// the user reads it: `Shot Main Line: 4 → 5 has zero length`, never the
+    /// positional `line:position` handle. `shot_label` names the shot
+    /// (`Main Line: 4 → 5`, `Project::shot_label_at`) and is asked only when a
+    /// check fires, so a whole-project pass pays for no names on clean shots.
     pub fn validate_shot(
         shot: &ShotData,
         config: &ValidationConfig,
-        line_id: LineId,
-        shot_index: usize,
+        shot_label: impl FnOnce() -> String,
     ) -> Vec<ValidationWarning> {
-        let mut warnings = Vec::new();
+        let findings = Self::shot_findings(shot, config);
+        if findings.is_empty() {
+            return Vec::new();
+        }
+        let label = shot_label();
+        // Every warning's severity is sourced from the single
+        // `severity_for_code` map (issue #57) - the validator, the ignore
+        // gate, and the map coloring can never disagree on a code's class.
+        findings
+            .into_iter()
+            .map(|(code, body)| ValidationWarning {
+                code: code.to_string(),
+                message: format!("Shot {label} {body}"),
+                severity: severity_for_code(code),
+            })
+            .collect()
+    }
 
-        // Build every warning through one helper so its severity is sourced from
-        // the single `severity_for_code` map (issue #57) - the validator, the
-        // ignore gate, and the map coloring can never disagree on a code's class.
-        let warn = |code: &str, message: String| ValidationWarning {
-            code: code.to_string(),
-            message,
-            severity: severity_for_code(code),
-        };
+    /// Every check `shot` fails, as `(code, message body)`: the body is what
+    /// follows the shot's name (`has zero length`).
+    fn shot_findings(shot: &ShotData, config: &ValidationConfig) -> Vec<(&'static str, String)> {
+        let mut warnings: Vec<(&'static str, String)> = Vec::new();
 
         // Non-finite backstop (#275 B4): NaN fails EVERY range comparison in
         // this function, so without an explicit check a NaN/inf field would
@@ -64,61 +79,42 @@ impl Validator {
         .map(|(name, _)| *name)
         .collect();
         if !non_finite.is_empty() {
-            warnings.push(warn(
+            warnings.push((
                 "NON_FINITE_VALUE",
-                format!(
-                    "Shot {}:{} has non-finite value(s) in: {}",
-                    line_id,
-                    shot_index + 1,
-                    non_finite.join(", ")
-                ),
+                format!("has non-finite value(s) in: {}", non_finite.join(", ")),
             ));
         }
 
         // Check for zero length
         if shot.length == 0.0 {
-            warnings.push(warn(
-                "ZERO_LENGTH",
-                format!("Shot {}:{} has zero length", line_id, shot_index + 1),
-            ));
+            warnings.push(("ZERO_LENGTH", "has zero length".to_string()));
         }
 
         // Check for negative length
         if shot.length < 0.0 {
-            warnings.push(warn(
+            warnings.push((
                 "NEGATIVE_LENGTH",
-                format!(
-                    "Shot {}:{} has negative length: {:.1}m",
-                    line_id,
-                    shot_index + 1,
-                    shot.length
-                ),
+                format!("has negative length: {:.1}m", shot.length),
             ));
         }
 
         // Check length thresholds
         if shot.length > 0.0 && shot.length < config.warn_shot_length_min {
-            warnings.push(warn(
+            warnings.push((
                 "SHORT_SHOT",
                 format!(
-                    "Shot {}:{} length {:.1}m below minimum threshold {:.1}m",
-                    line_id,
-                    shot_index + 1,
-                    shot.length,
-                    config.warn_shot_length_min
+                    "length {:.1}m below minimum threshold {:.1}m",
+                    shot.length, config.warn_shot_length_min
                 ),
             ));
         }
 
         if shot.length > config.warn_shot_length_max {
-            warnings.push(warn(
+            warnings.push((
                 "LONG_SHOT",
                 format!(
-                    "Shot {}:{} length {:.1}m above maximum threshold {:.1}m",
-                    line_id,
-                    shot_index + 1,
-                    shot.length,
-                    config.warn_shot_length_max
+                    "length {:.1}m above maximum threshold {:.1}m",
+                    shot.length, config.warn_shot_length_max
                 ),
             ));
         }
@@ -126,38 +122,31 @@ impl Validator {
         // Check depth change
         let depth_change = (shot.depth_out - shot.depth_in).abs();
         if depth_change > config.warn_depth_change_per_shot_max {
-            warnings.push(warn(
+            warnings.push((
                 "LARGE_DEPTH_CHANGE",
                 format!(
-                    "Shot {}:{} depth change {:.1}m exceeds threshold {:.1}m",
-                    line_id,
-                    shot_index + 1,
-                    depth_change,
-                    config.warn_depth_change_per_shot_max
+                    "depth change {:.1}m exceeds threshold {:.1}m",
+                    depth_change, config.warn_depth_change_per_shot_max
                 ),
             ));
         }
 
         // Check azimuth range
         if shot.azimuth_in < 0.0 || shot.azimuth_in >= 360.0 {
-            warnings.push(warn(
+            warnings.push((
                 "INVALID_AZIMUTH",
                 format!(
-                    "Shot {}:{} has invalid azimuth_in: {:.1}° (must be 0-360)",
-                    line_id,
-                    shot_index + 1,
+                    "has invalid azimuth_in: {:.1}° (must be 0-360)",
                     shot.azimuth_in
                 ),
             ));
         }
 
         if shot.azimuth_out < 0.0 || shot.azimuth_out >= 360.0 {
-            warnings.push(warn(
+            warnings.push((
                 "INVALID_AZIMUTH",
                 format!(
-                    "Shot {}:{} has invalid azimuth_out: {:.1}° (must be 0-360)",
-                    line_id,
-                    shot_index + 1,
+                    "has invalid azimuth_out: {:.1}° (must be 0-360)",
                     shot.azimuth_out
                 ),
             ));
@@ -167,14 +156,11 @@ impl Validator {
         let diff = (shot.azimuth_out - shot.azimuth_in).abs();
         let angular_diff = if diff > 180.0 { 360.0 - diff } else { diff };
         if angular_diff > config.azimuth_diff_threshold {
-            warnings.push(warn(
+            warnings.push((
                 "AZIMUTH_DEVIATION",
                 format!(
-                    "Shot {}:{} azimuth in/out difference {:.1}° exceeds threshold {:.1}°",
-                    line_id,
-                    shot_index + 1,
-                    angular_diff,
-                    config.azimuth_diff_threshold
+                    "azimuth in/out difference {:.1}° exceeds threshold {:.1}°",
+                    angular_diff, config.azimuth_diff_threshold
                 ),
             ));
         }
@@ -182,56 +168,36 @@ impl Validator {
         // Check LRUD values are non-negative
         if let Some(left) = shot.left {
             if left < 0.0 {
-                warnings.push(warn(
+                warnings.push((
                     "NEGATIVE_LRUD",
-                    format!(
-                        "Shot {}:{} has negative left distance: {:.1}m",
-                        line_id,
-                        shot_index + 1,
-                        left
-                    ),
+                    format!("has negative left distance: {left:.1}m"),
                 ));
             }
         }
 
         if let Some(right) = shot.right {
             if right < 0.0 {
-                warnings.push(warn(
+                warnings.push((
                     "NEGATIVE_LRUD",
-                    format!(
-                        "Shot {}:{} has negative right distance: {:.1}m",
-                        line_id,
-                        shot_index + 1,
-                        right
-                    ),
+                    format!("has negative right distance: {right:.1}m"),
                 ));
             }
         }
 
         if let Some(up) = shot.up {
             if up < 0.0 {
-                warnings.push(warn(
+                warnings.push((
                     "NEGATIVE_LRUD",
-                    format!(
-                        "Shot {}:{} has negative up distance: {:.1}m",
-                        line_id,
-                        shot_index + 1,
-                        up
-                    ),
+                    format!("has negative up distance: {up:.1}m"),
                 ));
             }
         }
 
         if let Some(down) = shot.down {
             if down < 0.0 {
-                warnings.push(warn(
+                warnings.push((
                     "NEGATIVE_LRUD",
-                    format!(
-                        "Shot {}:{} has negative down distance: {:.1}m",
-                        line_id,
-                        shot_index + 1,
-                        down
-                    ),
+                    format!("has negative down distance: {down:.1}m"),
                 ));
             }
         }
@@ -247,14 +213,12 @@ impl Validator {
         for (leg, pitch) in [("in", shot.pitch_in), ("out", shot.pitch_out)] {
             if let Some(p) = pitch {
                 if !(PITCH_MIN..=PITCH_MAX).contains(&p) {
-                    warnings.push(warn(
+                    warnings.push((
                         "INVALID_PITCH",
                         format!(
-                            "Shot {}:{} has an out-of-range pitch_{leg}: {:.1}° (must be between -90° and 90°)",
-                            line_id,
-                            shot_index + 1,
-                            p
-                        ),
+                    "has an out-of-range pitch_{leg}: {:.1}° (must be between -90° and 90°)",
+                    p
+                ),
                     ));
                 }
             }
@@ -270,14 +234,11 @@ impl Validator {
                 && leg_in_range(Some(pitch_out))
                 && pitch_diff > config.pitch_diff_threshold
             {
-                warnings.push(warn(
+                warnings.push((
                     "PITCH_DEVIATION",
                     format!(
-                        "Shot {}:{} inclination in/out difference {:.1}° exceeds threshold {:.1}°",
-                        line_id,
-                        shot_index + 1,
-                        pitch_diff,
-                        config.pitch_diff_threshold
+                        "inclination in/out difference {:.1}° exceeds threshold {:.1}°",
+                        pitch_diff, config.pitch_diff_threshold
                     ),
                 ));
             }
@@ -291,15 +252,13 @@ impl Validator {
             // The slope length can never be shorter than the vertical change -
             // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
             if shot.length + DEPTH_ROUNDING_EPSILON_M < dz.abs() {
-                warnings.push(warn(
+                warnings.push((
                     "LENGTH_BELOW_DEPTH_CHANGE",
                     format!(
-                        "Shot {}:{} length {:.2}m is shorter than its depth change {:.2}m (impossible: slope length must be at least the vertical change)",
-                        line_id,
-                        shot_index + 1,
-                        shot.length,
+                    "length {:.2}m is shorter than its depth change {:.2}m (impossible: slope length must be at least the vertical change)",
+                    shot.length,
                         dz.abs()
-                    ),
+                ),
                 ));
             } else {
                 // A recorded inclination must agree with the depth/length geometry
@@ -320,16 +279,14 @@ impl Validator {
                     if leg_in_range(shot.pitch_in) && leg_in_range(shot.pitch_out) {
                         let implied = implied_pitch_deg(shot.length, shot.depth_in, shot.depth_out);
                         if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
-                            warnings.push(warn(
+                            warnings.push((
                                 "INCLINATION_DEPTH_MISMATCH",
                                 format!(
-                                    "Shot {}:{} recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
-                                    line_id,
-                                    shot_index + 1,
-                                    recorded,
+                    "recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
+                    recorded,
                                     implied,
                                     config.inclination_depth_diff_threshold
-                                ),
+                ),
                             ));
                         }
                     }
@@ -358,6 +315,45 @@ mod tests {
     use super::*;
     use crate::models::GpsCoordinates;
 
+    /// A shot's label as `Project::shot_label_at` writes it, for a line named
+    /// `Line <line>` whose stations are named by index.
+    fn shot_name(line: u32, index: usize) -> String {
+        format!("Line {line}: {index} \u{2192} {}", index + 1)
+    }
+
+    /// The label is asked for only when a check fires, and once.
+    #[test]
+    fn test_shot_label_is_read_only_for_a_failing_shot() {
+        let clean = ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 46.0,
+            length: 5.0,
+            ..Default::default()
+        };
+        let mut asked = 0;
+        let warnings = Validator::validate_shot(&clean, &default_config(), || {
+            asked += 1;
+            String::new()
+        });
+        assert!(warnings.is_empty());
+        assert_eq!(asked, 0, "a clean shot is not named");
+        let bad = ShotData {
+            length: 0.0,
+            left: Some(-1.0),
+            ..clean
+        };
+        asked = 0;
+        let warnings = Validator::validate_shot(&bad, &default_config(), || {
+            asked += 1;
+            "Main: 4 \u{2192} 5".to_string()
+        });
+        assert_eq!(asked, 1);
+        assert!(warnings.len() >= 2);
+        assert!(warnings
+            .iter()
+            .all(|w| w.message.starts_with("Shot Main: 4 \u{2192} 5 ")));
+    }
+
     fn default_config() -> ValidationConfig {
         ValidationConfig {
             warn_shot_length_min: 0.1,
@@ -381,7 +377,7 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), || shot_name(0, 0));
         assert!(warnings.is_empty());
     }
 
@@ -396,7 +392,7 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), || shot_name(0, 0));
         assert!(Validator::has_errors(&warnings));
     }
 
@@ -417,7 +413,7 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 3, 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), || shot_name(3, 0));
         let nf = warnings
             .iter()
             .find(|w| w.code == "NON_FINITE_VALUE")
@@ -445,9 +441,11 @@ mod tests {
             depth_out: 11.0,
             ..Default::default()
         };
-        assert!(Validator::validate_shot(&ok, &default_config(), 3, 0)
-            .iter()
-            .all(|w| w.code != "NON_FINITE_VALUE"));
+        assert!(
+            Validator::validate_shot(&ok, &default_config(), || shot_name(3, 0))
+                .iter()
+                .all(|w| w.code != "NON_FINITE_VALUE")
+        );
     }
 
     #[test]
@@ -461,65 +459,66 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), || shot_name(0, 0));
         assert!(!warnings.is_empty());
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
     }
 
-    /// Verify warning messages use "Shot {line_id}:{position}" format
+    /// Verify warning messages name the shot by its stations
+    /// (`Shot Line 4: 2 → 3 ...`), never by a positional `line:position` id
     #[test]
     fn test_warning_message_format() {
         let config = default_config();
 
-        // ZERO_LENGTH with line_id=4, shot_index=2 → "Shot 4:3 has zero length"
+        // ZERO_LENGTH on shot 2 → 3 of Line 4 → "Shot Line 4: 2 → 3 has zero length"
         let zero_shot = ShotData {
             azimuth_in: 45.0,
             azimuth_out: 50.0,
             length: 0.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&zero_shot, &config, 4, 2);
+        let warnings = Validator::validate_shot(&zero_shot, &config, || shot_name(4, 2));
         let w = warnings.iter().find(|w| w.code == "ZERO_LENGTH").unwrap();
         assert!(
-            w.message.starts_with("Shot 4:3 "),
-            "Expected 'Shot 4:3 ...' but got: {}",
+            w.message.starts_with("Shot Line 4: 2 \u{2192} 3 "),
+            "Expected 'Shot Line 4: 2 → 3 ...' but got: {}",
             w.message
         );
 
-        // SHORT_SHOT with line_id=7, shot_index=0 → "Shot 7:1 length ..."
+        // SHORT_SHOT → "Shot Line 7: 0 → 1 length ..."
         let short_shot = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 95.0,
             length: 0.05,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&short_shot, &config, 7, 0);
+        let warnings = Validator::validate_shot(&short_shot, &config, || shot_name(7, 0));
         let w = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
         assert!(
-            w.message.starts_with("Shot 7:1 "),
-            "Expected 'Shot 7:1 ...' but got: {}",
+            w.message.starts_with("Shot Line 7: 0 \u{2192} 1 "),
+            "Expected 'Shot Line 7: 0 → 1 ...' but got: {}",
             w.message
         );
 
-        // INVALID_AZIMUTH with line_id=2, shot_index=5 → "Shot 2:6 has invalid azimuth_in..."
+        // INVALID_AZIMUTH → "Shot Line 2: 5 → 6 has invalid azimuth_in..."
         let bad_azimuth = ShotData {
             azimuth_in: 400.0,
             azimuth_out: 180.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&bad_azimuth, &config, 2, 5);
+        let warnings = Validator::validate_shot(&bad_azimuth, &config, || shot_name(2, 5));
         let w = warnings
             .iter()
             .find(|w| w.code == "INVALID_AZIMUTH")
             .unwrap();
         assert!(
-            w.message.starts_with("Shot 2:6 "),
-            "Expected 'Shot 2:6 ...' but got: {}",
+            w.message.starts_with("Shot Line 2: 5 \u{2192} 6 "),
+            "Expected 'Shot Line 2: 5 → 6 ...' but got: {}",
             w.message
         );
 
-        // NEGATIVE_LRUD with line_id=10, shot_index=3 → "Shot 10:4 has negative left..."
+        // NEGATIVE_LRUD → "Shot Line 10: 3 → 4 has negative left..."
         let neg_lrud = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 270.0,
@@ -527,11 +526,11 @@ mod tests {
             left: Some(-1.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_lrud, &config, 10, 3);
+        let warnings = Validator::validate_shot(&neg_lrud, &config, || shot_name(10, 3));
         let w = warnings.iter().find(|w| w.code == "NEGATIVE_LRUD").unwrap();
         assert!(
-            w.message.starts_with("Shot 10:4 "),
-            "Expected 'Shot 10:4 ...' but got: {}",
+            w.message.starts_with("Shot Line 10: 3 \u{2192} 4 "),
+            "Expected 'Shot Line 10: 3 → 4 ...' but got: {}",
             w.message
         );
     }
@@ -550,7 +549,7 @@ mod tests {
             depth_out: 0.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&valid_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&valid_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| !w.code.contains("LENGTH")));
 
         // Negative length should produce error
@@ -560,7 +559,7 @@ mod tests {
             azimuth_out: 95.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&negative_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&negative_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -571,7 +570,7 @@ mod tests {
             azimuth_out: 95.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&zero_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&zero_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -582,7 +581,7 @@ mod tests {
             azimuth_out: 95.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&short_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&short_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
 
         // Very long shot (above max threshold) should produce warning
@@ -592,7 +591,7 @@ mod tests {
             azimuth_out: 95.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&long_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&long_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
     }
 
@@ -608,7 +607,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_0, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_0, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "INVALID_AZIMUTH"));
 
         // Valid azimuth at 359.9 degrees
@@ -618,7 +617,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_359, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_359, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "INVALID_AZIMUTH"));
 
         // Invalid: azimuth_in >= 360
@@ -628,7 +627,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_360, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_360, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -639,7 +638,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_out_400, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_out_400, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 
         // Invalid: negative azimuth_in
@@ -649,7 +648,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_neg, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_neg, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 
         // Invalid: negative azimuth_out
@@ -659,7 +658,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_neg_out, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot_neg_out, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
     }
 
@@ -679,7 +678,7 @@ mod tests {
             down: Some(0.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&valid_shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&valid_shot, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Valid: zero LRUD values are allowed (wall touching)
@@ -693,7 +692,7 @@ mod tests {
             down: Some(0.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&zero_lrud, &config, 0, 0);
+        let warnings = Validator::validate_shot(&zero_lrud, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Valid: None LRUD values (not measured)
@@ -707,7 +706,7 @@ mod tests {
             down: None,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&none_lrud, &config, 0, 0);
+        let warnings = Validator::validate_shot(&none_lrud, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Invalid: negative left
@@ -718,7 +717,7 @@ mod tests {
             left: Some(-1.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_left, &config, 0, 0);
+        let warnings = Validator::validate_shot(&neg_left, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
         assert!(Validator::has_errors(&warnings));
 
@@ -730,7 +729,7 @@ mod tests {
             right: Some(-2.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_right, &config, 0, 0);
+        let warnings = Validator::validate_shot(&neg_right, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 
         // Invalid: negative up
@@ -741,7 +740,7 @@ mod tests {
             up: Some(-0.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_up, &config, 0, 0);
+        let warnings = Validator::validate_shot(&neg_up, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 
         // Invalid: negative down
@@ -752,7 +751,7 @@ mod tests {
             down: Some(-3.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_down, &config, 0, 0);
+        let warnings = Validator::validate_shot(&neg_down, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
     }
 
@@ -841,7 +840,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&identical, &config, 0, 0);
+        let warnings = Validator::validate_shot(&identical, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Valid: within threshold (5° difference)
@@ -851,7 +850,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&within_threshold, &config, 0, 0);
+        let warnings = Validator::validate_shot(&within_threshold, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Valid: exactly at threshold (20° difference, not exceeded)
@@ -861,7 +860,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&at_threshold, &config, 0, 0);
+        let warnings = Validator::validate_shot(&at_threshold, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Invalid: exceeds threshold (25° difference)
@@ -871,7 +870,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&exceeds_threshold, &config, 0, 0);
+        let warnings = Validator::validate_shot(&exceeds_threshold, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test wraparound: 355° and 5° should be 10° apart (within threshold)
@@ -881,7 +880,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound_within, &config, 0, 0);
+        let warnings = Validator::validate_shot(&wraparound_within, &config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Test wraparound with warning: 355° and 20° = 25° apart
@@ -891,7 +890,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound_exceeds, &config, 0, 0);
+        let warnings = Validator::validate_shot(&wraparound_exceeds, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test with strict config (5° threshold)
@@ -907,7 +906,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&small_diff, &strict_config, 0, 0);
+        let warnings = Validator::validate_shot(&small_diff, &strict_config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // 10° difference should fail with strict 5° config
@@ -917,7 +916,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&medium_diff, &strict_config, 0, 0);
+        let warnings = Validator::validate_shot(&medium_diff, &strict_config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test with lenient config (60° threshold)
@@ -933,7 +932,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&large_diff, &lenient_config, 0, 0);
+        let warnings = Validator::validate_shot(&large_diff, &lenient_config, || shot_name(0, 0));
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
     }
 
@@ -952,7 +951,7 @@ mod tests {
             depth_out: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&bad, &config, 0, 0);
+        let warnings = Validator::validate_shot(&bad, &config, || shot_name(0, 0));
         assert!(warnings
             .iter()
             .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
@@ -964,9 +963,11 @@ mod tests {
             depth_out: 0.0,
             ..bad.clone()
         };
-        assert!(Validator::validate_shot(&bad_up, &config, 0, 0)
-            .iter()
-            .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
+        assert!(
+            Validator::validate_shot(&bad_up, &config, || shot_name(0, 0))
+                .iter()
+                .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE")
+        );
 
         // length == |dz| (vertical shot) is valid; length > |dz| is valid.
         let vertical = ShotData {
@@ -975,16 +976,18 @@ mod tests {
             depth_out: 5.0,
             ..bad.clone()
         };
-        assert!(Validator::validate_shot(&vertical, &config, 0, 0)
-            .iter()
-            .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
+        assert!(
+            Validator::validate_shot(&vertical, &config, || shot_name(0, 0))
+                .iter()
+                .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE")
+        );
         let ok = ShotData {
             length: 10.0,
             depth_in: 0.0,
             depth_out: 5.0,
             ..bad.clone()
         };
-        assert!(Validator::validate_shot(&ok, &config, 0, 0)
+        assert!(Validator::validate_shot(&ok, &config, || shot_name(0, 0))
             .iter()
             .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
     }
@@ -1048,7 +1051,7 @@ mod tests {
                 "pitch {pitch_in}° does not match the {depth_in}m -> {depth_out}m depth change"
             );
 
-            let warnings = Validator::validate_shot(&shot_data, &config, 0, 0);
+            let warnings = Validator::validate_shot(&shot_data, &config, || shot_name(0, 0));
             let mismatch = warnings
                 .iter()
                 .find(|w| w.code == "INCLINATION_DEPTH_MISMATCH");
@@ -1079,7 +1082,7 @@ mod tests {
             ..Default::default()
         };
         let has_mismatch = |s: &ShotData| {
-            Validator::validate_shot(s, &config, 0, 0)
+            Validator::validate_shot(s, &config, || shot_name(0, 0))
                 .iter()
                 .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH")
         };
@@ -1177,7 +1180,7 @@ mod tests {
             pitch_out: Some(120.0),
             ..down.clone()
         };
-        let w = Validator::validate_shot(&out_of_range, &config, 0, 0);
+        let w = Validator::validate_shot(&out_of_range, &config, || shot_name(0, 0));
         assert!(
             w.iter().any(|w| w.code == "INVALID_PITCH"),
             "120° pitch is out of range"
@@ -1208,7 +1211,7 @@ mod tests {
             pitch_out: Some(0.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+        let warnings = Validator::validate_shot(&shot, &config, || shot_name(0, 0));
         assert!(
             warnings
                 .iter()
@@ -1239,7 +1242,7 @@ mod tests {
                 ..base.clone()
             };
             assert!(
-                Validator::validate_shot(&ok, &config, 0, 0)
+                Validator::validate_shot(&ok, &config, || shot_name(0, 0))
                     .iter()
                     .all(|w| w.code != "INVALID_PITCH"),
                 "{p}° is a valid pitch"
@@ -1252,7 +1255,7 @@ mod tests {
             pitch_out: Some(0.0),
             ..base.clone()
         };
-        let warnings = Validator::validate_shot(&bad_in, &config, 0, 0);
+        let warnings = Validator::validate_shot(&bad_in, &config, || shot_name(0, 0));
         assert!(warnings.iter().any(|w| w.code == "INVALID_PITCH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -1261,9 +1264,11 @@ mod tests {
             pitch_out: Some(-100.0),
             ..base.clone()
         };
-        assert!(Validator::validate_shot(&bad_out, &config, 0, 0)
-            .iter()
-            .any(|w| w.code == "INVALID_PITCH"));
+        assert!(
+            Validator::validate_shot(&bad_out, &config, || shot_name(0, 0))
+                .iter()
+                .any(|w| w.code == "INVALID_PITCH")
+        );
     }
 
     /// The two inclination readings must agree within `pitch_diff_threshold`
@@ -1287,7 +1292,7 @@ mod tests {
                 pitch_out,
                 ..base.clone()
             };
-            Validator::validate_shot(&shot, &config, 2, 4)
+            Validator::validate_shot(&shot, &config, || shot_name(2, 4))
                 .into_iter()
                 .find(|w| w.code == "PITCH_DEVIATION")
         };
@@ -1300,7 +1305,7 @@ mod tests {
         let w = pitch_deviation(Some(2.0), Some(8.0)).expect("6° exceeds the 5° threshold");
         assert_eq!(w.severity, WarningSeverity::Warning);
         assert!(
-            w.message.starts_with("Shot 2:5 ") && w.message.contains("6.0°"),
+            w.message.starts_with("Shot Line 2: 4 \u{2192} 5 ") && w.message.contains("6.0°"),
             "unexpected message: {}",
             w.message
         );
@@ -1324,9 +1329,11 @@ mod tests {
             pitch_out: Some(8.0),
             ..base.clone()
         };
-        assert!(Validator::validate_shot(&shot, &lenient, 0, 0)
-            .iter()
-            .all(|w| w.code != "PITCH_DEVIATION"));
+        assert!(
+            Validator::validate_shot(&shot, &lenient, || shot_name(0, 0))
+                .iter()
+                .all(|w| w.code != "PITCH_DEVIATION")
+        );
     }
 
     /// `severity_for_code` is the single source of truth, so every warning the
@@ -1346,7 +1353,7 @@ mod tests {
             pitch_in: Some(120.0), // INVALID_PITCH (error)
             ..Default::default()
         };
-        for w in Validator::validate_shot(&shot, &config, 0, 0) {
+        for w in Validator::validate_shot(&shot, &config, || shot_name(0, 0)) {
             assert_eq!(
                 w.severity,
                 severity_for_code(&w.code),

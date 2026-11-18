@@ -428,11 +428,32 @@ impl Project {
         Some(format!("{line} / {name}"))
     }
 
+    /// [`Self::station_label`] for user-facing text that must say something
+    /// even when the station cannot be named: `a station of Main Line`, or
+    /// `a station` when its line is gone too. Never the positional
+    /// `line:index` handle.
+    pub fn station_text(&self, station: StationRef) -> String {
+        self.station_label(station).unwrap_or_else(|| {
+            self.line_label(station.line_id)
+                .map_or_else(|| "a station".to_string(), |l| format!("a station of {l}"))
+        })
+    }
+
     /// A shot as the user reads it, with its line: `Main Line: 4 → 5`.
     /// `None` when the shot is not in the project.
     pub fn shot_label(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
         let line = self.get_line(line_id)?;
-        let index = line.shots.iter().position(|s| s.id == shot_id)? as u32;
+        let index = line.shots.iter().position(|s| s.id == shot_id)?;
+        self.shot_label_at(line_id, index)
+    }
+
+    /// [`Self::shot_label`] for the shot at `shot_index` of the line.
+    pub fn shot_label_at(&self, line_id: LineId, shot_index: usize) -> Option<String> {
+        let line = self.get_line(line_id)?;
+        if shot_index >= line.shots.len() {
+            return None;
+        }
+        let index = u32::try_from(shot_index).ok()?;
         let name = |i: u32| {
             self.station_name_at(StationRef::new(line_id, i))
                 .map_or_else(|| i.to_string(), str::to_string)
@@ -443,6 +464,26 @@ impl Project {
             name(index),
             name(index + 1)
         ))
+    }
+
+    /// The shot labels of a whole line by shot index (`Main Line: 4 → 5`),
+    /// reading the line's names once: what a pass that names many shots of
+    /// one line (validation warnings) should use instead of
+    /// [`Self::shot_label_at`] per shot.
+    pub fn line_shot_labels(&self, line_id: LineId) -> Vec<String> {
+        let Some(label) = self.line_label(line_id) else {
+            return Vec::new();
+        };
+        let names: Vec<String> = self
+            .line_station_names(line_id)
+            .into_iter()
+            .enumerate()
+            .map(|(i, n)| n.unwrap_or_else(|| i.to_string()))
+            .collect();
+        names
+            .windows(2)
+            .map(|pair| format!("{label}: {} \u{2192} {}", pair[0], pair[1]))
+            .collect()
     }
 
     /// The identity `line_id` carries right now, with its stations' ids and

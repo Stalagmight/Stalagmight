@@ -39,7 +39,7 @@ const SAVE_WARNING: ValidationWarning = {
 };
 const VALIDATION_WARNING: ValidationWarning = {
   code: 'LONG_SHOT',
-  message: 'Shot 3:5 length 142.0m above maximum threshold 120.0m',
+  message: 'Shot Main: 4 \u2192 5 length 142.0m above maximum threshold 120.0m',
   severity: 'warning',
 };
 

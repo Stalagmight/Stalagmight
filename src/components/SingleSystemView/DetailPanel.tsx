@@ -18,7 +18,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Line, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { displayStationName } from '../../utils/formatters';
-import { warningMessageBody, warningMessageText } from '../../utils/stationIdentity';
+import { warningMessageBody } from '../../utils/stationIdentity';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { findStation } from '../../utils/findStation';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
@@ -538,11 +538,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </span>
               <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                 {(() => {
-                  // Survey messages open with a positional "Shot <line>:<pos>"
-                  // prefix that is never shown: the shot is named by its
-                  // stations instead - as a pill at the Full level.
-                  const body = warningMessageBody(warning.message);
-                  if (!showPills || body === warning.message) return warningMessageText(labels, warning);
+                  // Survey messages open with the shot named by its line and
+                  // stations (`Shot Main Line: 4 → 5 ...`); at the Full level
+                  // that shot becomes a pill and the rest follows it.
+                  const body = warningMessageBody(labels, warning);
+                  if (!showPills || body === warning.message) return warning.message;
                   const shot = labels.shotAt(warning.lineId, warning.shotIndex);
                   return (
                     <>

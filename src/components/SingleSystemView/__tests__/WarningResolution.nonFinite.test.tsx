@@ -35,7 +35,7 @@ const nanLengthShot = {
 
 const warning: ProjectWarning = {
   code: 'NON_FINITE_VALUE',
-  message: 'Shot 3:1 has non-finite value(s) in: length',
+  message: 'Shot Main: 0 \u2192 1 has non-finite value(s) in: length',
   severity: 'error',
   lineId: 3,
   shotId: 9,

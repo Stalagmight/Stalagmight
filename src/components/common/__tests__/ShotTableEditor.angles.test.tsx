@@ -185,7 +185,7 @@ describe('ShotTableEditor warning column', () => {
     shotId: 1,
     shotIndex: 0,
     code: 'SHORT_SHOT',
-    message: 'Shot 7:1 is suspiciously short',
+    message: 'Shot Main: 0 \u2192 1 is suspiciously short',
     severity: 'warning',
     isResolved: false,
     ...over,

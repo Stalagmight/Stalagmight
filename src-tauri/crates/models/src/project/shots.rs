@@ -149,14 +149,16 @@ impl Project {
         };
         if line.shots.len() >= Self::max_shots_per_line() {
             return Some(format!(
-                "Line {line_id} has reached the maximum of {} shots",
+                "Line \"{}\" has reached the maximum of {} shots",
+                super::combine_candidate::line_label(line),
                 Self::max_shots_per_line()
             ));
         }
         (line.shot_ids_left() == 0).then(|| {
             format!(
-                "Line {line_id} has used up its shot numbers for this session: save \
-                 and reopen to add a station to it"
+                "Line \"{}\" has used up its shot numbers for this session: save \
+                 and reopen to add a station to it",
+                super::combine_candidate::line_label(line)
             )
         })
     }
@@ -465,7 +467,8 @@ impl Project {
             .ok_or_else(|| format!("Line {line_id} not found"))?;
         if line.shots.len() >= Self::max_shots_per_line() {
             return Err(format!(
-                "Line {line_id} has reached the maximum of {} shots",
+                "Line \"{}\" has reached the maximum of {} shots",
+                super::combine_candidate::line_label(line),
                 Self::max_shots_per_line()
             ));
         }

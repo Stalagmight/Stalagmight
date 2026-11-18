@@ -10247,6 +10247,14 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     assert_eq!(closure_violations.len(), 1, "{closure_violations:?}");
     assert_eq!(closure_violations[0].category, "closure_misaligned");
     assert!(closure_violations[0].message.contains("20.00 m"));
+    // Named by its stations, without the closure's internal id or `0:0`.
+    assert!(
+        closure_violations[0].message.starts_with(&format!(
+            "Loop closure Line {a} / 0 \u{2194} Line {b} / 2 is marked closed"
+        )),
+        "{}",
+        closure_violations[0].message
+    );
 
     // An UNaligned closure is inert and not flagged.
     project.loop_closures[0].is_aligned = false;
@@ -11045,6 +11053,17 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
     assert_eq!(drift.len(), 1, "{drift:?}");
     assert_eq!(drift[0].category, "merge_misaligned");
     assert!(drift[0].message.contains(" m apart"));
+    // The banner names the stations by line and name, never `0:1`.
+    project.get_line_mut(a).unwrap().name = Some("Main".to_string());
+    project.get_line_mut(b).unwrap().name = Some("Side".to_string());
+    let named = project.check_merge_alignment();
+    assert!(
+        named[0]
+            .message
+            .starts_with("Merged stations Main / 1 and Side / 0 are "),
+        "{}",
+        named[0].message
+    );
 
     // Repair realigns it.
     assert_eq!(project.realign_merges(), 1);

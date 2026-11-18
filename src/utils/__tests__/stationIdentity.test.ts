@@ -7,7 +7,6 @@ import {
   shotIndexOf,
   stationGlobalIndexOf,
   warningMessageBody,
-  warningMessageText,
   type IdentityData,
 } from '../stationIdentity';
 import type { Station } from '../../types/project';
@@ -95,18 +94,17 @@ describe('station identity labels', () => {
 
 describe('survey warning text', () => {
   const labels = identityLabels({ surveyData: data() });
-  const warning = { lineId: 7, shotIndex: 1, message: 'Shot 7:2 has zero length' };
+  const warning = { lineId: 7, shotIndex: 1, message: 'Shot Main Line: 4a \u2192 5 has zero length' };
 
-  it('drops the positional prefix', () => {
-    expect(warningMessageBody(warning.message)).toBe('has zero length');
+  it('drops the named shot the backend opens the message with', () => {
+    expect(warningMessageBody(labels, warning)).toBe('has zero length');
   });
 
-  it('names the shot by its stations instead', () => {
-    expect(warningMessageText(labels, warning)).toBe('Shot 4a → 5 has zero length');
-    expect(warningMessageText(labels, warning, true)).toBe('Shot Main Line: 4a → 5 has zero length');
-  });
-
-  it('leaves a message without the prefix as it is', () => {
-    expect(warningMessageText(labels, { ...warning, message: 'GPS fix is far away' })).toBe('GPS fix is far away');
+  it('leaves a message that does not open with the shot as it is', () => {
+    expect(warningMessageBody(labels, { ...warning, message: 'GPS fix is far away' })).toBe('GPS fix is far away');
+    // A positional prefix is no longer produced, and never parsed.
+    expect(warningMessageBody(labels, { ...warning, message: 'Shot 7:2 has zero length' })).toBe(
+      'Shot 7:2 has zero length',
+    );
   });
 });

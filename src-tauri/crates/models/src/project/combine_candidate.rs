@@ -385,6 +385,21 @@ impl Project {
         })
     }
 
+    /// `Lines "A" and "B" cannot be combined`, by the lines' names.
+    pub(super) fn cannot_combine_message(&self, kept: LineId, other: LineId) -> String {
+        let name = |id| {
+            self.get_line(id).map_or_else(
+                || "a missing line".to_string(),
+                |l| format!("\"{}\"", line_label(l)),
+            )
+        };
+        format!(
+            "Lines {} and {} cannot be combined",
+            name(kept),
+            name(other)
+        )
+    }
+
     /// Why combining `other` into `kept` at `join` is refused, if it is: the
     /// pair's reason, else the one that depends on which line is kept. The
     /// one check `combine_lines` and the command both run before changing
@@ -396,7 +411,7 @@ impl Project {
         join: Option<CombineJoinEnds>,
     ) -> Option<String> {
         let Some(candidate) = self.combine_candidate_joining(kept, other, join) else {
-            return Some(format!("Lines {kept} and {other} cannot be combined"));
+            return Some(self.cannot_combine_message(kept, other));
         };
         candidate.blocked_reason.or(if candidate.line_a == kept {
             candidate.blocked_keeping_a

@@ -240,7 +240,7 @@ describe('deferredSaveWarnings (#110)', () => {
     // ALSO carries routine validation warnings must not be treated as a save
     // failure.
     const result = deferredSaveWarnings([
-      w('LONG_SHOT', 'Shot 3:5 length above threshold'),
+      w('LONG_SHOT', 'Shot Main: 4 \u2192 5 length above threshold'),
       w('SYSTEM', 'Imported, but could not save … please save manually.'),
       w('AZIMUTH_DEVIATION'),
     ]);

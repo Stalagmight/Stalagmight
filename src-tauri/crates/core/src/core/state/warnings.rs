@@ -3,9 +3,9 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, LineId, Project,
-    ProjectWarning, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT,
-    CLOSURE_ADJUSTMENT_FAILED, DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    datum_gap_ignore_code, severity_for_code, DatumGap, LineId, Project, ProjectWarning, ShotData,
+    ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED, DATUM_GPS_GAP,
+    DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
@@ -196,6 +196,9 @@ impl AppState {
         let mut all_warnings = Vec::new();
 
         for line in &project.lines {
+            // The line's shot names (`Main Line: 4 → 5`), read once, and only
+            // when one of its shots has a warning to name.
+            let mut shot_labels: Option<Vec<String>> = None;
             for (shot_index, shot) in line.shots.iter().enumerate() {
                 // Convert Shot to ShotData for validation
                 let shot_data = ShotData {
@@ -220,8 +223,13 @@ impl AppState {
                     credit: None,
                 };
 
-                let warnings =
-                    Validator::validate_shot(&shot_data, &project.validation, line.id, shot_index);
+                let warnings = Validator::validate_shot(&shot_data, &project.validation, || {
+                    shot_labels
+                        .get_or_insert_with(|| project.line_shot_labels(line.id))
+                        .get(shot_index)
+                        .cloned()
+                        .unwrap_or_default()
+                });
                 for warning in warnings {
                     // Errors are never ignorable (issue #57): force is_resolved
                     // false so a stray resolved row (legacy/bulk) can't hide a
@@ -348,10 +356,10 @@ impl AppState {
                     shot_index,
                     code: CLOSURE_ACROSS_ONE_SHOT.to_string(),
                     message: format!(
-                        "Shot {line_id}:{} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
-                        shot_index + 1,
-                        station_id_label(skipped.station_a),
-                        station_id_label(skipped.station_b),
+                        "Shot {} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
+                        project.shot_label_at(line_id, shot_index).unwrap_or_default(),
+                        project.station_text(skipped.station_a),
+                        project.station_text(skipped.station_b),
                     ),
                     severity: severity_for_code(CLOSURE_ACROSS_ONE_SHOT),
                     is_resolved: false,
@@ -402,8 +410,8 @@ impl AppState {
                     shot_index,
                     code: CLOSURE_ADJUSTMENT_FAILED.to_string(),
                     message: format!(
-                        "Shot {line_id}:{} is in a part of the survey ({lines} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
-                        shot_index + 1,
+                        "Shot {} is in a part of the survey ({lines} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
+                        project.shot_label_at(line_id, shot_index).unwrap_or_default(),
                         if lines == 1 { "line" } else { "lines" },
                         failure.user_reason(),
                     ),

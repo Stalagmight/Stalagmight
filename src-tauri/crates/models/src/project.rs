@@ -188,9 +188,7 @@ pub use adjustment_report::{
     SkippedClosure,
 };
 pub use classify::ClassifyScope;
-pub use closure_shots::{
-    closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot, ClosuresBeforeEdit,
-};
+pub use closure_shots::{ClosureAcrossOneShot, ClosuresBeforeEdit};
 pub use combine_candidate::{
     line_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
 };
