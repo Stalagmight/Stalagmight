@@ -1871,3 +1871,108 @@ fn a_hand_moved_join_station_keeps_its_branch_through_undo_and_a_reopen() {
         );
     }
 }
+
+/// Every section's legacy surveyor and every shot's credited surveyors.
+fn credits(state: &AppState) -> Vec<(SectionId, Option<String>, Vec<Vec<String>>)> {
+    state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| {
+            let shots = s
+                .shots
+                .iter()
+                .map(|shot| {
+                    shot.credit()
+                        .surveyors
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect()
+                })
+                .collect();
+            (s.id, s.legacy_surveyor.clone(), shots)
+        })
+        .collect()
+}
+
+/// A shotless section keeps a legacy surveyor until shots arrive. Combining
+/// shots into it hands that surveyor to the ones without a credit, as the
+/// first appended shot takes it - so no later restore (an undo, a rollback)
+/// or reload re-reads it onto them and lands on a different state.
+#[test]
+fn shots_combined_into_a_shotless_section_take_its_legacy_surveyor() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("legacy-combine.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Legacy combine".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Empty".to_string()),
+        surveyor: Some("Diver One".to_string()),
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    assert!(created.success, "{:?}", created.error);
+    let kept = created.section_id.unwrap();
+    let uncredited = |azimuth| ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length: 4.0,
+        ..Default::default()
+    };
+    let other = create(&state, "Line", vec![uncredited(10.0), uncredited(20.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(kept, 0),
+        station_b: StationRef::new(other, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    assert_eq!(
+        credits(&state)[0].1.as_deref(),
+        Some("Diver One"),
+        "premise: the shotless section holds the legacy surveyor"
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone())
+            })
+            .success
+    );
+    let before = snapshot(&state);
+
+    let result = state.execute_combine_sections(kept, other, options());
+    assert!(result.success, "{:?}", result.error);
+    let combined = credits(&state);
+    assert_eq!(combined.len(), 1);
+    assert_eq!(
+        combined[0].1, None,
+        "the section let the legacy surveyor go"
+    );
+    assert!(
+        combined[0]
+            .2
+            .iter()
+            .all(|s| s == &vec!["Diver One".to_string()]),
+        "every arriving shot took it: {combined:?}"
+    );
+    let after = snapshot(&state);
+
+    assert!(state.undo().success);
+    assert_eq!(snapshot(&state), before, "the undo restores it exactly");
+    assert!(state.redo().success);
+    assert_eq!(snapshot(&state), after, "the redo restores it exactly");
+
+    assert!(state.execute(Command::SaveProject { path: None }).success);
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path).success, "reopen");
+    assert_eq!(
+        credits(&state),
+        combined,
+        "a reload hands nothing out again"
+    );
+}

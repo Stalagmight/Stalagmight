@@ -572,6 +572,14 @@ impl Project {
         if !append {
             section.shots.rotate_right(no as usize);
         }
+        // A shotless kept section can still hold a legacy surveyor/date (it
+        // waits there for the section's first shot). Shots have arrived, so it
+        // goes to every one of them without a credit of its own, exactly as
+        // the first shot appended takes it and as a reload would hand it out.
+        // Left on the section, the next restore of this state (an undo, a
+        // rollback) and every reload re-read it onto the shots, and the state
+        // would depend on the route taken to it.
+        section.absorb_legacy_credit();
         // An empty name leaves the section unnamed, as it may have been.
         section.name = Some(options.name.clone()).filter(|name| !name.trim().is_empty());
         section.color.clone_from(&options.color);
