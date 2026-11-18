@@ -635,6 +635,9 @@ impl AppState {
           // Repair mutated measured geometry (and convert_orphan_closures_to_merges
           // doesn't bump modified_at), so drop any cached closure-adjusted solve.
         self.invalidate_adjusted_cache();
+        // A repair can re-mint a shot uuid and drop a dangling key: settle the
+        // station identities before the after-snapshot records the repair.
+        self.settle_station_identities();
         let after = self.integrity_violation_messages().len();
         // Record an undo entry (before -> after) so the user can revert the repair.
         // Only when it actually changed the project, so a no-op repair doesn't add

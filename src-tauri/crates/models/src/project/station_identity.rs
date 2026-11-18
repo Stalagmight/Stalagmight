@@ -46,22 +46,52 @@ impl IdentityHeal {
     }
 }
 
+/// FNV-1a, for the per-pass maps below: their keys are short uuid strings and
+/// small integers, never attacker-chosen in a way that matters (a crafted file
+/// can only slow its own open), and the default SipHash dominated the
+/// no-change pass that runs after every command.
+#[derive(Default)]
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = if self.0 == 0 {
+            0xcbf2_9ce4_8422_2325
+        } else {
+            self.0
+        };
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+}
+
+type FastHash = std::hash::BuildHasherDefault<Fnv>;
+type FastMap<K, V> = HashMap<K, V, FastHash>;
+type FastSet<K> = HashSet<K, FastHash>;
+
 /// Resolves stored keys against the current shots in O(1), without
 /// allocating, for the whole-project passes below (`Project::resolve_key`
 /// clones the uuid on its cache lookup).
 struct KeyResolver<'a> {
     /// `(line, shot uuid)` -> the station after that shot. First occurrence
     /// wins, as in `resolve_key`.
-    after: HashMap<(LineId, &'a str), u32>,
+    after: FastMap<(LineId, &'a str), u32>,
     /// Shot count per line.
-    shots: HashMap<LineId, u32>,
+    shots: FastMap<LineId, u32>,
 }
 
 impl<'a> KeyResolver<'a> {
     fn new(lines: &'a [crate::Line]) -> Self {
         let total: usize = lines.iter().map(|l| l.shots.len()).sum();
-        let mut after = HashMap::with_capacity(total);
-        let mut shots = HashMap::with_capacity(lines.len());
+        let mut after = FastMap::with_capacity_and_hasher(total, FastHash::default());
+        let mut shots = FastMap::with_capacity_and_hasher(lines.len(), FastHash::default());
         for line in lines {
             shots.insert(line.id, line.shots.len() as u32);
             for (i, shot) in line.shots.iter().enumerate() {
@@ -182,10 +212,20 @@ impl Project {
             line_names: self.ensure_line_names(),
             ..IdentityHeal::default()
         };
-        if !self.station_ids_settled() {
+        // The common case - nothing missing - is decided by one resolver
+        // built once for both maps.
+        let (ids_settled, names_settled) = {
+            let resolver = KeyResolver::new(&self.lines);
+            let keyable = keyable_stations(&self.lines);
+            (
+                self.station_ids_settled(&resolver, keyable),
+                self.station_names_settled(&resolver, keyable),
+            )
+        };
+        if !ids_settled {
             self.settle_station_ids(&mut heal);
         }
-        if !self.station_names_settled() {
+        if !names_settled {
             self.settle_station_names(&mut heal);
         }
         if !heal.is_empty() {
@@ -242,12 +282,12 @@ impl Project {
 
     /// Every station keyed canonically with an id, ids unique, and
     /// `next_station_id` above them all.
-    fn station_ids_settled(&self) -> bool {
-        if self.station_ids.len() != keyable_stations(&self.lines) {
+    fn station_ids_settled(&self, resolver: &KeyResolver<'_>, keyable: usize) -> bool {
+        if self.station_ids.len() != keyable {
             return false;
         }
-        let resolver = KeyResolver::new(&self.lines);
-        let mut seen: HashSet<StationId> = HashSet::with_capacity(self.station_ids.len());
+        let mut seen: FastSet<StationId> =
+            FastSet::with_capacity_and_hasher(self.station_ids.len(), FastHash::default());
         self.station_ids.iter().all(|(key, id)| {
             matches!(resolver.resolve(key), Some((_, true)))
                 && *id < self.next_station_id
@@ -288,10 +328,10 @@ impl Project {
 
     /// Every station named under its canonical key, no name blank, names
     /// unique within each line. Keys that do not resolve are ignored.
-    fn station_names_settled(&self) -> bool {
-        let resolver = KeyResolver::new(&self.lines);
+    fn station_names_settled(&self, resolver: &KeyResolver<'_>, keyable: usize) -> bool {
         let mut resolving = 0;
-        let mut unique: HashSet<(LineId, &str)> = HashSet::with_capacity(self.station_names.len());
+        let mut unique: FastSet<(LineId, &str)> =
+            FastSet::with_capacity_and_hasher(self.station_names.len(), FastHash::default());
         for (key, name) in &self.station_names {
             match resolver.resolve(key) {
                 None => {}
@@ -303,7 +343,7 @@ impl Project {
                 Some(_) => return false,
             }
         }
-        resolving == keyable_stations(&self.lines)
+        resolving == keyable
     }
 
     fn settle_station_names(&mut self, heal: &mut IdentityHeal) {

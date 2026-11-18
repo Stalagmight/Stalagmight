@@ -405,3 +405,24 @@ fn snapshots_carry_ids_and_the_counter() {
     assert!(old.station_ids.is_empty());
     assert_eq!(old.next_station_id, 0);
 }
+
+/// The epilogue runs after every command, so its no-change pass must stay
+/// cheap on the largest surveys (~89k stations): a scan, no allocation per
+/// station. Prints the timing; asserts only a generous bound.
+#[test]
+#[ignore = "timing probe; run with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe prints what it measures")]
+fn the_no_change_pass_is_cheap_on_a_large_project() {
+    let mut project = Project::new("Large".to_string(), None);
+    for _ in 0..14_000 {
+        add(&mut project, None, 5);
+    }
+    project.ensure_station_identities();
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        assert!(project.ensure_station_identities().is_empty());
+    }
+    let per_pass = start.elapsed() / 10;
+    eprintln!("no-change pass over 84k stations: {per_pass:?}");
+    assert!(per_pass < std::time::Duration::from_millis(500));
+}
