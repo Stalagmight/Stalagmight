@@ -246,13 +246,44 @@ fn ids_leave_every_table_an_outside_reader_reads_unchanged() {
     assert!(dump(plain, "station_ids", &[]).is_empty());
 }
 
-/// `page number -> owning table or index`, from SQLite's `dbstat`.
-fn page_owners(db: &Database) -> BTreeMap<i64, String> {
-    let mut stmt = db.conn.prepare("SELECT pageno, name FROM dbstat").unwrap();
-    let rows = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+/// `page number -> owning table or index`, found by walking each b-tree in
+/// `sqlite_schema` down from its root page. Not `dbstat`: shipped and CI
+/// builds compile SQLite without it (`LIBSQLITE3_FLAGS`, #608). Overflow and
+/// free pages are not walked, so they compare as unowned pages.
+fn page_owners(db: &Database, bytes: &[u8], page_size: usize) -> BTreeMap<u32, String> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT name, rootpage FROM sqlite_schema WHERE rootpage > 0")
         .unwrap();
-    rows.map(Result::unwrap).collect()
+    let mut roots: Vec<(String, u32)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    roots.push(("sqlite_schema".to_string(), 1));
+    let be_u16 = |at: usize| usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+    let be_u32 = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+    let mut owners = BTreeMap::new();
+    for (name, root) in roots {
+        let mut pending = vec![root];
+        while let Some(number) = pending.pop() {
+            owners.insert(number, name.clone());
+            let start = (usize::try_from(number).unwrap() - 1) * page_size;
+            // Page 1 starts with the 100-byte file header.
+            let header = start + if number == 1 { 100 } else { 0 };
+            // 0x02 and 0x05 are interior (index, table) pages: each cell
+            // starts with a child page number, and the header holds the
+            // rightmost one. Leaves have no children.
+            if !matches!(bytes[header], 0x02 | 0x05) {
+                continue;
+            }
+            pending.push(be_u32(header + 8));
+            for cell in 0..be_u16(header + 3) {
+                pending.push(be_u32(start + be_u16(header + 12 + 2 * cell)));
+            }
+        }
+    }
+    owners
 }
 
 /// The station side tables are filled from `HashMap`s, whose order changes on
@@ -342,25 +373,30 @@ fn a_resave_with_no_edit_writes_the_same_pages() {
         );
     }
 
-    let owners = page_owners(&a);
-    assert_eq!(owners, page_owners(&b), "the two files lay out differently");
     let (bytes_a, bytes_b) = (
         std::fs::read(&first).unwrap(),
         std::fs::read(&second).unwrap(),
     );
+    assert_eq!(bytes_a.len(), bytes_b.len(), "the files differ in size");
     let page_size: i64 = a
         .conn
         .query_row("PRAGMA page_size", [], |row| row.get(0))
         .unwrap();
-    let page = |bytes: &[u8], number: i64| -> Vec<u8> {
-        let start = usize::try_from((number - 1) * page_size).unwrap();
-        bytes[start..start + usize::try_from(page_size).unwrap()].to_vec()
-    };
-    let changed: Vec<&str> = owners
-        .iter()
-        .filter(|(_, owner)| owner.as_str() != "sections")
-        .filter(|(&number, _)| page(&bytes_a, number) != page(&bytes_b, number))
-        .map(|(_, owner)| owner.as_str())
+    let page_size = usize::try_from(page_size).unwrap();
+    let owners = page_owners(&a, &bytes_a, page_size);
+    assert_eq!(
+        owners,
+        page_owners(&b, &bytes_b, page_size),
+        "the two files lay out differently"
+    );
+    let changed: Vec<String> = bytes_a
+        .chunks(page_size)
+        .zip(bytes_b.chunks(page_size))
+        .zip(1_u32..)
+        .filter(|((page_a, page_b), _)| page_a != page_b)
+        .map(|(_, number)| owners.get(&number).map_or("unowned", String::as_str))
+        .filter(|owner| *owner != "sections")
+        .map(str::to_string)
         .collect();
     assert!(
         changed.is_empty(),
