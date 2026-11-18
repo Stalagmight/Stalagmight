@@ -264,6 +264,53 @@ pub struct CombinePlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub moved_with_joined_station: Option<CombineJoinedMove>,
+    /// The stations the combine renames with this line kept (their names
+    /// collide, or the kept line continues an earlier lettered combine), for
+    /// the dialog to say so before the user confirms. Absent when no station
+    /// is renamed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub station_renames: Option<CombineStationRenames>,
+}
+
+/// Why a combine renames stations (`station_naming::plan_combine_prefixes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CombineRenameReason {
+    /// A station name of the other line (its join station left out) is also
+    /// one of the kept line's.
+    Collision,
+    /// The kept line is lettered by an earlier combine (two or more letter
+    /// families) and the other line is not, so it takes the next letter.
+    Lettered,
+}
+
+/// How a combine renames one line's stations: how many, and the first and
+/// the last renamed station in the line's own station order, before and
+/// after (`0` -> `A0` .. `3` -> `A3`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CombineLineRenames {
+    pub count: u32,
+    pub first_from: String,
+    pub first_to: String,
+    pub last_from: String,
+    pub last_to: String,
+}
+
+/// The station renames a combine makes, for one choice of the kept line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CombineStationRenames {
+    pub reason: CombineRenameReason,
+    /// The kept line's renames; absent when it keeps its names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kept: Option<CombineLineRenames>,
+    /// The other line's renames; absent when it keeps its names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub other: Option<CombineLineRenames>,
+    /// The joined station's name after the combine.
+    pub join_name: String,
 }
 
 /// Whether two lines can be combined, and where. Read-only: answered by

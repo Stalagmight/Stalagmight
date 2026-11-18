@@ -932,6 +932,8 @@ impl Project {
                 }
                 _ => None,
             },
+            // Filled by the candidate, which knows both join stations.
+            station_renames: None,
         }
     }
 

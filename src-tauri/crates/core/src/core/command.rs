@@ -173,10 +173,13 @@ pub enum Command {
         station_ref: StationRef,
         comment: Option<String>,
     },
-    /// Rename a station. The name is trimmed and must be non-empty and
-    /// unique within the station's line
-    /// ([`crate::models::Project::validate_station_name`]). Metadata only: no
-    /// geometry, no references. Undone by the inverse rename.
+    /// Rename a station. The name is trimmed and must be non-empty, free of
+    /// control and invisible formatting characters, and unique within the
+    /// station's line ([`crate::models::Project::validate_station_name`]).
+    /// Metadata only: no geometry, no references. Undone by the inverse
+    /// rename. The name the station already has (after trimming) succeeds as
+    /// a no-op with no undo entry and no dirty flag (`execute()` returns
+    /// before its epilogue, as for a reverse of a shot-less line).
     SetStationName {
         station_ref: StationRef,
         name: String,

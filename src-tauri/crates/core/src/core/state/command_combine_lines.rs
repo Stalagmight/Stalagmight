@@ -109,6 +109,13 @@ impl AppState {
             if let Some(reason) = project.combine_refusal(kept, other, options.join) {
                 return CommandResult::failure(reason);
             }
+            // The combined line's name replaces both lines' names: refused
+            // like a rename when empty or a third line's.
+            if let Err(reason) =
+                project.validate_replacement_line_names(&[options.name.as_str()], &[kept, other])
+            {
+                return CommandResult::failure(reason);
+            }
             // A heal, before the pins and the snapshot below: shots the two
             // lines both claim get their own identity first, so every pin,
             // the held component gauge and the undo step name each shot by the

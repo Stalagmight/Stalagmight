@@ -171,25 +171,33 @@ pub fn family_letter(name: &str) -> Option<char> {
     chars.next().filter(char::is_ascii_digit).map(|_| first)
 }
 
-/// Whether every name of a line is lettered (see [`family_letter`]). A line
-/// with no names is not.
-pub fn is_lettered<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
-    let mut any = false;
-    for name in names {
-        if family_letter(name).is_none() {
-            return false;
-        }
-        any = true;
-    }
-    any
+/// Why a Combine Lines renames stations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombinePrefixReason {
+    /// A name of the other line (its join station left out) is also a name
+    /// of the kept line.
+    Collision,
+    /// The kept line is the product of an earlier lettered combine (two or
+    /// more letter families) and the other line has no letter family, so it
+    /// continues the scheme.
+    Lettered,
 }
 
 /// The renames a Combine Lines applies to the two lines' station names, old
-/// name -> new name, per line. Empty maps when nothing is prefixed.
+/// name -> new name, per line. Empty maps (and no reason) when nothing is
+/// prefixed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CombinePrefixes {
     pub kept: HashMap<String, String>,
     pub other: HashMap<String, String>,
+    pub reason: Option<CombinePrefixReason>,
+}
+
+impl CombinePrefixes {
+    /// Whether the plan renames nothing.
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty() && self.other.is_empty()
+    }
 }
 
 /// The first capital letter not in `used`.
@@ -197,22 +205,35 @@ fn free_letter(used: &BTreeSet<char>) -> Option<char> {
     ('A'..='Z').find(|c| !used.contains(c))
 }
 
+/// The letter families among `names` (see [`family_letter`]).
+pub fn letter_families<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<char> {
+    names.into_iter().filter_map(family_letter).collect()
+}
+
 /// Decide the Combine Lines prefixing (decision 5 of the line-identity
-/// contract).
+/// contract, as refined after review; documented in docs/SPEC.md 4.2).
 ///
-/// The two lines are prefixed when a name of the other line, its join station
-/// left out (the join keeps the kept line's name), is also a name of the kept
-/// line, or when either line is already lettered (a later combine with a
-/// lettered line keeps the scheme). Then:
-/// - the kept line keeps its letters when it is lettered; otherwise every name
-///   gets the first capital no name of either line uses as a family letter
-///   (`3` -> `A3`);
-/// - the other line, when lettered, keeps every family whose letter the kept
-///   line does not use and re-letters the others to the next free capitals;
-///   otherwise every name gets the next free capital (`0` -> `B0`).
+/// The lines are prefixed only when
+/// - a name of the other line, its join station left out (the join keeps the
+///   kept line's name), is also a name of the kept line - a real collision;
+///   or
+/// - the kept line has two or more letter families (it is the product of an
+///   earlier lettered combine) and the other line has none, so the other
+///   line continues the scheme (`A0..A3 B1 B2` + `0 1` -> `.. C0 C1`).
 ///
-/// With all 26 letters in use nothing is prefixed; the caller's final
-/// uniquify still makes every name unique.
+/// A line with no collision is never renamed: kept `0..200` + other
+/// `A1..A9`, or a line split from `E0..E10` and combined back, keep their
+/// names. When prefixing:
+/// - a line that already has letter families keeps its names, except that
+///   the other line's families whose letter the kept line uses are
+///   re-lettered to the next free capital (the kept line goes first);
+/// - a line with no letter family gets the first free capital no name of
+///   either line uses - the kept line first, then the other (`3` -> `A3`,
+///   `0` -> `B0`).
+///
+/// The caller then makes every name unique (a lettered line may still hold a
+/// plain name that collides). With all 26 letters in use nothing is
+/// prefixed; the uniquify still makes every name unique.
 pub fn plan_combine_prefixes(
     kept: &[&str],
     other: &[&str],
@@ -223,21 +244,22 @@ pub fn plan_combine_prefixes(
         .iter()
         .filter(|name| Some(**name) != other_join)
         .any(|name| kept_set.contains(name));
-    let kept_lettered = is_lettered(kept.iter().copied());
-    let other_lettered = is_lettered(other.iter().copied());
-    if !(collides || kept_lettered || other_lettered) {
-        return CombinePrefixes::default();
-    }
-    let mut used: BTreeSet<char> = kept
-        .iter()
-        .chain(other)
-        .filter_map(|name| family_letter(name))
-        .collect();
-
-    let mut plan = CombinePrefixes::default();
-    let kept_letters: BTreeSet<char> = if kept_lettered {
-        kept.iter().filter_map(|name| family_letter(name)).collect()
+    let kept_families = letter_families(kept.iter().copied());
+    let other_families = letter_families(other.iter().copied());
+    let reason = if collides {
+        CombinePrefixReason::Collision
+    } else if kept_families.len() >= 2 && other_families.is_empty() {
+        CombinePrefixReason::Lettered
     } else {
+        return CombinePrefixes::default();
+    };
+    let mut used: BTreeSet<char> = kept_families.union(&other_families).copied().collect();
+
+    let mut plan = CombinePrefixes {
+        reason: Some(reason),
+        ..CombinePrefixes::default()
+    };
+    let kept_letters: BTreeSet<char> = if kept_families.is_empty() {
         let Some(letter) = free_letter(&used) else {
             return CombinePrefixes::default();
         };
@@ -247,15 +269,21 @@ pub fn plan_combine_prefixes(
                 .insert((*name).to_string(), format!("{letter}{name}"));
         }
         BTreeSet::from([letter])
+    } else {
+        kept_families
     };
 
-    if other_lettered {
-        let families: BTreeSet<char> = other
-            .iter()
-            .filter_map(|name| family_letter(name))
-            .collect();
+    if other_families.is_empty() {
+        let Some(letter) = free_letter(&used) else {
+            return CombinePrefixes::default();
+        };
+        for name in other {
+            plan.other
+                .insert((*name).to_string(), format!("{letter}{name}"));
+        }
+    } else {
         let mut relettered: HashMap<char, char> = HashMap::new();
-        for family in families.iter().filter(|f| kept_letters.contains(f)) {
+        for family in other_families.iter().filter(|f| kept_letters.contains(f)) {
             let Some(letter) = free_letter(&used) else {
                 return CombinePrefixes::default();
             };
@@ -272,16 +300,40 @@ pub fn plan_combine_prefixes(
                     .insert((*name).to_string(), format!("{letter}{rest}"));
             }
         }
-    } else {
-        let Some(letter) = free_letter(&used) else {
-            return CombinePrefixes::default();
-        };
-        for name in other {
-            plan.other
-                .insert((*name).to_string(), format!("{letter}{name}"));
-        }
+    }
+    if plan.is_empty() {
+        return CombinePrefixes::default();
     }
     plan
+}
+
+/// Whether `c` may not appear in a name the user types for a station, a line
+/// or a Section: a control character (Unicode `Cc`: tab, newline, NUL, ...)
+/// or an invisible formatting character that can make one name look like
+/// another - the zero-width space and (non-)joiners (U+200B..U+200D), the
+/// left-to-right and right-to-left marks (U+200E, U+200F), the bidi
+/// embeddings and overrides (U+202A..U+202E), the bidi isolates
+/// (U+2066..U+2069) and the byte-order mark (U+FEFF). Visible separators
+/// such as ` / ` stay allowed.
+pub fn is_forbidden_name_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+
+/// The refusal for a user-typed `what` name (`"station"`, `"line"`,
+/// `"section"`) that holds a character [`is_forbidden_name_char`] rejects,
+/// naming the first one by its code point; `None` when the name is clean.
+pub fn name_characters_refusal(what: &str, name: &str) -> Option<String> {
+    name.chars().find(|c| is_forbidden_name_char(*c)).map(|c| {
+        format!(
+            "A {what} name cannot contain control or invisible formatting characters \
+                 (U+{:04X})",
+            u32::from(c)
+        )
+    })
 }
 
 /// Make the names of one line unique, in station order: the first holder of a
@@ -290,6 +342,18 @@ pub fn plan_combine_prefixes(
 /// suffixed when that is taken). `names[i]` is station `i`'s name. Returns
 /// how many names were seeded and how many renamed.
 pub fn settle_line_station_names(names: &mut [Option<String>]) -> (usize, usize) {
+    // Names are stored and compared trimmed: `5 ` is `5`, and a blank one is
+    // missing. A trimmed name counts as renamed.
+    let mut trimmed = 0;
+    for slot in names.iter_mut() {
+        if let Some(name) = slot {
+            if name.trim().len() != name.len() {
+                let bare = name.trim();
+                *slot = (!bare.is_empty()).then(|| bare.to_string());
+                trimmed += 1;
+            }
+        }
+    }
     // Every name present, so a seed or a rename never takes a name a later
     // station already holds.
     let mut taken: HashSet<String> = names.iter().flatten().cloned().collect();
@@ -319,7 +383,7 @@ pub fn settle_line_station_names(names: &mut [Option<String>]) -> (usize, usize)
             }
         }
     }
-    (seeded, renamed)
+    (seeded, renamed + trimmed)
 }
 
 /// Fill the gaps of one line whose stations are partly named (an import whose

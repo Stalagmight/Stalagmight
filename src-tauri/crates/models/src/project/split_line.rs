@@ -150,6 +150,9 @@ impl Project {
         // to both), anchored by the first half, while the station the
         // adjustment held went to the second: hold it there.
         self.restore_component_gauges(&component_gauges);
+        // A name another line holds (the command refuses one; a direct
+        // caller may not) renames a half, never that other line.
+        self.dedupe_touched_line_names(&[line_id, second_id]);
         Ok(second_id)
     }
 

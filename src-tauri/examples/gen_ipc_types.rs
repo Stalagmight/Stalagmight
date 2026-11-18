@@ -53,11 +53,12 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::{
     AdjustmentFailureReport, AdjustmentReport, AlongLineResult, AzimuthReference, ClosurePair,
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
-    CombineJoinKind, CombineJoinedMove, CombineLinesOptions, CombinePick, CombinePlan,
-    CombineRemovedClosure, CombineRemovedKind, CombineReplacedClosure, CombineReplacedKind,
-    ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
-    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
-    DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
+    CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
+    CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
+    CombineReplacedClosure, CombineReplacedKind, CombineStationRenames, ConnectivityResult,
+    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
+    DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan,
+    DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
     GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
     Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
     LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
@@ -255,6 +256,9 @@ fn main() {
     export::<CombineJoinEnds>(&out_dir);
     export::<CombineJoinKind>(&out_dir);
     export::<CombinePlan>(&out_dir);
+    export::<CombineRenameReason>(&out_dir);
+    export::<CombineLineRenames>(&out_dir);
+    export::<CombineStationRenames>(&out_dir);
     export::<CombineJoinedMove>(&out_dir);
     export::<CombineRemovedClosure>(&out_dir);
     export::<CombineRemovedKind>(&out_dir);
@@ -583,6 +587,9 @@ fn main() {
         "CombineJoinEnds",
         "CombineJoinKind",
         "CombinePlan",
+        "CombineRenameReason",
+        "CombineLineRenames",
+        "CombineStationRenames",
         "CombineJoinedMove",
         "CombineRemovedClosure",
         "CombineRemovedKind",

@@ -18,7 +18,8 @@ use crate::{LineId, ShotId, StationAnchor, StationId, StationKey, StationRef};
 
 use super::station_naming::{
     dedupe_line_name, fill_line_station_names, name_after_end, name_before_start,
-    name_with_free_letter, plan_combine_prefixes, seed_line_name, settle_line_station_names,
+    name_characters_refusal, name_with_free_letter, plan_combine_prefixes, seed_line_name,
+    settle_line_station_names, CombinePrefixReason, CombinePrefixes,
 };
 use super::{station_key_order, Project};
 
@@ -246,12 +247,25 @@ impl Project {
     pub fn ensure_line_names(&mut self) -> usize {
         let named = |name: &Option<String>| name.as_ref().is_some_and(|n| !n.trim().is_empty());
         let mut seen: HashSet<&str> = HashSet::with_capacity(self.lines.len());
-        let settled = self
-            .lines
-            .iter()
-            .all(|line| named(&line.name) && seen.insert(line.name.as_deref().unwrap_or_default()));
+        let settled = self.lines.iter().all(|line| {
+            line.name
+                .as_deref()
+                .is_some_and(|n| !n.is_empty() && n.trim().len() == n.len() && seen.insert(n))
+        });
         if settled {
             return 0;
+        }
+        // Names are stored and compared trimmed (`Main ` is `Main`), so the
+        // repeats below are found on the trimmed key; a blank one is unnamed.
+        let mut changed = 0;
+        for line in &mut self.lines {
+            if let Some(name) = &line.name {
+                if name.trim().len() != name.len() {
+                    let bare = name.trim();
+                    line.name = (!bare.is_empty()).then(|| bare.to_string());
+                    changed += 1;
+                }
+            }
         }
         let mut taken: HashSet<String> = self
             .lines
@@ -260,7 +274,6 @@ impl Project {
             .filter_map(|line| line.name.clone())
             .collect();
         let mut kept: HashSet<String> = HashSet::with_capacity(self.lines.len());
-        let mut changed = 0;
         // Repeats first, in line order, then the seeds, so a seed never takes
         // a name a later repeat would have been renamed to.
         for line in &mut self.lines {
@@ -332,8 +345,9 @@ impl Project {
         self.station_ids = ids;
     }
 
-    /// Every station named under its canonical key, no name blank, names
-    /// unique within each line. Keys that do not resolve are ignored.
+    /// Every station named under its canonical key, no name blank or padded
+    /// with whitespace, names unique within each line. Keys that do not
+    /// resolve are ignored.
     fn station_names_settled(&self, resolver: &KeyResolver<'_>, keyable: usize) -> bool {
         let mut resolving = 0;
         let mut unique: FastSet<(LineId, &str)> =
@@ -342,7 +356,9 @@ impl Project {
             match resolver.resolve(key) {
                 None => {}
                 Some((_, true))
-                    if !name.trim().is_empty() && unique.insert((key.line_id, name)) =>
+                    if !name.is_empty()
+                        && name.trim().len() == name.len()
+                        && unique.insert((key.line_id, name)) =>
                 {
                     resolving += 1;
                 }
@@ -626,16 +642,15 @@ impl Project {
         }
     }
 
-    /// Combine Lines' prefixing (`station_naming::plan_combine_prefixes`):
-    /// rename the station names of `kept` and `other` in place, before the
-    /// join, when the other line's names (its join station `other_join` left
-    /// out) collide with the kept line's or either line is lettered.
-    pub(super) fn prefix_combined_station_names(
-        &mut self,
+    /// The Combine Lines prefixing plan (`station_naming::plan_combine_prefixes`)
+    /// for combining `other` into `kept`, `other_join` being the other line's
+    /// join station (its name is retired, so it collides with nothing).
+    fn combine_prefix_plan(
+        &self,
         kept: LineId,
         other: LineId,
         other_join: StationRef,
-    ) {
+    ) -> CombinePrefixes {
         let kept_names: Vec<String> = self
             .line_station_names(kept)
             .into_iter()
@@ -647,12 +662,26 @@ impl Project {
             .flatten()
             .collect();
         let join_name = self.station_name_at(other_join).map(str::to_string);
-        let plan = plan_combine_prefixes(
+        plan_combine_prefixes(
             &kept_names.iter().map(String::as_str).collect::<Vec<_>>(),
             &other_names.iter().map(String::as_str).collect::<Vec<_>>(),
             join_name.as_deref(),
-        );
-        if plan.kept.is_empty() && plan.other.is_empty() {
+        )
+    }
+
+    /// Combine Lines' prefixing: rename the station names of `kept` and
+    /// `other` in place, before the join, when the other line's names (its
+    /// join station `other_join` left out) collide with the kept line's, or
+    /// the kept line continues an earlier lettered combine
+    /// ([`Self::combine_prefix_plan`]).
+    pub(super) fn prefix_combined_station_names(
+        &mut self,
+        kept: LineId,
+        other: LineId,
+        other_join: StationRef,
+    ) {
+        let plan = self.combine_prefix_plan(kept, other, other_join);
+        if plan.is_empty() {
             return;
         }
         for (key, name) in &mut self.station_names {
@@ -667,6 +696,57 @@ impl Project {
                 name.clone_from(renamed);
             }
         }
+    }
+
+    /// What combining `other` into `kept` (joined at `kept_join` and
+    /// `other_join`) will rename, for the Combine Lines dialog to say before
+    /// the user confirms: `None` when no station is renamed. Each line's
+    /// renames are summarized by the first and the last renamed station in
+    /// its own station order, and `join_name` is the joined station's name
+    /// after the combine (the kept join station's, prefixed when it is).
+    pub fn combine_station_renames(
+        &self,
+        kept: LineId,
+        other: LineId,
+        kept_join: StationRef,
+        other_join: StationRef,
+    ) -> Option<crate::CombineStationRenames> {
+        let plan = self.combine_prefix_plan(kept, other, other_join);
+        let reason = match plan.reason? {
+            CombinePrefixReason::Collision => crate::CombineRenameReason::Collision,
+            CombinePrefixReason::Lettered => crate::CombineRenameReason::Lettered,
+        };
+        let summarize = |line: LineId,
+                         renames: &HashMap<String, String>|
+         -> Option<crate::CombineLineRenames> {
+            let changes: Vec<(String, String)> = self
+                .line_station_names(line)
+                .into_iter()
+                .flatten()
+                .filter_map(|old| renames.get(&old).map(|new| (old, new.clone())))
+                .collect();
+            let (first, last) = (changes.first()?, changes.last()?);
+            Some(crate::CombineLineRenames {
+                count: u32::try_from(changes.len()).unwrap_or(u32::MAX),
+                first_from: first.0.clone(),
+                first_to: first.1.clone(),
+                last_from: last.0.clone(),
+                last_to: last.1.clone(),
+            })
+        };
+        let kept_renames = summarize(kept, &plan.kept);
+        let other_renames = summarize(other, &plan.other);
+        if kept_renames.is_none() && other_renames.is_none() {
+            return None;
+        }
+        let join = self.station_name_at(kept_join)?.to_string();
+        let join_name = plan.kept.get(&join).cloned().unwrap_or(join);
+        Some(crate::CombineStationRenames {
+            reason,
+            kept: kept_renames,
+            other: other_renames,
+            join_name,
+        })
     }
 
     // === User edits ===
@@ -684,6 +764,9 @@ impl Project {
         let name = name.trim();
         if name.is_empty() {
             return Err("A station name cannot be empty".to_string());
+        }
+        if let Some(refusal) = name_characters_refusal("station", name) {
+            return Err(refusal);
         }
         let names = self.line_station_names(station.line_id);
         let clash = names
@@ -719,17 +802,98 @@ impl Project {
     /// name of another line (`except` is the line being renamed). Returns
     /// the trimmed name.
     pub fn validate_line_name(&self, name: &str, except: Option<LineId>) -> Result<String, String> {
+        let except: &[LineId] = match &except {
+            Some(id) => std::slice::from_ref(id),
+            None => &[],
+        };
+        self.validate_line_name_replacing(name, except)
+    }
+
+    /// [`Self::validate_line_name`] for a name that replaces the lines
+    /// `replacing` (a Split's halves replace the line split, a Combine's line
+    /// replaces both lines): their names are no collision.
+    pub fn validate_line_name_replacing(
+        &self,
+        name: &str,
+        replacing: &[LineId],
+    ) -> Result<String, String> {
         let name = name.trim();
         if name.is_empty() {
             return Err("A line name cannot be empty".to_string());
         }
+        if let Some(refusal) = name_characters_refusal("line", name) {
+            return Err(refusal);
+        }
         let taken = self.lines.iter().any(|line| {
-            Some(line.id) != except && line.name.as_deref().map(str::trim) == Some(name)
+            !replacing.contains(&line.id) && line.name.as_deref().map(str::trim) == Some(name)
         });
         if taken {
             return Err(format!("A line named \"{name}\" already exists"));
         }
         Ok(name.to_string())
+    }
+
+    /// The names of the lines an operation makes in place of `replacing`
+    /// (a Split's two halves, a Combine's one line), each validated as
+    /// [`Self::validate_line_name_replacing`] and distinct from the ones
+    /// before it: the same refusals as a rename. Returns them trimmed.
+    pub fn validate_replacement_line_names(
+        &self,
+        names: &[&str],
+        replacing: &[LineId],
+    ) -> Result<Vec<String>, String> {
+        let mut out: Vec<String> = Vec::with_capacity(names.len());
+        for name in names {
+            let name = self.validate_line_name_replacing(name, replacing)?;
+            if out.contains(&name) {
+                return Err(format!("A line named \"{name}\" already exists"));
+            }
+            out.push(name);
+        }
+        Ok(out)
+    }
+
+    /// Make the names of the lines an operation just touched (`touched`: a
+    /// split's halves, a combined line) unique, renaming THEM rather than an
+    /// unrelated line: a touched line whose (trimmed) name another line
+    /// holds, or an earlier touched one, gets ` (2)`, ` (3)`, ...; an unnamed
+    /// one is left to the seeding rule. The backstop behind the validation of
+    /// a name the user typed, run before the normalization (which would
+    /// otherwise rename the later holder in line order, whichever it is).
+    /// Returns how many lines it renamed.
+    pub fn dedupe_touched_line_names(&mut self, touched: &[LineId]) -> usize {
+        let mut taken: HashSet<String> = self
+            .lines
+            .iter()
+            .filter(|line| !touched.contains(&line.id))
+            .filter_map(|line| line.name.as_deref())
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect();
+        let mut renamed = 0;
+        for id in touched {
+            let Some(line) = self.get_line_mut(*id) else {
+                continue;
+            };
+            let Some(name) = line
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+            else {
+                continue;
+            };
+            let name = name.to_string();
+            let fresh = if taken.contains(&name) {
+                renamed += 1;
+                dedupe_line_name(&name, &|n| taken.contains(n))
+            } else {
+                name
+            };
+            taken.insert(fresh.clone());
+            line.name = Some(fresh);
+        }
+        renamed
     }
 
     /// Offset every Station ID, and `next_station_id`, by `by`. Add .stalx /

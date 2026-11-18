@@ -209,6 +209,12 @@ mod multi_datum_steps_fuzz;
 )]
 mod multi_datum_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod name_rules_tests;
+#[cfg(test)]
 mod open_undo_bugs_tests;
 #[cfg(test)]
 #[expect(

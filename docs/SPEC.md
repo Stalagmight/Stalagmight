@@ -482,39 +482,58 @@ A station or line that already has a valid name and id keeps them.
   starts the new line keeps the name (names are unique per line, not per
   project) and gets a **new** Station ID.
 
-**Combine Lines.** The joined line must keep its names unique. When a name of
-the other line (its join station aside - the joined station keeps the kept
-line's name and Station ID, the other join station's are retired) is also a
-name of the kept line, or when either line is already **lettered** (every name
-an ASCII capital directly followed by a digit, `A0`, `B12a`), both lines are
-prefixed:
+**Combine Lines.** The joined line must keep its names unique, and it renames
+stations only when it has to. The two lines are prefixed when
 
-- the kept line keeps its letters when it is lettered; otherwise every name
-  gets the first capital no name of either line uses as a family letter
-  (`3` -> `A3`);
-- the other line, when lettered, keeps every family whose letter the kept line
-  does not use and re-letters the others to the next free capitals; otherwise
-  every name gets the next free capital (`0` -> `B0`).
+- a name of the other line (its join station aside - the joined station keeps
+  the kept line's name and Station ID, the other join station's are retired)
+  is also a name of the kept line: a real **collision**; or
+- the kept line has two or more **letter families** (it is the product of an
+  earlier lettered combine; a letter family is the names starting with one
+  ASCII capital directly followed by a digit, `A0`, `A3`, `B12a`) and the other
+  line has none, so the other line continues the scheme.
+
+When they are prefixed:
+
+- a line that already has letter families keeps its names, except that the
+  other line's families whose letter the kept line uses are re-lettered to the
+  next free capital (the kept line goes first);
+- a line with no letter family gets the first capital neither line uses as a
+  family letter - the kept line first (`3` -> `A3`), then the other (`0` ->
+  `B0`).
 
 So kept `0 1 2 3` + other `0 1 2` joined at kept `3` = other `0` gives
 `A0 A1 A2 A3 B1 B2`, and a later combine of that line with `0 1` gives
-`A0 .. A3 B1 B2 C1`. Lines whose names do not collide and are not lettered keep
-every name (`0 1 2 3` + `3 4 5` joined at `3` gives `0 1 2 3 4 5`). A final pass
-letter-suffixes any repeat the prefixing could not prevent (all 26 letters in
-use).
+`A0 .. A3 B1 B2 C1`. Lines whose names do not collide keep every name: `0 1 2 3`
++ `3 4 5` joined at `3` gives `0 1 2 3 4 5`; kept `0 .. 200` + other `A1 .. A9`
+keeps both; a line imported as `E0 .. E10`, split at `E5` and combined back is
+`E0 .. E10` again. A final pass letter-suffixes any repeat the prefixing could
+not prevent (a plain name of a lettered line, or all 26 letters in use). The
+Combine Lines dialog says, for the line it shows as kept, which stations will
+be renamed ("Station names collide, so stations will be renamed: Main 0..3 ->
+A0..A3, Side 0..2 -> B0..B2") and names the joined station by its name after
+the combine.
 
 **User edits.** Renaming a station (`SetStationName`, undoable) trims the
 name and refuses an empty one or one another station of the line holds ("Line
-X already has a station named Y"). Renaming a line (Edit Line) or creating one
-from the UI refuses an empty name or one another line holds ("A line named X
-already exists"); automatic paths (imports, split and combine default names)
-de-duplicate instead. The dialogs, the data table and the Sections panel
-check the same rules inline before sending anything, and also refuse a name
-holding a control character or an invisible formatting character (the
-left-to-right / right-to-left marks, the bidi embeddings, overrides and
-isolates, the zero-width space and joiners, the BOM; `nameValidation.ts`),
-which can make a name read as something it is not. A name that only differs
-from the current one by surrounding spaces is no rename: nothing is sent.
+X already has a station named Y"). Renaming a station to the name it already
+has (after trimming) succeeds as a no-op: no undo entry, no unsaved-changes
+flag. Renaming a line (Edit Line) or creating one from the UI refuses an empty
+name or one another line holds ("A line named X already exists"); so do the
+names a user gives the halves of Split Line Here or a delete-and-split and the
+name of a combined line (the line or lines being replaced are no collision).
+Automatic paths (imports, default names) de-duplicate instead, renaming the
+line the operation made, never an unrelated one. The backend and the dialogs,
+the data table and the Sections panel (inline, before sending anything) also
+refuse a station, line or Section name holding a control character or an
+invisible formatting character (the left-to-right / right-to-left marks, the
+bidi embeddings, overrides and isolates, the zero-width space and joiners, the
+BOM; `name_characters_refusal` in the backend, `nameValidation.ts` in the
+UI), which can make a name read as something it is not; visible separators
+such as ` / ` are fine. Names are stored trimmed, and compared trimmed:
+`Main ` is `Main`, and a file holding both is normalized to `Main` and
+`Main (2)`. A name that only differs from the current one by surrounding
+spaces is no rename: nothing is sent.
 
 **Labels.** The "Station IDs" map and image-export label draws the Station ID;
 the "Station names" label draws the name (every station has one). The two are

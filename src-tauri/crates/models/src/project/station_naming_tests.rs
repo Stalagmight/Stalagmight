@@ -1,11 +1,12 @@
 //! The naming rules (`station_naming`) as pure functions.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::station_naming::{
-    dedupe_line_name, family_letter, fill_line_station_names, is_lettered, name_after_end,
+    dedupe_line_name, family_letter, fill_line_station_names, letter_families, name_after_end,
     name_before_start, name_with_free_letter, next_free_integer, plan_combine_prefixes,
-    seed_line_name, settle_line_station_names, trailing_number,
+    seed_line_name, settle_line_station_names, trailing_number, CombinePrefixReason,
+    CombinePrefixes,
 };
 
 fn set<'a>(names: &'a [&'a str]) -> HashSet<&'a str> {
@@ -119,9 +120,11 @@ fn a_lettered_name_is_a_capital_then_a_digit() {
     assert_eq!(family_letter("B12a"), Some('B'));
     assert_eq!(family_letter("a3"), None);
     assert_eq!(family_letter("AB"), None);
-    assert!(is_lettered(["A0", "B1"]));
-    assert!(!is_lettered(["A0", "1"]));
-    assert!(!is_lettered(Vec::<&str>::new()));
+    assert_eq!(
+        letter_families(["A0", "B1", "A2", "7"]),
+        BTreeSet::from(['A', 'B'])
+    );
+    assert!(letter_families(["0", "1"]).is_empty());
 }
 
 #[test]
@@ -157,8 +160,49 @@ fn lines_that_do_not_collide_are_left_alone() {
 
 #[test]
 fn a_lettered_other_line_reletters_only_the_families_it_shares() {
-    let plan = plan_combine_prefixes(&["A0", "A1"], &["A5", "B6", "B7"], Some("A5"));
+    // `A1` collides; the kept line keeps its letters, the other line's
+    // clashing family A moves to the next free letter, B is left alone.
+    let plan = plan_combine_prefixes(&["A0", "A1"], &["A9", "A1", "B6", "B7"], Some("A9"));
+    assert_eq!(plan.reason, Some(CombinePrefixReason::Collision));
     assert!(plan.kept.is_empty());
-    assert_eq!(plan.other["A5"], "C5");
+    assert_eq!(plan.other["A9"], "C9");
+    assert_eq!(plan.other["A1"], "C1");
     assert!(!plan.other.contains_key("B6"));
+}
+
+#[test]
+fn an_unlettered_kept_line_and_a_lettered_other_without_a_collision_keep_their_names() {
+    // Review counter-example 1: kept `0..200` + other `A1..A9`.
+    let kept: Vec<String> = (0..=200).map(|i| i.to_string()).collect();
+    let kept: Vec<&str> = kept.iter().map(String::as_str).collect();
+    let other: Vec<String> = (1..=9).map(|i| format!("A{i}")).collect();
+    let other: Vec<&str> = other.iter().map(String::as_str).collect();
+    let plan = plan_combine_prefixes(&kept, &other, Some("A1"));
+    assert_eq!(plan, CombinePrefixes::default());
+}
+
+#[test]
+fn a_line_split_from_one_family_and_combined_back_keeps_its_names() {
+    // Review counter-example 2: an imported `E0..E10` split at E5 and
+    // combined back: the join's own name is retired, nothing collides.
+    let kept = ["E0", "E1", "E2", "E3", "E4", "E5"];
+    let other = ["E5", "E6", "E7", "E8", "E9", "E10"];
+    let plan = plan_combine_prefixes(&kept, &other, Some("E5"));
+    assert_eq!(plan, CombinePrefixes::default());
+    // One letter family is not the product of an earlier lettered combine:
+    // an unlettered other line without a collision keeps its names too.
+    let plan = plan_combine_prefixes(&["A0", "A1", "A2"], &["0", "1"], Some("0"));
+    assert_eq!(plan, CombinePrefixes::default());
+}
+
+#[test]
+fn a_lettered_kept_line_with_a_plain_name_keeps_it_and_the_other_takes_a_free_letter() {
+    // A collision on a plain name of a lettered kept line: the kept line
+    // keeps every name (the caller's uniquify settles the rest), the
+    // unlettered other line takes the first free letter.
+    let plan = plan_combine_prefixes(&["A0", "A1", "7"], &["7", "8"], Some("8"));
+    assert_eq!(plan.reason, Some(CombinePrefixReason::Collision));
+    assert!(plan.kept.is_empty());
+    assert_eq!(plan.other["7"], "B7");
+    assert_eq!(plan.other["8"], "B8");
 }

@@ -545,7 +545,12 @@ impl Line {
         let shotless = data.shots.is_empty();
         let mut line = Self {
             id,
-            name: data.name,
+            // Line names are stored trimmed (`Main ` is `Main`); a blank one
+            // is no name, which the normalization seeds.
+            name: data
+                .name
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty()),
             legacy_surveyor: data.surveyor.filter(|_| shotless),
             legacy_date: data.date.filter(|_| shotless),
             color: data.color,
@@ -777,7 +782,12 @@ impl Line {
     /// Apply partial updates to this line
     pub fn apply_updates(&mut self, updates: &LineUpdates) {
         if let Some(v) = &updates.name {
-            self.name.clone_from(v);
+            // Stored trimmed, as `Line::new` stores it.
+            self.name = v
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
         }
         if self.shots.is_empty() {
             // No shot to carry them: the line keeps the legacy pair.

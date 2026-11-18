@@ -113,6 +113,22 @@ impl AppState {
         }
     }
 
+    /// Whether `cmd` is a `SetStationName` giving a station the name it
+    /// already holds, compared trimmed as the rename stores it.
+    fn is_unchanged_station_name(&self, cmd: &Command) -> bool {
+        let Command::SetStationName { station_ref, name } = cmd else {
+            return false;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.as_ref().is_some_and(|project| {
+            let name = name.trim();
+            !name.is_empty() && project.station_name_at(*station_ref) == Some(name)
+        })
+    }
+
     /// Whether this command is a reverse (or a batch of reverses) whose every named line has
     /// no shots - i.e. provably a no-op, so it must not consume the redo branch or dirty a
     /// remote project. A missing line counts as "nothing to change" for the same reason.
@@ -730,6 +746,17 @@ impl AppState {
             tracing::debug!(
                 command = %cmd.description(),
                 "Reverse of shot-less line(s) changes nothing; skipping undo, redo-clear and dirty flip"
+            );
+            return CommandResult::success();
+        }
+        // Renaming a station to the name it already has (after trimming, as
+        // the rename stores it) is the same kind of no-op: it succeeds with no
+        // undo entry, no redo-clear and no dirty flip, so the Edit Station
+        // dialog's Save with the name untouched leaves no history behind.
+        if self.is_unchanged_station_name(&cmd) {
+            tracing::debug!(
+                command = %cmd.description(),
+                "Station already has that name; skipping undo, redo-clear and dirty flip"
             );
             return CommandResult::success();
         }

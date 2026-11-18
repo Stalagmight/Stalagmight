@@ -47,9 +47,11 @@
 //! whose ends it moved apart are measured again off the final geometry.
 //!
 //! Station names are unique per line, so when a name of the other line
-//! (its join station aside) is also one of the kept line's, or either line is
-//! lettered already, both lines' names are letter-prefixed first (`A0 A1`,
-//! `B0 B1`; see `station_naming::plan_combine_prefixes` and docs/SPEC.md).
+//! (its join station aside) is also one of the kept line's, or the kept line
+//! continues an earlier lettered combine and the other line has no letter
+//! family, the lines' names are letter-prefixed first (`A0 A1`, `B0 B1`; see
+//! `station_naming::plan_combine_prefixes` and docs/SPEC.md). Lines whose
+//! names do not collide keep them.
 //!
 //! Credit: survey credit (surveyors, explorers, date) lives on every shot and
 //! travels with it, through the reverse too, so every shot keeps its own
@@ -300,6 +302,9 @@ impl Project {
             .collect();
         removed
             .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
+        // A name a third line holds renames the combined line, never that
+        // third line (the command refuses one; a direct caller may not).
+        self.dedupe_touched_line_names(&[kept]);
         self.touch();
         Ok(CombineOutcome {
             removed_across_one_shot: removed,
@@ -497,8 +502,9 @@ impl Project {
         };
         let gauge_capture = captured_gauge(source);
 
-        // Letter the two lines' station names when they collide (or either
-        // is lettered already), while each name is still on its own line.
+        // Letter the two lines' station names when they collide (or the kept
+        // line continues an earlier lettered combine), while each name is
+        // still on its own line.
         self.prefix_combined_station_names(kept, other, join_o);
         // Settle the join first (it touches keyed entries only, never the
         // structure), then resolve every stored key against the structure as
@@ -520,8 +526,9 @@ impl Project {
         if !append {
             line.shots.rotate_right(no as usize);
         }
-        // An empty name leaves the line unnamed, as it may have been.
-        line.name = Some(options.name.clone()).filter(|name| !name.trim().is_empty());
+        // Stored trimmed; an empty name leaves the line unnamed, as it may
+        // have been (the command refuses one; a direct caller may not).
+        line.name = Some(options.name.trim().to_string()).filter(|name| !name.is_empty());
         line.color.clone_from(&options.color);
         self.reindex_line_shot_uuids(kept);
         self.reindex_line_shot_uuids(other);

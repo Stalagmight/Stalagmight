@@ -25,6 +25,33 @@ pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<
 }
 
 impl AppState {
+    /// The two halves' names of a delete-and-split of `line_id`, trimmed, or
+    /// the refusal (`Project::validate_replacement_line_names`: empty, or
+    /// another line's, as a rename is refused). A missing line or project is
+    /// left for the command to report.
+    fn validate_split_names(
+        &self,
+        line_id: LineId,
+        name_a: &str,
+        name_b: &str,
+    ) -> Result<(String, String), CommandResult> {
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(project) = guard.as_ref() else {
+            return Ok((name_a.trim().to_string(), name_b.trim().to_string()));
+        };
+        match project.validate_replacement_line_names(&[name_a, name_b], &[line_id]) {
+            Ok(mut names) => {
+                let name_b = names.pop().unwrap_or_default();
+                let name_a = names.pop().unwrap_or_default();
+                Ok((name_a, name_b))
+            }
+            Err(e) => Err(CommandResult::failure(e)),
+        }
+    }
+
     /// Execute a delete-shot-and-split-line operation as a single atomic undo/redo unit.
     /// Deletes a mid-line shot and splits the line into two, with user-provided names.
     /// Uses `ProjectSnapshotPair` for single-undo. Follows `execute_create_and_merge()` pattern.
@@ -43,6 +70,12 @@ impl AppState {
         if let Err(f) = self.guard_mutation("Delete shot and split line") {
             return f;
         }
+        // The halves' names replace the line's: refused like a rename when
+        // empty or another line's, before anything changes.
+        let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
+            Ok(names) => names,
+            Err(refusal) => return refusal,
+        };
         tracing::info!(
             line_id,
             shot_id,
@@ -223,6 +256,7 @@ impl AppState {
 
             // Set line B offset
             project.set_line_offset(new_id, (line_ox + bx, line_oy + by));
+            project.dedupe_touched_line_names(&[line_id, new_id]);
 
             // Step 6: Remap every cross-reference across the split.
             // Stations whose positional index moved into line B (index in
@@ -359,6 +393,12 @@ impl AppState {
         if let Err(f) = self.guard_mutation("Delete shot range and split line") {
             return f;
         }
+        // The halves' names replace the line's: refused like a rename when
+        // empty or another line's, before anything changes.
+        let (name_a, name_b) = match self.validate_split_names(line_id, &name_a, &name_b) {
+            Ok(names) => names,
+            Err(refusal) => return refusal,
+        };
         tracing::info!(
             line_id,
             start_shot_id,
@@ -529,6 +569,7 @@ impl AppState {
                 project.settle_cut_halves(line_id, new_id, orientation, start_pos, end_pos + 1);
             }
             project.set_line_offset(new_id, (line_ox + bx, line_oy + by));
+            project.dedupe_touched_line_names(&[line_id, new_id]);
 
             // Remap cross-refs across the split: stations at index >= split_station
             // (= end_pos+1) move to B with index -= split_station; everything else

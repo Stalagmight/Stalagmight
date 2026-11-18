@@ -46,6 +46,9 @@ impl Project {
         if name.is_empty() {
             return Err("A section needs a name".to_string());
         }
+        if let Some(refusal) = super::station_naming::name_characters_refusal("section", name) {
+            return Err(refusal);
+        }
         if name.chars().count() > MAX_SECTION_NAME_CHARS {
             return Err(format!(
                 "Section names are at most {MAX_SECTION_NAME_CHARS} characters"

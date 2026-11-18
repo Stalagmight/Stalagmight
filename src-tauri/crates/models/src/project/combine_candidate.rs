@@ -572,6 +572,7 @@ impl Project {
             closures_removed_across_one_shot: None,
             closures_replaced: None,
             moved_with_joined_station: None,
+            station_renames: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -667,8 +668,14 @@ impl Project {
         // name (names are unique per line; see `combine_lines`).
         let (station_name_a, station_name_b) = (None, None);
         let merged = touch.kind == CombineJoinKind::Merged;
-        let (plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
-        let (plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);
+        let (mut plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
+        let (mut plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);
+        // What each choice renames, for the dialog to say (the combine
+        // prefixes before it joins; see `prefix_combined_station_names`).
+        plan_keeping_a.station_renames =
+            self.combine_station_renames(a.id, b.id, station_a, station_b);
+        plan_keeping_b.station_renames =
+            self.combine_station_renames(b.id, a.id, station_b, station_a);
         Some(CombineCandidate {
             line_a: a.id,
             line_b: b.id,

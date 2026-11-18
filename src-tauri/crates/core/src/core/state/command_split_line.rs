@@ -219,8 +219,9 @@ impl AppState {
     /// Every refusal of Split Line Here, read-only and in the order the
     /// command decides them: the read-only edit gate (#191, D-B6), the
     /// options (a half with no name, a zero datum asked to stay on both
-    /// halves: [`SplitLineOptions::refusal`]), then the cut itself
-    /// ([`Self::validate_cut`]). The command and
+    /// halves: [`SplitLineOptions::refusal`]), the cut itself
+    /// ([`Self::validate_cut`]), then the halves' names (empty, or another
+    /// line's: `Project::validate_replacement_line_names`). The command and
     /// [`Self::split_line_preview`] both run it, so a preview refuses
     /// exactly what the split would, with the same reason. The edit gate reads
     /// only the SpeleoDB session, before the project lock is taken.
@@ -236,7 +237,16 @@ impl AppState {
         if let Some(refusal) = options.refusal() {
             return Err(refusal);
         }
-        self.with_project(|project| Self::validate_cut(project, line_id, at))
+        self.with_project(|project| {
+            let cut = Self::validate_cut(project, line_id, at)?;
+            // The halves' names replace the line's: refused like a rename
+            // when empty or another line's.
+            project.validate_replacement_line_names(
+                &[options.name_a.as_str(), options.name_b.as_str()],
+                &[line_id],
+            )?;
+            Ok(cut)
+        })
     }
 
     /// Resolve `at` to where the split cuts, or why it is refused. Read-only:
