@@ -166,10 +166,10 @@ fn a_fix_re_keyed_onto_its_moved_twins_key_is_placed() {
     // E is the frame, with a fix on E:1 whose GPS is copied from S's
     // placement datum on S:0. Then both twins are re-keyed and moved in one
     // window: S moves 50 m north, the fix takes S:0's key and the placement
-    // datum S:1's. The fix kept the twin's key and GPS (a stronger pair than
-    // either datum's GPS alone), so the alignment pairs it with the old
-    // placement datum and leaves the fix out. Being its twin, the fix could
-    // be it all the same: S:0's datum, the placement datum now, is placed.
+    // datum S:1's. The fix now has the twin's key and GPS, a stronger pair
+    // than either datum's GPS alone, but pairing those two would leave the
+    // other datum out: the alignment keeps both, in list order, so S:0's
+    // datum, the placement datum now, was the fix, and it is placed.
     let mut project = Project::new("TwinsMoved".to_string(), None);
     let e = north_section(&mut project, 1);
     project
@@ -186,6 +186,40 @@ fn a_fix_re_keyed_onto_its_moved_twins_key_is_placed() {
     let s1 = project.key_for_ref(StationRef::new(s, 1)).unwrap();
     project.zero_datums[1].station_ref = s0;
     project.zero_datums[2].station_ref = s1;
+    assert!(project.settle_datum_layout(&before));
+
+    let (x, y) = project
+        .compute_station_raw_xy(StationRef::new(s, 0))
+        .unwrap();
+    let (gx, gy) = gps_to_local(&twin, &origin());
+    assert!(
+        (x - gx).abs() < 1e-6 && (y - gy).abs() < 1e-6,
+        "S:0 at ({x}, {y}), its GPS at ({gx}, {gy})"
+    );
+}
+
+#[test]
+fn a_moved_placement_datum_whose_twin_fix_went_is_placed() {
+    // E is the frame, with a fix on E:1 whose GPS is copied from S's
+    // placement datum on S:0. Then, in one window, the fix goes and S moves
+    // 50 m north. One pair either way: S:0's datum kept its key and GPS
+    // (rank 4), a stronger pair than the GPS alone the fix shares with it
+    // (rank 6), so it pairs as the placement datum it was. But the fix that
+    // went was its twin and could be it, re-keyed onto S:0: S:0's datum is
+    // placed, which is right whichever it was.
+    let mut project = Project::new("TwinGone".to_string(), None);
+    let e = north_section(&mut project, 1);
+    project
+        .set_zero_datum(StationRef::new(e, 0), origin())
+        .unwrap();
+    let s = north_section(&mut project, 2);
+    let twin = gps_at(100.0, 0.0);
+    project.set_zero_datum(StationRef::new(e, 1), twin).unwrap();
+    project.set_zero_datum(StationRef::new(s, 0), twin).unwrap();
+    let before = project.datum_layout();
+
+    project.adjust_section_offset(s, 0.0, 50.0);
+    project.zero_datums.remove(1);
     assert!(project.settle_datum_layout(&before));
 
     let (x, y) = project

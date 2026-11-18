@@ -67,8 +67,11 @@ const TIERS: usize = 5;
 const RANKS: usize = 2 * TIERS;
 
 /// The most earlier-by-current cells [`DatumLayout::unplaced`] aligns (a
-/// byte of steps each, 4 MB). Past it, thousands of datums changed in one
-/// command, it places every placement datum it could not pair as it stands.
+/// byte of steps each, 4 MB, beside two rows of scores). Past it, thousands
+/// of datums changed in one command, it places every placement datum among
+/// the changed ones: a piece on its GPS stays where it is, but one an older
+/// file left off its GPS is put on it, where below the limit it keeps its
+/// gap.
 const ALIGN_CELLS: usize = 1 << 22;
 
 /// How alike an earlier datum and a current one are, as a rank from 0 (the
