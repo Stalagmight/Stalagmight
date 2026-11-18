@@ -721,3 +721,37 @@ fn a_reinstall_into_a_nearer_snapshot_that_holds_the_ids_is_renamed() {
     let expected: Vec<Option<String>> = X.iter().map(|u| Some(new_id(u))).collect();
     assert_eq!(recreated_ids(&stack), expected);
 }
+
+/// A compact entry that is well-formed but does not fit the project it would
+/// be applied to - recorded over more sections than the project holds - would
+/// refuse every undo for good, and the entries under it with it. The load
+/// drops the history whole instead, as it does a damaged one.
+#[test]
+fn a_compact_entry_that_does_not_fit_the_loaded_project_drops_the_history() {
+    let delta = |text: &str| {
+        UndoData::Delta(Box::new(crate::core::SnapshotDelta {
+            delta: serde_json::from_str(text).unwrap(),
+            preview: None,
+        }))
+    };
+    let project = two_copies();
+    let renamed = ShotUuidRemap::default();
+
+    let mut fits = stack_of(vec![delta(r#"{"s":[2,[{"k":[0,2]}]]}"#)]);
+    assert_eq!(
+        fits.reconcile_with_loaded_project(&project, &renamed).1,
+        None
+    );
+    assert_eq!(fits.len(), 1, "an entry that fits is kept");
+
+    let mut unfit = stack_of(vec![
+        delta(r#"{"s":[2,[{"k":[0,2]}]]}"#),
+        delta(r#"{"s":[3,[{"k":[0,3]}]]}"#),
+    ]);
+    assert_eq!(
+        unfit.reconcile_with_loaded_project(&project, &renamed).1,
+        Some(HistoryDropped::Unreadable)
+    );
+    assert_eq!(unfit.len(), 0, "the whole history goes, not only the entry");
+    assert_eq!(unfit.redo_len(), 0);
+}

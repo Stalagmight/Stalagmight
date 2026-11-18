@@ -26,7 +26,7 @@ use crate::models::{
 };
 
 use super::history_walk::HolderWalk;
-use super::{UndoData, UndoEntry, UndoStack};
+use super::{HistoryDropped, UndoData, UndoEntry, UndoStack};
 
 impl UndoStack {
     /// Translate the loaded history through `renamed` (what this load's heal did
@@ -38,10 +38,50 @@ impl UndoStack {
         &mut self,
         project: &Project,
         renamed: &ShotUuidRemap,
-    ) -> usize {
+    ) -> (usize, Option<HistoryDropped>) {
+        if let Some(dropped) = self.drop_history_that_does_not_fit(project) {
+            return (0, Some(dropped));
+        }
         let translated = self.translate_shot_uuids(project, renamed);
         self.drop_entries_addressing_a_missing_shot(project);
-        translated
+        (translated, None)
+    }
+
+    /// Drop the whole history when a compact entry in it does not fit the
+    /// state the entries above it leave: its recorded section count, a section
+    /// it edits by id, a run past the end. Every row parsed and passed
+    /// `check_shape`, so the file's rows are well-formed - but such an entry
+    /// would refuse every step for good, and the entries under it with it. A
+    /// compact history is usable only whole, so it goes whole, with the banner
+    /// a damaged history gets (`HistoryDropped::Unreadable`).
+    ///
+    /// Judged by walking each stack from the loaded project, the walk the uuid
+    /// remap takes. A walk that loses track at a TYPED entry proves nothing
+    /// about the deltas under it, and keeps the history.
+    fn drop_history_that_does_not_fit(&mut self, project: &Project) -> Option<HistoryDropped> {
+        let mut unfit = 0;
+        for (stack, undoing) in [(&self.undo_stack, true), (&self.redo_stack, false)] {
+            let mut walk = HolderWalk::of(project);
+            for entry in stack.iter().rev() {
+                if !walk.known {
+                    break;
+                }
+                walk.step(entry, undoing);
+            }
+            unfit += usize::from(walk.unfit_delta);
+        }
+        if unfit == 0 {
+            return None;
+        }
+        let rows = self.undo_stack.len() + self.redo_stack.len();
+        tracing::warn!(
+            rows,
+            purpose = "load persisted undo history",
+            "A compact undo entry does not fit the project it would be applied to; the whole \
+             history is dropped rather than wedged at that entry"
+        );
+        self.clear();
+        Some(HistoryDropped::Unreadable)
     }
 
     /// Rewrite every entry's shot ids with [`history_remap`]. Returns how many

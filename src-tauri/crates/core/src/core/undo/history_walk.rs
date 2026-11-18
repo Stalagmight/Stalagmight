@@ -27,6 +27,10 @@ pub(super) struct HolderWalk {
     /// False once an entry could not be followed; the remap then judges the
     /// rest against the live project, as it did before there were walls.
     pub(super) known: bool,
+    /// Set when the entry that could not be followed was a compact delta that
+    /// does not fit the state the entries above it leave - a history the
+    /// steps would refuse at that entry, for good.
+    pub(super) unfit_delta: bool,
 }
 
 /// What a step changed: the sections that are new or rebuilt in the state it
@@ -51,6 +55,7 @@ impl HolderWalk {
             view: Vec::new(),
             index: HashMap::new(),
             known: true,
+            unfit_delta: false,
         };
         walk.replace(view);
         walk
@@ -89,6 +94,7 @@ impl HolderWalk {
                     Some(self.replace(next))
                 } else {
                     self.known = false;
+                    self.unfit_delta = true;
                     None
                 }
             }

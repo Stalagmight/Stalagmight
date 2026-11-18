@@ -443,7 +443,9 @@ impl AppState {
                 // would fail and be pushed straight back, sealing off
                 // everything under it (#413).
                 if let Some(project) = proj_guard.as_ref() {
-                    undo_stack.reconcile_with_loaded_project(project, &renamed_shots);
+                    let (_, unfit) =
+                        undo_stack.reconcile_with_loaded_project(project, &renamed_shots);
+                    self.note_history_dropped(unfit);
                 }
                 tracing::info!(
                     undo = undo_stack.len(),
@@ -1117,7 +1119,8 @@ impl AppState {
                 // ...and against the project they will be replayed onto: first
                 // translated through the shot UUIDs this load renamed, then an
                 // entry that still cannot find its shot is dropped (#413).
-                undo_stack.reconcile_with_loaded_project(&project, &renamed_shots);
+                let (_, unfit) = undo_stack.reconcile_with_loaded_project(&project, &renamed_shots);
+                self.note_history_dropped(unfit);
                 tracing::info!(
                     undo = undo_stack.len(),
                     purpose = "restore edit history",
