@@ -339,7 +339,7 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 - Serialization uses gzip compression
 - A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
 - On project open, persisted stacks are restored from the database
-- A whole-project snapshot (`ProjectSnapshot`, `ProjectSnapshotPair`) mirrors the
+- A whole-project snapshot (`ProjectSnapshotPair`) mirrors the
   `zero_datum_extras` split (#741): its `zero_datums` holds the placement and
   dangling datums only, and each GPS fix rides beside it under
   `zero_datum_fixes` with its place in the whole list. An older build reads a

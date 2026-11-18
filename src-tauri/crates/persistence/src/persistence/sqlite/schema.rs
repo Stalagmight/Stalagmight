@@ -1331,7 +1331,7 @@ impl Database {
             // and `load_from_persisted_with_timestamps` skips a bad entry
             // WITHOUT truncating, keeping the entries on both sides. That
             // leaves a HOLE: the surviving older entries (position-keyed
-            // `ShotSnapshot`s, and the `ProjectSnapshotPair` the apply itself
+            // shot snapshots, and the `ProjectSnapshotPair` the apply itself
             // wrote) would replay against a tree that still carries the applied
             // changes, silently reverting them or shifting every station past
             // the apply's inserts. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v14

@@ -39,9 +39,6 @@ Commands go through a two-phase capture during execution:
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
 | `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
-| `ShotSnapshot` | legacy persisted DeleteShot entries (a live DeleteShot records `ProjectSnapshotPair`) | Restore shot at exact position | Re-execute the delete |
-| `MergeInfo` | legacy persisted MergeStations entries (a live MergeStations records `ProjectSnapshotPair`) | Restore previous offsets + unmerge | Execute the original command |
-| `UnmergeInfo` | legacy persisted UnmergeStations entries (a live UnmergeStations records `ProjectSnapshotPair`) | Re-merge + restore removed closures | Re-execute the unmerge |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
@@ -191,17 +188,14 @@ The rules the restore paths follow:
   runs after the restore and drops (with a warning) entries whose shot target
   does not resolve, so a stale entry costs one undo step instead of wedging
   every step beneath it. It scans from the top and STOPS at the first entry
-  whose undo restores recorded state wholesale (`ProjectSnapshot`,
-  `ProjectSnapshotPair`, `SectionSnapshot`, `ShotSnapshot`): such an entry puts
-  a whole project or section back in the id space it was recorded in, so
-  anything below it may become addressable again once the walk reaches it.
+  whose undo restores recorded state wholesale (`Delta`,
+  `ProjectSnapshotPair`): such an entry puts a whole project back in the id
+  space it was recorded in, so anything below it may become addressable again
+  once the walk reaches it.
 
 `SetShotKind` records `PreviousValues` rather than the
 `InverseCommand(SetShotKind)` it used to, for the same reason: `InverseCommand`
-is a newtype around `Command`, so there is nowhere in it to record a uuid
-without breaking every legacy payload of that variant. Persisted
-`InverseCommand(SetShotKind)` entries still restore through their own arm, by
-id, as legacy entries.
+is a newtype around `Command`, so there is nowhere in it to record a uuid.
 
 ### A restore puts identity and ORDER back, not just values (#413, findings 1, 4, 17)
 
@@ -359,10 +353,10 @@ does the same thing one variant over, for `CreatedSectionSnapshot`.
 
 The two are complementary and both are kept: the refresh fixes the half being
 LEFT, the carry-forward fixes the half being RESTORED (and is also on the path of
-every single `ProjectSnapshot`, rollback and load-time restore, where there is no
-pair to refresh). The cost is one project serialization per snapshot-pair history
-move - not a new cost class, since recording a pair already serializes the project
-twice and restoring one already deserializes it.
+every rollback and load-time restore, where there is no pair to refresh). The cost
+is one project serialization per snapshot-pair history move - not a new cost class,
+since recording a pair already serializes the project twice and restoring one
+already deserializes it.
 
 ### A dust-zero `section_offsets` entry is unrepresentable (#413, finding 27)
 

@@ -657,25 +657,6 @@ fn derive_preview_data(
             _ => None,
         },
 
-        // DeleteShot - show length and azimuth from ShotSnapshot
-        (Command::DeleteShot { .. }, UndoData::ShotSnapshot { shot_data, .. }) => {
-            Some(PreviewData {
-                changes: vec![
-                    FieldChange {
-                        field: "Length".to_string(),
-                        old_value: format!("{:.2}", shot_data.length),
-                        new_value: String::new(),
-                    },
-                    FieldChange {
-                        field: "Azimuth".to_string(),
-                        old_value: format!("{:.1}", shot_data.azimuth_in),
-                        new_value: String::new(),
-                    },
-                ],
-                additional_changes: 0,
-            })
-        }
-
         // SetZeroDatum - show coordinates from command
         (Command::SetZeroDatum { coordinates, .. }, _) => Some(PreviewData {
             changes: vec![
@@ -694,11 +675,7 @@ fn derive_preview_data(
         }),
 
         // SetShotKind - the undo data carries the real previous kind (#27 q12),
-        // so show it rather than guessing as the old boolean did. Two shapes,
-        // one meaning: `PreviousValues` is what the capture records now (it can
-        // carry the target's uuid, which the newtype `InverseCommand` cannot -
-        // #413), and `InverseCommand` is what a persisted entry from before that
-        // change still holds.
+        // so show it rather than guessing as the old boolean did.
         (Command::SetShotKind { kind, .. }, undo_data) => {
             let old_value = match undo_data {
                 UndoData::PreviousValues { values_json, .. } => {
@@ -706,9 +683,6 @@ fn derive_preview_data(
                         .ok()
                         .and_then(|prev| prev.kind)
                         .map_or_else(String::new, |prev| prev.label().to_string())
-                }
-                UndoData::InverseCommand(Command::SetShotKind { kind: prev, .. }) => {
-                    prev.label().to_string()
                 }
                 _ => String::new(),
             };
@@ -1224,12 +1198,7 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
             },
-            undo_data: UndoData::MergeInfo {
-                station_a: StationRef::new(0, 0),
-                station_b: StationRef::new(1, 0),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
+            undo_data: UndoData::None,
             timestamp: None,
         };
 
@@ -1249,12 +1218,7 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
             },
-            undo_data: UndoData::MergeInfo {
-                station_a: StationRef::new(0, 0),
-                station_b: StationRef::new(1, 0),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
+            undo_data: UndoData::None,
             timestamp: None,
         };
 
@@ -1333,8 +1297,12 @@ mod tests {
 
     #[test]
     fn test_derive_preview_data_set_shot_kind() {
-        // The inverse command supplies the previous kind, so the preview can
-        // show a real Jump -> Reference transition rather than a guessed one.
+        // The recorded previous values supply the previous kind, so the preview
+        // can show a real Jump -> Reference transition rather than a guessed one.
+        let previous = ShotUpdates {
+            kind: Some(ShotKind::Jump),
+            ..Default::default()
+        };
         let entry = UndoEntry {
             command_bytes: None,
             command: Command::SetShotKind {
@@ -1342,11 +1310,13 @@ mod tests {
                 shot_id: 2,
                 kind: ShotKind::Reference,
             },
-            undo_data: UndoData::InverseCommand(Command::SetShotKind {
+            undo_data: UndoData::PreviousValues {
                 section_id: 1,
-                shot_id: 2,
-                kind: ShotKind::Jump,
-            }),
+                shot_id: Some(2),
+                shot_uuid: None,
+                values_json: serde_json::to_string(&previous).unwrap(),
+                previous_offsets: HashMap::new(),
+            },
             timestamp: None,
         };
 

@@ -758,7 +758,7 @@ impl AppState {
     ///
     /// Snapshot entries stopped being local-only when Full mode started shipping undo
     /// history: `sanitize_push_snapshot` deliberately keeps `undo_stack` in the upload, and
-    /// every `ProjectSnapshot` / `ProjectSnapshotPair` is a whole serialized `Project`.
+    /// every `ProjectSnapshotPair` half is a whole serialized `Project`.
     /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
     /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
     /// layout into the project's git history, permanently, readable by every collaborator

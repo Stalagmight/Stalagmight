@@ -97,10 +97,6 @@ impl HolderWalk {
                 self.reset_to_snapshot(half);
                 None
             }
-            UndoData::ProjectSnapshot(json) if undoing => {
-                self.reset_to_snapshot(json);
-                None
-            }
             UndoData::CreatedShotSnapshot {
                 section_id,
                 uuid,
@@ -175,12 +171,6 @@ impl HolderWalk {
                         .collect();
                     self.append(added);
                 }
-                None
-            }
-            // Legacy wholesale restores of one section or shot: not followed
-            // (no history this build loads carries them).
-            UndoData::SectionSnapshot { .. } | UndoData::ShotSnapshot { .. } => {
-                self.known = false;
                 None
             }
             _ => None,

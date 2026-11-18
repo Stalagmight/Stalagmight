@@ -266,7 +266,8 @@ mod grouped_credit_changes {
 /// Data needed to undo a command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UndoData {
-    /// Simple inverse command (e.g., SetShotKind -> SetShotKind(prev kind), MergeStations -> UnmergeStations)
+    /// Simple inverse command (SetStationComment -> SetStationComment with the
+    /// previous comment)
     InverseCommand(Command),
 
     /// Previous values for an update operation (JSON serialized)
@@ -321,15 +322,7 @@ pub enum UndoData {
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
-    /// Full section snapshot for restoring deleted sections
-    SectionSnapshot {
-        section_id: SectionId,
-        /// Full section data including all shots
-        section_data: SectionData,
-    },
-
     /// Snapshot of a newly created section (for CreateSection undo/redo ID preservation)
-    /// Distinct from SectionSnapshot (used by DeleteSection) to avoid ambiguity in redo logic.
     CreatedSectionSnapshot {
         section_id: SectionId,
         /// Full section data including all shots
@@ -355,23 +348,7 @@ pub enum UndoData {
         identity: SectionIdentity,
     },
 
-    /// Shot snapshot for restoring deleted shots
-    ShotSnapshot {
-        section_id: SectionId,
-        shot_id: ShotId,
-        shot_data: ShotData,
-        /// Position in the section's shot list (for re-insertion)
-        position: usize,
-        /// The deleted shot's persistent UUID, so undo restores the same
-        /// identity (station cross-references anchor on it via
-        /// `StationKey::AfterShot`) rather than minting a fresh one. `None` for
-        /// legacy persisted entries.
-        #[serde(default)]
-        uuid: Option<String>,
-    },
-
     /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
-    /// Distinct from ShotSnapshot (used by DeleteShot) to avoid ambiguity in redo logic.
     CreatedShotSnapshot {
         section_id: SectionId,
         shot_id: ShotId,
@@ -446,28 +423,6 @@ pub enum UndoData {
         consumed_legacy: Option<(Option<String>, Option<chrono::NaiveDate>)>,
     },
 
-    /// Merge info for unmerging stations
-    MergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        #[serde(default)]
-        removed_closures: Vec<LoopClosure>,
-        /// Section offsets before the merge (for restoring positions on undo)
-        #[serde(default)]
-        #[serde(serialize_with = "ordered_section_offsets")]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
-    },
-
-    /// Unmerge info for re-merging stations on undo (opposite of MergeInfo)
-    UnmergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        #[serde(default)]
-        removed_closures: Vec<LoopClosure>,
-    },
-
     /// Loop closure info for undoing CreateLoopClosure
     ClosureInfo {
         /// The full loop closure data to remove on undo
@@ -482,8 +437,7 @@ pub enum UndoData {
         /// FORMAT EVOLUTION (additive, no schema bump): `None` for a legacy
         /// persisted entry and for a `CreateLoopClosure` entry, whose undo
         /// REMOVES the closure and whose redo appends the one it first
-        /// appended; both keep the push, exactly as `restore_shot`'s
-        /// out-of-range `position` falls back to one.
+        /// appended; both keep the push.
         #[serde(default)]
         position: Option<usize>,
     },
@@ -536,25 +490,6 @@ pub enum UndoData {
         /// The offset that was applied (for redo)
         offset: (f64, f64),
     },
-
-    /// Previous shot data and station offset for station moves.
-    /// MoveStation modifies adjacent shots' geometry (length/azimuth/depth) directly,
-    /// so undo needs to restore the original shot data and station offset.
-    StationMoveInfo {
-        station_ref: StationRef,
-        /// Shot data for the preceding shot (shot at station_index - 1), if any
-        prev_shot_before: Option<(ShotId, ShotData)>,
-        /// Shot data for the following shot (shot at station_index), if any
-        prev_shot_after: Option<(ShotId, ShotData)>,
-        /// Previous station offset (None = no offset existed)
-        prev_offset: Option<(f64, f64, f64)>,
-        /// Previous section offset (None = no offset existed)
-        #[serde(default)]
-        prev_section_offset: Option<(f64, f64)>,
-    },
-
-    /// Full project snapshot for batch operations (JSON serialized)
-    ProjectSnapshot(String),
 
     /// Before and after project snapshots for operations that can't be re-executed
     /// (e.g., batch operations that create sections with dynamic IDs)
@@ -609,9 +544,7 @@ impl UndoData {
     ///
     /// The uuid is the address to use; the id is only the legacy fallback for
     /// entries written before the uuid fields existed (issue #413, findings 8,
-    /// 12, 13 and 16). `ShotSnapshot` is deliberately not here: its restore
-    /// re-creates a shot that must be ABSENT, so "does the target resolve" is
-    /// not a question about it.
+    /// 12, 13 and 16).
     pub fn shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
         match self {
             UndoData::CreatedShotSnapshot {
@@ -626,13 +559,6 @@ impl UndoData {
                 shot_uuid,
                 ..
             } => Some((*section_id, shot_uuid.as_deref(), *shot_id)),
-            // Legacy only - `SetShotKind` now records `PreviousValues`, which
-            // can carry a uuid. A persisted one has nothing but the id.
-            UndoData::InverseCommand(Command::SetShotKind {
-                section_id,
-                shot_id,
-                ..
-            }) => Some((*section_id, None, *shot_id)),
             _ => None,
         }
     }
@@ -662,18 +588,14 @@ impl UndoData {
     /// Does undoing this entry restore recorded state WHOLESALE?
     ///
     /// Such an entry is a wall for any reasoning about which shots exist: it
-    /// puts back a whole project, section or shot recorded in a different id
-    /// space, so nothing below it can be judged against the project as loaded
-    /// (issue #413, finding 12's write-up calls a `ProjectSnapshotPair` "a
-    /// wall" for exactly this reason).
+    /// puts back a whole project recorded in a different id space, so nothing
+    /// below it can be judged against the project as loaded (issue #413,
+    /// finding 12's write-up calls a `ProjectSnapshotPair` "a wall" for exactly
+    /// this reason).
     pub fn restores_recorded_state(&self) -> bool {
         matches!(
             self,
-            UndoData::ProjectSnapshot(_)
-                | UndoData::ProjectSnapshotPair { .. }
-                | UndoData::Delta(_)
-                | UndoData::SectionSnapshot { .. }
-                | UndoData::ShotSnapshot { .. }
+            UndoData::ProjectSnapshotPair { .. } | UndoData::Delta(_)
         )
     }
 
@@ -743,17 +665,11 @@ impl UndoData {
         match self {
             UndoData::InverseCommand(_) => "InverseCommand",
             UndoData::PreviousValues { .. } => "PreviousValues",
-            UndoData::SectionSnapshot { .. } => "SectionSnapshot",
             UndoData::CreatedSectionSnapshot { .. } => "CreatedSectionSnapshot",
-            UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::CreatedShotSnapshot { .. } => "CreatedShotSnapshot",
-            UndoData::MergeInfo { .. } => "MergeInfo",
-            UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
-            UndoData::StationMoveInfo { .. } => "StationMoveInfo",
-            UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
             UndoData::Delta(_) => "Delta",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
@@ -1476,112 +1392,6 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_data_section_snapshot() {
-        let mut stack = UndoStack::new();
-
-        let section_data = test_section_data("Snapshot Test");
-        stack.push_with_data(
-            test_delete_section_command(5),
-            UndoData::SectionSnapshot {
-                section_id: 5,
-                section_data,
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::SectionSnapshot {
-            section_id,
-            section_data: stored_data,
-        } = data
-        {
-            assert_eq!(*section_id, 5);
-            assert_eq!(stored_data.name, Some("Snapshot Test".to_string()));
-        } else {
-            panic!("Expected SectionSnapshot");
-        }
-    }
-
-    #[test]
-    fn test_undo_data_shot_snapshot() {
-        let mut stack = UndoStack::new();
-
-        let shot_data = ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 10.0,
-            depth_in: 5.0,
-            depth_out: 6.0,
-            ..Default::default()
-        };
-
-        stack.push_with_data(
-            Command::DeleteShot {
-                section_id: 1,
-                shot_id: 100,
-            },
-            UndoData::ShotSnapshot {
-                section_id: 1,
-                shot_id: 100,
-                shot_data,
-                position: 2,
-                uuid: None,
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::ShotSnapshot {
-            section_id,
-            shot_id,
-            shot_data: stored_data,
-            position,
-            ..
-        } = data
-        {
-            assert_eq!(*section_id, 1);
-            assert_eq!(*shot_id, 100);
-            assert_eq!(stored_data.length, 10.0);
-            assert_eq!(*position, 2);
-        } else {
-            panic!("Expected ShotSnapshot");
-        }
-    }
-
-    #[test]
-    fn test_undo_data_merge_info() {
-        let mut stack = UndoStack::new();
-
-        stack.push_with_data(
-            Command::MergeStations {
-                station_a: StationRef::new(1, 0),
-                station_b: StationRef::new(2, 3),
-            },
-            UndoData::MergeInfo {
-                station_a: StationRef::new(1, 0),
-                station_b: StationRef::new(2, 3),
-                removed_closures: Vec::new(),
-                previous_offsets: HashMap::new(),
-            },
-        );
-
-        let data = stack.peek_undo_data().unwrap();
-        if let UndoData::MergeInfo {
-            station_a,
-            station_b,
-            removed_closures,
-            ..
-        } = data
-        {
-            assert_eq!(station_a.section_id, 1);
-            assert_eq!(station_a.station_index, 0);
-            assert_eq!(station_b.section_id, 2);
-            assert_eq!(station_b.station_index, 3);
-            assert!(removed_closures.is_empty());
-        } else {
-            panic!("Expected MergeInfo");
-        }
-    }
-
-    #[test]
     fn test_undo_data_zero_datum_info() {
         let mut stack = UndoStack::new();
 
@@ -1682,10 +1492,11 @@ mod tests {
     fn test_serialize_entry_with_section_snapshot() {
         let entry = UndoEntry {
             command_bytes: None,
-            command: test_delete_section_command(5),
-            undo_data: UndoData::SectionSnapshot {
+            command: test_create_section_command("Snapshot"),
+            undo_data: UndoData::CreatedSectionSnapshot {
                 section_id: 5,
                 section_data: test_section_data("Snapshot"),
+                identity: SectionIdentity::default(),
             },
             timestamp: None,
         };
@@ -1696,15 +1507,16 @@ mod tests {
         let (cmd_json, undo_json) = result.unwrap();
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
 
-        if let UndoData::SectionSnapshot {
+        if let UndoData::CreatedSectionSnapshot {
             section_id,
             section_data,
+            ..
         } = restored.undo_data
         {
             assert_eq!(section_id, 5);
             assert_eq!(section_data.name, Some("Snapshot".to_string()));
         } else {
-            panic!("Expected SectionSnapshot");
+            panic!("Expected CreatedSectionSnapshot");
         }
     }
 
@@ -2378,38 +2190,11 @@ mod tests {
             },
             UndoEntry {
                 command_bytes: None,
-                command: test_delete_section_command(2),
-                undo_data: UndoData::SectionSnapshot {
-                    section_id: 2,
-                    section_data: test_section_data("Snapshot"),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
                 command: test_create_section_command("Created Snapshot"),
                 undo_data: UndoData::CreatedSectionSnapshot {
                     section_id: 3,
                     section_data: test_section_data("Created"),
                     identity: SectionIdentity::default(),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
-                command: Command::DeleteShot {
-                    section_id: 1,
-                    shot_id: 100,
-                },
-                undo_data: UndoData::ShotSnapshot {
-                    section_id: 1,
-                    shot_id: 100,
-                    shot_data: ShotData {
-                        length: 5.0,
-                        ..Default::default()
-                    },
-                    position: 0,
-                    uuid: None,
                 },
                 timestamp: None,
             },
@@ -2463,22 +2248,11 @@ mod tests {
             },
             UndoEntry {
                 command_bytes: None,
-                command: Command::MergeStations {
-                    station_a: StationRef::new(1, 0),
-                    station_b: StationRef::new(2, 1),
-                },
-                undo_data: UndoData::MergeInfo {
-                    station_a: StationRef::new(1, 0),
-                    station_b: StationRef::new(2, 1),
-                    removed_closures: Vec::new(),
-                    previous_offsets: HashMap::new(),
-                },
-                timestamp: None,
-            },
-            UndoEntry {
-                command_bytes: None,
                 command: Command::Batch { commands: vec![] },
-                undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+                undo_data: UndoData::ProjectSnapshotPair {
+                    before: "{}".to_string(),
+                    after: "{}".to_string(),
+                },
                 timestamp: None,
             },
             UndoEntry {
@@ -2517,12 +2291,21 @@ mod tests {
 
     // === [#303] Byte budget (spec items 7, 8, 9) ===
 
-    /// An entry whose estimated size is `payload` bytes plus the flat overhead.
+    /// An entry whose estimated size is `payload` bytes plus the flat overhead:
+    /// a section-values edit, which the estimate charges its recorded JSON.
+    fn sized_payload(payload: usize) -> UndoData {
+        UndoData::PreviousValues {
+            section_id: 0,
+            shot_id: None,
+            shot_uuid: None,
+            values_json: "x".repeat(payload),
+            previous_offsets: HashMap::new(),
+        }
+    }
+
+    /// [`sized_payload`] under a command named `name`.
     fn sized_entry(payload: usize, name: &str) -> (Command, UndoData) {
-        (
-            test_create_section_command(name),
-            UndoData::ProjectSnapshot("x".repeat(payload)),
-        )
+        (test_create_section_command(name), sized_payload(payload))
     }
 
     /// [#303] The measured size of one `sized_entry`, so a budget can be expressed in
@@ -2585,7 +2368,7 @@ mod tests {
         let entry = UndoEntry {
             command_bytes: None,
             command: test_create_section_command("persisted"),
-            undo_data: UndoData::ProjectSnapshot("x".repeat(256)),
+            undo_data: sized_payload(256),
             timestamp: None,
         };
         let persisted = UndoStack::serialize_entry(&entry).expect("serialize entry");
@@ -2966,7 +2749,10 @@ mod tests {
         assert_eq!(UndoStack::estimated_size(&small), 512);
 
         let payload = UndoEntry {
-            undo_data: UndoData::ProjectSnapshot("x".repeat(2_048)),
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "x".repeat(2_048),
+                after: String::new(),
+            },
             ..small
         };
         assert_eq!(UndoStack::estimated_size(&payload), 2_048 + 512);
@@ -3005,7 +2791,7 @@ mod tests {
         assert_eq!(
             UndoStack::estimated_size(&previous_values(offsets.clone())),
             64 + 512 + 4 * 64,
-            "a shot edit's recorded offsets are 64 bytes apiece, as on MergeInfo"
+            "a shot edit's recorded offsets are 64 bytes apiece, as on ZeroDatumInfo"
         );
 
         let created_shot = |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| {

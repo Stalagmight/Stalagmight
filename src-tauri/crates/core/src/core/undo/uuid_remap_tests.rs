@@ -12,9 +12,7 @@ use chrono::Utc;
 use super::*;
 use crate::core::undo::AddedContent;
 use crate::core::Command;
-use crate::models::{
-    ClosureStrategy, Section, SectionIdentity, ShotData, StationMerge, StationRef, ZeroDatum,
-};
+use crate::models::{ClosureStrategy, Section, SectionIdentity, ShotData, StationMerge, ZeroDatum};
 
 const X: [&str; 3] = [
     "aaaaaaaa-0000-4000-8000-000000000001",
@@ -103,6 +101,30 @@ fn stack_of(entries: Vec<UndoData>) -> UndoStack {
     stack
 }
 
+/// A stack whose REDO side holds `entries` exactly as given, the last one the
+/// next to redo.
+fn redo_stack_of(entries: Vec<UndoData>) -> UndoStack {
+    let mut stack = UndoStack::new();
+    for data in entries {
+        stack.push_redo(UndoEntry {
+            command: command(),
+            undo_data: data,
+            timestamp: Some(Utc::now()),
+            command_bytes: None,
+        });
+    }
+    stack
+}
+
+/// A redo entry that re-creates section `section_id` holding the ids `X`.
+fn recreate(section_id: SectionId) -> UndoData {
+    UndoData::CreatedSectionSnapshot {
+        section_id,
+        section_data: copy_data(),
+        identity: SectionIdentity::default(),
+    }
+}
+
 fn only_entry(stack: &UndoStack) -> &UndoData {
     let mut entries = stack.undo_entries();
     let data = &entries.next().unwrap().undo_data;
@@ -135,13 +157,6 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
             previous_offsets: HashMap::new(),
             consumed_legacy: None,
         },
-        UndoData::ShotSnapshot {
-            section_id: 1,
-            shot_id: 100_002,
-            shot_data: shot(X[2]),
-            position: 2,
-            uuid: Some(X[2].to_string()),
-        },
         // Section 0 kept its ids: an entry about it must not move.
         UndoData::PreviousValues {
             section_id: 0,
@@ -152,7 +167,7 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
         },
     ]);
 
-    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 3);
+    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 2);
 
     let entries: Vec<&UndoData> = stack.undo_entries().map(|e| &e.undo_data).collect();
     // `undo_entries` is newest first.
@@ -160,21 +175,13 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
         panic!("section 0 entry");
     };
     assert_eq!(shot_uuid.as_deref(), Some(X[0]));
-    let UndoData::ShotSnapshot {
-        shot_data, uuid, ..
-    } = entries[1]
-    else {
-        panic!("shot snapshot");
-    };
-    assert_eq!(shot_data.uuid.as_deref(), Some(new_id(X[2]).as_str()));
-    assert_eq!(uuid.as_deref(), Some(new_id(X[2]).as_str()));
     let UndoData::CreatedShotSnapshot {
         shot_data,
         after_shot_uuid,
         before_shot_uuid,
         uuid,
         ..
-    } = entries[2]
+    } = entries[1]
     else {
         panic!("created shot snapshot");
     };
@@ -182,95 +189,57 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
     assert_eq!(uuid.as_deref(), Some(new_id(X[1]).as_str()));
     assert_eq!(after_shot_uuid.as_deref(), Some(new_id(X[0]).as_str()));
     assert_eq!(before_shot_uuid.as_deref(), Some(new_id(X[2]).as_str()));
-    let UndoData::PreviousValues { shot_uuid, .. } = entries[3] else {
+    let UndoData::PreviousValues { shot_uuid, .. } = entries[2] else {
         panic!("section 1 entry");
     };
     assert_eq!(shot_uuid.as_deref(), Some(new_id(X[0]).as_str()));
 }
 
 #[test]
-fn section_entries_follow_in_their_data_and_their_identity() {
+fn a_created_section_entry_follows_in_its_data_and_its_identity() {
     let (project, renamed) = healed();
-    let mut stack = stack_of(vec![
-        UndoData::SectionSnapshot {
-            section_id: 1,
-            section_data: copy_data(),
+    let mut stack = stack_of(vec![UndoData::CreatedSectionSnapshot {
+        section_id: 1,
+        section_data: copy_data(),
+        identity: SectionIdentity {
+            shot_uuids: X.iter().map(|u| Some((*u).to_string())).collect(),
+            gauge_shot_uuid: Some(X[0].to_string()),
+            gauge_neighbour_uuid: Some(X[1].to_string()),
+            ..Default::default()
         },
-        UndoData::CreatedSectionSnapshot {
-            section_id: 1,
-            section_data: copy_data(),
-            identity: SectionIdentity {
-                shot_uuids: X.iter().map(|u| Some((*u).to_string())).collect(),
-                gauge_shot_uuid: Some(X[0].to_string()),
-                gauge_neighbour_uuid: Some(X[1].to_string()),
-                ..Default::default()
-            },
-        },
-    ]);
-    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 2);
+    }]);
+    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
 
     let expected: Vec<Option<String>> = X.iter().map(|u| Some(new_id(u))).collect();
-    for entry in stack.undo_entries() {
-        match &entry.undo_data {
-            UndoData::SectionSnapshot { section_data, .. } => {
-                let ids: Vec<_> = section_data.shots.iter().map(|s| s.uuid.clone()).collect();
-                assert_eq!(ids, expected);
-            }
-            UndoData::CreatedSectionSnapshot {
-                section_data,
-                identity,
-                ..
-            } => {
-                let ids: Vec<_> = section_data.shots.iter().map(|s| s.uuid.clone()).collect();
-                assert_eq!(ids, expected);
-                assert_eq!(identity.shot_uuids, expected);
-                assert_eq!(identity.gauge_shot_uuid, expected[0]);
-                assert_eq!(identity.gauge_neighbour_uuid, expected[1]);
-            }
-            other => panic!("unexpected entry {other:?}"),
-        }
-    }
+    let UndoData::CreatedSectionSnapshot {
+        section_data,
+        identity,
+        ..
+    } = only_entry(&stack)
+    else {
+        panic!("created section entry");
+    };
+    let ids: Vec<_> = section_data.shots.iter().map(|s| s.uuid.clone()).collect();
+    assert_eq!(ids, expected);
+    assert_eq!(identity.shot_uuids, expected);
+    assert_eq!(identity.gauge_shot_uuid, expected[0]);
+    assert_eq!(identity.gauge_neighbour_uuid, expected[1]);
 }
 
 #[test]
-fn closure_and_merge_entries_follow_only_their_renamed_endpoint() {
+fn a_closure_entry_follows_only_its_renamed_endpoint() {
     let (project, renamed) = healed();
-    let pair = || closure(key(1, X[1]), key(0, X[1]));
-    let mut stack = stack_of(vec![
-        UndoData::ClosureInfo {
-            closure: pair(),
-            position: None,
-        },
-        UndoData::MergeInfo {
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(0, 2),
-            removed_closures: vec![pair()],
-            previous_offsets: HashMap::new(),
-        },
-        UndoData::UnmergeInfo {
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(0, 2),
-            removed_closures: vec![pair()],
-        },
-    ]);
-    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 3);
+    let mut stack = stack_of(vec![UndoData::ClosureInfo {
+        closure: closure(key(1, X[1]), key(0, X[1])),
+        position: None,
+    }]);
+    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
 
-    let check = |c: &LoopClosure| {
-        assert_eq!(after_shot(&c.station_a), new_id(X[1]));
-        assert_eq!(after_shot(&c.station_b), X[1]);
+    let UndoData::ClosureInfo { closure, .. } = only_entry(&stack) else {
+        panic!("closure entry");
     };
-    for entry in stack.undo_entries() {
-        match &entry.undo_data {
-            UndoData::ClosureInfo { closure, .. } => check(closure),
-            UndoData::MergeInfo {
-                removed_closures, ..
-            }
-            | UndoData::UnmergeInfo {
-                removed_closures, ..
-            } => removed_closures.iter().for_each(check),
-            other => panic!("unexpected entry {other:?}"),
-        }
-    }
+    assert_eq!(after_shot(&closure.station_a), new_id(X[1]));
+    assert_eq!(after_shot(&closure.station_b), X[1]);
 }
 
 #[test]
@@ -336,32 +305,6 @@ fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
     );
     assert_eq!(after_shot(&content.loop_closures[0].station_b), X[0]);
     assert_eq!(content.ignores[0].shot_uuid, new_id(X[1]));
-}
-
-#[test]
-fn a_station_move_entry_follows_too() {
-    let (project, renamed) = healed();
-    let mut stack = stack_of(vec![UndoData::StationMoveInfo {
-        station_ref: StationRef::new(1, 1),
-        prev_shot_before: Some((100_000, shot(X[0]))),
-        prev_shot_after: Some((100_001, shot(X[1]))),
-        prev_offset: None,
-        prev_section_offset: None,
-    }]);
-    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
-    let UndoData::StationMoveInfo {
-        prev_shot_before,
-        prev_shot_after,
-        ..
-    } = only_entry(&stack)
-    else {
-        panic!("station move");
-    };
-    assert_eq!(
-        prev_shot_before.as_ref().unwrap().1.uuid,
-        Some(new_id(X[0]))
-    );
-    assert_eq!(prev_shot_after.as_ref().unwrap().1.uuid, Some(new_id(X[1])));
 }
 
 /// The pre-heal project as an undo snapshot, with a comment on section 1's
@@ -685,11 +628,11 @@ fn json(project: &Project) -> String {
     serde_json::to_string(project).unwrap()
 }
 
-fn section_snapshot_ids(stack: &UndoStack) -> Vec<Option<String>> {
+fn recreated_ids(stack: &UndoStack) -> Vec<Option<String>> {
     stack
-        .undo_entries()
+        .redo_entries()
         .find_map(|entry| match &entry.undo_data {
-            UndoData::SectionSnapshot { section_data, .. } => {
+            UndoData::CreatedSectionSnapshot { section_data, .. } => {
                 Some(section_data.shots.iter().map(|s| s.uuid.clone()).collect())
             }
             _ => None,
@@ -720,29 +663,31 @@ fn shots_moved_out_of_a_created_section_keep_their_ids() {
     assert_eq!(stack.translate_shot_uuids(&live, &renamed), 0);
 }
 
-/// The other side of #732: a whole-project snapshot OLDER than the entry that
-/// reinstalls a section says nothing about what that entry replays into. Here
-/// section 0 alone held the ids once, then section 1 came to hold them too
-/// (a pre-uniqueness history), and section 0 was deleted. Undoing that delete
-/// lands beside the live section 1, so section 0's copy must still be renamed.
+/// The other side of #732: a whole-project snapshot FURTHER from the live
+/// project than the entry that reinstalls a section says nothing about what
+/// that entry replays into. Here a snapshot holds the ids in section 0 alone,
+/// but the redo nearest the live project re-creates section 0 holding them
+/// while the live section 1 holds them too (a pre-uniqueness history). The
+/// redo lands beside the live section 1, so section 0's copy must still be
+/// renamed.
 #[test]
-fn an_older_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
+fn a_farther_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
     let mut live = sections_holding(&[&Y, &X]);
+    live.sections.retain(|s| s.id == 1);
+    live.rebuild_section_index();
+    live.rebuild_shot_uuid_index();
     let renamed = live.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
-    let older = json(&sections_holding(&[&X]));
-    let mut stack = stack_of(vec![
+    let farther = json(&sections_holding(&[&X]));
+    let mut stack = redo_stack_of(vec![
         UndoData::ProjectSnapshotPair {
-            before: older.clone(),
-            after: older,
+            before: farther.clone(),
+            after: farther,
         },
-        UndoData::SectionSnapshot {
-            section_id: 0,
-            section_data: copy_data(),
-        },
+        recreate(0),
     ]);
     assert!(stack.translate_shot_uuids(&live, &renamed) > 0);
-    let reinstalled = section_snapshot_ids(&stack);
+    let reinstalled = recreated_ids(&stack);
     for (id, old) in reinstalled.iter().zip(X) {
         assert_ne!(
             id.as_deref(),
@@ -753,26 +698,23 @@ fn an_older_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
 }
 
 /// A reinstall is judged against the project it replays into, not the live
-/// one: the newer snapshot pair puts section 0 holding the ids back first, so
-/// undoing the older delete of section 1 would repeat them - even though no
-/// live section holds them.
+/// one: the nearer snapshot pair's redo puts section 0 holding the ids back
+/// first, so redoing the re-creation of section 1 after it would repeat them -
+/// even though no live section holds them.
 #[test]
-fn a_reinstall_into_a_newer_snapshot_that_holds_the_ids_is_renamed() {
+fn a_reinstall_into_a_nearer_snapshot_that_holds_the_ids_is_renamed() {
     let mut live = sections_holding(&[&Y]);
     let renamed = live.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
     let holding = json(&sections_holding(&[&X]));
-    let mut stack = stack_of(vec![
-        UndoData::SectionSnapshot {
-            section_id: 1,
-            section_data: copy_data(),
-        },
+    let mut stack = redo_stack_of(vec![
+        recreate(1),
         UndoData::ProjectSnapshotPair {
-            before: holding,
-            after: json(&live),
+            before: json(&live),
+            after: holding,
         },
     ]);
     assert!(stack.translate_shot_uuids(&live, &renamed) > 0);
     let expected: Vec<Option<String>> = X.iter().map(|u| Some(new_id(u))).collect();
-    assert_eq!(section_snapshot_ids(&stack), expected);
+    assert_eq!(recreated_ids(&stack), expected);
 }

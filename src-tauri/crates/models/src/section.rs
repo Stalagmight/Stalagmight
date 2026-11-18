@@ -173,8 +173,7 @@ pub struct LoadedLegacyText {
 ///
 /// FORMAT EVOLUTION (additive, no schema bump): an entry written before this
 /// existed deserializes to [`SectionIdentity::default`] - no uuids, parity
-/// false, no anchors - which is exactly the pre-fix behaviour (mint fresh),
-/// mirroring how `restore_shot`'s `uuid: None` is its own legacy fallback.
+/// false, no anchors - which is exactly the pre-fix behaviour (mint fresh).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SectionIdentity {
     /// The shots' persistent UUIDs, in shot order. An entry per shot, `None`
@@ -529,15 +528,15 @@ impl Section {
         // come through here. It is NOT the only door into a section: the
         // single-shot inserts ([`Self::add_shot`],
         // [`Self::insert_shot_after_with_id`], [`Self::insert_shot_before_with_id`])
-        // and the per-shot undo restore (`core::state::undo_restore`) build a
-        // `Shot` and push it directly, bypassing this loop.
+        // and the redo of a created shot (`core::state::undo`) build a `Shot`
+        // and push it directly, bypassing this loop.
         //
         // What keeps those safe is a property of this function, not of them: a
         // FOREIGN id can only enter a section HERE, so every identity they can
         // introduce is either a fresh v4 (no collision possible) or one this
         // section already de-duped. The IPC `create_shot` clears `uuid` at the
-        // boundary so a caller cannot smuggle one in, and `restore_shot` asserts
-        // the identity it replays is absent before inserting it. A NEW path that
+        // boundary so a caller cannot smuggle one in, and the redo of a created
+        // shot refuses a uuid the section already holds. A NEW path that
         // admits a foreign id one shot at a time would break that property and
         // needs its own answer - do not read this as blanket cover.
         //
@@ -605,7 +604,7 @@ impl Section {
     ///
     /// A shot with no recorded uuid (`identity.shot_uuids` shorter than the
     /// section, i.e. a legacy entry) keeps the fresh mint - the pre-fix
-    /// behaviour, and the same fallback `restore_shot` takes.
+    /// behaviour.
     pub fn restore_with_identity(
         id: SectionId,
         data: SectionData,

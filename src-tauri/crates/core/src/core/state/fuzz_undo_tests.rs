@@ -4760,9 +4760,9 @@ impl Fuzzer {
                         kind: *kind,
                     }),
                 );
-                // `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })`,
-                // which names the shot by its in-session id on BOTH the undo and
-                // the redo.
+                // `UndoData::PreviousValues { section_id, shot_id, .. }` as for
+                // an update: the undo restores the kind on this id's shot, and
+                // `redo_inner`'s catch-all re-executes the command with it.
                 drawn.target = target;
                 Some(drawn)
             }
@@ -5545,9 +5545,9 @@ impl Fuzzer {
             self.live_shot_ids(section_id)
         );
 
-        // Every id-bearing edit variant, contiguous, on top: `PreviousValues`
-        // (update_shot) and `InverseCommand` (set_shot_kind), each aimed at a
-        // shot whose id will address a DIFFERENT one after the renumbering.
+        // Every id-bearing edit, contiguous, on top: update_shot and
+        // set_shot_kind (both `PreviousValues`), each aimed at a shot whose id
+        // will address a DIFFERENT one after the renumbering.
         for &shot_id in colliding.iter().take(2) {
             let target = self.shot_target(section_id, shot_id);
             let before = self.stacks();

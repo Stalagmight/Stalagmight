@@ -352,8 +352,7 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 ///   back (#413, finding 11's re-creation residue).
 ///
 /// Neither subsumes the other, and this one is also on the path of every
-/// `ProjectSnapshot`, rollback and load-time restore, where there is no pair to
-/// refresh at all.
+/// rollback and load-time restore, where there is no pair to refresh at all.
 /// * `ensure_unique_shot_uuids` - NOT re-applied. It RE-MINTS an existing uuid,
 ///   which is not fill-in, and the pre-repair state of a `duplicate_shot_uuid`
 ///   Repair is a snapshot that intentionally holds duplicates: undoing that

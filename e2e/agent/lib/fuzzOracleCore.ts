@@ -37,8 +37,8 @@
  *   - `project.next_section_id`, `project.next_closure_id`,
  *     `project.sections.*.next_shot_id` - monotonic id counters, and an
  *     ASYMMETRY rather than a bug: a snapshot-pair undo restores them verbatim
- *     while a targeted undo (`restore_section`, `restore_shot`) only ever raises
- *     them, so comparing them would fire on every mixed history.
+ *     while a targeted restore (`restore_section`, a re-created shot) only ever
+ *     raises them, so comparing them would fire on every mixed history.
  *
  * Everything else is compared: shot uuids, `reverse_parity`, the gauge anchors,
  * `StationMerge.merged_at`, every `LoopClosure` metric, both imported-hash

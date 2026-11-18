@@ -52,7 +52,7 @@ impl AppState {
 
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
-            // zero datums - a SectionSnapshot alone cannot restore those.
+            // zero datums - a snapshot of the section alone cannot restore those.
             // Guard: only serialize if section exists (avoids overhead for doomed commands).
             Command::DeleteSection { section_id } => {
                 if project.get_section(*section_id).is_some() {
@@ -98,7 +98,7 @@ impl AppState {
             }
 
             // For DeleteShot, capture full project snapshot (before/after pair)
-            // because remove_shot shifts station refs - a ShotSnapshot alone cannot
+            // because remove_shot shifts station refs - a snapshot of the shot alone cannot
             // restore the original station references.
             Command::DeleteShot {
                 section_id,
@@ -240,8 +240,7 @@ impl AppState {
             // the undo reset a DIFFERENT shot's kind (#413, finding 12). This
             // is the same restore - one field put back to its previous value -
             // through the variant that can carry the address that survives a
-            // save. Persisted `InverseCommand(SetShotKind)` entries still
-            // restore through their own arm in `undo_inner`.
+            // save.
             Command::SetShotKind {
                 section_id,
                 shot_id,
@@ -272,7 +271,7 @@ impl AppState {
             // Merge can shift sections BEYOND the two merge groups: after aligning
             // the groups, cascade_connection_offsets re-anchors any section reachable
             // through an ALIGNED loop closure (cascade phase 2), and such a section is
-            // in neither merge group. A lightweight MergeInfo only restores the two
+            // in neither merge group. A lightweight merge record only restores the two
             // groups' offsets, so that external section stays drifted on undo - and
             // realign_merges() cannot self-heal it (it checks merge alignment only,
             // never closures). So capture a full before/after pair (like
@@ -302,7 +301,7 @@ impl AppState {
             // Unmerge removes a merge edge, which can strand a section so its sole
             // remaining bridge is a loop closure - execute() then converts that
             // closure into a merge and re-derives offsets (#8). A lightweight
-            // UnmergeInfo can only re-create the removed merge; it cannot reverse
+            // unmerge record can only re-create the removed merge; it cannot reverse
             // that conversion (the closure would stay a merge, forming a cycle) or
             // restore the pre-unmerge offsets. So capture a full before/after pair
             // (matching DeleteShot/DeleteSection, which trigger the same side
@@ -504,7 +503,7 @@ impl AppState {
 
             // MoveStation rewrites the raw geometry of the two adjacent shots and can,
             // through reconcile, re-anchor sections connected by merges/aligned closures.
-            // A lightweight StationMoveInfo captured only azimuth/length/depth of two
+            // A lightweight station-move record captured only azimuth/length/depth of two
             // shots and one section offset - it dropped pitch/lrud/temperature and any
             // re-cascaded section. Capture a full before/after pair (like Merge/Unmerge)
             // so undo restores every field and every offset the move could have touched.

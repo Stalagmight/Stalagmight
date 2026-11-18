@@ -21,10 +21,8 @@
  * (src-tauri/src/core/state/undo_capture.rs) plus the three paths that push
  * their own entry (`execute_batch`, `execute_move_comment`,
  * `repair_open_project_integrity`) are the ONLY producers. Measured against
- * them, six `UndoData` variants are dead as far as a freshly-stripped project is
- * concerned - see `UNREACHABLE_VARIANTS`. They survive in `undo()` as restore
- * arms for entries persisted by older builds, so a scenario that strips the
- * fixture's history can never construct one.
+ * them, one `UndoData` variant never reaches a stack - see
+ * `UNREACHABLE_VARIANTS`.
  *
  * ## The variant map
  *
@@ -114,27 +112,18 @@ export const VARIANT_BY_COMMAND_TYPE: Readonly<Record<string, UndoVariant>> = {
 
 /**
  * `UndoData` variants that exist in `src-tauri/src/core/undo.rs` and have a
- * restore arm in `undo()`/`redo()`, but which NO live command produces any more.
+ * restore arm in `undo()`/`redo()`, but which no live entry holds.
  *
  * Verified by grepping every construction site outside `#[cfg(test)]`: only
  * `undo_capture.rs` and `app_state.rs` build `UndoData`, and between them they
- * emit exactly the nine variants above plus `None`. Each name below was replaced
- * by a `ProjectSnapshotPair` (the capture comments in `undo_capture.rs` say why:
- * a lightweight record could not restore the cascades the command triggers) or,
- * for `ShotSnapshot`, is documented in `undo()` as serving "legacy persisted
- * entries" only.
+ * emit exactly the nine variants above plus `None` - and the snapshot pair that
+ * `UndoData::compact` turns into a `Delta` before it is pushed.
  *
  * This matters for the scope of this scenario: a stale-id defect in one of these
  * arms is unreachable from a project whose persisted history was stripped, so
  * the hunt is bounded by this list rather than by the enum.
  */
 export const UNREACHABLE_VARIANTS: Readonly<Record<string, string>> = {
-  MergeInfo: 'MergeStations captures a ProjectSnapshotPair instead (undo_capture.rs)',
-  UnmergeInfo: 'UnmergeStations/UnmergeStationPair capture a ProjectSnapshotPair instead',
-  StationMoveInfo: 'MoveStation captures a ProjectSnapshotPair instead',
-  ShotSnapshot: 'DeleteShot captures a ProjectSnapshotPair; this arm serves legacy persisted entries',
-  SectionSnapshot: 'DeleteSection captures a ProjectSnapshotPair; no live producer',
-  ProjectSnapshot: 'superseded by ProjectSnapshotPair; no live producer',
   ProjectSnapshotPair: 'a capture shape only: every pair is stored as a compact Delta',
 };
 

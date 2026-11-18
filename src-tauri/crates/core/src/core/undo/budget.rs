@@ -29,8 +29,7 @@ impl UndoStack {
         const BYTES_PER_OFFSET: usize = 64;
 
         let payload = match &entry.undo_data {
-            // Exact: these hold the serialized project already.
-            UndoData::ProjectSnapshot(json) => json.len(),
+            // Exact: this holds the serialized project already.
             UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
             // Exact too: measured by serializing, which is cheap because the
             // payload is only what the entry changed.
@@ -42,22 +41,12 @@ impl UndoStack {
             } => values_json.len() + previous_offsets.len() * BYTES_PER_OFFSET,
             // Approximated from element counts - a section snapshot of a big section is
             // the only other variant that can reach megabytes.
-            UndoData::SectionSnapshot { section_data, .. }
-            | UndoData::CreatedSectionSnapshot { section_data, .. } => {
+            UndoData::CreatedSectionSnapshot { section_data, .. } => {
                 section_data.shots.len() * BYTES_PER_SHOT
             }
-            UndoData::ShotSnapshot { .. } => BYTES_PER_SHOT,
             UndoData::CreatedShotSnapshot {
                 previous_offsets, ..
             } => BYTES_PER_SHOT + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::MergeInfo {
-                removed_closures,
-                previous_offsets,
-                ..
-            } => removed_closures.len() * 256 + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::UnmergeInfo {
-                removed_closures, ..
-            } => removed_closures.len() * 256,
             UndoData::ClosureInfo { .. } => 256,
             UndoData::ZeroDatumInfo {
                 previous_offsets, ..
@@ -67,7 +56,6 @@ impl UndoStack {
                 previous_offsets,
                 ..
             } => affected_sections.len() * 16 + previous_offsets.len() * BYTES_PER_OFFSET,
-            UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
             // Sized by what the add brought (#674) - which is the point of the
             // variant: it grows with the added file, never with the open cave.
             UndoData::AddedProjectContent(content) => {

@@ -554,8 +554,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 ///
 /// FIXED, and kept as the regression guard: `UndoData::ClosureInfo` records the
 /// index the removal took it out of and the undo re-inserts there, with `push`
-/// kept for a legacy entry that has no recorded position - the same shape
-/// `restore_shot` already used.
+/// kept for a legacy entry that has no recorded position.
 #[test]
 fn undo_of_remove_loop_closure_restores_the_original_order() {
     let _config = isolated_config();
@@ -1118,12 +1117,13 @@ fn diverged_section(state: &AppState) -> SectionId {
 // save/reload, undo of SetShotKind or UpdateShot writes to the WRONG SHOT
 // ===========================================================================
 
-/// `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })` names the
-/// shot by its IN-SESSION id (`undo_capture.rs`), and undo executes that command
-/// verbatim (`execute_without_undo`, core/state/undo.rs). The loader renumbers
-/// shots to `section_id * FEATURE_ID_STRIDE + sequence_order`
-/// (persistence/sqlite/read.rs) and nothing remaps the persisted entries, so
-/// after a reopen the id addresses whichever shot now occupies that slot.
+/// `SetShotKind` used to record `UndoData::InverseCommand(Command::SetShotKind
+/// { shot_id, .. })`, which names the shot by its IN-SESSION id, and undo
+/// executed that command verbatim (`execute_without_undo`, core/state/undo.rs).
+/// The loader renumbers shots to `section_id * FEATURE_ID_STRIDE +
+/// sequence_order` (persistence/sqlite/read.rs) and nothing remapped the
+/// persisted entries, so after a reopen the id addressed whichever shot then
+/// occupied that slot. It records `PreviousValues` with the shot's uuid now.
 ///
 /// Quieter than bug 8 and just as wrong: no shot is lost, no uuid changes and no
 /// count moves. One shot silently keeps an edit the undo was supposed to take

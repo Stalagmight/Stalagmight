@@ -127,7 +127,7 @@ pub const SCHEMA_VERSION: i32 = 18;
 ///   outright - and `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad
 ///   entry rather than truncating, keeping the entries on BOTH sides. The stack
 ///   loads with a HOLE, and undoing past it replays surviving older entries
-///   (position-keyed `ShotSnapshot`s, the apply's own `ProjectSnapshotPair`)
+///   (position-keyed shot snapshots, the apply's own `ProjectSnapshotPair`)
 ///   against a tree they no longer describe.
 ///
 /// v11→v12 drops the stacks as well, but conditionally - only when the pitch

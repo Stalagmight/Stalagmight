@@ -1,6 +1,6 @@
 //! GPS fixes in a whole-project undo snapshot (#741).
 //!
-//! A `ProjectSnapshot` / `ProjectSnapshotPair` is a serialized [`Project`], and
+//! A `ProjectSnapshotPair` half is a serialized [`Project`], and
 //! it is persisted in the `.stalx` undo history, where an older build reads it
 //! back with `serde_json::from_str::<Project>`. That build assumes at most one
 //! zero datum per merge component, so a GPS fix in the plain `zero_datums`

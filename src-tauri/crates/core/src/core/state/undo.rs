@@ -162,46 +162,9 @@ impl AppState {
                     section_values,
                 } => self.undo_shot_credits(changes, section_values.as_ref()),
 
-                UndoData::SectionSnapshot {
-                    section_id,
-                    section_data,
-                } => {
-                    // Restore deleted section. LEGACY ONLY: a live `DeleteSection`
-                    // captures a `ProjectSnapshotPair` (which restores the whole
-                    // `Section`, identity included), so this arm serves persisted
-                    // entries written before that change - and those carry no
-                    // identity, so the shots come back with fresh uuids exactly as
-                    // they always did.
-                    self.restore_section(
-                        *section_id,
-                        section_data.clone(),
-                        &SectionIdentity::default(),
-                    )
-                }
-
                 UndoData::CreatedSectionSnapshot { section_id, .. } => {
                     // Undo a CreateSection by deleting the section
                     self.delete_section(*section_id)
-                }
-
-                UndoData::ShotSnapshot {
-                    section_id,
-                    shot_id,
-                    shot_data,
-                    position,
-                    uuid,
-                } => {
-                    // Restore deleted shot at its original position with original ID
-                    // and original UUID. (Live DeleteShot now captures a full
-                    // ProjectSnapshotPair; this path serves legacy persisted entries,
-                    // where `uuid` is None and a fresh one is minted.)
-                    self.restore_shot(
-                        *section_id,
-                        *shot_id,
-                        shot_data.clone(),
-                        *position,
-                        uuid.clone(),
-                    )
                 }
 
                 UndoData::CreatedShotSnapshot {
@@ -257,82 +220,6 @@ impl AppState {
                             removed
                         }
                         Err(e) => CommandResult::failure(e),
-                    }
-                }
-
-                UndoData::MergeInfo {
-                    station_a,
-                    station_b,
-                    previous_offsets,
-                    ..
-                } => {
-                    // Undo a merge by restoring section offsets and unmerging the stations.
-                    match self.project.lock() {
-                        Ok(mut proj_guard) => match proj_guard.as_mut() {
-                            Some(project) => {
-                                // Restore section offsets to pre-merge positions
-                                project.restore_section_offsets(previous_offsets);
-
-                                // Then unmerge the stations
-                                project.unmerge_stations(*station_a, *station_b);
-                                CommandResult::success()
-                            }
-                            None => CommandResult::failure("No project open".to_string()),
-                        },
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    }
-                }
-
-                UndoData::UnmergeInfo {
-                    station_a,
-                    station_b,
-                    removed_closures,
-                } => {
-                    // Re-merge the stations to undo the unmerge
-                    let merge_result = self.merge_stations(*station_a, *station_b);
-                    if merge_result.success {
-                        // Merge succeeded, now restore removed closures
-                        if !removed_closures.is_empty() {
-                            if let Ok(mut proj_guard) = self.project.lock() {
-                                if let Some(project) = proj_guard.as_mut() {
-                                    for closure in removed_closures {
-                                        project.next_closure_id =
-                                            project.next_closure_id.max(closure.id + 1);
-                                        project.loop_closures.push(closure.clone());
-                                    }
-                                    project.touch();
-                                }
-                            }
-                        }
-                        merge_result
-                    } else {
-                        // If re-merge fails (e.g., stations now connected), try direct restoration
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                                Some(project) => {
-                                    if let (Some(key_a), Some(key_b)) = (
-                                        project.key_for_ref(*station_a),
-                                        project.key_for_ref(*station_b),
-                                    ) {
-                                        project.record_station_merge(crate::models::StationMerge {
-                                            station_a: key_a,
-                                            station_b: key_b,
-                                            merged_at: chrono::Utc::now(),
-                                        });
-                                    }
-                                    // Restore removed closures and bump next_closure_id
-                                    for closure in removed_closures {
-                                        project.next_closure_id =
-                                            project.next_closure_id.max(closure.id + 1);
-                                        project.loop_closures.push(closure.clone());
-                                    }
-                                    project.touch();
-                                    CommandResult::success()
-                                }
-                                None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                        }
                     }
                 }
 
@@ -479,103 +366,6 @@ impl AppState {
                             }
                             None => CommandResult::failure("No project open".to_string()),
                         },
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    }
-                }
-
-                UndoData::StationMoveInfo {
-                    station_ref,
-                    prev_shot_before,
-                    prev_shot_after,
-                    prev_offset,
-                    prev_section_offset,
-                } => {
-                    // Restore adjacent shot data and station offset
-                    match self.project.lock() {
-                        Ok(mut proj_guard) => match proj_guard.as_mut() {
-                            Some(project) => {
-                                let section = project
-                                    .sections
-                                    .iter_mut()
-                                    .find(|s| s.id == station_ref.section_id);
-                                if let Some(section) = section {
-                                    // Restore preceding shot
-                                    if let Some((shot_id, shot_data)) = prev_shot_before {
-                                        if let Some(shot) =
-                                            section.shots.iter_mut().find(|s| s.id == *shot_id)
-                                        {
-                                            shot.azimuth_in = shot_data.azimuth_in;
-                                            shot.azimuth_out = shot_data.azimuth_out;
-                                            shot.length = shot_data.length;
-                                            shot.depth_in = shot_data.depth_in;
-                                            shot.depth_out = shot_data.depth_out;
-                                        }
-                                    }
-                                    // Restore following shot
-                                    if let Some((shot_id, shot_data)) = prev_shot_after {
-                                        if let Some(shot) =
-                                            section.shots.iter_mut().find(|s| s.id == *shot_id)
-                                        {
-                                            shot.azimuth_in = shot_data.azimuth_in;
-                                            shot.azimuth_out = shot_data.azimuth_out;
-                                            shot.length = shot_data.length;
-                                            shot.depth_in = shot_data.depth_in;
-                                            shot.depth_out = shot_data.depth_out;
-                                        }
-                                    }
-                                }
-                                // Restore station offset
-                                if let Some(key) = project.key_for_ref(*station_ref) {
-                                    match prev_offset {
-                                        Some(offset) => {
-                                            project.station_offsets.insert(key, *offset);
-                                        }
-                                        None => {
-                                            project.station_offsets.remove(&key);
-                                        }
-                                    }
-                                }
-                                // Restore section offset - through the one writer, so a
-                                // legacy entry carrying a dust-zero value restores as
-                                // ABSENT rather than installing a state the app cannot
-                                // otherwise hold (the invariant on
-                                // `Project::write_section_offset`). This arm serves
-                                // persisted entries only; a live `MoveStation` records
-                                // a `ProjectSnapshotPair`.
-                                match prev_section_offset {
-                                    Some(offset) => {
-                                        crate::models::Project::write_section_offset(
-                                            &mut project.section_offsets,
-                                            station_ref.section_id,
-                                            *offset,
-                                        );
-                                    }
-                                    None => {
-                                        project.section_offsets.remove(&station_ref.section_id);
-                                    }
-                                }
-                                project.touch();
-                                CommandResult::success()
-                            }
-                            None => CommandResult::failure("No project open".to_string()),
-                        },
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    }
-                }
-
-                UndoData::ProjectSnapshot(json) => {
-                    // Restore entire project (caches rebuilt centrally; see
-                    // AppState::restore_snapshot_into).
-                    match self.project.lock() {
-                        Ok(mut proj) => {
-                            if Self::restore_snapshot_into(&mut proj, json.as_str()) {
-                                CommandResult::success()
-                            } else {
-                                CommandResult::failure(
-                                    "Failed to parse project snapshot".to_string(),
-                                )
-                            }
-                        }
                         Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                     }
                 }

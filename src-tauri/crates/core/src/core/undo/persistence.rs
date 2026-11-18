@@ -290,7 +290,7 @@ impl UndoStack {
     /// Deliberately a TOP-DOWN scan that STOPS at the first entry whose undo
     /// restores recorded state wholesale
     /// ([`UndoData::restores_recorded_state`]). Such an entry is a wall: it puts
-    /// a whole project or section back, in the id space it was recorded in, so
+    /// a whole project back, in the id space it was recorded in, so
     /// a target that does not resolve against the project as loaded may resolve
     /// perfectly once the walk gets there. Above the wall the question is
     /// answerable, because every live path that REMOVES a shot records a

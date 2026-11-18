@@ -1515,115 +1515,14 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
 }
 
 // ---------------------------------------------------------------------------
-// 15. A legacy undo entry must not restore a shot with no identity
+// 15. A legacy undo entry must not re-create a shot with no identity
 // ---------------------------------------------------------------------------
 
-/// An undo entry serialised before #423 carries neither a `ShotData::uuid` nor a
-/// `ShotInfo`-side `uuid`. `Shot::with_uuid` resolves `data.uuid.or(explicit)`
-/// and never mints, so replaying one used to restore a shot with `uuid: None`:
-/// absent from `shot_uuid_index`, unnameable by any `StationKey::AfterShot`, and
-/// left that way until some later save happened to mint one.
-///
-/// `restore_shot` goes through `Shot::uuid_or_mint`, so the restored shot always
-/// has an identity and a cross-reference can be anchored on it immediately.
-#[test]
-fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
-    let state = state_with_project();
-    let section_id = state
-        .execute(Command::CreateSection {
-            name: Some("Legacy".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            shots: vec![
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 90.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 90.0,
-                    length: 11.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-            ],
-        })
-        .section_id
-        .unwrap();
-
-    // The pre-#423 payload shape: no uuid on the ShotData, and none recorded
-    // beside it. Pushed straight onto the stack, exactly as a persisted entry
-    // written by an older build deserialises.
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.push_with_data(
-            Command::DeleteShot {
-                section_id,
-                shot_id: 0,
-            },
-            crate::core::undo::UndoData::ShotSnapshot {
-                section_id,
-                shot_id: 9_999,
-                shot_data: ShotData {
-                    azimuth_in: 45.0,
-                    azimuth_out: 45.0,
-                    length: 7.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                position: 1,
-                uuid: None,
-            },
-        );
-    }
-
-    let undone = state.undo();
-    assert!(undone.success, "{:?}", undone.error);
-
-    let project = state.get_project_state().unwrap();
-    let restored = project
-        .get_section(section_id)
-        .unwrap()
-        .shots
-        .iter()
-        .find(|s| s.id == 9_999)
-        .expect("the legacy entry restored its shot");
-    let uuid = restored
-        .uuid
-        .clone()
-        .expect("a restored shot must have an identity, or no anchor can name it");
-    assert!(!uuid.is_empty());
-
-    // The point of having one: an AfterShot anchor on it resolves.
-    let key = project
-        .key_for_ref(StationRef::new(section_id, 2))
-        .expect("the station after the restored shot must be nameable");
-    assert_eq!(
-        key.anchor,
-        crate::models::StationAnchor::AfterShot(uuid),
-        "the anchor must be keyed on the restored shot's own identity"
-    );
-    assert_eq!(
-        project.resolve_key(&key),
-        Some(StationRef::new(section_id, 2)),
-        "and it must resolve back to the same station"
-    );
-}
-
-/// The redo twin of the test above, for the one insert arm that bypasses the
-/// `section.rs` helpers: a legacy `CreatedShotSnapshot` (both anchors `None`,
-/// no recorded uuid) redone as a TRUE APPEND takes the raw
-/// `section.shots.insert` path in `core/state/undo.rs`, which used to hand
-/// `Shot::with_uuid` a bare `None` - recreating the identity-less shot every
-/// other insert path mints for.
+/// The one insert arm that bypasses the `section.rs` helpers: a legacy
+/// `CreatedShotSnapshot` (both anchors `None`, no recorded uuid) redone as a
+/// TRUE APPEND takes the raw `section.shots.insert` path in
+/// `core/state/undo.rs`, which used to hand `Shot::with_uuid` a bare `None` -
+/// recreating the identity-less shot every other insert path mints for.
 #[test]
 fn a_legacy_created_shot_redo_append_mints_an_identity() {
     let state = state_with_project();

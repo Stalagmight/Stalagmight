@@ -277,8 +277,8 @@ precheck plus a per-row backstop), with a message naming the offending id and
 the bound - a pre-#556 file, another tool's output, or a hostile author cannot
 reach the unchecked encodes through the open path. The persisted-undo replay
 is bounded at both of its section-construction points: `restore_section`
-(legacy `SectionSnapshot` and `CreatedSectionSnapshot` entries) refuses an
-over-bound id, and `restore_snapshot_into` - the chokepoint the
+(`CreatedSectionSnapshot` entries) refuses an over-bound id, and
+`restore_snapshot_into` - the chokepoint the
 `ProjectSnapshotPair` arm current builds write goes through, where serde
 rebuilds sections without `Section::new` - refuses the whole snapshot. The
 counter rebuild (`next_section_id`) saturates as defense in depth.

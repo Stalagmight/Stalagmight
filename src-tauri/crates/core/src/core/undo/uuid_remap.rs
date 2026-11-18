@@ -127,14 +127,6 @@ fn reinstalled_ids(data: &UndoData) -> Vec<(SectionId, &str)> {
                     .filter_map(move |s| Some((section.id, s.uuid.as_deref()?)))
             })
             .collect(),
-        UndoData::SectionSnapshot {
-            section_id,
-            section_data,
-        } => section_data
-            .shots
-            .iter()
-            .filter_map(|s| Some((*section_id, s.uuid.as_deref()?)))
-            .collect(),
         UndoData::CreatedSectionSnapshot {
             section_id,
             section_data,
@@ -167,10 +159,6 @@ impl HistoryIds {
                 state.entry(uuid.to_string()).or_default().insert(section);
             };
         match data {
-            UndoData::ProjectSnapshot(json) => {
-                probe_snapshot(json, &mut |section, uuid| note(&mut state, section, uuid));
-                self.close_state(&mut state);
-            }
             UndoData::ProjectSnapshotPair { before, after } => {
                 probe_snapshot(before, &mut |section, uuid| note(&mut state, section, uuid));
                 self.close_state(&mut state);
@@ -338,7 +326,6 @@ fn remap_entry(entry: &mut UndoEntry, map: &ShotUuidRemap) -> bool {
         map.rewrite_uuid(section, uuid)
     });
     match &mut entry.undo_data {
-        UndoData::ProjectSnapshot(json) => changed |= remap_snapshot(json, map),
         UndoData::ProjectSnapshotPair { before, after } => {
             changed |= remap_snapshot(before, map);
             changed |= remap_snapshot(after, map);
@@ -439,7 +426,6 @@ fn visit_entry(
         UndoData::InverseCommand(_)
         | UndoData::ZeroDatumInfo { .. }
         | UndoData::SegmentMoveInfo { .. }
-        | UndoData::ProjectSnapshot(_)
         | UndoData::ProjectSnapshotPair { .. }
         // Rewritten as a whole by `remap_entry`, like a snapshot.
         | UndoData::Delta(_)
@@ -449,10 +435,6 @@ fn visit_entry(
             shot_uuid,
             ..
         } => changed |= f(*section_id, shot_uuid),
-        UndoData::SectionSnapshot {
-            section_id,
-            section_data,
-        } => changed |= visit_section_data(*section_id, section_data, f),
         UndoData::CreatedSectionSnapshot {
             section_id,
             section_data,
@@ -464,15 +446,6 @@ fn visit_entry(
             }
             changed |= f(*section_id, &mut identity.gauge_shot_uuid);
             changed |= f(*section_id, &mut identity.gauge_neighbour_uuid);
-        }
-        UndoData::ShotSnapshot {
-            section_id,
-            shot_data,
-            uuid,
-            ..
-        } => {
-            changed |= f(*section_id, &mut shot_data.uuid);
-            changed |= f(*section_id, uuid);
         }
         UndoData::CreatedShotSnapshot {
             section_id,
@@ -487,32 +460,7 @@ fn visit_entry(
             changed |= f(*section_id, before_shot_uuid);
             changed |= f(*section_id, uuid);
         }
-        UndoData::MergeInfo {
-            removed_closures, ..
-        }
-        | UndoData::UnmergeInfo {
-            removed_closures, ..
-        } => {
-            for closure in removed_closures {
-                changed |= visit_closure(closure, f);
-            }
-        }
         UndoData::ClosureInfo { closure, .. } => changed |= visit_closure(closure, f),
-        UndoData::StationMoveInfo {
-            station_ref,
-            prev_shot_before,
-            prev_shot_after,
-            ..
-        } => {
-            // Inert (the restore copies geometry by shot id), translated anyway
-            // so no copy of an old id outlives the heal.
-            for (_, shot_data) in prev_shot_before
-                .iter_mut()
-                .chain(prev_shot_after.iter_mut())
-            {
-                changed |= f(station_ref.section_id, &mut shot_data.uuid);
-            }
-        }
         UndoData::ShotCredits { changes, .. } => {
             for change in changes {
                 let mut uuid = Some(std::mem::take(&mut change.shot_uuid));
