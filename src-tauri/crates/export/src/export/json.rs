@@ -117,42 +117,43 @@ impl JsonExport {
                     color: s.color.clone(),
                     shots: {
                         let stations = super::csv::station_columns(project, s.id);
-                        let name = |i: usize| stations.get(i).map(|st| st.0.clone()).unwrap_or_default();
+                        let name =
+                            |i: usize| stations.get(i).map(|st| st.0.clone()).unwrap_or_default();
                         let id = |i: usize| stations.get(i).and_then(|st| st.1.parse().ok());
                         s.shots
-                        .iter()
-                        .enumerate()
-                        .map(|(index, shot)| JsonShot {
-                            from: name(index),
-                            to: name(index + 1),
-                            from_id: id(index),
-                            to_id: id(index + 1),
-                            length: shot.length,
-                            azimuth_in: shot.azimuth_in,
-                            azimuth_out: shot.azimuth_out,
-                            depth_in: shot.depth_in,
-                            depth_out: shot.depth_out,
-                            lrud: if shot.left.is_some()
-                                || shot.right.is_some()
-                                || shot.up.is_some()
-                                || shot.down.is_some()
-                            {
-                                Some([
-                                    shot.left.unwrap_or(0.0),
-                                    shot.right.unwrap_or(0.0),
-                                    shot.up.unwrap_or(0.0),
-                                    shot.down.unwrap_or(0.0),
-                                ])
-                            } else {
-                                None
-                            },
-                            kind: shot.kind,
-                            comment: shot.comment.clone(),
-                            surveyors: names(&shot.credit().surveyors),
-                            explorers: names(&shot.credit().explorers),
-                            date: shot.credit().date.map(|d| d.to_string()),
-                        })
-                        .collect()
+                            .iter()
+                            .enumerate()
+                            .map(|(index, shot)| JsonShot {
+                                from: name(index),
+                                to: name(index + 1),
+                                from_id: id(index),
+                                to_id: id(index + 1),
+                                length: shot.length,
+                                azimuth_in: shot.azimuth_in,
+                                azimuth_out: shot.azimuth_out,
+                                depth_in: shot.depth_in,
+                                depth_out: shot.depth_out,
+                                lrud: if shot.left.is_some()
+                                    || shot.right.is_some()
+                                    || shot.up.is_some()
+                                    || shot.down.is_some()
+                                {
+                                    Some([
+                                        shot.left.unwrap_or(0.0),
+                                        shot.right.unwrap_or(0.0),
+                                        shot.up.unwrap_or(0.0),
+                                        shot.down.unwrap_or(0.0),
+                                    ])
+                                } else {
+                                    None
+                                },
+                                kind: shot.kind,
+                                comment: shot.comment.clone(),
+                                surveyors: names(&shot.credit().surveyors),
+                                explorers: names(&shot.credit().explorers),
+                                date: shot.credit().date.map(|d| d.to_string()),
+                            })
+                            .collect()
                     },
                 })
                 .collect(),

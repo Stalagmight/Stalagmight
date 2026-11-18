@@ -64,7 +64,11 @@ fn ids_and_the_counter_round_trip_through_a_saved_file() {
 
     assert_eq!(ids_of(&loaded), ids_of(&project));
     assert_eq!(loaded.next_station_id, 42);
-    assert_eq!(loaded.station_names.len(), 6, "every station's name is written");
+    assert_eq!(
+        loaded.station_names.len(),
+        6,
+        "every station's name is written"
+    );
 }
 
 /// A v18 file from before Station IDs: no table, no key. It opens with no

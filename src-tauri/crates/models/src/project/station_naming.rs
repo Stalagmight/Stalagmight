@@ -73,19 +73,11 @@ fn family_max<'a>(prefix: &str, names: impl IntoIterator<Item = &'a str>) -> Opt
 /// `names` (`0` when there is none), incremented until free.
 pub fn next_free_integer<'a>(names: impl IntoIterator<Item = &'a str> + Clone) -> String {
     let taken: HashSet<&str> = names.clone().into_iter().collect();
-    match family_max("", names) {
-        Some(max) => next_numbered("", max, 1, &|n| taken.contains(n)),
-        None => {
-            let mut number: u64 = 0;
-            loop {
-                let candidate = number.to_string();
-                if !taken.contains(candidate.as_str()) {
-                    return candidate;
-                }
-                number += 1;
-            }
-        }
-    }
+    // With no all-digit name, `0` is free by definition.
+    family_max("", names).map_or_else(
+        || "0".to_string(),
+        |max| next_numbered("", max, 1, &|n| taken.contains(n)),
+    )
 }
 
 /// The End rule: the name of a station appended after `previous`.
@@ -350,7 +342,7 @@ pub fn fill_line_station_names(names: &mut [Option<String>]) -> usize {
     let mut anchor: Option<String> = None;
     for index in first_named..names.len() {
         if named(&names[index]) {
-            anchor = names[index].clone();
+            anchor.clone_from(&names[index]);
             continue;
         }
         let Some(base) = anchor.clone() else { continue };

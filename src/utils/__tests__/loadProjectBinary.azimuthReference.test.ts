@@ -45,7 +45,7 @@ function envelope(overrides: {
   });
 
   return {
-    version: 7,
+    version: 8,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -92,6 +92,7 @@ function envelope(overrides: {
     station_closures_with: [],
     station_comments: [],
     station_names: [],
+    stations_ids: new Uint8Array(0),
     stats: {} as never,
     warnings: [],
     display_settings: {} as never,

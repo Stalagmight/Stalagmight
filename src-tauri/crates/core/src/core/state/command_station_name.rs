@@ -56,9 +56,7 @@ impl AppState {
         };
         let line_id: LineId = *line_id;
         self.with_open_project(|project| {
-            if project.get_line(line_id).is_none() {
-                return None;
-            }
+            project.get_line(line_id)?;
             project
                 .validate_line_name(name.as_deref().unwrap_or_default(), Some(line_id))
                 .err()
