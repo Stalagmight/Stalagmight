@@ -422,7 +422,7 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^These 2 connections are removed:/);
     expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
       'The snapped closure between [section Section 9] [station 9:1] and [section Main-B] [station 5:0] : ' +
-        'as an ordinary closure it would join the two ends of one shot.',
+        'it would join the two ends of one shot.',
       'Loop closure [section Main-A] [station 2:1] to [section Main-B] [station 5:0] : it would join the ' +
         'two ends of one shot.',
     ]);
@@ -715,6 +715,94 @@ describe('CombineSectionsDialog', () => {
     expect(screen.getByTestId('combine-torn-why').textContent).toBe(
       "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop."
     );
+  });
+
+  it('says why a snap the joined station pulls apart becomes a loop closure, and names a former snap (#736)', () => {
+    // Keeping Main-A nothing moves, but the joined station keeps Main-A's
+    // hand move: the snap at Main-B's join station ends up apart. That is its
+    // own reason, not a loop the combine closes, so no paragraph says the
+    // combined section would be tied to itself.
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          join_offset_change_m: 0.5,
+          torn_ties: [tornTie('snapped_closure', [5, 0], [8, 1], 'joined_station_moves')],
+        }),
+        // Keeping Main-B, which moves (a zero datum holds Main-A): the
+        // joined station keeps Main-A's position, and a torn snap the move
+        // brings back together across the two sides is named as the loop
+        // closure left from a snap it is.
+        plan_keeping_b: quietPlan(5, {
+          moving_section: 5,
+          kept_moves_because: 'zero_datum',
+          moved_sections: [5],
+          shift_m: 0.3,
+          join_offset_change_m: 0.5,
+          torn_ties: [
+            tornTie('former_snapped_closure', [5, 1], [2, 1], 'loop'),
+            tornTie('snapped_closure', [2, 3], [8, 1], 'joined_station_moves'),
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'The snapped closure between [section Main-B] [station 5:0] and [section Section 8] [station 8:1] . ' +
+        "The joined station keeps [section Main-A] 's position as shown, so the two stations end up more " +
+        'than 0.01m apart.',
+    ]);
+    expect(screen.queryByTestId('combine-torn-why')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
+      'Loop closure [section Main-B] [station 5:1] to [section Main-A] [station 2:1] , left from a snap whose ' +
+        'stations had moved apart: combining brings them back together, where it would snap again',
+      'The snapped closure between [section Main-A] [station 2:3] and [section Section 8] [station 8:1] . ' +
+        "The joined station keeps [section Main-A] 's position as shown, so the two stations end up more " +
+        'than 0.01m apart.',
+    ]);
+    expect(screen.getByTestId('combine-torn-why').textContent).toBe(
+      "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop."
+    );
+  });
+
+  it('names a former snap the combine removes across one shot or that takes a closure\'s place (#736)', () => {
+    const at = (s: number, i: number) => ({ section_id: s, station_index: i });
+    dialogData = {
+      candidate: candidate({
+        join_kind: 'closure',
+        plan_keeping_a: quietPlan(2, {
+          moving_section: 5,
+          moved_sections: [5],
+          shift_m: 0.4,
+          closures_removed_across_one_shot: [
+            { station_a: at(5, 1), station_b: at(2, 2), kind: 'former_snapped_closure' },
+          ],
+          closures_replaced: [
+            {
+              station_a: at(5, 2),
+              station_b: at(2, 1),
+              kind: 'legacy_closure',
+              by_station_a: at(5, 2),
+              by_station_b: at(2, 1),
+              by_kind: 'former_snapped_closure',
+            },
+          ],
+        }),
+      }),
+    };
+    render(<CombineSectionsDialog />);
+    expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
+      'Loop closure [section Main-B] [station 5:1] to [section Main-A] [station 2:2] , left from a snap whose ' +
+        'stations had moved apart: combining brings them back together, where it would join the two ends of ' +
+        'one shot.',
+    ]);
+    expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
+      'Loop closure [section Main-B] [station 5:2] to [section Main-A] [station 2:1] , an older kind the ' +
+        'Closures Computed View does not adjust. Loop closure [section Main-B] [station 5:2] to [section ' +
+        'Main-A] [station 2:1] , left from a snap whose stations had moved apart, becomes an ordinary loop ' +
+        'closure on the same two stations and takes its place.',
+    ]);
   });
 
   it('lists converted bearings, the kept quality and offset, renewed shot ids and crossings', () => {
