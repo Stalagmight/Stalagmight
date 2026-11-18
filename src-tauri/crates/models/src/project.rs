@@ -128,6 +128,13 @@ mod combine_hand_move_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_realign_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_residual_tests;
