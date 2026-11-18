@@ -78,10 +78,13 @@ fn issue_loop() -> (Project, LineId, LineId) {
     p.merge_stations(st(a, 0), st(b, 0)).unwrap();
     p.create_loop_closure(st(b, 3), st(a, 2), ClosureStrategy::Batch)
         .unwrap();
+    // Named as the app holds them: lines `Line 1`, `Line 2`, stations by index.
+    p.ensure_station_identities();
     (p, a, b)
 }
 
-const SPANS_A1_A2: &str = "This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.";
+/// The refusal names the shot's two stations the way the user reads them.
+const SPANS_A1_A2: &str = "This closure would join the two ends of one shot (Line 1 / 1 to Line 1 / 2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.";
 
 // ---- the helper -------------------------------------------------------------
 
@@ -276,7 +279,9 @@ fn creation_refuses_a_closure_across_one_shot_for_every_strategy() {
     }
     assert_eq!(p.loop_closures.len(), 1, "nothing was created");
     assert_eq!(p.closure_spans_one_shot(st(a, 1), st(a, 2)), Some((a, 1)));
-    assert_eq!(closure_across_one_shot_refusal((a, 1)), SPANS_A1_A2);
+    assert_eq!(p.closure_across_one_shot_message((a, 1)), SPANS_A1_A2);
+    // The positional form survives only for a caller with no project.
+    assert!(closure_across_one_shot_refusal((a, 1)).contains("(0:1 to 0:2)"));
 }
 
 /// Positions of every station, keyed for comparison.
@@ -467,6 +472,7 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
             (st(b, 1), st(far, 1)), // valid loop
             (st(c, 1), st(far, 1)), // valid loop
         ];
+        p.ensure_station_identities();
         (p, pairs)
     }
     let (mut seq, pairs) = build();
@@ -491,7 +497,7 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
     );
     assert!(errs[4]
         .as_deref()
-        .is_some_and(|e| e.contains("one shot (2:0 to 2:1)")));
+        .is_some_and(|e| e.contains("one shot (Line 3 / 0 to Line 3 / 1)")));
     assert!(errs[5].is_none() && errs[6].is_none(), "{errs:?}");
     let ids = |p: &Project| {
         p.loop_closures

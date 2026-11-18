@@ -198,9 +198,10 @@ fn the_connectivity_check_carries_the_backend_refusal() {
     let across = state.check_merge_connectivity(st(a, 1), st(a, 2)).unwrap();
     assert!(across.connected && !across.can_merge);
     let refusal = across.closure_refusal.expect("a refusal for one shot");
+    let line = state.get_project_state().unwrap().line_label(a).unwrap();
     assert!(refusal.starts_with(&format!(
-        "This closure would join the two ends of one shot ({a}:1 to {a}:2) and squeeze that \
-         shot to zero length."
+        "This closure would join the two ends of one shot ({line} / 1 to {line} / 2) and \
+         squeeze that shot to zero length."
     )));
     // The very words the create command answers with.
     let created = state.execute(Command::CreateLoopClosure {

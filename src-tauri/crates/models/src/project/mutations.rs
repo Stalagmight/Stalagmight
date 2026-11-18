@@ -272,7 +272,7 @@ impl Project {
         // `Move` closure either. A pair other merges and closures already tie
         // together is NOT refused: it changes nothing for the solve.
         if let Some(shot) = self.closure_spans_one_shot(station_a, station_b) {
-            return Err(super::closure_shots::closure_across_one_shot_refusal(shot));
+            return Err(self.closure_across_one_shot_message(shot));
         }
 
         // Compute closure values using shared helper
@@ -485,9 +485,7 @@ impl Project {
                 continue;
             }
             if let Some(shot) = knots.collapsed_shot(station_a, station_b) {
-                results.push(Err(super::closure_shots::closure_across_one_shot_refusal(
-                    shot,
-                )));
+                results.push(Err(self.closure_across_one_shot_message(shot)));
                 continue;
             }
             let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {

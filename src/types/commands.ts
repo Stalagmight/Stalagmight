@@ -95,4 +95,8 @@ export type BatchCommand =
   | { type: 'edit_shot_credit'; targets: CreditTargets; edit: CreditEdit }
   // Edit Line's Save: a rename / recolour and the shots' credit edit go in
   // one batch, so the Save is one undo step.
-  | { type: 'update_line_metadata'; line_id: LineId; updates: LineUpdates };
+  | { type: 'update_line_metadata'; line_id: LineId; updates: LineUpdates }
+  // Renaming stations: a data-table paste of names is one user action. The
+  // backend trims each name and refuses an empty one or one another station
+  // of the line holds, rolling the whole batch back.
+  | { type: 'set_station_name'; station_ref: StationRef; name: string };

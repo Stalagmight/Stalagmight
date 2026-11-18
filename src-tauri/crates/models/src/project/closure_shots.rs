@@ -84,11 +84,27 @@ impl ClosureAcrossOneShot {
 /// files.
 pub fn closure_across_one_shot_refusal(shot: (LineId, usize)) -> String {
     let (from, to) = shot_ends(shot);
+    across_one_shot_text(&station_id_label(from), &station_id_label(to))
+}
+
+fn across_one_shot_text(from: &str, to: &str) -> String {
     format!(
-        "This closure would join the two ends of one shot ({} to {}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.",
-        station_id_label(from),
-        station_id_label(to)
+        "This closure would join the two ends of one shot ({from} to {to}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot."
     )
+}
+
+impl Project {
+    /// [`closure_across_one_shot_refusal`] with the two stations named the
+    /// way the user reads them (`Main Line / 4`), falling back to the
+    /// positional label only for a station no name can be read for.
+    pub fn closure_across_one_shot_message(&self, shot: (LineId, usize)) -> String {
+        let (from, to) = shot_ends(shot);
+        let label = |station: StationRef| {
+            self.station_label(station)
+                .unwrap_or_else(|| station_id_label(station))
+        };
+        across_one_shot_text(&label(from), &label(to))
+    }
 }
 
 /// `S:I`, the station id the UI shows (`formatStationId`).

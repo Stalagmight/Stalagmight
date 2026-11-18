@@ -81,7 +81,7 @@ impl AppState {
         } else {
             project
                 .closure_spans_one_shot(station_a, station_b)
-                .map(crate::models::closure_across_one_shot_refusal)
+                .map(|shot| project.closure_across_one_shot_message(shot))
         };
 
         // Two placed pieces (#741): which one the merge moves, and how far.
