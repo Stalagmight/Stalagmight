@@ -1,7 +1,5 @@
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
     reason = "test module: a failed lookup is a failed test"
 )]
 
@@ -311,7 +309,7 @@ fn moving_and_reversing_shots_costs_runs_not_shots() {
     let shot_bytes = serde_json::to_string(&before["sections"][0]["shots"][0])
         .unwrap()
         .len();
-    let mut big = before.clone();
+    let mut big = before;
     // One section with 400 shots.
     let long = world.section(400);
     World::sections(&mut big).push(long);
@@ -366,7 +364,11 @@ fn deleting_one_shot_records_that_shot_only() {
     let undo = round_trip(&after, &before);
     let redo = round_trip(&before, &after);
     let shot_bytes = serde_json::to_string(&removed).unwrap().len();
-    assert!(encoded_len(&undo) < shot_bytes + 200, "{}", encoded_len(&undo));
+    assert!(
+        encoded_len(&undo) < shot_bytes + 200,
+        "{}",
+        encoded_len(&undo)
+    );
     assert!(encoded_len(&redo) < 160, "{}", encoded_len(&redo));
 }
 

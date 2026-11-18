@@ -111,7 +111,10 @@ pub fn shot_run_displacement(shots: &[ShotData], reference: AzimuthReference) ->
 /// the reading `average_azimuth` measures its ±180 tie-break from flips, which
 /// is what turns the bearing around. An involution either way.
 pub fn reversed_azimuths(azimuth_in: f64, azimuth_out: f64) -> (f64, f64) {
-    let (azimuth_in, azimuth_out) = (normalize_azimuth(azimuth_in), normalize_azimuth(azimuth_out));
+    let (azimuth_in, azimuth_out) = (
+        normalize_azimuth(azimuth_in),
+        normalize_azimuth(azimuth_out),
+    );
     if readings_are_antipodal(azimuth_in, azimuth_out) {
         (azimuth_out, azimuth_in)
     } else {

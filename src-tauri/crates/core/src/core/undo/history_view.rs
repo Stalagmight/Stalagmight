@@ -643,9 +643,9 @@ fn derive_preview_data(
         // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
         (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
             SnapshotPreview::parse(before).and_then(|snapshot| {
-                snapshot
-                    .section(*section_id)
-                    .map(|section| deleted_section_preview(section.name.as_deref(), section.shots.len()))
+                snapshot.section(*section_id).map(|section| {
+                    deleted_section_preview(section.name.as_deref(), section.shots.len())
+                })
             })
         }
 

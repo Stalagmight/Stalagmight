@@ -51,7 +51,9 @@ fn shot(section: usize, i: usize) -> ShotData {
         right: Some(2.0),
         up: Some(0.75),
         down: Some(1.25),
-        comment: (i % 10 == 0).then(|| format!("station note {section}-{i}")),
+        comment: i
+            .is_multiple_of(10)
+            .then(|| format!("station note {section}-{i}")),
         marker_index: Some(i as u32),
         ..Default::default()
     }
@@ -125,7 +127,10 @@ fn open(sections: usize) -> Gate {
     let dir = TempDir::new().unwrap();
     let path: PathBuf = dir.path().join("gate.stalx");
     let project = survey(sections);
-    Database::open(&path).unwrap().save_project(&project).unwrap();
+    Database::open(&path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
     let state = AppState::new().unwrap();
     assert!(state.open_project(path.clone()).success, "open the survey");
     // Rewrite it through the app's own save, history empty: the survey alone.
@@ -196,6 +201,9 @@ struct Row {
     variant: String,
     undo_bytes: usize,
     redo_bytes: usize,
+    /// Wall time of the action, its undo and its redo (reported, never
+    /// asserted: a debug build and a loaded host say nothing about release).
+    millis: [u128; 3],
 }
 
 type Action = fn(&Gate) -> crate::core::CommandResult;
@@ -406,7 +414,9 @@ fn actions() -> Vec<(&'static str, Action)> {
             g.state
                 .update_project_settings("Gate renamed".to_string(), validation)
         }),
-        ("surface elevation", |g| g.state.set_surface_elevation(Some(12.0))),
+        ("surface elevation", |g| {
+            g.state.set_surface_elevation(Some(12.0))
+        }),
         ("split section here", |g| {
             g.state.execute_split_section(
                 g.mid(),
@@ -482,7 +492,9 @@ fn measure(gate: &Gate) -> (Vec<Row>, Vec<String>) {
     let mut failed = Vec::new();
     for (action, run) in actions() {
         let depth = gate.state.undo_stack.lock().unwrap().len();
+        let started = std::time::Instant::now();
         let result = run(gate);
+        let forward_ms = started.elapsed().as_millis();
         if !result.success {
             failed.push(format!("{action}: {:?}", result.error));
             continue;
@@ -492,17 +504,29 @@ fn measure(gate: &Gate) -> (Vec<Row>, Vec<String>) {
             continue;
         }
         let (variant, undo_bytes) = newest(&gate.state, false);
+        let started = std::time::Instant::now();
         let undone = gate.state.undo();
+        let undo_ms = started.elapsed().as_millis();
         if !undone.success {
             failed.push(format!("{action}: undo: {:?}", undone.error));
             continue;
         }
         let (_, redo_bytes) = newest(&gate.state, true);
+        // Redo and undo again, so the next action starts from the same state
+        // and the redo is timed too.
+        let started = std::time::Instant::now();
+        let redone = gate.state.redo();
+        let redo_ms = started.elapsed().as_millis();
+        if !redone.success || !gate.state.undo().success {
+            failed.push(format!("{action}: redo or the undo after it failed"));
+            continue;
+        }
         rows.push(Row {
             action,
             variant,
             undo_bytes,
             redo_bytes,
+            millis: [forward_ms, undo_ms, redo_ms],
         });
     }
     (rows, failed)
@@ -521,12 +545,15 @@ fn table(label: &str, gate: &Gate, rows: &[Row]) -> String {
         let worst = row.undo_bytes.max(row.redo_bytes);
         let _ = writeln!(
             out,
-            "  {:<36} {:<24} undo {:>8} redo {:>8}  {:.4}%",
+            "  {:<36} {:<24} undo {:>8} redo {:>8}  {:.4}%   ms do/undo/redo {}/{}/{}",
             row.action,
             row.variant,
             row.undo_bytes,
             row.redo_bytes,
-            100.0 * worst as f64 / gate.file_bytes as f64
+            100.0 * worst as f64 / gate.file_bytes as f64,
+            row.millis[0],
+            row.millis[1],
+            row.millis[2]
         );
     }
     out

@@ -13,14 +13,14 @@ mod added_content;
 mod budget;
 pub mod delta;
 mod history_credit;
-mod history_walk;
 pub mod history_view;
+mod history_walk;
 mod persistence;
 pub(crate) mod snapshot_fixes;
 mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
-pub use delta::{BeforePreview, ProjectDelta, SnapshotDelta};
+pub use delta::{BeforePreview, Doc, ProjectDelta, SectionIds, SnapshotDelta};
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -1827,8 +1827,9 @@ mod tests {
         assert_eq!(stack.len(), 0);
 
         // So does a history written by an older build (a bare payload).
-        let legacy = serde_json::to_string(&UndoData::InverseCommand(test_delete_section_command(1)))
-            .unwrap();
+        let legacy =
+            serde_json::to_string(&UndoData::InverseCommand(test_delete_section_command(1)))
+                .unwrap();
         stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
         assert_eq!(stack.len(), 0);
     }

@@ -39,7 +39,11 @@ impl HolderWalk {
             .sections
             .iter()
             .map(|s| {
-                let shots = s.shots.iter().map(|shot| shot.uuid.as_deref().map(Rc::from)).collect();
+                let shots = s
+                    .shots
+                    .iter()
+                    .map(|shot| shot.uuid.as_deref().map(Rc::from))
+                    .collect();
                 (s.id, Rc::new(shots))
             })
             .collect();
@@ -80,13 +84,14 @@ impl HolderWalk {
             return None;
         }
         match &entry.undo_data {
-            UndoData::Delta(delta) => match delta.delta.step_holders(&self.view) {
-                Some(next) => Some(self.replace(next)),
-                None => {
+            UndoData::Delta(delta) => {
+                if let Some(next) = delta.delta.step_holders(&self.view) {
+                    Some(self.replace(next))
+                } else {
                     self.known = false;
                     None
                 }
-            },
+            }
             UndoData::ProjectSnapshotPair { before, after } => {
                 let half = if undoing { before } else { after };
                 self.reset_to_snapshot(half);
@@ -160,8 +165,11 @@ impl HolderWalk {
                         .sections
                         .iter()
                         .map(|s| {
-                            let shots =
-                                s.shots.iter().map(|shot| shot.uuid.as_deref().map(Rc::from)).collect();
+                            let shots = s
+                                .shots
+                                .iter()
+                                .map(|shot| shot.uuid.as_deref().map(Rc::from))
+                                .collect();
                             (s.id, Rc::new(shots))
                         })
                         .collect();
@@ -183,12 +191,16 @@ impl HolderWalk {
     /// `next` that `self` did not already share.
     fn replace(&mut self, next: Vec<HolderSection>) -> Changed {
         let identity = |list: &[HolderSection]| -> HashMap<SectionId, *const Vec<Option<Rc<str>>>> {
-            list.iter().map(|(id, shots)| (*id, Rc::as_ptr(shots))).collect()
+            list.iter()
+                .map(|(id, shots)| (*id, Rc::as_ptr(shots)))
+                .collect()
         };
         let before = identity(&self.view);
         let after = identity(&next);
-        let shared = |map: &HashMap<SectionId, *const Vec<Option<Rc<str>>>>, (id, shots): &HolderSection| {
-            map.get(id).is_some_and(|ptr| std::ptr::eq(*ptr, Rc::as_ptr(shots)))
+        let shared = |map: &HashMap<SectionId, *const Vec<Option<Rc<str>>>>,
+                      (id, shots): &HolderSection| {
+            map.get(id)
+                .is_some_and(|ptr| std::ptr::eq(*ptr, Rc::as_ptr(shots)))
         };
         for (id, shots) in self.view.iter().filter(|section| !shared(&after, section)) {
             for uuid in shots.iter().flatten() {
@@ -276,7 +288,11 @@ impl HolderWalk {
             .sections
             .into_iter()
             .map(|s| {
-                let shots = s.shots.into_iter().map(|shot| shot.uuid.map(Rc::from)).collect();
+                let shots = s
+                    .shots
+                    .into_iter()
+                    .map(|shot| shot.uuid.map(Rc::from))
+                    .collect();
                 (s.id, Rc::new(shots))
             })
             .collect();
