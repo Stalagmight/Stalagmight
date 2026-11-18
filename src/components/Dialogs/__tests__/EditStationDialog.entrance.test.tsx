@@ -1,5 +1,5 @@
 /**
- * #741: the Entrance checkbox in Edit Station's zero-datum line. The
+ * #741: the Entrance checkbox in Edit Station's zero-datum section. The
  * backend resolves whether a datum is an entrance (`is_entrance` on the stored
  * datum and on the preview); the dialog shows that answer and sends the
  * user's click only when it differs.

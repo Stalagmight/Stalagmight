@@ -657,7 +657,7 @@ export interface GpxPointSpec {
   desc?: string;
   /** Emit `<tag .../>` with no children. */
   selfClosing?: boolean;
-  /** Wrap `ele` in a CDATA line, which the reader silently drops. */
+  /** Wrap `ele` in a CDATA section, which the reader silently drops. */
   eleCdata?: boolean;
 }
 

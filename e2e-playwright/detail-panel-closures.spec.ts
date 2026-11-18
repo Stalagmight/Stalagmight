@@ -1,9 +1,9 @@
 /**
- * E2E tests for Loop Closures line in the Detail Panel.
+ * E2E tests for Loop Closures section in the Detail Panel.
  *
  * Tests verify:
- * - Closure line appears in station details when closures_with is populated
- * - Closure line is hidden when station has no closures
+ * - Closure section appears in station details when closures_with is populated
+ * - Closure section is hidden when station has no closures
  * - Direct and transitive closures displayed with correct formatting
  * - Metrics displayed for each closure group
  * - Navigation via closure station links works
@@ -286,7 +286,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     await setupMockedPage(page);
   });
 
-  test('closure line appears when station has closures_with', async ({ page }) => {
+  test('closure section appears when station has closures_with', async ({ page }) => {
     await createProjectWithLines(page);
 
     const lineIds = await getLineIds(page);
@@ -299,7 +299,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     // Select the station that has closures
     await selectStation(page, mainLineId, 1);
 
-    // Verify closures line is visible
+    // Verify closures section is visible
     const closuresSection = page.getByTestId('closures-section');
     await expect(closuresSection).toBeVisible();
 
@@ -307,7 +307,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     await expect(closuresSection.getByText('Loop Closures')).toBeVisible();
   });
 
-  test('closure line hidden when station has no closures', async ({ page }) => {
+  test('closure section hidden when station has no closures', async ({ page }) => {
     await createProjectWithLines(page);
 
     const lineIds = await getLineIds(page);
@@ -316,7 +316,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     // Select a station without closures
     await selectStation(page, mainLineId, 0);
 
-    // Verify closures line is not present
+    // Verify closures section is not present
     const closuresSection = page.getByTestId('closures-section');
     await expect(closuresSection).toBeHidden();
   });

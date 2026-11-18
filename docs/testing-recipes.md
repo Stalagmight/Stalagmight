@@ -43,7 +43,7 @@ dropdown. It runs in two halves - the entry-intrinsic triple
 and the whole item including `previewData` is compared across every save/reload
 crossing. `previewData` is left out of the first half on purpose: it resolves
 line NAMES against the live project (see
-[Undo/Redo](undo-redo.md#line-name-resolution)), so it is stable exactly
+[Undo/Redo](undo-redo.md#name-resolution)), so it is stable exactly
 where the project is.
 
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION

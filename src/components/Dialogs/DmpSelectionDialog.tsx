@@ -105,7 +105,7 @@ function samePeopleLists(a: CreditLists, b: CreditLists): boolean {
  *
  * This dialog displays:
  * - DMP file metadata header (version, lines, shots, length, date range)
- * - Default values line (surveyors, explorers, date override)
+ * - Default values section (surveyors, explorers, date override)
  * - Bulk selection controls (All, None, Invert)
  * - Line table with checkboxes
  *
@@ -402,7 +402,7 @@ export default function DmpSelectionDialog({
           </div>
         )}
 
-        {/* Default values line */}
+        {/* Default values section */}
         <Panel title={t('dialogs.dmpSelection.defaultValues')}>
           <div className="space-y-3" data-testid="dmp-default-values">
             <CreditPeopleFields {...peopleProps} layout="columns" testIdPrefix="default" />

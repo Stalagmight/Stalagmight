@@ -384,7 +384,7 @@ export default function EditStationDialog() {
           </div>
         )}
 
-        {/* Comment line */}
+        {/* Comment section */}
         <div className="border-t border-border pt-3 space-y-2">
           <label className="block text-sm font-medium" htmlFor="station-comment">
             Comment
@@ -400,7 +400,7 @@ export default function EditStationDialog() {
           />
         </div>
 
-        {/* Zero Datum line */}
+        {/* Zero Datum section */}
         <div className="border-t border-border pt-3 space-y-3">
           <div className="flex items-center gap-2">
             <input

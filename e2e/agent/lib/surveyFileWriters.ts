@@ -350,7 +350,7 @@ export interface TmlShotSpec {
   /**
    * Escape hatch: emitted VERBATIM in place of the whole element, with no
    * escaping and no well-formedness check. This is how a spec produces an
-   * unclosed tag, a stray `]]>` outside a CDATA line, or a nested `<Shape>`
+   * unclosed tag, a stray `]]>` outside a CDATA section, or a nested `<Shape>`
    * subtree. Every OTHER field is ignored when this is set.
    */
   rawXml?: string;

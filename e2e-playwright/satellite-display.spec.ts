@@ -347,7 +347,7 @@ test.describe('Satellite Display', () => {
       // Click Cache tab
       await page.click('[data-testid="settings-tab-cache"]');
 
-      // Cache stats line should be visible
+      // Cache stats section should be visible
       const cacheStats = page.locator('[data-testid="cache-stats"]');
       await expect(cacheStats).toBeVisible({ timeout: 5000 });
     });

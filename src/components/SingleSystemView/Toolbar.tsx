@@ -407,7 +407,7 @@ export default function Toolbar({
 
   return (
     <header ref={headerRef} className={`relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel ${splitToolbar ? 'flex-wrap gap-y-1' : ''}`} data-testid="toolbar">
-      {/* Left line: hamburger menu, Import, then Undo/Redo */}
+      {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
         className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
@@ -554,7 +554,7 @@ export default function Toolbar({
         </div>
       )}
 
-      {/* Right line - tools and display menu; while the table is fullscreen,
+      {/* Right section - tools and display menu; while the table is fullscreen,
           just the table picker (the "Back to Map" button lives on the left). */}
       <div ref={rightRef} className={`flex items-center gap-2 ${clusterCls}`}>
         {dataTableFullScreen ? (
