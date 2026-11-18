@@ -1682,4 +1682,20 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
     expect(stationLabelFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
+
+  it("a merge group's one label drag-hides when any member is dragged", () => {
+    const c = cameraController(zoomOnlyMap(18).map);
+    const p = makeParams();
+    // B's start (g3) is merged onto A's middle station (g1): g1 labels both.
+    p.surveyData.stationMergedWith = new Map([
+      [1, [{ line_id: 2, station_index: 0 }]],
+      [3, [{ line_id: 1, station_index: 1 }]],
+    ]);
+    c.sync(p);
+    const layer = h.layerState.last!;
+    expect(vfl(layer).kind.filter((k) => k === LABEL_KIND.STATION_LABEL).length / 4).toBe(3);
+    c.setDragHide({ stationGlobalIndices: new Set([3]) });
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 2) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+  });
 });

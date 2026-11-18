@@ -31,6 +31,7 @@ import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { buildStationLookup, computeStationAllReference, projectStationsRel } from './tessellate';
+import { mergedStationLabels } from './labelMergeGroups';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { shapeLabel, type ShapedLabel, type ShapeCache } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
@@ -101,6 +102,10 @@ export interface LabelDescriptor {
   /** Station index within its line (station label + station comment) - the
    *  immovable feature id is `lineId * FEATURE_ID_STRIDE + stationIndex`. */
   stationIndex?: number;
+  /** Station label of a merge group's representative: every member's global
+   *  index (the representative's own included), so dragging any member hides
+   *  the one label the group draws. Absent for a station that is not merged. */
+  stationGroup?: readonly number[];
   /** Global shot index (shot label + shot comment) - keys shot drag-hide. */
   shotGlobal?: number;
   /** Shot id within its line (shot label + shot comment) - the immovable
@@ -258,14 +263,14 @@ export function buildLabelDescriptors(
   // label flags per-kind rather than collapsed, so a station label cannot
   // outlive the station marker it sits on.
   const allRef = computeStationAllReference(data, lookup);
-  const stationKindFlags = (g: number): number => {
-    const mask = allRef[g]!;
+  const kindFlagsOfMask = (mask: number): number => {
     if (mask === 0) return 0;
     return (
       ((mask & 1) !== 0 ? LABEL_FLAG.ALL_JUMP : 0) |
       ((mask & 2) !== 0 ? LABEL_FLAG.ALL_REFERENCE : 0)
     );
   };
+  const stationKindFlags = (g: number): number => kindFlagsOfMask(allRef[g]!);
   const stationRel = projectStationsRel(data, gpsOrigin, anchorX, anchorY);
   const { colorCtx } = ctx;
 
@@ -360,33 +365,59 @@ export function buildLabelDescriptors(
   const wantStationComment = wants(LABEL_KIND.STATION_COMMENT);
   const namesMode = ctx.stationLabelText === 'name';
   if (wantStationLabel || wantStationComment) {
-    // Per-line min station index == the "first in line" predicate.
+    // Per-line min station index == the "first in line" predicate; the max is
+    // its counterpart, which a merge group's representative avoids next.
     const lineMinIndex = new Map<number, number>();
+    const lineMaxIndex = new Map<number, number>();
     for (let g = 0; g < data.stationCount; g++) {
       const sid = data.stationLineIds[g]!;
       const idx = data.stationIndices[g]!;
       const cur = lineMinIndex.get(sid);
       if (cur === undefined || idx < cur) lineMinIndex.set(sid, idx);
+      const top = lineMaxIndex.get(sid);
+      if (top === undefined || idx > top) lineMaxIndex.set(sid, idx);
     }
+    // IDs mode draws the Station ID, never the station's position in its line.
+    const labelText = (g: number): string | null => {
+      if (namesMode) return formatStationNameLabel(data.stationNames.get(g));
+      const stationId = data.stationIds[g];
+      return stationId === undefined ? null : formatStationLabel(stationId);
+    };
+    // Merged stations are one point: ONE label per merge group, drawn for its
+    // representative (`labelMergeGroups.ts`); the other members draw none.
+    const merged = wantStationLabel
+      ? mergedStationLabels(data, lookup, lineMinIndex, lineMaxIndex, (m) => labelText(m) !== null)
+      : null;
     for (let g = 0; g < data.stationCount; g++) {
       const sid = data.stationLineIds[g]!;
       const stationIndex = data.stationIndices[g]!;
       const z = data.stationCoords[g * 3 + 2]!;
+      const group = merged?.members.get(g);
       let flags = 0;
-      if (stationIndex === lineMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_LINE;
-      flags |= stationKindFlags(g);
+      if (group === undefined) {
+        if (stationIndex === lineMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_LINE;
+        flags |= stationKindFlags(g);
+      } else {
+        // The group's label stands for every member: always shown when any
+        // member starts its line (the first-in-line rule), and hidden with
+        // the shots only when every member would be (a Normal shot at any
+        // member keeps it; otherwise the kinds touching them all).
+        let mask = 0;
+        let normal = false;
+        for (const m of group) {
+          if (data.stationIndices[m] === lineMinIndex.get(data.stationLineIds[m]!)) {
+            flags |= LABEL_FLAG.FIRST_IN_LINE;
+          }
+          if (allRef[m] === 0) normal = true;
+          mask |= allRef[m]!;
+        }
+        flags |= kindFlagsOfMask(normal ? 0 : mask);
+      }
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
-      // IDs mode draws the Station ID, never the station's position in its line.
-      const stationId = data.stationIds[g];
-      const stationText = !(wantStationLabel && stationInView)
-        ? null
-        : namesMode
-          ? formatStationNameLabel(data.stationNames.get(g))
-          : stationId === undefined
-            ? null
-            : formatStationLabel(stationId);
+      const represents = merged === null || merged.representative[g] === g;
+      const stationText = wantStationLabel && stationInView && represents ? labelText(g) : null;
       if (stationText !== null) descriptors.push({
         kind: LABEL_KIND.STATION_LABEL,
         text: stationText,
@@ -398,6 +429,7 @@ export function buildLabelDescriptors(
         lineId: sid,
         stationGlobal: g,
         stationIndex,
+        ...(group !== undefined ? { stationGroup: group } : {}),
       });
       const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {

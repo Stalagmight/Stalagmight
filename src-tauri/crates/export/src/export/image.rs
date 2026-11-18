@@ -1493,11 +1493,16 @@ fn render_svg(
         // Pass 4a: one label at every point touched by at least one drawn
         // shot (deg >= 1) - i.e. all stations on drawn passage, deduped by
         // colocation. The label is the Station ID, or with names on, the
-        // station name. Representative station per point = the smallest
-        // station index that has a label (deterministic): every station for
-        // index labels, only named ones for names, so a merge of an unnamed
-        // and a named station still shows the name, and a point with no
-        // named station gets no label.
+        // station name. Representative station per point (docs/SPEC.md 4.2,
+        // Labels; the map's `labelMergeGroups.ts` picks the same): among the
+        // stations that have a label, one that is not its line's first
+        // station, then one that is not its line's last, ties broken by the
+        // line's order in the project and then the station index - so a
+        // branch merged onto the main line shows the main line's name there,
+        // not the branch's `0`. Every station has a label for index labels,
+        // only named ones for names, so a merge of an unnamed and a named
+        // station still shows the name, and a point with no named station
+        // gets no label.
         if options.show_station_labels || show_station_names {
             // Names mode cleans each name once (it decides who represents a
             // point); index labels are formatted only for the chosen stations.
@@ -1518,13 +1523,19 @@ fn render_svg(
                     Some(stations[i].id.to_string())
                 }
             };
+            let rank = point_label_rank(project, &stations);
             let mut rep: HashMap<usize, usize> = HashMap::new();
             for i in 0..n {
                 if show_station_names && names[i].is_none() {
                     continue;
                 }
-                // Ascending `i`: the first entry per point is its smallest.
-                rep.entry(point_uf.find(i)).or_insert(i);
+                rep.entry(point_uf.find(i))
+                    .and_modify(|best| {
+                        if rank[i] < rank[*best] {
+                            *best = i;
+                        }
+                    })
+                    .or_insert(i);
             }
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
@@ -1886,6 +1897,41 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
             dist = 0.0;
         }
     }
+}
+
+/// How well each of `stations` represents a point of colocated stations in
+/// the station labels (lower is better): a station that is not its line's
+/// first, then one that is not its line's last, then the line's order in
+/// `project.lines`, then the station index (docs/SPEC.md 4.2, Labels).
+fn point_label_rank(
+    project: &Project,
+    stations: &[crate::models::Station],
+) -> Vec<(bool, bool, usize, u32)> {
+    let lines: HashMap<LineId, (usize, u32)> = project
+        .lines
+        .iter()
+        .enumerate()
+        .map(|(order, line)| {
+            let last = u32::try_from(line.shots.len()).unwrap_or(u32::MAX);
+            (line.id, (order, last))
+        })
+        .collect();
+    stations
+        .iter()
+        .map(|s| {
+            let at = s.station_ref;
+            let (order, last) = lines
+                .get(&at.line_id)
+                .copied()
+                .unwrap_or((usize::MAX, u32::MAX));
+            (
+                at.station_index == 0,
+                at.station_index == last,
+                order,
+                at.station_index,
+            )
+        })
+        .collect()
 }
 
 /// Return the angle (in screen coordinates - y axis flipped, same frame the
@@ -4339,6 +4385,91 @@ mod tests {
         assert!(
             x.abs() < 1.0 && y.abs() < 1.0,
             "the named member speaks for the point, at its own position: {svg}"
+        );
+    }
+
+    /// Main (the three-shot line, every station named by its index, `1`
+    /// renamed `Junction`) and a two-shot Branch named `0 1 2` whose start is
+    /// merged onto `main_at`; `branch_first` lists Branch first in the
+    /// project. Returns the project with every Station ID allocated.
+    fn junction_project(main_at: u32, branch_first: bool) -> Project {
+        let mut project = three_shot_line_project();
+        let main_id = project.lines[0].id;
+        let branch_id = project
+            .add_line(LineData {
+                name: Some("Branch".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(branch_id, 0).into(),
+            station_b: StationRef::new(main_id, main_at).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.ensure_station_identities();
+        project
+            .set_station_name(StationRef::new(main_id, 1), "Junction")
+            .unwrap();
+        if branch_first {
+            project.lines.reverse();
+            project.rebuild_line_index();
+        }
+        project
+    }
+
+    #[test]
+    fn a_merged_point_is_labelled_by_the_main_line_not_the_branch_start() {
+        // Branch:0 is merged onto Main:1 (`Junction`): the point shows
+        // `Junction` once, never Branch's `0`, whatever the line order.
+        for branch_first in [false, true] {
+            let project = junction_project(1, branch_first);
+            let svg = generate_svg_string(&project, &names_only()).unwrap();
+            assert_eq!(
+                sorted_texts(&svg),
+                ["0", "1", "2", "2", "3", "Junction"],
+                "Main 0 Junction 2 3 + Branch 1 2 (its 0 is the junction): {svg}"
+            );
+            // The Station IDs label draws the same representative's ID.
+            let stations = project.compute_station_coordinates();
+            let id_of = |line: usize, index: u32| {
+                let at = StationRef::new(project.lines[line].id, index);
+                stations
+                    .iter()
+                    .find(|s| s.station_ref == at)
+                    .unwrap()
+                    .id
+                    .to_string()
+            };
+            let (main, branch) = if branch_first { (1, 0) } else { (0, 1) };
+            let svg = generate_svg_string(
+                &project,
+                &ExportImageOptions {
+                    show_penetration_labels: false,
+                    show_station_labels: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let texts = sorted_texts(&svg);
+            assert!(texts.contains(&id_of(main, 1)), "{svg}");
+            assert!(!texts.contains(&id_of(branch, 0)), "{svg}");
+            assert_eq!(texts.len(), 6, "{svg}");
+        }
+    }
+
+    #[test]
+    fn a_merged_line_end_wins_over_the_other_line_start() {
+        // Branch:0 merged onto Main's last station `3`: neither is in the
+        // middle of its line, and Main's end is not a line start, so it
+        // labels the point even with Branch listed first.
+        let project = junction_project(3, true);
+        let svg = generate_svg_string(&project, &names_only()).unwrap();
+        assert_eq!(
+            sorted_texts(&svg),
+            ["0", "1", "2", "2", "3", "Junction"],
+            "{svg}"
         );
     }
 

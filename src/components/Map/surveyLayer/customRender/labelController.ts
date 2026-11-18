@@ -838,6 +838,11 @@ export class SurveyLabelController {
     if (lineIds?.has(sid) === true) return true;
     switch (desc.kind) {
       case LABEL_KIND.STATION_LABEL:
+        // A merge group draws one label: it hides when any member is dragged.
+        if (desc.stationGroup !== undefined && stationGlobalIndices) {
+          return desc.stationGroup.some((g) => stationGlobalIndices.has(g));
+        }
+        return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
       case LABEL_KIND.STATION_COMMENT:
         return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
       case LABEL_KIND.SHOT_LABEL:
