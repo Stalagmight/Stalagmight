@@ -74,10 +74,51 @@ fn sections_and_memberships_round_trip_through_a_saved_file() {
         "names, colours and order"
     );
     assert_eq!(memberships(&loaded), memberships(&project));
+    assert_eq!(loaded.next_section_id, 2, "the saved counter");
+}
+
+/// The counter is saved (`next_cave_section_id`), so a Section deleted
+/// before the save keeps its id retired after a reopen; read tolerantly as
+/// max(saved, highest id + 1), and derived when the row is missing.
+#[test]
+fn the_section_id_counter_survives_a_reopen_and_is_read_tolerantly() {
+    let dir = TempDir::new().unwrap();
+    let (mut project, _) = project_with_sections();
+    project.next_section_id = 7;
+    let path = save_to(&dir, "counter.stalx", &project);
     assert_eq!(
-        loaded.next_section_id, 2,
-        "the counter is derived from the highest saved id"
+        reload(&path).next_section_id,
+        7,
+        "a deleted id stays retired"
     );
+
+    let set = |value: Option<&str>| {
+        let db = Database::open_existing(&path).unwrap();
+        db.conn
+            .execute(
+                "DELETE FROM project_settings WHERE key = 'next_cave_section_id'",
+                [],
+            )
+            .unwrap();
+        if let Some(value) = value {
+            db.conn
+                .execute(
+                    "INSERT INTO project_settings (key, value) VALUES ('next_cave_section_id', ?1)",
+                    [value],
+                )
+                .unwrap();
+        }
+    };
+    set(Some("1"));
+    assert_eq!(
+        reload(&path).next_section_id,
+        2,
+        "raised above the saved ids"
+    );
+    set(Some("not a number"));
+    assert_eq!(reload(&path).next_section_id, 2);
+    set(None);
+    assert_eq!(reload(&path).next_section_id, 2, "derived from the ids");
 }
 
 /// The open refuses a file whose rows break a foreign key (as for every

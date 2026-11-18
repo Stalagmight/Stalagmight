@@ -25,6 +25,12 @@
 //! counted; [`crate::models::Project::normalize_sections`] then settles the
 //! rest (repeated names, the id counter).
 //!
+//! The id counter (`Project::next_section_id`) is the `project_settings` row
+//! `next_cave_section_id`, so a Section id deleted (or undone) before a save
+//! is never handed out again after a reopen - a view setting such as
+//! `hiddenSections` names Sections by id. Read tolerantly: a missing or
+//! unreadable row, or one below the saved ids, is raised above them.
+//!
 //! Plain DDL only: `schema_guard` refuses a file with CHECKs other than
 //! `id = 1`, partial or expression indexes, `DEFAULT (expr)`, views and
 //! triggers, and these tables must not be the reason a file is refused.
@@ -37,6 +43,9 @@ use rusqlite::{params, Connection, Transaction};
 use crate::models::{LineId, Project, Section, SectionId};
 
 use super::shot_credits::{extended_code, is_schema_error};
+
+/// The `project_settings` key of `Project::next_section_id`.
+pub(super) const NEXT_CAVE_SECTION_ID_KEY: &str = "next_cave_section_id";
 
 /// Run by `save_project` inside its transaction, after the lines are written:
 /// both tables are rewritten whole, so they are recreated rather than emptied
@@ -83,7 +92,26 @@ pub(super) fn write_cave_sections(tx: &Transaction<'_>, project: &Project) -> Re
             insert_member.execute(params![line.id, section])?;
         }
     }
+    tx.execute(
+        "INSERT OR REPLACE INTO project_settings (key, value) VALUES (?1, ?2)",
+        params![
+            NEXT_CAVE_SECTION_ID_KEY,
+            project.next_section_id.to_string()
+        ],
+    )?;
     Ok(())
+}
+
+/// The stored `next_cave_section_id`, or `None` when the row is missing or
+/// does not read as an id (`normalize_sections` then derives it).
+fn load_next_cave_section_id(conn: &Connection) -> Option<SectionId> {
+    conn.query_row(
+        "SELECT value FROM project_settings WHERE key = ?1",
+        [NEXT_CAVE_SECTION_ID_KEY],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|value| value.trim().parse::<SectionId>().ok())
 }
 
 /// Whether `table` exists as a table.
@@ -150,6 +178,9 @@ fn read_member_rows(conn: &Connection) -> rusqlite::Result<Vec<MemberRow>> {
 /// Sections.
 pub(super) fn load_cave_sections(conn: &Connection, project: &mut Project) -> Result<()> {
     project.sections.clear();
+    // The saved counter, raised above the saved ids by the normalization
+    // below: max(persisted, highest id + 1).
+    project.next_section_id = load_next_cave_section_id(conn).unwrap_or(0);
     if !has_table(conn, "cave_sections")? {
         return Ok(());
     }

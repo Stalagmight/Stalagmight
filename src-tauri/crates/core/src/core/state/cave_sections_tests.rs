@@ -807,3 +807,42 @@ fn hidden_sections_are_a_saved_view_setting_not_an_edit() {
         [upper]
     );
 }
+
+/// Section ids are never handed out twice in a timeline: an undone or
+/// deleted Section keeps its id retired through an undo, a snapshot restore,
+/// and a save and reopen (`hiddenSections` names Sections by id).
+#[test]
+fn a_section_id_is_never_reused_after_undo_delete_or_reopen() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("ids.stalx");
+    let state = saved_state(&path);
+    let (a, _, _) = three_lines(&state);
+    let first = create_section(&state, "First", &[]);
+    let undone = create_section(&state, "Undone", &[]);
+    undo(&state);
+    let after_undo = create_section(&state, "After undo", &[]);
+    assert!(after_undo > undone, "{after_undo} reuses {undone}");
+
+    // A snapshot pair (Delete line) recorded before a Section was created:
+    // undoing it does not lower the counter either.
+    ok(state.execute(Command::DeleteLine { line_id: a }));
+    let made = create_section(&state, "Made", &[]);
+    undo(&state); // the Section
+    undo(&state); // the delete, a snapshot restore
+    let after_restore = create_section(&state, "After restore", &[]);
+    assert!(after_restore > made, "{after_restore} reuses {made}");
+
+    // Delete the highest, save, reopen: its id stays retired.
+    ok(state.execute(Command::DeleteCaveSection {
+        section_id: after_restore,
+    }));
+    ok(state.execute(Command::SaveProject { path: None }));
+    ok(state.execute(Command::CloseProject));
+    ok(state.open_project(path));
+    assert!(project(&state).section(first).is_some());
+    let after_reopen = create_section(&state, "After reopen", &[]);
+    assert!(
+        after_reopen > after_restore,
+        "{after_reopen} reuses {after_restore}"
+    );
+}

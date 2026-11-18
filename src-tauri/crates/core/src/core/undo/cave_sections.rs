@@ -61,7 +61,10 @@ impl CaveSectionsState {
     /// names a Section this side does not hold is dropped.
     pub fn restore_into(&self, project: &mut Project) -> usize {
         project.sections.clone_from(&self.cave_sections);
-        project.next_section_id = self.next_cave_section_id;
+        // Never lowered: an undone Section's id stays retired, so a view
+        // setting naming Sections by id (`hiddenSections`) never meets a
+        // different Section under it.
+        project.next_section_id = project.next_section_id.max(self.next_cave_section_id);
         let mut missing = 0usize;
         for member in &self.members {
             match project.get_line_mut(member.line_id) {

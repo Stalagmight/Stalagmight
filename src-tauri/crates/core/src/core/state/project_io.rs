@@ -384,6 +384,10 @@ pub(super) fn reapply_heals_after_restore(
     let Some(live) = live else {
         return;
     };
+    // The Section id counter only goes up within a timeline: a Section the
+    // restored state predates keeps its id retired, so `hiddenSections` (a
+    // view setting, keyed by id) never names a different Section later.
+    restored.next_section_id = restored.next_section_id.max(live.next_section_id);
     adopt_station_identities(restored, live);
     for line in &mut restored.lines {
         if line.gauge_shot_uuid.is_some() {
