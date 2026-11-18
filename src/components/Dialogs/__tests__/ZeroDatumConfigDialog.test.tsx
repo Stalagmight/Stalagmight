@@ -43,10 +43,14 @@ vi.mock('@tanstack/react-virtual', () => ({
 import { render, screen, fireEvent } from '@testing-library/react';
 
 // Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
-// the real `initReactI18next`.
+// the real `initReactI18next`. Keys come back as themselves, except the
+// station label the picker is asserted by, which reads as in English.
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
+  useTranslation: () => ({
+    t: (k: string, o?: { name?: string }) =>
+      k === 'dialogs.dmpNewImport.manualPlacing.stationNamed' ? `Station ${o?.name ?? ''}` : k,
+  }),
 }));
 
 // LinePreview draws on a MapLibre canvas, which jsdom cannot run. The pick

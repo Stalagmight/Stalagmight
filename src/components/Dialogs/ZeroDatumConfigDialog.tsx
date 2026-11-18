@@ -485,9 +485,9 @@ export default function ZeroDatumConfigDialog({
     const names = importLineStationNames(shots.filter(isCounted), reverse);
     return Array.from({ length: stationCount }, (_, i) => ({
       value: String(i),
-      label: `Station ${displayStationName(names[i] ?? String(i))}`,
+      label: t('dialogs.dmpNewImport.manualPlacing.stationNamed', { name: displayStationName(names[i] ?? String(i)) }),
     }));
-  }, [stationCount, shots, reverse]);
+  }, [stationCount, shots, reverse, t]);
 
   // GPS origin for map preview - only set when valid GPS coordinates are entered
   const gpsOrigin = useMemo(() => {

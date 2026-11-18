@@ -1563,7 +1563,9 @@
       "import": "Import",
       "importing": "Importing...",
       "checkingDuplicates": "Checking for duplicates...",
-      "continue": "Continue"
+      "continue": "Continue",
+      "stationFirst": "{{station}} (first)",
+      "stationLast": "{{station}} (last)"
     },
     "dmpSelection": {
       "title": "Import DMP File (Step 1)",

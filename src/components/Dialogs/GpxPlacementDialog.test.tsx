@@ -8,7 +8,7 @@
  * (GPX has no orphan-placement step, so there's no ordering concern here.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
@@ -17,6 +17,7 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   setSource: vi.fn(),
 }));
 
+import '../../i18n';
 import GpxPlacementDialog from './GpxPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -166,5 +167,27 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
 
     await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }));
     expect(showToast).not.toHaveBeenCalled();
+  });
+});
+
+describe('GpxPlacementDialog zero-datum station picker', () => {
+  it('names each station by its seeded name, through i18n', () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const point = { latitude: 20, longitude: -87, elevation: null, time: null };
+    useUIStore.setState({
+      dialogData: {
+        gpxFile: { ...emptyGpx, tracks: [{ name: 'Walk', comment: null, segments: [{ points: [point, point, point] }] }] },
+        filePath: '/tmp/cave.gpx',
+        fileHash: 'hash',
+        importWaypoints: false,
+        importTracks: true,
+        importRoutes: false,
+      },
+    });
+    render(<GpxPlacementDialog />);
+    fireEvent.click(screen.getByTestId('gpx-placement-zero-datum-0'));
+    expect(screen.getByTestId('gpx-placement-zero-datum-0-option-0')).toHaveTextContent('Station 0 (first)');
+    expect(screen.getByTestId('gpx-placement-zero-datum-0-option-1')).toHaveTextContent(/^Station 1$/);
+    expect(screen.getByTestId('gpx-placement-zero-datum-0-option-2')).toHaveTextContent('Station 2 (last)');
   });
 });

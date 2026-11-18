@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import {
@@ -21,6 +22,7 @@ import { setSource } from '../../utils/telemetry';
  * Waypoints are always auto-placed as zero datums and don't appear here.
  */
 export default function GpxPlacementDialog() {
+  const { t } = useTranslation();
   const { executeGpxImport } = useProjectStore();
   const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } =
     useUIStore();
@@ -196,10 +198,18 @@ export default function GpxPlacementDialog() {
                       onChange={(v) => handleZeroDatumChange(i, parseInt(v, 10))}
                       // A GPX import names no station, so each is seeded with
                       // its index as text (SPEC 4.2): `Station 3` is its name.
-                      options={Array.from({ length: sec.pointCount }, (_, si) => ({
-                        value: String(si),
-                        label: `Station ${si}${si === 0 ? ' (first)' : si === sec.pointCount - 1 ? ' (last)' : ''}`,
-                      }))}
+                      options={Array.from({ length: sec.pointCount }, (_, si) => {
+                        const station = t('dialogs.dmpNewImport.manualPlacing.stationNamed', { name: String(si) });
+                        return {
+                          value: String(si),
+                          label:
+                            si === 0
+                              ? t('dialogs.gpxSelection.stationFirst', { station })
+                              : si === sec.pointCount - 1
+                                ? t('dialogs.gpxSelection.stationLast', { station })
+                                : station,
+                        };
+                      })}
                       size="sm"
                       aria-label={`Zero datum station for ${sec.name}`}
                     />
