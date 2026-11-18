@@ -16,26 +16,32 @@ map: they change no survey data, no geometry and no statistics.
 
 1. In the **Sections** panel, click **New Section** (the folder with a plus,
    next to **Add line**).
-2. A section named **Section 1** (or the next free number) appears, with its
-   name ready to edit. Type a name and press **Enter**. **Escape** keeps the
-   suggested name.
+2. A row appears above the list, asking for the name: **Section 1** (or the
+   next free number) is filled in and selected. Type a name and press
+   **Enter**. Clicking elsewhere also creates the section, with the name in the
+   field.
+3. **Escape** cancels: no section is created.
+
+Creating a section is one **Undo** step, already with its name.
 
 Once the project has a section, the panel lists each section with its lines
-under it, then **Ungrouped**. A section header shows its color, name, how many
-lines it holds and their total length.
+under it, then **Ungrouped** (left out when every line is in a section). A
+section header shows its color, name, how many lines it holds and their total
+length.
 
 Names are unique in a project. A name that is already taken, or an empty one,
-is refused under the field before anything changes.
+is refused under the field before anything is created.
 
 ## Put lines in a section
 
 - **Drag**: drag a line row onto a section header, or onto any line already in
   that section. The header lights up and a label says where the line goes.
-  Drag onto **Ungrouped** to take a line out of its section. **Escape** cancels
-  the drag.
+  Drag onto **Ungrouped** to take a line out of its section (while you drag,
+  **Ungrouped** is shown even when no line is in it). **Escape** cancels the
+  drag.
 - **Menu**: right-click a line, choose **Move to Section**, then a section,
-  **No Section**, or **New Section...** (a new section holding the line, ready
-  to rename).
+  **No Section**, or **New Section...** (the same row asking for a name; the
+  new section holds the line).
 - **Several at once**: select lines with `Shift`+click or `Ctrl`+click, then
   drag any of them, or right-click one: the menu reads **Move N Lines to
   Section**.

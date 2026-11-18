@@ -83,6 +83,26 @@ async function createSection(page: Page, name: string, members: number[]): Promi
   );
 }
 
+/** Record the Section commands the page sends from here on. */
+async function recordSectionCalls(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (cmd: string, ...rest: unknown[]) => Promise<unknown> };
+      __SECTION_CALLS__: string[];
+    };
+    w.__SECTION_CALLS__ = [];
+    const invoke = w.__TAURI_INTERNALS__.invoke.bind(w.__TAURI_INTERNALS__);
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, ...rest: unknown[]) => {
+      if (/_cave_section/.test(cmd)) w.__SECTION_CALLS__.push(cmd);
+      return invoke(cmd, ...rest);
+    };
+  });
+}
+
+async function sectionCalls(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...(window as unknown as { __SECTION_CALLS__: string[] }).__SECTION_CALLS__]);
+}
+
 async function undo(page: Page): Promise<void> {
   await page.evaluate(() => (window as unknown as E2EWindow).__E2E_TEST__.projectStore.getState().undo());
 }
@@ -115,33 +135,76 @@ test.describe('Sections (groups of lines)', () => {
     await expect(page.getByTestId('sections-new-section-button')).toBeEnabled();
   });
 
-  test('New Section creates "Section 1", renames inline, and undo takes both back @smoke', async ({ page }) => {
+  test('New Section asks for the name first: ONE create, ONE undo step @smoke', async ({ page }) => {
     const ids = await setup(page);
+    await recordSectionCalls(page);
     await page.getByTestId('sections-new-section-button').click();
 
-    const input = page.locator('[data-testid^="section-rename-input-"]');
+    // A pending row: the next free name, selected, and nothing created yet.
+    const input = page.getByTestId('sections-new-section-input');
     await expect(input).toBeFocused();
     await expect(input).toHaveValue('Section 1');
-    const [created] = await sections(page);
-    expect(created?.name).toBe('Section 1');
-    const header = page.getByTestId(`section-header-${created!.id}`);
-    await expect(header).toHaveAttribute('aria-level', '1');
-    await expect(header).toHaveAttribute('aria-expanded', 'true');
-    // Every line is ungrouped, under the Ungrouped header, one level down.
-    await expect(page.getByTestId('sections-ungrouped-header')).toBeVisible();
-    await expect(page.getByTestId(`line-row-${ids.Main}`)).toHaveAttribute('aria-level', '2');
+    expect(await input.evaluate((el) => [(el as HTMLInputElement).selectionStart, (el as HTMLInputElement).selectionEnd])).toEqual([
+      0,
+      'Section 1'.length,
+    ]);
+    expect(await sections(page)).toEqual([]);
 
     await input.fill('Upper level');
     await input.press('Enter');
+    await expect(page.getByTestId('sections-new-section-row')).toHaveCount(0);
+    await expect.poll(async () => (await sections(page)).map((s) => s.name)).toEqual(['Upper level']);
+    const [created] = await sections(page);
+    const header = page.getByTestId(`section-header-${created!.id}`);
+    await expect(header).toHaveAttribute('aria-level', '1');
+    await expect(header).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByTestId(`section-name-${created!.id}`)).toHaveText('Upper level');
     await expect(header).toBeFocused();
-    await expect.poll(async () => (await sections(page))[0]?.name).toBe('Upper level');
+    // Every line is ungrouped, under the Ungrouped header, one level down.
+    await expect(page.getByTestId('sections-ungrouped-header')).toBeVisible();
+    await expect(page.getByTestId(`line-row-${ids.Main}`)).toHaveAttribute('aria-level', '2');
+    // One command made it, already named: no create-then-rename.
+    expect(await sectionCalls(page)).toEqual(['create_cave_section']);
 
-    await undo(page);
-    await expect(page.getByTestId(`section-name-${created!.id}`)).toHaveText('Section 1');
+    // So one undo takes it away entirely.
     await undo(page);
     await expect(header).toHaveCount(0);
     await expect(page.getByTestId('sections-ungrouped-header')).toHaveCount(0);
+    expect(await sections(page)).toEqual([]);
+  });
+
+  test('Escape on the New Section row creates nothing', async ({ page }) => {
+    await setup(page);
+    await recordSectionCalls(page);
+    const button = page.getByTestId('sections-new-section-button');
+    await button.click();
+    const input = page.getByTestId('sections-new-section-input');
+    await input.fill('Sump');
+    await input.press('Escape');
+    await expect(page.getByTestId('sections-new-section-row')).toHaveCount(0);
+    await expect(button).toBeFocused();
+    expect(await sections(page)).toEqual([]);
+    expect(await sectionCalls(page)).toEqual([]);
+    await expect(page.getByTestId('sections-ungrouped-header')).toHaveCount(0);
+  });
+
+  test('the New Section row refuses a taken name inline; leaving it with a good one creates it', async ({ page }) => {
+    await setup(page);
+    await createSection(page, 'Upper level', []);
+    await page.getByTestId('sections-new-section-button').click();
+    const input = page.getByTestId('sections-new-section-input');
+    // The next free name.
+    await expect(input).toHaveValue('Section 1');
+    await input.fill('Upper level');
+    await input.press('Enter');
+    await expect(page.getByTestId('sections-new-section-error')).toHaveText(
+      'There is already a section named "Upper level".',
+    );
+    expect((await sections(page)).map((s) => s.name)).toEqual(['Upper level']);
+    await input.fill('Sump');
+    // Leaving the field with a usable name commits it.
+    await page.getByTestId('sections-panel').getByRole('heading').click();
+    await expect.poll(async () => (await sections(page)).map((s) => s.name)).toEqual(['Upper level', 'Sump']);
   });
 
   test('a taken or empty name is refused inline; Escape keeps the old name', async ({ page }) => {
@@ -200,19 +263,33 @@ test.describe('Sections (groups of lines)', () => {
     await expect.poll(() => sectionOfLine(page, ids.Main!)).toBeNull();
   });
 
-  test('New Section... in the line menu groups the line and opens the rename', async ({ page }) => {
+  test('New Section... in the line menu asks for the name, then groups the line in one step', async ({ page }) => {
     const ids = await setup(page);
+    await recordSectionCalls(page);
     await page.getByTestId(`line-row-${ids.Lower}`).click({ button: 'right' });
     await page.getByRole('button', { name: 'Move to Section' }).hover();
     await page.getByTestId('context-menu-submenu').getByRole('button', { name: 'New Section...' }).click();
 
-    const input = page.locator('[data-testid^="section-rename-input-"]');
+    const input = page.getByTestId('sections-new-section-input');
     await expect(input).toBeFocused();
+    await expect(page.getByTestId('sections-new-section-hint')).toContainText('with its line');
+    expect(await sections(page)).toEqual([]);
     await input.fill('Sump');
     await input.press('Enter');
+    await expect.poll(async () => (await sections(page)).map((s) => s.name)).toEqual(['Sump']);
     const [sump] = await sections(page);
-    await expect.poll(async () => (await sections(page))[0]?.name).toBe('Sump');
     expect(await sectionOfLine(page, ids.Lower!)).toBe(sump!.id);
+    expect(await sectionCalls(page)).toEqual(['create_cave_section']);
+
+    // Escape from the menu's row creates nothing, and gives the line its focus back.
+    await page.getByTestId(`line-row-${ids.Main}`).click({ button: 'right' });
+    await page.getByRole('button', { name: 'Move to Section' }).hover();
+    await page.getByTestId('context-menu-submenu').getByRole('button', { name: 'New Section...' }).click();
+    await expect(input).toBeFocused();
+    await input.press('Escape');
+    await expect(page.getByTestId(`line-row-${ids.Main}`)).toBeFocused();
+    expect((await sections(page)).map((s) => s.name)).toEqual(['Sump']);
+    expect(await sectionOfLine(page, ids.Main!)).toBeNull();
   });
 
   test('dragging a line row onto a Section header moves it; onto Ungrouped takes it out', async ({ page }) => {
@@ -243,6 +320,38 @@ test.describe('Sections (groups of lines)', () => {
     await expect(page.getByTestId('sections-ungrouped-header')).toHaveAttribute('data-drop-target', 'true');
     await page.mouse.up();
     await expect.poll(() => sectionOfLine(page, ids.Side!)).toBeNull();
+  });
+
+  test('the Ungrouped header is left out when every line is grouped, and is the drop target during a drag', async ({ page }) => {
+    const ids = await setup(page);
+    const upper = await createSection(page, 'Upper level', Object.values(ids));
+    const ungroupedHeader = page.getByTestId('sections-ungrouped-header');
+    await expect(page.getByTestId(`section-stats-${upper}`)).toContainText('4 lines');
+    await expect(ungroupedHeader).toHaveCount(0);
+
+    const row = (await page.getByTestId(`line-row-${ids.Side}`).boundingBox())!;
+    await page.mouse.move(row.x + 100, row.y + row.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(row.x + 100, row.y + row.height / 2 + 20, { steps: 4 });
+    // While the line is dragged, the empty Ungrouped header is there to drop on.
+    await expect(ungroupedHeader).toBeVisible();
+    await expect(page.getByTestId('sections-ungrouped-stats')).toContainText('0 lines');
+    const target = (await ungroupedHeader.boundingBox())!;
+    await page.mouse.move(target.x + 60, target.y + target.height / 2, { steps: 8 });
+    await expect(ungroupedHeader).toHaveAttribute('data-drop-target', 'true');
+    await page.mouse.up();
+    await expect.poll(() => sectionOfLine(page, ids.Side!)).toBeNull();
+    await expect(page.getByTestId('sections-ungrouped-stats')).toContainText('1 line');
+
+    // Back into the Section: no line is ungrouped, and the header goes again.
+    const moved = (await page.getByTestId(`line-row-${ids.Side}`).boundingBox())!;
+    const header = (await page.getByTestId(`section-header-${upper}`).boundingBox())!;
+    await page.mouse.move(moved.x + 100, moved.y + moved.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(header.x + 60, header.y + header.height / 2, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(() => sectionOfLine(page, ids.Side!)).toBe(upper);
+    await expect(ungroupedHeader).toHaveCount(0);
   });
 
   test('dragging a row of a multi-line selection carries the whole selection', async ({ page }) => {

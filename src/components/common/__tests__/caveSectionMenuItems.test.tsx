@@ -8,7 +8,12 @@ import type { TFunction } from 'i18next';
 import en from '../../../i18n/locales/en.json';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
-import { caveSectionHeaderMenuItems, caveSectionLineMenuItems, createSectionWithRename } from '../caveSectionMenuItems';
+import {
+  caveSectionHeaderMenuItems,
+  caveSectionLineMenuItems,
+  createNamedSection,
+  startNewSection,
+} from '../caveSectionMenuItems';
 import type { Line } from '../../../types/ipc/Line';
 
 /** A t() over the real English strings (plural `_one` / `_other` by count). */
@@ -80,15 +85,42 @@ describe('Move to Section', () => {
     expect(row!.submenu![2]!.disabled).toBe(true);
   });
 
-  it('New Section... creates "Section 1" with the lines and asks for the inline rename', async () => {
+  it('New Section... creates nothing: it asks the panel for a name, holding the lines', async () => {
     const create = vi.fn().mockResolvedValue({ ...ok, cave_section_id: 9 });
     useProjectStore.setState({ createCaveSection: create, project: { ...project } as never });
-    useUIStore.setState({ hiddenSections: [9], pendingSectionRename: null });
-    expect(await createSectionWithRename([3], t)).toBe(9);
-    expect(create).toHaveBeenCalledWith('Section 1', expect.stringMatching(/^#/), [3]);
-    expect(useUIStore.getState().pendingSectionRename).toBe(9);
+    useUIStore.setState({ pendingNewSection: null, leftWorkspace: 'speleodb' });
+    const [row] = caveSectionLineMenuItems(3, [], project, t, close);
+    await (row!.submenu![3]!.action as () => Promise<void>)();
+    expect(create).not.toHaveBeenCalled();
+    expect(useUIStore.getState().pendingNewSection).toEqual({ id: expect.any(Number), lineIds: [3] });
+    // The row is in the Sections tab, so the menu shows it.
+    expect(useUIStore.getState().leftWorkspace).toBe('sections');
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('asking again starts a fresh request', () => {
+    startNewSection([]);
+    const first = useUIStore.getState().pendingNewSection!.id;
+    startNewSection([1, 2]);
+    expect(useUIStore.getState().pendingNewSection).toEqual({ id: first + 1, lineIds: [1, 2] });
+    useUIStore.getState().endNewSection();
+    expect(useUIStore.getState().pendingNewSection).toBeNull();
+  });
+
+  it('the named Section is ONE create_cave_section with the lines, and starts shown', async () => {
+    const create = vi.fn().mockResolvedValue({ ...ok, cave_section_id: 9 });
+    useProjectStore.setState({ createCaveSection: create, project: { ...project } as never });
+    useUIStore.setState({ hiddenSections: [9] });
+    expect(await createNamedSection('Sump', '#123456', [3])).toBe(9);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith('Sump', '#123456', [3]);
     // An id an undone create left on the hidden list starts shown.
     expect(useUIStore.getState().hiddenSections).toEqual([]);
+  });
+
+  it('a refused create resolves to null', async () => {
+    useProjectStore.setState({ createCaveSection: vi.fn().mockResolvedValue({ ...ok, success: false }) });
+    expect(await createNamedSection('Sump', '#123456', [])).toBeNull();
   });
 });
 

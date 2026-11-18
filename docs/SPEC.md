@@ -1043,8 +1043,9 @@ Example: "Selected shot 2:3."
 A project without Sections lists its lines flat, as it always did. Once it has
 one, the panel is a tree: each Section is a header row (colour dot, name, "N
 lines · L m", eye toggle, collapse chevron) with its lines beneath, in project
-order, then an **Ungrouped** header for the lines in no Section (shown even when
-empty: it is where a line is dragged to leave its Section).
+order, then an **Ungrouped** header for the lines in no Section. With every line
+in a Section the Ungrouped header is left out, except while a line is dragged:
+it is then the drop target that takes a line out of its Section.
 
 - **One virtualized list.** The tree is flattened into one list of rows
   (`sectionsTree.ts`), virtualized like the flat list; line rows keep their test
@@ -1072,11 +1073,14 @@ empty: it is where a line is dragged to leave its Section).
 - **Collapse** is per project, for the session. Selecting a line of a collapsed
   group elsewhere (map, data table, Details) opens the group, so a selection is
   always visible in the panel.
-- **Editing** - New Section (header button; `Section N` in the next free palette
-  colour, then an inline rename), the header menu (Rename, Color..., Apply Color
+- **Editing** - New Section (header button: a pending row above the list, its
+  field prefilled with the next free `Section N` and selected, and the dot in
+  the next free palette colour; nothing exists until Enter, or leaving the field,
+  with a usable name sends ONE `create_cave_section` - one undo step, named as
+  typed; Escape drops the row and creates nothing), the header menu (Rename, Color..., Apply Color
   to Lines, Hide / Show on Map, Zoom to Section, Delete Section), the line menu's **Move to
-  Section** flyout (each Section, No Section, New Section...; the right-clicked
-  line, or the whole line selection it is part of), dragging a line row (or the
+  Section** flyout (each Section, No Section, New Section...: the same pending
+  row, holding the right-clicked line, or the whole line selection it is part of), dragging a line row (or the
   line selection it is part of) onto a group, and the New Line dialog's Section.
   Every one is gated on `useEditingBlocked()` and re-checked at commit time; the
   drag uses pointer events (not HTML5 drag-and-drop, which WebKitGTK runs

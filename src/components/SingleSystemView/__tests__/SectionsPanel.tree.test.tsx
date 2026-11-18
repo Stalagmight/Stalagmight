@@ -27,15 +27,16 @@ const lines = [
 
 const ok = { success: true, warnings: [], error: null, line_ids: [] };
 
-function setup() {
+function setup(panelLines: Line[] = lines) {
   useProjectStore.setState({
     project: {
       created_at: 'p1',
-      lines,
+      lines: panelLines,
       cave_sections: [{ id: 7, name: 'Upper level', color: '#ff0000' }],
     } as never,
     surveyData: null,
     updateCaveSection: vi.fn().mockResolvedValue(ok),
+    createCaveSection: vi.fn().mockResolvedValue({ ...ok, cave_section_id: 8 }),
   });
   useUIStore.setState({
     appMode: 'survey',
@@ -45,6 +46,7 @@ function setup() {
     hiddenSections: [],
     collapsedSections: {},
     pendingSectionRename: null,
+    pendingNewSection: null,
     activeDialog: null,
     requestZoomToLine: null,
     selectionAnnouncement: '',
@@ -52,14 +54,14 @@ function setup() {
   });
   // A confirmed-local project: editing is open.
   useSpeleoStore.setState({ projectLinkKind: 'local' } as never);
-  render(<SectionsPanel lines={lines} />);
+  render(<SectionsPanel lines={panelLines} />);
 }
 
 const header = () => screen.getByTestId('section-header-7');
 const ungrouped = () => screen.getByTestId('sections-ungrouped-header');
 
 describe('SectionsPanel tree', () => {
-  beforeEach(setup);
+  beforeEach(() => setup());
 
   it('is a tree: headers at level 1 with their lines at level 2', () => {
     expect(screen.getByRole('tree')).toHaveAttribute('aria-multiselectable', 'true');
@@ -215,5 +217,102 @@ describe('SectionsPanel tree', () => {
     act(() => useUIStore.getState().setSelection({ type: 'shot', lineId: 2, shotId: 5 }));
     expect(header()).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('line-row-2')).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('SectionsPanel New Section', () => {
+  beforeEach(() => setup());
+  const create = () => useProjectStore.getState().createCaveSection as ReturnType<typeof vi.fn>;
+  const open = () => {
+    fireEvent.click(screen.getByTestId('sections-new-section-button'));
+    return screen.getByTestId('sections-new-section-input') as HTMLInputElement;
+  };
+
+  it('asks for the name first: the next free name, selected, and nothing created yet', () => {
+    const input = open();
+    expect(input).toHaveFocus();
+    expect(input.value).toBe('Section 1');
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'Section 1'.length]);
+    expect(create()).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sections-new-section-hint')).toHaveTextContent('Enter creates the section');
+  });
+
+  it('Enter creates the Section with the typed name in ONE create_cave_section', async () => {
+    const input = open();
+    fireEvent.change(input, { target: { value: '  Sump ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(create()).toHaveBeenCalledTimes(1);
+    expect(create()).toHaveBeenCalledWith('Sump', expect.stringMatching(/^#/), []);
+    expect(screen.queryByTestId('sections-new-section-row')).toBeNull();
+    await act(async () => {});
+    expect(useProjectStore.getState().updateCaveSection).not.toHaveBeenCalled();
+  });
+
+  it('Escape cancels: nothing is created and the row goes', () => {
+    const input = open();
+    fireEvent.change(input, { target: { value: 'Sump' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('sections-new-section-row')).toBeNull();
+    expect(useUIStore.getState().pendingNewSection).toBeNull();
+    expect(create()).not.toHaveBeenCalled();
+  });
+
+  it('a taken name is refused at the field; leaving it with one creates nothing and says why', () => {
+    const input = open();
+    fireEvent.change(input, { target: { value: 'Upper level' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('sections-new-section-error')).toHaveTextContent(
+      'There is already a section named "Upper level".',
+    );
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.blur(input);
+    expect(screen.queryByTestId('sections-new-section-row')).toBeNull();
+    expect(create()).not.toHaveBeenCalled();
+    expect(useUIStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      'No section was created. There is already a section named "Upper level".',
+    ]);
+  });
+
+  it('leaving the field with a usable name creates the Section', () => {
+    const input = open();
+    fireEvent.blur(input);
+    expect(create()).toHaveBeenCalledWith('Section 1', expect.stringMatching(/^#/), []);
+  });
+
+  it('"New Section..." from a line holds the line, and says so', () => {
+    act(() => useUIStore.getState().startNewSection([3]));
+    expect(screen.getByTestId('sections-new-section-hint')).toHaveTextContent('with its line');
+    const input = screen.getByTestId('sections-new-section-input');
+    fireEvent.change(input, { target: { value: 'Sump' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(create()).toHaveBeenCalledWith('Sump', expect.stringMatching(/^#/), [3]);
+  });
+
+  it('closes when editing becomes blocked', () => {
+    open();
+    act(() => useUIStore.setState({ geometryMode: 'closureAdjusted' }));
+    expect(screen.queryByTestId('sections-new-section-row')).toBeNull();
+    expect(create()).not.toHaveBeenCalled();
+  });
+});
+
+describe('SectionsPanel Ungrouped header', () => {
+  it('is listed while some line is ungrouped', () => {
+    setup();
+    expect(ungrouped()).toBeInTheDocument();
+  });
+
+  it('is left out when every line is in a Section, and comes back as the drop target of a drag', () => {
+    const grouped = lines.map((l) => ({ ...l, cave_section_id: 7 })) as Line[];
+    setup(grouped);
+    expect(screen.queryByTestId('sections-ungrouped-header')).toBeNull();
+    // jsdom lays nothing out: no row is under the pointer.
+    document.elementFromPoint = () => null;
+    fireEvent.pointerDown(screen.getByTestId('line-row-2'), { button: 0, pointerType: 'mouse', clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(document, { clientX: 10, clientY: 40 });
+    expect(ungrouped()).toBeInTheDocument();
+    expect(screen.getByTestId('sections-ungrouped-stats')).toHaveTextContent('0 lines');
+    fireEvent.pointerUp(document, { clientX: 10, clientY: 40 });
+    expect(screen.queryByTestId('sections-ungrouped-header')).toBeNull();
   });
 });

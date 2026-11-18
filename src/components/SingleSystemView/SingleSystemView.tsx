@@ -306,6 +306,16 @@ export default function SingleSystemView() {
     const frame = requestAnimationFrame(() => document.getElementById('workspace-tab-speleodb')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [revealNonce, revealLeft]);
+  // A New Section row asks for its name in the Sections panel, which a line's
+  // menu on the map can be opened without: show the panel while it does.
+  // Only a closed panel is revealed: a temporary reveal of an open one would
+  // outlive it, floating the panel open again when it is next closed.
+  const pendingNewSectionId = useUIStore((s) => s.pendingNewSection?.id ?? null);
+  const sectionsOpenRef = useRef(sectionsReveal.isOpen);
+  sectionsOpenRef.current = sectionsReveal.isOpen;
+  useLayoutEffect(() => {
+    if (pendingNewSectionId !== null && !sectionsOpenRef.current) revealLeft();
+  }, [pendingNewSectionId, revealLeft]);
   const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
   const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
 

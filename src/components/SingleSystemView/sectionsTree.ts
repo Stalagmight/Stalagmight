@@ -4,8 +4,9 @@
  * A project with no Sections is the flat list of lines it always was (every
  * row at level 1). Once it has one, each Section is a level-1 header with its
  * lines beneath at level 2, in project order, followed by an "Ungrouped"
- * header holding the lines in no Section. The Ungrouped header is shown even
- * when it is empty: it is where a line is dragged to leave its Section.
+ * header holding the lines in no Section. An empty Ungrouped group is left out,
+ * except while a line is being dragged: it is then where a line is dropped to
+ * leave its Section.
  *
  * Pure: everything here is unit-tested without React.
  */
@@ -57,12 +58,15 @@ export interface SectionTree {
 
 export const groupKey = (group: GroupId) => (group === UNGROUPED_GROUP_ID ? 'ungrouped' : `section:${group}`);
 
-/** Build the flattened tree. `collapsed` and `hidden` hold group / Section ids. */
+/** Build the flattened tree. `collapsed` and `hidden` hold group / Section ids.
+ *  `showEmptyUngrouped` keeps the Ungrouped header when no line is ungrouped
+ *  (a line drag is in flight, and it is the drop target that ungroups). */
 export function buildSectionTree(
   lines: readonly Line[],
   sections: readonly Section[],
   collapsed: ReadonlySet<GroupId>,
   hidden: ReadonlySet<number>,
+  showEmptyUngrouped = false,
 ): SectionTree {
   const rows: TreeRow[] = [];
   const rowOfLine = new Map<LineId, number>();
@@ -114,7 +118,7 @@ export function buildSectionTree(
     }
   };
   for (const section of sections) pushGroup(section.id, section);
-  pushGroup(UNGROUPED_GROUP_ID, null);
+  if (showEmptyUngrouped || members.has(UNGROUPED_GROUP_ID)) pushGroup(UNGROUPED_GROUP_ID, null);
   return { rows, grouped: true, rowOfLine, rowOfGroup, groupOfLine };
 }
 

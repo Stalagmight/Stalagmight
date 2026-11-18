@@ -15,6 +15,12 @@ export const HIDDEN_SECTIONS_SETTING = 'hiddenSections';
  *  are unsigned, so it can never be a real one. */
 export const UNGROUPED_GROUP_ID = -1;
 
+/** A New Section the panel is asking a name for. */
+export interface PendingNewSection {
+  id: number;
+  lineIds: readonly LineId[];
+}
+
 export interface SectionsViewSlice {
   /** The Sections hidden on the map (ids). Restored per project by
    *  `applyDisplaySettings`; a load is authoritative. */
@@ -32,10 +38,20 @@ export interface SectionsViewSlice {
    *  Section id, or {@link UNGROUPED_GROUP_ID}. Session-only. */
   collapsedSections: Readonly<Record<string, readonly number[]>>;
   setSectionCollapsed: (projectKey: string, id: number, collapsed: boolean) => void;
-  /** A Section just created elsewhere (the context menu's "New Section...")
-   *  whose header should open its inline rename once the panel shows it. */
+  /** A Section whose header should open its inline rename once the panel
+   *  shows it (the header menu's Rename). */
   pendingSectionRename: number | null;
   requestSectionRename: (id: number | null) => void;
+  /** A New Section waiting for its name in the panel (the panel's New Section
+   *  button, or "New Section..." in a line's menu). Nothing exists until the
+   *  name is entered: then ONE `create_cave_section` makes it, holding
+   *  `lineIds`; Escape drops it without a trace. `id` tells requests apart, so
+   *  asking again starts the field afresh. */
+  pendingNewSection: PendingNewSection | null;
+  /** Ask the panel for a New Section row holding `lineIds`. */
+  startNewSection: (lineIds: readonly LineId[]) => void;
+  /** Drop the pending New Section row (created, cancelled, or no longer possible). */
+  endNewSection: () => void;
   /** Frame several lines at once (a Section's extent). Shares the single
    *  `requestZoomToLine` channel MapCanvas already serves. */
   triggerZoomToLines: (lineIds: readonly LineId[]) => void;
@@ -71,6 +87,9 @@ export function prunedHiddenSections(
   return kept.length === hidden.length ? null : kept;
 }
 
+/** Numbers the New Section requests ({@link PendingNewSection.id}). */
+let newSectionRequests = 0;
+
 export function createSectionsViewSlice(set: SliceSet): SectionsViewSlice {
   return {
     hiddenSections: [],
@@ -102,6 +121,12 @@ export function createSectionsViewSlice(set: SliceSet): SectionsViewSlice {
       }),
     pendingSectionRename: null,
     requestSectionRename: (pendingSectionRename) => set({ pendingSectionRename }),
+    pendingNewSection: null,
+    startNewSection: (lineIds) => {
+      newSectionRequests += 1;
+      set({ pendingNewSection: { id: newSectionRequests, lineIds: [...lineIds] } });
+    },
+    endNewSection: () => set({ pendingNewSection: null }),
     triggerZoomToLines: (lineIds) => {
       if (lineIds.length === 0) return;
       set({ requestZoomToLine: [...lineIds] });

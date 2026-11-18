@@ -60,9 +60,14 @@ describe('buildSectionTree', () => {
     expect(tree.rowOfGroup.get(3)).toBe(2);
   });
 
-  it('keeps an empty Ungrouped group as a drop target', () => {
+  it('leaves an empty Ungrouped group out, unless a drag needs it as a drop target', () => {
     const tree = buildSectionTree([line(1, 7)], SECTIONS, new Set(), new Set());
-    expect(kinds(tree.rows)).toEqual(['G7', 'L1@2', 'G3', `G${UNGROUPED_GROUP_ID}`]);
+    expect(kinds(tree.rows)).toEqual(['G7', 'L1@2', 'G3']);
+    expect(tree.rowOfGroup.has(UNGROUPED_GROUP_ID)).toBe(false);
+    const dragging = buildSectionTree([line(1, 7)], SECTIONS, new Set(), new Set(), true);
+    expect(kinds(dragging.rows)).toEqual(['G7', 'L1@2', 'G3', `G${UNGROUPED_GROUP_ID}`]);
+    const header = dragging.rows[3]!;
+    expect(header.kind === 'group' && header.lineIds).toEqual([]);
   });
 
   it('a collapsed group lists no lines; they resolve to its header', () => {

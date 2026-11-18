@@ -2896,6 +2896,13 @@
       "shown": "{{name}} is shown on the map"
     },
     "ariaTree": "Lines, grouped by section",
+    "create": {
+      "hint": "Enter creates the section, Escape cancels.",
+      "hintWithLines_one": "Enter creates the section with its line, Escape cancels.",
+      "hintWithLines_other": "Enter creates the section with its {{lines}} lines, Escape cancels.",
+      "label": "Name of the new section",
+      "notCreated": "No section was created. {{reason}}"
+    },
     "defaultNameBase": "Section",
     "detailLabel": "Section",
     "drag": {

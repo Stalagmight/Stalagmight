@@ -17,13 +17,19 @@ import { IconButton } from '../common/Button';
 import { FolderPlusIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { getErrorMessage } from '../../utils/ipc';
+import { getNextLineColor } from '../../utils/colors';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { UNGROUPED_GROUP_ID } from '../../store/sectionsViewSlice';
-import { createSectionWithRename, setSectionHiddenAnnounced } from '../common/caveSectionMenuItems';
-import { calculateLineStats, GroupHeaderRow, LineRow } from './SectionsPanelRows';
+import {
+  createNamedSection,
+  setSectionHiddenAnnounced,
+  startNewSection,
+} from '../common/caveSectionMenuItems';
+import { calculateLineStats, GroupHeaderRow, LineRow, NewSectionRow } from './SectionsPanelRows';
 import {
   buildSectionTree,
+  defaultSectionName,
   dropChangesSomething,
   groupClickSelection,
   linesToCarry,
@@ -32,6 +38,7 @@ import {
   treeArrowAction,
   treePositions,
   type GroupId,
+  type SectionTree,
   type TreeRow,
 } from './sectionsTree';
 import { LineDragGhost, useLineDrag } from './useLineDrag';
@@ -108,7 +115,7 @@ export function rovingDefaultTabIndex(
 export default function SectionsPanel({ lines }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, selectAll, hoveredLineId, hoveredShot, hoveredStation, setHoveredLineId, openDialog, enterLineFocus, triggerZoomToLine, triggerZoomToLines, showToast, announceSelection, hiddenSections, collapsedSections, setSectionCollapsed, pendingSectionRename, requestSectionRename } = useUIStore(
+  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, selectAll, hoveredLineId, hoveredShot, hoveredStation, setHoveredLineId, openDialog, enterLineFocus, triggerZoomToLine, triggerZoomToLines, showToast, announceSelection, hiddenSections, collapsedSections, setSectionCollapsed, pendingSectionRename, requestSectionRename, pendingNewSection, endNewSection, resolvedTheme } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       multiSelection: s.multiSelection,
@@ -132,6 +139,9 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
       setSectionCollapsed: s.setSectionCollapsed,
       pendingSectionRename: s.pendingSectionRename,
       requestSectionRename: s.requestSectionRename,
+      pendingNewSection: s.pendingNewSection,
+      endNewSection: s.endNewSection,
+      resolvedTheme: s.resolvedTheme,
     }))
   );
 
@@ -198,17 +208,8 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
   // other per-project state, by created_at).
   const projectKey = project?.created_at ?? '';
   const collapsedList = collapsedSections[projectKey];
-  const tree = useMemo(
-    () => buildSectionTree(lines, sections, new Set(collapsedList ?? []), new Set(hiddenSections)),
-    [lines, sections, collapsedList, hiddenSections],
-  );
-  const rows = tree.rows;
-  const positions = useMemo(() => treePositions(rows), [rows]);
-  const rowIndexByKey = useMemo(() => new Map(rows.map((r, i) => [r.key, i])), [rows]);
   const lineOrder = useMemo(() => lines.map((l) => l.id), [lines]);
-
-  // Track the last hovered line ID set by this panel (for cleanup on unmount)
-  const lastHoveredIdRef = useRef<LineId | null>(null);
+  const moveLinesToCaveSection = useProjectStore((s) => s.moveLinesToCaveSection);
 
   // Scroll container for the line list, plus the scroll position captured
   // before an *external* hover (map / data table / details panel) auto-scrolled
@@ -216,6 +217,49 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
   // panel doesn't drift while the user skims other surfaces. `null` means there
   // is no external-hover scroll to undo.
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const blockedToast = useCallback(() => {
+    showToast(
+      t(editingBlockedReasonNow() === 'project' ? 'caveSections.readOnlyProject' : 'caveSections.readOnly'),
+      TOAST_KEYS.EDIT_DISABLED,
+      'warning',
+    );
+  }, [showToast, t]);
+
+  // --- Drag lines onto a Section -------------------------------------------
+  // Ahead of the tree: while a drag is in flight the tree lists the Ungrouped
+  // header even when it is empty, as the drop target that ungroups. The drop
+  // check reads the tree of the last render (the drag runs between renders).
+  const treeRef = useRef<SectionTree | null>(null);
+  const lineDrag = useLineDrag({
+    enabled: sections.length > 0 && !editingBlocked,
+    listRef: listContainerRef,
+    carry: (lineId) => linesToCarry(lineId, selectedLineIds, lineOrder),
+    canDrop: (lineIds, group) => dropChangesSomething(lineIds, group, treeRef.current?.groupOfLine ?? new Map()),
+    onDrop: (lineIds, group) => {
+      // Re-checked at the drop: the mode can change while the button is down.
+      if (isEditingBlockedNow()) {
+        blockedToast();
+        return;
+      }
+      setSource('sections-panel');
+      void moveLinesToCaveSection(lineIds, group === UNGROUPED_GROUP_ID ? null : group);
+    },
+  });
+  const dragging = lineDrag.drag !== null;
+
+  const tree = useMemo(
+    () => buildSectionTree(lines, sections, new Set(collapsedList ?? []), new Set(hiddenSections), dragging),
+    [lines, sections, collapsedList, hiddenSections, dragging],
+  );
+  treeRef.current = tree;
+  const rows = tree.rows;
+  const positions = useMemo(() => treePositions(rows), [rows]);
+  const rowIndexByKey = useMemo(() => new Map(rows.map((r, i) => [r.key, i])), [rows]);
+
+  // Track the last hovered line ID set by this panel (for cleanup on unmount)
+  const lastHoveredIdRef = useRef<LineId | null>(null);
+
   const preHoverScrollTopRef = useRef<number | null>(null);
   // Pending debounced hover-scroll timer (see HOVER_SCROLL_DEBOUNCE_MS).
   const hoverScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -243,7 +287,6 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
   const surveyData = useProjectStore((s) => s.surveyData);
   const updateLine = useProjectStore((s) => s.updateLine);
   const updateCaveSection = useProjectStore((s) => s.updateCaveSection);
-  const moveLinesToCaveSection = useProjectStore((s) => s.moveLinesToCaveSection);
 
   // O(1) line-id -> metadata lookup, built once per surveyData change. This
   // replaces the former per-row `surveyData.lines.find(...)`, which made a
@@ -464,31 +507,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     selectLine(line, e);
   }, [selectLine, tree.grouped, editingBlocked, selectedLineIds]);
 
-  // --- Drag lines onto a Section -------------------------------------------
-
-  const blockedToast = useCallback(() => {
-    showToast(
-      t(editingBlockedReasonNow() === 'project' ? 'caveSections.readOnlyProject' : 'caveSections.readOnly'),
-      TOAST_KEYS.EDIT_DISABLED,
-      'warning',
-    );
-  }, [showToast, t]);
-
-  const lineDrag = useLineDrag({
-    enabled: tree.grouped && !editingBlocked,
-    listRef: listContainerRef,
-    carry: (lineId) => linesToCarry(lineId, selectedLineIds, lineOrder),
-    canDrop: (lineIds, group) => dropChangesSomething(lineIds, group, tree.groupOfLine),
-    onDrop: (lineIds, group) => {
-      // Re-checked at the drop: the mode can change while the button is down.
-      if (isEditingBlockedNow()) {
-        blockedToast();
-        return;
-      }
-      setSource('sections-panel');
-      void moveLinesToCaveSection(lineIds, group === UNGROUPED_GROUP_ID ? null : group);
-    },
-  });
+  // --- Drop target -------------------------------------------------------------
   const dropTarget = lineDrag.drag?.target ?? null;
   const { consumeDropClick, onPointerDown: dragPointerDown } = lineDrag;
   const handleDragPointerDown = useCallback(
@@ -856,14 +875,107 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     openDialog('import');
   };
 
+  // --- New Section -------------------------------------------------------------
+  // The button (and "New Section..." in a line's menu) opens a row above the
+  // list that asks for the name; nothing is created until it is entered, so
+  // naming a new Section is ONE undo step and Escape leaves nothing behind.
+
+  const [newSectionError, setNewSectionError] = useState<string | null>(null);
+  // The Section a commit created, focused once the panel lists it.
+  const [focusSectionId, setFocusSectionId] = useState<number | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const newSectionInput = () =>
+    panelRef.current?.querySelector<HTMLInputElement>('[data-testid="sections-new-section-input"]') ?? null;
+
   const handleNewSection = () => {
     if (isEditingBlockedNow()) {
       blockedToast();
       return;
     }
+    // Asked again while the row is open: back to its field (the button's
+    // press kept the focus there, so leaving it created nothing).
+    const open = newSectionInput();
+    if (open) {
+      open.focus();
+      open.select();
+      return;
+    }
     setSource('sections-panel');
-    void createSectionWithRename([], t);
+    setNewSectionError(null);
+    startNewSection([]);
   };
+
+  // A press on the button while the row is open must not leave the field:
+  // leaving it creates the Section.
+  const handleNewSectionMouseDown = (e: React.MouseEvent) => {
+    if (newSectionInput()) e.preventDefault();
+  };
+
+  const closeNewSection = useCallback((refocus: boolean, lineIds: readonly LineId[]) => {
+    endNewSection();
+    setNewSectionError(null);
+    if (!refocus) return;
+    // Back where it was asked for: the line it was asked for, else the button.
+    const lineRow = lineIds.length > 0 ? tree.rowOfLine.get(lineIds[0]!) : undefined;
+    requestAnimationFrame(() => {
+      if (lineRow !== undefined) focusRow(lineRow);
+      else panelRef.current?.querySelector<HTMLElement>('[data-testid="sections-new-section-button"]')?.focus();
+    });
+  }, [endNewSection, tree, focusRow]);
+
+  // The next free palette colour: the dot shows the colour the create sends.
+  const newSectionColor = useMemo(
+    () => getNextLineColor(sections.map((s) => s.color), resolvedTheme),
+    [sections, resolvedTheme],
+  );
+
+  const commitNewSection = useCallback((value: string, viaBlur: boolean): boolean => {
+    const pending = useUIStore.getState().pendingNewSection;
+    if (!pending) return true;
+    // Re-checked at commit time: the mode can change while the field is open.
+    if (isEditingBlockedNow()) {
+      blockedToast();
+      closeNewSection(!viaBlur, pending.lineIds);
+      return true;
+    }
+    const problem = sectionNameProblem(value, sections, null);
+    if (problem) {
+      const reason = sectionNameProblemMessage(problem, t);
+      // Leaving the field with a name that cannot be used creates nothing and
+      // says why (the field is gone); Enter says why at the field.
+      if (viaBlur) {
+        closeNewSection(false, pending.lineIds);
+        showToast(t('caveSections.create.notCreated', { reason }), TOAST_KEYS.RENAME, 'warning');
+        return true;
+      }
+      setNewSectionError(reason);
+      return false;
+    }
+    closeNewSection(false, pending.lineIds);
+    setSource('sections-panel');
+    void createNamedSection(value.trim(), newSectionColor, pending.lineIds).then((id) => {
+      if (id === null) return;
+      setSectionCollapsed(projectKey, id, false);
+      // Enter moves on to the new header; leaving the field went elsewhere.
+      if (!viaBlur) setFocusSectionId(id);
+    });
+    return true;
+  }, [sections, t, blockedToast, closeNewSection, showToast, newSectionColor, setSectionCollapsed, projectKey]);
+
+  useEffect(() => {
+    if (focusSectionId === null) return;
+    const idx = tree.rowOfGroup.get(focusSectionId);
+    if (idx === undefined) return;
+    setFocusSectionId(null);
+    requestAnimationFrame(() => focusRow(idx));
+  }, [focusSectionId, tree, focusRow]);
+
+  // A New Section row cannot outlive the edit it is for: it closes when
+  // editing becomes blocked, and with the project (a switch, a close).
+  useEffect(() => {
+    if (editingBlocked && useUIStore.getState().pendingNewSection) endNewSection();
+  }, [editingBlocked, pendingNewSection, endNewSection]);
+  useEffect(() => () => useUIStore.getState().endNewSection(), [projectKey]);
 
   const handleLineContextMenu = useCallback((e: React.MouseEvent, lineId: number) => {
     e.preventDefault();
@@ -879,13 +991,14 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
         : (sections.find((s) => s.id === dropTarget)?.name ?? null);
 
   return (
-    <div className="h-full flex flex-col bg-panel" data-testid="sections-panel">
+    <div ref={panelRef} className="h-full flex flex-col bg-panel" data-testid="sections-panel">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h2 className="font-medium">{t('sections.title')}</h2>
         <div className="flex items-center gap-1">
           <IconButton
             onClick={handleNewSection}
+            onMouseDown={handleNewSectionMouseDown}
             icon={<FolderPlusIcon size={14} />}
             size="sm"
             variant="ghost"
@@ -906,6 +1019,19 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
           />
         </div>
       </div>
+
+      {pendingNewSection && (
+        <NewSectionRow
+          key={pendingNewSection.id}
+          initial={defaultSectionName(sections, t('caveSections.defaultNameBase'))}
+          color={newSectionColor}
+          lineCount={pendingNewSection.lineIds.length}
+          error={newSectionError}
+          onCommit={commitNewSection}
+          onCancel={() => closeNewSection(true, pendingNewSection.lineIds)}
+          onInput={() => setNewSectionError(null)}
+        />
+      )}
 
       {/* Line tree */}
       <div ref={listContainerRef} className="flex-1 overflow-auto select-none" data-testid="sections-list">

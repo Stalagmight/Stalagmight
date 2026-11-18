@@ -15,9 +15,7 @@ import type { Line, LineId } from '../../types/project';
 import type { Section } from '../../types/ipc/Section';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { getNextLineColor } from '../../utils/colors';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { defaultSectionName } from '../SingleSystemView/sectionsTree';
 import { ToolGlyph } from './toolIcons';
 import { EyeIcon, EyeOffIcon, LayersIcon, PencilIcon, TrashIcon } from './icons';
 
@@ -70,23 +68,33 @@ export function setSectionHiddenAnnounced(section: Pick<Section, 'id' | 'name'>,
 }
 
 /**
- * Create a Section named `Section N` in the next free palette colour, holding
- * `lineIds`, and open its inline rename in the panel. Shared by the line
- * menu's "New Section..." and the panel's "New Section" button.
+ * Ask the Sections panel for a New Section row holding `lineIds`: an inline
+ * field prefilled with the next free `Section N`. Nothing is created until a
+ * name is entered there (one undo step); Escape drops it. Shared by the line
+ * menu's "New Section..." and the panel's "New Section" button; shows the
+ * Sections tab, which the line menu can be opened without (from the map).
  */
-export async function createSectionWithRename(lineIds: readonly LineId[], t: TFunction): Promise<number | null> {
-  const project = useProjectStore.getState().project;
+export function startNewSection(lineIds: readonly LineId[]): void {
   const ui = useUIStore.getState();
-  const sections = project?.cave_sections ?? [];
-  const color = getNextLineColor(sections.map((s) => s.color), ui.resolvedTheme);
-  const result = await useProjectStore
-    .getState()
-    .createCaveSection(defaultSectionName(sections, t('caveSections.defaultNameBase')), color, lineIds);
+  if (ui.leftWorkspace !== 'sections') ui.selectLeftWorkspace('sections');
+  ui.startNewSection(lineIds);
+}
+
+/**
+ * Create the Section the New Section row named, in `color`, holding
+ * `lineIds`: one `create_cave_section`. Resolves to its id, or null when it was
+ * refused (executeCommand has said why).
+ */
+export async function createNamedSection(
+  name: string,
+  color: string,
+  lineIds: readonly LineId[],
+): Promise<number | null> {
+  const result = await useProjectStore.getState().createCaveSection(name, color, lineIds);
   const id = result.success ? result.cave_section_id : undefined;
   if (id === undefined || id === null) return null;
   // An id coming back from an undone create may still be on the hidden list.
   if (useUIStore.getState().hiddenSections.includes(id)) useUIStore.getState().setSectionHidden(id, false);
-  useUIStore.getState().requestSectionRename(id);
   return id;
 }
 
@@ -127,7 +135,7 @@ export function caveSectionLineMenuItems(
     },
     {
       label: t('caveSections.menu.newSectionWithLines'),
-      action: closeAfter(closeDialog, () => createSectionWithRename(lineIds, t)),
+      action: closeAfter(closeDialog, () => startNewSection(lineIds)),
     },
   ];
   return [

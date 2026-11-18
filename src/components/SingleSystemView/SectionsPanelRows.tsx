@@ -642,29 +642,79 @@ function RenameField({
   onInput: () => void;
 }) {
   const { t } = useTranslation();
+  return (
+    <SectionNameField
+      initial={initial}
+      error={error}
+      onCommit={onCommit}
+      onCancel={onCancel}
+      onInput={onInput}
+      label={t('caveSections.actions.renameLabel')}
+      testId={`section-rename-${sectionId}`}
+      inputTestId={`section-rename-input-${sectionId}`}
+      errorTestId={`section-rename-error-${sectionId}`}
+    />
+  );
+}
+
+/** How many frames a name field keeps trying to take the focus: it can mount
+ *  inside a closed side panel that a programmatic reveal opens a frame later
+ *  ("New Section..." from a line's menu on the map). */
+const FOCUS_RETRY_FRAMES = 10;
+
+/** A Section name field: Enter commits (and stays open, saying why, when the
+ *  name cannot be used), leaving it commits, Escape cancels. Opens focused,
+ *  with the whole name selected. */
+function SectionNameField({
+  initial,
+  error,
+  onCommit,
+  onCancel,
+  onInput,
+  label,
+  testId,
+  inputTestId,
+  errorTestId,
+}: {
+  initial: string;
+  error: string | null;
+  onCommit: (value: string, viaBlur: boolean) => boolean;
+  onCancel: () => void;
+  onInput: () => void;
+  label: string;
+  testId: string;
+  inputTestId: string;
+  errorTestId: string;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   // Set once the field has settled (committed, or cancelled with Escape): the
   // blur that follows its removal must not commit again.
   const settledRef = useRef(false);
   useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    input.focus();
-    input.select();
+    let frames = 0;
+    let frame: number | null = null;
+    const take = () => {
+      frame = null;
+      const input = inputRef.current;
+      if (!input || settledRef.current) return;
+      input.focus();
+      input.select();
+      if (document.activeElement !== input && ++frames < FOCUS_RETRY_FRAMES) frame = requestAnimationFrame(take);
+    };
+    take();
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, []);
-  const errorId = `section-rename-error-${sectionId}`;
+  const errorId = `${errorTestId}-message`;
   return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      data-testid={`section-rename-${sectionId}`}
-    >
+    <div onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} data-testid={testId}>
       <input
         ref={inputRef}
         type="text"
         defaultValue={initial}
         maxLength={400}
-        aria-label={t('caveSections.actions.renameLabel')}
+        aria-label={label}
         aria-invalid={error !== null}
         aria-describedby={error ? errorId : undefined}
         className={`w-full select-text text-sm px-1 py-0.5 bg-panel border rounded focus:outline-none focus:ring-1 focus:ring-accent ${
@@ -688,13 +738,76 @@ function RenameField({
         }}
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
-        data-testid={`section-rename-input-${sectionId}`}
+        data-testid={inputTestId}
       />
       {error && (
-        <div id={errorId} role="alert" className="mt-0.5 text-xs text-error" data-testid={`section-rename-error-${sectionId}`}>
+        <div id={errorId} role="alert" className="mt-0.5 text-xs text-error" data-testid={errorTestId}>
           {error}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The New Section row, above the list: the colour the Section will get and a
+ * name field prefilled with the next free `Section N`. Nothing exists until
+ * the name is entered; Escape drops the row (see `pendingNewSection`).
+ */
+export function NewSectionRow({
+  initial,
+  color,
+  lineCount,
+  error,
+  onCommit,
+  onCancel,
+  onInput,
+}: {
+  initial: string;
+  color: string;
+  /** How many lines the Section will hold ("New Section..." from a line). */
+  lineCount: number;
+  error: string | null;
+  onCommit: (value: string, viaBlur: boolean) => boolean;
+  onCancel: () => void;
+  onInput: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex items-start gap-1.5 pl-2 pr-2 py-1.5 border-b border-border bg-accent-10"
+      // A press on the row around the field must not take the focus out of it
+      // (leaving the field creates the Section).
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('input')) return;
+        e.preventDefault();
+      }}
+      data-testid="sections-new-section-row"
+    >
+      <span
+        className="mt-1.5 w-3 h-3 rounded-full flex-shrink-0"
+        style={{ backgroundColor: color }}
+        aria-hidden="true"
+        data-testid="sections-new-section-color"
+      />
+      <div className="flex-1 min-w-0">
+        <SectionNameField
+          initial={initial}
+          error={error}
+          onCommit={onCommit}
+          onCancel={onCancel}
+          onInput={onInput}
+          label={t('caveSections.create.label')}
+          testId="sections-new-section-field"
+          inputTestId="sections-new-section-input"
+          errorTestId="sections-new-section-error"
+        />
+        <div className="mt-0.5 text-xs text-text-secondary" data-testid="sections-new-section-hint">
+          {lineCount > 0
+            ? t('caveSections.create.hintWithLines', { count: lineCount, lines: formatNumber(lineCount) })
+            : t('caveSections.create.hint')}
+        </div>
+      </div>
     </div>
   );
 }
