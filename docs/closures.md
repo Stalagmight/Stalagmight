@@ -261,7 +261,10 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   length, it would tie the joined station to itself), and drops a closure the
   combine made identical to another one. An UNALIGNED closure between the two
   sections elsewhere stays: it becomes a closure inside one section, which the
-  least-squares solve adjusts like any other.
+  least-squares solve adjusts like any other. A torn snap there (an unaligned
+  `Move` closure) that the combine brings back within 1 cm becomes a `Batch`
+  closure instead: the next re-measure would snap it inside the combined
+  section (#736, "Snaps as the combined project measures them" below).
 - **Of closures made identical, the one the solve takes stays (#749).**
   Once the two join stations are one, two closures can tie the same two
   stations: a tie the combine tears (a merge becomes a `Batch` closure,
@@ -311,7 +314,8 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
   one merge tears, the one nearest the moving section; a snapped (aligned)
   closure across the two sides, or from a side that moves, is demoted to
-  `Batch` the same way. The loop's misclosure moves to the torn tie. With
+  `Batch` the same way, and so is a torn snap the move re-closes across the
+  two sides (#736). The loop's misclosure moves to the torn tie. With
   zero datums on both sides, the moving section's merges to its datum sides
   tear too, for the datum (`TornTieReason::ZeroDatum`; the dialog names the
   end that does not move as held), and so does a snap the move tears into
@@ -434,6 +438,52 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   by its own stations before the combine.
   Unlike a split, a combine runs no orphan-closure sweep: it joins two sections
   and never strands one on a lone closure.
+- **Snaps as the combined project measures them (#736).** `is_aligned` is a
+  measurement ("`is_aligned` is a MEASUREMENT" below) that the command's
+  epilogue (`AppState::reconcile_geometry`) takes again after the combine, and
+  since #736 it decides what the Closures Computed solve ties. A combine
+  changes both of its terms: the moving side can bring a torn snap (a `Move`
+  closure whose stations had moved apart) back within 1 cm, as when it
+  carries the misclosure that snap also carries; a dropped join hand move can
+  pull a snap apart; and the merges it tears and the two sections it makes one
+  change the merge components the double-anchor term reads. The plan used to
+  read every flag as it stood, so the epilogue snapped a closure inside the
+  combined section (seen in the campaigns on master too), or snapped a torn
+  snap that then left a loop closure across one shot the dialog never listed.
+  Now the plan asks the stamp's two questions of the combined project for
+  every `Move` closure its other rules leave as one
+  (`project/combine_alignment.rs`: each station as shown once the plan's moves
+  are made, the merge components once its merges tear and the two sections
+  are one):
+  - a torn snap re-closed where a snap would tie the combined section to
+    itself (across the two sides, or with both ends on the combined section)
+    becomes a `Batch` closure, as such a snap does, and Details list it as a
+    snapped closure that becomes a loop closure;
+  - a snap the combine pulls apart (past 1 cm) becomes a `Batch` closure, as
+    one the moving side pulls apart does, listed the same way;
+  - any other keeps the alignment the combined project gives it: a torn snap
+    re-closed elsewhere (beside a merged join, where the sections merged at
+    the join point move with neither side) is a snap again, and a snap left
+    between two placed groups would be torn again. No combine reaches the
+    last: a closure the app keeps has both ends in one merge component, and
+    the only merges a combine tears that leave one split apart (the moving
+    section's merges to its datum sides) take every snap between the parts
+    with them.
+
+  The model of the joined survey (`joined_sweep`) sweeps the snaps of the
+  combined project, so the anchor rule and the across-one-shot removal read
+  the alignment the combined project will have (the anchor rule's plain plan,
+  where the other side moves, asks the same of its own moves). The combine
+  then measures every flag itself, before its backstop
+  (`remeasure_closure_alignment_ids`), and checks it changed exactly the
+  plan's `TiePlan::realigned` (a `debug_assert!` failure in a debug build, an
+  error in the log in a release build), so the epilogue changes nothing after
+  a combine; the sweeps assert both after every combine. Cost: the geometry as
+  shown is read once per candidate query (`ClosureFacts`), and only when a
+  plan leaves a `Move` closure; each plan then reads it in `O(1)` per closure,
+  with one union-find over the merges for the double-anchor term. Tests:
+  `project/combine_realign_tests.rs` (one survey per case), and the campaign
+  chains pinned in `CHAINS_THE_CAMPAIGNS_FAILED_ON`.
 
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 
@@ -553,9 +603,11 @@ Export pulled the pair apart (0.25 m in the issue's square).
   the destructive adjust before 0.5.0) is eligible and tied already. No version wrote an
   aligned proportional or equal one; a hand-edited file's is a snap.
 - **What mirrors it.** Combine Sections' model of the joined survey (`joined_sweep`) sweeps
-  the snaps it leaves snapped; one its dedupe drops for a later closure on the same two
-  stations is swept where that closure stands. The delete commands and the gap-close
-  preview name a snap they leave across one shot.
+  the snaps the combined project holds: the ones it leaves snapped, and a torn snap its
+  move re-closes, with the alignment the combined project gives each `Move` closure
+  ("Snaps as the combined project measures them" above); one its dedupe drops for a later
+  closure on the same two stations is swept where that closure stands. The delete
+  commands and the gap-close preview name a snap they leave across one shot.
 
 Tests: `project/closure_snap_tests.rs` (the issue's square, one test per case above, a
 snap-free survey pinned to the view before #736 within 1e-12 m, and a seeded sweep of snaps
