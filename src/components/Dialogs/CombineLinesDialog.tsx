@@ -11,6 +11,8 @@ import { formatLength } from '../../utils/formatStats';
 import { defaultConfig } from '../../types/config';
 import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
+import type { CombineLineRenames } from '../../types/ipc/CombineLineRenames';
+import type { CombineStationRenames } from '../../types/ipc/CombineStationRenames';
 import type { CombinePick } from '../../types/ipc/CombinePick';
 import type { LineId, StationRef } from '../../types/project';
 import type { CreditedPerson, Shot } from '../../types/ipc.generated';
@@ -56,6 +58,29 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
       <div className="text-text-secondary">Every shot keeps its own surveyors, explorers and date.</div>
     </div>
   );
+}
+
+/** One line's renames as the note reads them: `Main 0..3 → A0..A3`. */
+function lineRenameText(lineName: string, renames: CombineLineRenames): string {
+  const span = (first: string, last: string) => (renames.count > 1 ? `${first}..${last}` : first);
+  return `${lineName} ${span(renames.first_from, renames.last_from)} \u2192 ${span(renames.first_to, renames.last_to)}`;
+}
+
+/**
+ * The note that tells the user, before they confirm, that the combine renames
+ * stations (`CombinePlan.station_renames`): why, and each line's first and
+ * last renamed station before and after.
+ */
+function stationRenameNote(renames: CombineStationRenames, keptName: string, otherName: string): string {
+  const parts = [
+    renames.kept ? lineRenameText(keptName, renames.kept) : null,
+    renames.other ? lineRenameText(otherName, renames.other) : null,
+  ].filter((part): part is string => part !== null);
+  const why =
+    renames.reason === 'collision'
+      ? 'Station names collide'
+      : `${keptName} is lettered by an earlier combine`;
+  return `${why}, so stations will be renamed: ${parts.join(', ')}`;
 }
 
 /**
@@ -128,12 +153,15 @@ export default function CombineLinesDialog() {
   const nameError = nameProblem ? lineNameProblemMessage(nameProblem, shownName) : null;
 
   const join = keepB ? candidate?.station_b : candidate?.station_a;
-  // The join station by its line and name: `Main Line / 17`.
-  const joinLabel = join ? labels.station(join, true) : '';
   // A tie's station beside its line pill: the name alone (`17`); with
   // `withLine`, `Main Line / 17`.
   const stationLabel = (ref: StationRef, withLine = false) => labels.station(ref, withLine);
   const plan = candidate ? combinePlanFor(candidate, keptId) : undefined;
+  // The stations the combine renames for the line shown as kept, if any.
+  const renames = plan?.station_renames ?? null;
+  // The join station by its line and name: `Main Line / 17`; by the name it
+  // will have when the combine renames it (`Main Line / A3`).
+  const joinLabel = renames ? `${keptName} / ${renames.join_name}` : join ? labels.station(join, true) : '';
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
   const summary = t('dialogs.combineSections.summary', {
@@ -231,6 +259,13 @@ export default function CombineLinesDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary" data-testid="combine-summary">{summary}</p>
         {!isStale && <p className="text-sm" data-testid="combine-plan">{placement}</p>}
+        {/* Outside the folded Details: renamed stations are a change the user
+            sees everywhere afterwards, so they are told before confirming. */}
+        {!isStale && renames && (
+          <p className="text-sm" data-testid="combine-rename-note">
+            {stationRenameNote(renames, keptName, otherName)}
+          </p>
+        )}
         {!isStale && candidate?.join_kind === 'closure' && (
           <p className="text-sm" data-testid="combine-closure-join">
             {t('dialogs.combineSections.closureJoin', {

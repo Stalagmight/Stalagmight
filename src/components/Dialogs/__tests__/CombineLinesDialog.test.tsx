@@ -176,6 +176,56 @@ describe('CombineLinesDialog', () => {
     expect(screen.queryByTestId('combine-plan-notes')).toBeNull();
   });
 
+  it('says which stations the combine renames, and names the join by its new name', () => {
+    stations = [{ station_ref: { line_id: 2, station_index: 3 }, name: '3' }];
+    const range = (from: [string, string], to: [string, string], count: number) => ({
+      count,
+      first_from: from[0],
+      last_from: from[1],
+      first_to: to[0],
+      last_to: to[1],
+    });
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          station_renames: {
+            reason: 'collision',
+            kept: range(['0', '3'], ['A0', 'A3'], 4),
+            other: range(['0', '2'], ['B0', 'B2'], 3),
+            join_name: 'A3',
+          },
+        }),
+      }),
+    };
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
+      'Station names collide, so stations will be renamed: Main-A 0..3 \u2192 A0..A3, Main-B 0..2 \u2192 B0..B2'
+    );
+    expect(screen.getByTestId('combine-summary')).toHaveTextContent('at station Main-A / A3');
+    // Keeping the other line renames nothing here: no note, the join as it is.
+    fireEvent.click(screen.getByTestId('combine-swap-kept'));
+    expect(screen.queryByTestId('combine-rename-note')).toBeNull();
+    expect(screen.getByTestId('combine-summary')).toHaveTextContent('at station Main-B / 0');
+  });
+
+  it('says when the other line continues a lettered kept line', () => {
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          station_renames: {
+            reason: 'lettered',
+            other: { count: 1, first_from: '7', last_from: '7', first_to: 'C7', last_to: 'C7' },
+            join_name: 'B2',
+          },
+        }),
+      }),
+    };
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
+      'Main-A is lettered by an earlier combine, so stations will be renamed: Main-B 7 \u2192 C7'
+    );
+  });
+
   it('swaps the kept line, and the untouched defaults follow it', async () => {
     render(<CombineLinesDialog />);
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
