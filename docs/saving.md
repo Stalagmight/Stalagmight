@@ -109,6 +109,39 @@ rows, `held_gauges` and a dive-plan snapshot captured on the commit before the
 rename (`core/undo/testdata/pre_line_rename_rows.json`): each must parse and
 serialize back to the same JSON.
 
+## Station names and Station IDs
+
+Every station has a name (unique within its line) and a project-unique
+Station ID ([SPEC 4.2](SPEC.md#42-station-identification)). Both are stored
+positionally, keyed `(section_id, station_index)` like `station_comments`, in
+side tables that carry no schema bump (SpeleoDB's reader accepts exactly v18
+and ignores tables it does not know):
+
+- `station_names (section_id, station_index, name)` - written for every
+  station (`persistence/sqlite/station_texts.rs`);
+- `station_ids (section_id, station_index, station_id)`, primary key
+  `(section_id, station_index)`, plain DDL (`persistence/sqlite/station_ids.rs`);
+- the `project_settings` row `next_station_id`, the allocation counter.
+
+The read is tolerant: a missing table or key reads as none, a `station_ids` of
+another shape gives none (with a warning), an unreadable row is skipped and
+counted. Whatever is missing is re-minted on open by
+`Project::ensure_station_identities`, which allocates in line order then station
+order - so a file an older build rewrote without the table (an older build saves
+by writing a fresh file, which drops tables it does not know) opens with the same
+ids every time, and the names survive (older builds since #676 keep
+`station_names`). SQLite failing for a reason of its own still fails the open.
+A v18 file from before the tables takes the version fast path, so `save_project`
+creates them inside its transaction. `station_ids_tests.rs` pins the round trip,
+the degradations, and that no table the outside reader reads changes beyond the
+`next_station_id` key it never asks for.
+
+The whole-project undo snapshots carry `station_ids` and `next_station_id` in
+the project serde (sorted pairs, `serde(default)`), so a snapshot restore puts
+the counter back with the ids it allocated. A snapshot recorded before the ids
+existed adopts the live project's ids for the stations it shares
+(`core/state/project_io.rs` `adopt_station_identities`).
+
 ## Per-shot survey credit
 
 Surveyors, explorers and the survey date are stored per shot, in two side

@@ -401,9 +401,10 @@ Lines unreachable after all passes remain in the wizard's manual segment-placeme
 MNemo numbers a section's start station 0 and the end of its N-th shot N, and
 divers key their notes to those numbers. The `.dmp` file carries no station
 numbers, and every later edit - the shots the importer skips, an overlap trim,
-a deleted or added row, any edit after import - shifts the positional
-`S:I` station IDs, so the import records each station's MNemo number as its
-**name** (`Project.station_names`).
+a deleted or added row, any edit after import - shifts the positional station
+indexes, so the import records each station's MNemo number as its **name**
+(`Project.station_names`; names are unique within a line, see
+[SPEC 4.2](SPEC.md#42-station-identification)).
 
 - **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
   importer keeps advance the number - those `isImportableDmpShot` passes
@@ -420,7 +421,8 @@ a deleted or added row, any edit after import - shifts the positional
   (`src/utils/importLineConfig.ts`) turns the rows actually sent into
   `ImportLineConfig.station_names`: the end of emitted row k is station
   k + 1; a start keeps the previous row's number (as an in-app delete keeps the
-  surviving start), so a station after an added row stays unnamed; only the
+  surviving start), so a station after an added row has no MNemo number - the
+  backend names it by the creation rules (`5`, `5a`, ...; SPEC 4.2); only the
   start of the first DMP row falls back to its number minus 1. A line whose
   first m shots an overlap trim removed therefore starts at m, and the trimmed
   numbers are gone with their stations - one name per station, no aliases.
@@ -428,10 +430,8 @@ a deleted or added row, any edit after import - shifts the positional
   reversed import exactly like `station_comments`.
 - **After import.** Names are keyed by `StationKey`, so they follow their
   station through later inserts, deletes, splits and reverses; a merge keeps
-  both stations' own numbers. The stations grid has a read-only Name column
-  (hidden by default; the eye menu shows it) and the detail panel shows
-  `S:I · name` on station links. On the map, the Display menu's **Station
-  names** labels each named station with its number in place of its ID (it
+  both stations' own numbers. On the map, the Display menu's **Station
+  names** labels each station with its name in place of its Station ID (it
   and **Station IDs** are one choice), and the image export has the same
   **Station names** option.
 

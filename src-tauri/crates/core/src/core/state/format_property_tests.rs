@@ -736,6 +736,21 @@ const DEGRADATIONS: &[Degradation] = &[
         surgery: |connection| connection.execute_batch("DROP TABLE station_names;"),
         must_open: true,
     },
+    // `station_ids` and the `next_station_id` setting arrived the same way. A
+    // file without them opens with every id re-minted in line order, and saves.
+    Degradation {
+        id: "v18-file-without-station-ids",
+        promise: "persistence/sqlite/station_ids.rs reads an absent table and key as none, the \
+                  open re-mints the ids (`Project::ensure_station_identities`), and write.rs \
+                  creates the table before its DELETE",
+        surgery: |connection| {
+            connection.execute_batch(
+                "DROP TABLE station_ids;
+                 DELETE FROM project_settings WHERE key = 'next_station_id';",
+            )
+        },
+        must_open: true,
+    },
 ];
 
 /// Apply one degradation to a fresh file and report what the loader did.

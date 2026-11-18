@@ -35,10 +35,10 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
+| `InverseCommand` | SetStationComment, SetStationName (the inverse renames back to the name the station had) | Execute the inverse command | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateLineMetadata | Parse JSON, apply old values, then put the recorded `line_offsets` back (see below) | Execute the original command |
 | `CreatedLineSnapshot` | CreateLine | Delete the line | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
-| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `line_offsets` back (see below) | Restore from snapshot (preserves original ID) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `line_offsets` back (see below) | Restore from snapshot (preserves original ID, and the created station's Station ID and name from `created_station`) |
 | `ShotSnapshot` | legacy persisted DeleteShot entries (a live DeleteShot records `ProjectSnapshotPair`) | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | legacy persisted MergeStations entries (a live MergeStations records `ProjectSnapshotPair`) | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | legacy persisted UnmergeStations entries (a live UnmergeStations records `ProjectSnapshotPair`) | Re-merge + restore removed closures | Re-execute the unmerge |
@@ -967,6 +967,33 @@ refused exactly when there is no edit session, including right after Take remote
 whose reload carries no claim. A Restore that loads a revision's undo history keeps
 its edit session by carrying the claim through the swap; a View carries none.
 
+## Station identity across undo and redo
+
+Every station has a name and a Station ID (SPEC 4.2), and undo/redo must give
+them back exactly - an undone delete restores the same id and name, a redone
+insert re-creates the station with the id and name it had.
+
+- **The epilogue.** `AppState::settle_station_identities`
+  (`Project::ensure_station_identities`) runs after every successful mutating
+  command BEFORE its undo entry is finalized, on the after-snapshot of every
+  command that records a snapshot pair (`capture_after_snapshot_or_rollback`),
+  and after every undo/redo step (single and `undo_to`/`redo_to`). So the entry
+  records the state with the new station's id in it, and a step never leaves a
+  station without one. It never changes a station that has a valid id and name.
+- **Snapshot pairs** carry `station_names`, `station_ids` and
+  `next_station_id` in the project serde, so they restore exactly; the counter
+  goes back with the snapshot (allocation is monotonic within one timeline). A
+  snapshot recorded before Station IDs adopts the live ids of the stations it
+  shares (`adopt_station_identities`).
+- **Targeted entries** record what they would otherwise lose (all additive,
+  `serde(default)`, no schema bump): `CreatedShotSnapshot.created_station`
+  (the created station's id and name; the created station is the new start for
+  a prepend, the station after the shot otherwise), `CreatedLineSnapshot`'s
+  `LineIdentity.station_ids` / `station_names` (per station index), and
+  `AddedProjectContent.station_ids`. An id another station holds by the time of
+  the redo is left to the epilogue, which keeps ids unique. Undo of these leaves
+  `next_station_id` alone, like the other allocators.
+
 ## History UI
 
 SpeleoDB revision inspection and restore/revert live in the left workspace History
@@ -1004,9 +1031,19 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 - **Old value only** (removed): `Field: ~~value~~` (strikethrough)
 - **Batch sub-commands**: Description as gray header, details on indented line below
 
-### Line Name Resolution
+### Name Resolution
 
-Line names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current line names, not the names at the time of the merge. This is intentional - the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
+Labels and previews never show the positional ids (`line:index`, shot ids):
+lines, stations and shots are named the way the user reads them -
+`Update shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`,
+`Delete line "Main Line"` (`core/undo/history_names.rs`). The names are resolved
+at **display time**, not execution time, from a `NameBook` read off the project
+for just the lines the listed entries address: hovering a "Merge stations" entry
+shows the current names. This is intentional - the preview answers "what is this
+referring to now?". A deleted line's label reads its name from the entry's
+`before` snapshot, and a station rename is labelled with the name the station
+had (from the inverse). A name that cannot be resolved falls back to the wording
+without the handle (`Delete shot`, `-` in a preview row), never to the number.
 
 ### Preview Data Generation (`core/undo/history_view.rs`)
 
@@ -1036,6 +1073,8 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
+| `src-tauri/crates/core/src/core/undo/history_names.rs` | `NameBook`, the named history labels (`describe`, `describe_entry`) |
+| `src-tauri/crates/core/src/core/undo/created_station.rs` | `CreatedStation`: the id and name a redone `CreateShot` gives its station back |
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
 | `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Frontend dropdown + preview popup |
 | `src-tauri/crates/models/src/shot.rs` | `shot_display_position()` helper |

@@ -312,8 +312,8 @@ Project (Cave System)
 │   ├── created_at: DateTime
 │   └── modified_at: DateTime
 ├── Lines[]   (the `sections` table on disk)
-│   ├── id: u32 (internal, immutable)
-│   ├── name: Option<String>
+│   ├── id: u32 (internal, immutable, never shown)
+│   ├── name: String (required, unique in the project; seeded `Line N`)
 │   ├── surveyor: Option<String> (legacy; credit is per shot)
 │   ├── date: Option<Date> (legacy; credit is per shot)
 │   ├── color: Color
@@ -321,7 +321,7 @@ Project (Cave System)
 │   ├── quality: f64
 │   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
-│       ├── id: u32 (internal, immutable)
+│       ├── id: u32 (internal session handle, never shown)
 │       ├── uuid: Option<String> (persistent identity, schema v6+, unique across the project)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
@@ -339,7 +339,9 @@ Project (Cave System)
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
 ├── Stations[] (computed from shots)
-│   ├── station_ref: StationRef (line_id:station_index)
+│   ├── station_ref: StationRef (line_id:station_index, internal handle, never shown)
+│   ├── id: StationId (u32, project-unique Station ID, shown)
+│   ├── name: String (unique within the line, shown)
 │   ├── coordinates: Coordinates (computed or GPS)
 │   ├── is_zero_datum: bool
 │   ├── gps_coordinates: Option<GpsCoordinates>
@@ -352,6 +354,9 @@ Project (Cave System)
 │     ├── station_ref: StationRef (the other station in the closure)
 │     ├── via_station: Option<StationRef> (intermediate station for transitive closures)
 │     └── is_transitive: bool (false = direct closure, true = transitive)
+├── station_names: {StationKey -> String} (every station's name; `station_names` table)
+├── station_ids: {StationKey -> StationId} (every station's Station ID; `station_ids` table)
+├── next_station_id: StationId (the next id to allocate; `project_settings`)
 └── Settings (per-project, stored in the .stalx: project_settings + display_settings tables)
     ├── validation: ValidationConfig
     ├── surface_elevation: Option<f64>
@@ -369,39 +374,108 @@ JSON it stores (undo history, held gauges, the dive-plan sidecar) keeps
 
 ### 4.2 Station Identification
 
-Stations use a dual-ID system to preserve provenance through merges:
+The user identifies a station by its **name** and its **Station ID**, a line
+by its **name**, and a shot by its two stations. The positional handles the
+code addresses them with (`line_id`, the shot id, `StationRef =
+line_id:station_index`) are internal session handles and are never shown.
 
-```
-StationRef = line_id:station_index
+| Thing | Identity the user sees | Unique within | Example |
+|-------|------------------------|---------------|---------|
+| Line | name | the project | `Main Line` |
+| Station | name | its line | `17`, `4a`, `A3` |
+| Station | Station ID (integer) | the project | `512` |
+| Station, with its line | `line / name` | the project | `Main Line / 17` |
+| Shot | `from → to` | its line | `4 → 5`, with its line `Main Line: 4 → 5` |
 
-Examples:
-- 0:0  → First station of line 0
-- 0:15 → 16th station of line 0
-- Merged station: [0:15, 1:0] → Station 15 of line 0 merged with station 0 of line 1
-```
-
-A station's stored identity is not this index but the shot UUID before it
-(`StationAnchor::AfterShot`). Shot UUIDs are unique across the whole project:
-an import, merge or Add that brings an id the project already holds renames the
-newcomer's copy to a derived id, and a file saved before that rule is healed the
-same way on load, with its undo history translated alongside (see
-[ariane-export.md](ariane-export.md#shot-uuids) and
+A station's stored identity is the shot UUID before it
+(`StationAnchor::AfterShot`; `LineStart` for station 0). Shot UUIDs are unique
+across the whole project: an import, merge or Add that brings an id the project
+already holds renames the newcomer's copy to a derived id, and a file saved
+before that rule is healed the same way on load, with its undo history
+translated alongside (see [ariane-export.md](ariane-export.md#shot-uuids) and
 [undo-redo.md](undo-redo.md#a-loaded-history-follows-the-loads-shot-uuid-heal)).
+The names (`Project::station_names`) and Station IDs
+(`Project::station_ids`) are keyed to that physical station, so they stay put
+when shots are inserted, deleted or reversed, and follow their station through
+Split Line Here and Combine Lines.
 
-The index is positional: inserting, deleting or reversing shots renumbers it.
-A station can also carry a **name**, free text stored apart from the shots and
-keyed to the physical station, so it stays put through those edits. A DMP
-import records each station's MNemo station number there (see
-[dmp-import.md](dmp-import.md#station-names)); names are not unique (MNemo
-restarts at 0 in every section it records, so in every imported line), so the grid, the detail panel and the station
-links show a name beside the positional ID (`3:5 · 17`), never instead of it.
-The one place a name stands alone is the opt-in **Station names** map label
-(and the matching image-export option), which labels each named station with
-its name instead of its index and leaves unnamed stations unlabelled; it is
-exclusive with the Station IDs label, so the two numbers are never drawn
-side by side. A shot delete drops the name of the
-station it removes, an inserted shot adds an unnamed station, and a reverse
-keeps every name on its physical station.
+**Normalization.** One entry point, `Project::ensure_station_identities`,
+guarantees after every load, import, Add/Merge, mutating command and undo/redo
+step that:
+
+- every line has a non-empty name, unique in the project: an unnamed line is
+  seeded `Line 1`, `Line 2`, ... (smallest free number, in line order); a
+  repeated name gets ` (2)`, ` (3)`, ... on the later line;
+- every station has a Station ID: one without (or holding an id an earlier
+  station holds) gets the project's `next_station_id`, allocated in line order
+  then station order, so a file an older build rewrote without the ids re-mints
+  the same ids on every open; ids are never reused within a timeline (an undo
+  that restores a snapshot restores the counter with it);
+- every station has a name, unique within its line: a missing name is seeded
+  from the station's index (`i` -> `"i"`), and a name an earlier station of the
+  line holds gets the first free lowercase suffix (`5`, `5` -> `5`, `5a`).
+
+A station or line that already has a valid name and id keeps them.
+
+**Naming a new station.** An edit that creates a station names it:
+
+- **End** (a shot appended at the end of a line): the previous station's name
+  plus one - `5` -> `6`, `A3` -> `A4`, `007` -> `008` - incremented while taken;
+  a previous name with no trailing number gives the line's next free integer
+  (one above its highest all-digit name, `0` when there is none).
+- **Mid** (Insert Shot after/before inside a line, Insert Station on a shot,
+  split shot at distance): the previous station's name plus the first free
+  lowercase suffix, `a`..`z`, then `aa`..`zz`, `aaa`, ... - after `2` -> `2a`,
+  again -> `2b` (giving `2 - 2b - 2a - 3`); Insert Station on `4 → 5` -> `4a`.
+- **Prepend** (Add Shot Before at the start): the next free number of the old
+  first station's prefix family - `0 1 .. 6` -> `7`, `A0 .. A3` -> `A4`.
+- **Imports**: a line whose file names some stations (or rows the user added in
+  an import wizard) gets the rest by the same rules - a run after the last
+  named station continues it (End), a run between two named stations takes Mid
+  suffixes of the station before it, a run before the first named station takes
+  Prepend names going backwards; a line with no name at all is seeded.
+- **Split Line Here** at a station: both halves carry the station; the copy that
+  starts the new line keeps the name (names are unique per line, not per
+  project) and gets a **new** Station ID.
+
+**Combine Lines.** The joined line must keep its names unique. When a name of
+the other line (its join station aside - the joined station keeps the kept
+line's name and Station ID, the other join station's are retired) is also a
+name of the kept line, or when either line is already **lettered** (every name
+an ASCII capital directly followed by a digit, `A0`, `B12a`), both lines are
+prefixed:
+
+- the kept line keeps its letters when it is lettered; otherwise every name
+  gets the first capital no name of either line uses as a family letter
+  (`3` -> `A3`);
+- the other line, when lettered, keeps every family whose letter the kept line
+  does not use and re-letters the others to the next free capitals; otherwise
+  every name gets the next free capital (`0` -> `B0`).
+
+So kept `0 1 2 3` + other `0 1 2` joined at kept `3` = other `0` gives
+`A0 A1 A2 A3 B1 B2`, and a later combine of that line with `0 1` gives
+`A0 .. A3 B1 B2 C1`. Lines whose names do not collide and are not lettered keep
+every name (`0 1 2 3` + `3 4 5` joined at `3` gives `0 1 2 3 4 5`). A final pass
+letter-suffixes any repeat the prefixing could not prevent (all 26 letters in
+use).
+
+**User edits.** Renaming a station (`SetStationName`, undoable) trims the
+name and refuses an empty one or one another station of the line holds ("Line
+X already has a station named Y"). Renaming a line (Edit Line) or creating one
+from the UI refuses an empty name or one another line holds ("A line named X
+already exists"); automatic paths (imports, split and combine default names)
+de-duplicate instead.
+
+**Labels.** The "Station IDs" map and image-export label draws the Station ID;
+the "Station names" label draws the name (every station has one). The two are
+exclusive. The undo history names lines, stations and shots by name (`Update
+shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`, `Delete
+line "Main Line"`); a name that can no longer be resolved falls back to the
+wording without it.
+
+A DMP import records each station's MNemo station number as its name (see
+[dmp-import.md](dmp-import.md#station-names)); MNemo restarts at 0 in every
+section, which per-line uniqueness allows.
 
 ### 4.3 Coordinate System
 
@@ -2644,7 +2718,13 @@ the names on its next save. A v18 file from before the table takes the version
 fast path, so the read side treats a missing table as empty and `save_project`
 creates it inside its transaction; `station_names_tests.rs` in
 `persistence/sqlite/` pins both, and that no table the outside reader reads
-changes when a project gains names.
+changes when a project gains names. Every station's name is written (names are
+required, 4.2).
+
+`station_ids` holds every station's Station ID in the same positional shape
+(`section_id, station_index, station_id`), and the `project_settings` row
+`next_station_id` the allocation counter - both without a schema bump, for the
+same reason (see [saving.md](saving.md#station-names-and-station-ids)).
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
@@ -2763,10 +2843,15 @@ depth legend.
 
 **Survey Data (CSV):**
 ```csv
-line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
-0,Main Line,0,3.2,45.0,46.2,5.1,5.8,1.2,0.8,2.1,1.5,Permanent,
-0,Main Line,1,4.1,52.3,53.0,5.8,6.2,1.0,1.1,1.8,1.2,Permanent,
+line,from,to,from_id,to_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
+Main Line,0,1,0,1,3.2,45.0,46.2,5.1,5.8,1.2,0.8,2.1,1.5,Permanent,
+Main Line,1,2,1,2,4.1,52.3,53.0,5.8,6.2,1.0,1.1,1.8,1.2,Permanent,
 ```
+
+A shot is identified by its line's name and its two stations' names (`from`,
+`to`) and Station IDs (`from_id`, `to_id`); the internal line and shot ids are
+not exported. Text cells (line, station names, comment) are formula-neutralised
+and quoted (`export/csv.rs` `escape_csv`).
 
 **Survey Data (JSON):**
 ```json
@@ -2777,13 +2862,15 @@ line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,
   },
   "lines": [
     {
-      "id": 0,
       "name": "Main Line",
       "surveyor": "J. Smith",
       "date": "2024-01-10",
       "shots": [
         {
-          "id": 0,
+          "from": "0",
+          "to": "1",
+          "from_id": 0,
+          "to_id": 1,
           "length": 3.2,
           "azimuth_in": 45.0,
           "azimuth_out": 46.2,

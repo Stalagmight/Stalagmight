@@ -56,9 +56,14 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
   - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
     boundary between consecutive shots), so it has no record of its own to hang a
     comment on.
-  - `station_names` - a station's name (a DMP import's MNemo station number), keyed
-    and handled exactly like `station_comments`, so it stays on its physical station
-    when shots are inserted, deleted or reversed.
+  - `station_names` / `station_ids` - every station's name (unique within its line;
+    e.g. a DMP import's MNemo station number) and project-unique Station ID, keyed
+    and handled exactly like `station_comments`, so they stay on their physical
+    station when shots are inserted, deleted or reversed. `next_station_id` is the
+    allocator; `Project::ensure_station_identities` (`project/station_identity.rs`)
+    is the one normalization entry point, run at the load boundary and by the
+    station-identity epilogue after every command and undo/redo step. See
+    [SPEC 4.2](SPEC.md#42-station-identification).
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
     file between collaborators instead of following whoever opens it.
   - `imported_file_hashes` / `imported_line_hashes` - re-import de-duplication.
