@@ -13,6 +13,14 @@ use super::LineId;
 /// which stays an internal session address.
 pub type StationId = u32;
 
+/// Every valid Station ID is below this (2^31). A stored id at or above it
+/// (a crafted or corrupt file, a snapshot, an Add that would overflow) is
+/// invalid: the normalization re-mints it, and a counter past it is brought
+/// back ([`crate::Project::ensure_station_identities`]). The headroom above
+/// keeps `next_station_id` arithmetic far from `u32::MAX`, where saturating
+/// adds handed out one id twice.
+pub const MAX_STATION_ID: StationId = 1 << 31;
+
 /// Reference to a station using line_id:station_index format
 ///
 /// Ordered lexicographically by `(line_id, station_index)` - the field order

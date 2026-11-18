@@ -156,6 +156,43 @@ fn an_unreadable_row_is_skipped() {
     assert_eq!(loaded.station_ids.len(), 5);
 }
 
+/// A crafted file: an id past `MAX_STATION_ID` reads as no id, and a counter
+/// past it as no counter, so the open re-mints instead of saturating.
+#[test]
+fn an_id_or_a_counter_past_the_bound_reads_as_missing() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("huge.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project_with_ids()).unwrap();
+        db.conn
+            .execute(
+                "UPDATE station_ids SET station_id = 4294967295 WHERE station_index = 1 \
+                 AND section_id = (SELECT min(id) FROM sections)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE project_settings SET value = '4294967295' WHERE key = 'next_station_id'",
+                [],
+            )
+            .unwrap();
+    }
+    let mut loaded = Database::open_existing(&path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(loaded.station_ids.len(), 5);
+    assert_eq!(loaded.next_station_id, 0, "derived from the ids instead");
+    loaded.ensure_station_identities();
+    assert!(loaded
+        .station_ids
+        .values()
+        .all(|id| *id < crate::models::MAX_STATION_ID));
+    assert!(loaded.ensure_station_identities().is_empty());
+}
+
 /// The SpeleoDB contract (see `station_names_tests`): the tables an outside
 /// reader of v18 files reads are unchanged by the ids, but for the one
 /// `project_settings` row `next_station_id` - a key that reader never asks for

@@ -117,7 +117,11 @@ fn read_rows(conn: &Connection) -> rusqlite::Result<HashMap<StationKey, StationI
             Some((
                 u32::try_from(line?).ok()?,
                 u32::try_from(index?).ok()?,
-                StationId::try_from(id?).ok()?,
+                // Past the bound is unreadable too: the station is
+                // re-minted (`MAX_STATION_ID`).
+                StationId::try_from(id?)
+                    .ok()
+                    .filter(|id| *id < crate::models::MAX_STATION_ID)?,
             ))
         })();
         match decoded {
@@ -148,4 +152,5 @@ pub(super) fn load_next_station_id(conn: &Connection) -> Option<StationId> {
     )
     .ok()
     .and_then(|value| value.trim().parse::<StationId>().ok())
+    .filter(|next| *next <= crate::models::MAX_STATION_ID)
 }

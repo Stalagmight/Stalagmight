@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{LineId, ShotId, StationAnchor, StationId, StationKey, StationRef};
+use crate::{LineId, ShotId, StationAnchor, StationId, StationKey, StationRef, MAX_STATION_ID};
 
 use super::station_naming::{
     dedupe_line_name, fill_line_station_names, name_after_end, name_before_start,
@@ -307,11 +307,12 @@ impl Project {
         }
         let mut seen: FastSet<StationId> =
             FastSet::with_capacity_and_hasher(self.station_ids.len(), FastHash::default());
-        self.station_ids.iter().all(|(key, id)| {
-            matches!(resolver.resolve(key), Some((_, true)))
-                && *id < self.next_station_id
-                && seen.insert(*id)
-        })
+        self.next_station_id <= MAX_STATION_ID
+            && self.station_ids.iter().all(|(key, id)| {
+                matches!(resolver.resolve(key), Some((_, true)))
+                    && *id < self.next_station_id
+                    && seen.insert(*id)
+            })
     }
 
     fn settle_station_ids(&mut self, heal: &mut IdentityHeal) {
@@ -327,20 +328,49 @@ impl Project {
         for line in &self.lines {
             for (index, key) in canonical_keys(line) {
                 match by_station.get(&(line.id, index)) {
-                    Some((_, id)) if seen.insert(*id) => {
+                    // An id past the bound is invalid: the station is
+                    // re-minted like one that has none.
+                    Some((_, id)) if *id < MAX_STATION_ID && seen.insert(*id) => {
                         ids.insert(key, *id);
                     }
                     _ => missing.push(key),
                 }
             }
         }
+        // A counter past the bound is as invalid as such an id: start again
+        // above the valid ids.
+        if self.next_station_id > MAX_STATION_ID {
+            self.next_station_id = 0;
+        }
         if let Some(max) = seen.iter().max() {
-            self.next_station_id = self.next_station_id.max(max.saturating_add(1));
+            self.next_station_id = self.next_station_id.max(max + 1);
         }
         heal.ids_allocated += missing.len();
-        for key in missing {
-            ids.insert(key, self.next_station_id);
-            self.next_station_id = self.next_station_id.saturating_add(1);
+        let room = u64::from(MAX_STATION_ID - self.next_station_id);
+        if missing.len() as u64 > room {
+            // Allocating would run past the bound: renumber every station
+            // compactly, in line order, station order (only a project that
+            // has used up 2^31 ids, or a crafted one, gets here).
+            tracing::warn!(
+                stations = ids.len() + missing.len(),
+                next_station_id = self.next_station_id,
+                purpose = "keep Station IDs unique and bounded",
+                "Station IDs would overflow; renumbering every station"
+            );
+            heal.ids_allocated += ids.len();
+            ids.clear();
+            self.next_station_id = 0;
+            for line in &self.lines {
+                for (_, key) in canonical_keys(line) {
+                    ids.insert(key, self.next_station_id);
+                    self.next_station_id += 1;
+                }
+            }
+        } else {
+            for key in missing {
+                ids.insert(key, self.next_station_id);
+                self.next_station_id += 1;
+            }
         }
         self.station_ids = ids;
     }
@@ -900,9 +930,12 @@ impl Project {
     /// Merge projects shift the incoming project's ids past the target's
     /// `next_station_id`.
     pub fn offset_station_ids(&mut self, by: StationId) {
+        // Saturating at the bound: an id pushed past it is invalid, and the
+        // normalization re-mints it (renumbering when there is no room).
+        let shift = |id: StationId| id.saturating_add(by).min(MAX_STATION_ID);
         for id in self.station_ids.values_mut() {
-            *id = id.saturating_add(by);
+            *id = shift(*id);
         }
-        self.next_station_id = self.next_station_id.saturating_add(by);
+        self.next_station_id = shift(self.next_station_id);
     }
 }

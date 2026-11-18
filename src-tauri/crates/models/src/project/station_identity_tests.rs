@@ -3,7 +3,9 @@
 //! new id, and the user-edit validation.
 
 use super::*;
-use crate::{CombineLinesOptions, CombinePick, LineEnd, SplitLineOptions, SplitSide};
+use crate::{
+    CombineLinesOptions, CombinePick, LineEnd, SplitLineOptions, SplitSide, MAX_STATION_ID,
+};
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
     ShotData {
@@ -426,4 +428,62 @@ fn the_no_change_pass_is_cheap_on_a_large_project() {
     let per_pass = start.elapsed() / 10;
     eprintln!("no-change pass over 84k stations: {per_pass:?}");
     assert!(per_pass < std::time::Duration::from_millis(500));
+}
+
+/// A crafted or corrupt file can hold ids and a counter far past anything a
+/// real project allocates. Ids at or above `MAX_STATION_ID` are invalid and
+/// re-minted, a counter past it starts again above the valid ids, and the
+/// result is settled: no duplicate ids, no re-settle on every later pass.
+#[test]
+fn huge_ids_and_counters_are_re_minted_and_stay_settled() {
+    let (mut project, a, b) = seeded();
+    let key = |project: &Project, line: LineId, i: u32| {
+        project.key_for_ref(StationRef::new(line, i)).unwrap()
+    };
+    let (k1, k2) = (key(&project, a, 1), key(&project, a, 2));
+    project.station_ids.insert(k1, u32::MAX);
+    project.station_ids.insert(k2, MAX_STATION_ID);
+    project.next_station_id = u32::MAX;
+    let heal = project.ensure_station_identities();
+    assert_eq!(heal.ids_allocated, 2, "{heal:?}");
+    let all: Vec<StationId> = [ids(&project, a), ids(&project, b)]
+        .concat()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert!(all.iter().all(|id| *id < MAX_STATION_ID), "{all:?}");
+    let unique: HashSet<_> = all.iter().collect();
+    assert_eq!(unique.len(), all.len(), "{all:?}");
+    assert_eq!(ids(&project, a)[0], Some(0), "valid ids keep their value");
+    assert!(project.next_station_id < MAX_STATION_ID);
+    assert!(project.ensure_station_identities().is_empty(), "settled");
+}
+
+/// When minting would run past the bound, every station is renumbered
+/// compactly instead of handing out an id twice.
+#[test]
+fn an_allocation_that_would_overflow_renumbers_compactly() {
+    let (mut project, a, b) = seeded();
+    project.next_station_id = MAX_STATION_ID - 1;
+    let key = project.key_for_ref(StationRef::new(a, 0)).unwrap();
+    project.station_ids.insert(key, MAX_STATION_ID - 2);
+    let c = add(&mut project, None, 2);
+    project.ensure_station_identities();
+    let all: Vec<_> = [ids(&project, a), ids(&project, b), ids(&project, c)].concat();
+    assert_eq!(all, some(&[0, 1, 2, 3, 4, 5, 6, 7]));
+    assert_eq!(project.next_station_id, 8);
+    assert!(project.ensure_station_identities().is_empty(), "settled");
+
+    // An Add that would push the incoming ids past the bound lands there too.
+    let mut incoming = Project::new("Incoming".to_string(), None);
+    add(&mut incoming, None, 1);
+    incoming.ensure_station_identities();
+    incoming.offset_station_ids(u32::MAX - 1);
+    assert!(incoming
+        .station_ids
+        .values()
+        .all(|id| *id == MAX_STATION_ID));
+    incoming.ensure_station_identities();
+    assert!(incoming.station_ids.values().all(|id| *id < MAX_STATION_ID));
+    assert!(incoming.ensure_station_identities().is_empty());
 }
