@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use chrono::Utc;
 use rusqlite::params;
 
 use crate::models::{LineId, Project, StationKey};
@@ -146,7 +145,11 @@ impl Database {
                     line
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
-                    Utc::now().to_rfc3339()
+                    // What the file held, so an unchanged project saves to
+                    // the same bytes (`Line::loaded_created_at`).
+                    line.loaded_created_at
+                        .unwrap_or(project.created_at)
+                        .to_rfc3339()
                 ],
             )?;
             // What this build wrote, so a later open can tell a pair retyped

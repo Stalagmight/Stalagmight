@@ -286,13 +286,12 @@ fn page_owners(db: &Database, bytes: &[u8], page_size: usize) -> BTreeMap<u32, S
     owners
 }
 
-/// The station side tables are filled from `HashMap`s, whose order changes on
-/// every open, and so were their rows, rowids and page splits: an unchanged
-/// project saved, opened and saved again gave a different file. Only
-/// `sections` may differ now (it stamps each line's `created_at` with the
-/// time of the save); every other page of the two files is the same.
+/// An unchanged project saved, opened and saved again gives the same file.
+/// It did not: the station side tables were filled in `HashMap` order, which
+/// changes on every open, and so were their rows, rowids and page splits; and
+/// every save stamped each line's `sections.created_at` with the time.
 #[test]
-fn a_resave_with_no_edit_writes_the_same_pages() {
+fn a_resave_with_no_edit_writes_the_same_bytes() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Order".to_string(), None);
     for line in 0..12_u32 {
@@ -389,14 +388,12 @@ fn a_resave_with_no_edit_writes_the_same_pages() {
         page_owners(&b, &bytes_b, page_size),
         "the two files lay out differently"
     );
-    let changed: Vec<String> = bytes_a
+    let changed: Vec<&str> = bytes_a
         .chunks(page_size)
         .zip(bytes_b.chunks(page_size))
         .zip(1_u32..)
         .filter(|((page_a, page_b), _)| page_a != page_b)
         .map(|(_, number)| owners.get(&number).map_or("unowned", String::as_str))
-        .filter(|owner| *owner != "sections")
-        .map(str::to_string)
         .collect();
     assert!(
         changed.is_empty(),

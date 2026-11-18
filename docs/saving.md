@@ -293,6 +293,29 @@ back into a loop closure before the offset re-solve (see
 
 Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo stacks while the file is still staged, so a partial rewrite is never renamed into place.
 
+### An unchanged project saves to the same bytes
+
+Saving, opening and saving again with no edit writes the survey data byte for
+byte the same. SpeleoDB keeps every push in git, so a page that changes for no
+reason is a page every push uploads and stores. Two rules keep it:
+
+- The station side tables (`station_ids`, `station_names`, `station_comments`,
+  `station_offsets`) and `section_offsets` are written in station order (line
+  id, then station index), not in the order of the in-memory `HashMap`s, which
+  changes on every open. The insert order decides a table's rowids and how its
+  pages and its key index split, so map order rewrote most of those pages on
+  every save.
+- `sections.created_at` is written back as the file held it
+  (`Line::loaded_created_at`); builds before this one stamped it with the time
+  of each save. A line the file holds no readable time for (new this session,
+  restored from an undo snapshot, or not RFC 3339 text) gets the project's
+  `created_at`.
+
+`a_resave_with_no_edit_writes_the_same_bytes` (`station_ids_tests.rs`) pins
+this for a project without undo history; the undo rows are written by their own
+path and are not covered. An edit still rewrites what it moves: inserting or
+deleting a shot mid-line shifts every later row of the `shots` table.
+
 ### `section_offsets` rows are never all-zero
 
 The `section_offsets` table (the on-disk name of `Project.line_offsets`) records

@@ -9025,3 +9025,82 @@ fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
         .unwrap();
     assert!(db.load_project().unwrap().held_gauges.is_empty());
 }
+
+/// `sections.created_at` is written back as the file held it, so a re-save
+/// does not change it. A line the file did not hold a time for, or held
+/// something other than RFC 3339 text for, is written with the project's
+/// `created_at`: still a valid time, which SpeleoDB's reader requires.
+#[test]
+fn a_line_keeps_the_created_at_it_was_read_with() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Times".to_string(), None);
+    for name in ["Kept", "Garbled", "Offset"] {
+        project.add_line(LineData {
+            name: Some(name.to_string()),
+            shots: vec![ShotData {
+                length: 4.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    let ids: Vec<u32> = project.lines.iter().map(|line| line.id).collect();
+    let first = dir.path().join("first.stalx");
+    Database::open(&first)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    {
+        let db = Database::open_existing(&first).unwrap();
+        for (id, at) in ids.iter().zip([
+            // What an older build wrote: `to_rfc3339` of a save time.
+            "2024-03-05T10:20:30.123456789+00:00",
+            "not a time",
+            "2024-03-05T12:20:30+02:00",
+        ]) {
+            db.conn
+                .execute(
+                    "UPDATE sections SET created_at = ?1 WHERE id = ?2",
+                    rusqlite::params![at, id],
+                )
+                .unwrap();
+        }
+    }
+
+    let mut reopened = Database::open_existing(&first)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let new_line = reopened
+        .add_line(LineData {
+            name: Some("New".to_string()),
+            ..Default::default()
+        })
+        .id;
+    let second = dir.path().join("second.stalx");
+    Database::open(&second)
+        .unwrap()
+        .save_project(&reopened)
+        .unwrap();
+
+    let stored = |id: u32| -> String {
+        Database::open_readonly(&second)
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT created_at FROM sections WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let fallback = reopened.created_at.to_rfc3339();
+    assert_eq!(stored(ids[0]), "2024-03-05T10:20:30.123456789+00:00");
+    assert_eq!(stored(ids[1]), fallback, "unreadable text is replaced");
+    assert_eq!(
+        stored(ids[2]),
+        "2024-03-05T10:20:30+00:00",
+        "an offset is kept as the same instant in UTC"
+    );
+    assert_eq!(stored(new_line), fallback, "a new line has no stored time");
+}
