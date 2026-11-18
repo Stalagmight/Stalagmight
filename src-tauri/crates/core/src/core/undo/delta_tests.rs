@@ -475,6 +475,14 @@ fn hostile(text: &str) -> ProjectDelta {
     serde_json::from_str(text).unwrap()
 }
 
+/// `delta` breaks a rule, and the one `why` names.
+fn refused_for(delta: &ProjectDelta, why: &str) {
+    match delta.check_shape() {
+        Ok(()) => panic!("a delta that breaks a rule passed: {delta:?}"),
+        Err(reason) => assert!(reason.contains(why), "refused for another rule: {reason}"),
+    }
+}
+
 fn section_count(p: &Value) -> usize {
     p["sections"].as_array().unwrap().len()
 }
@@ -489,7 +497,7 @@ fn a_delta_that_keeps_a_section_twice_is_refused() {
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"k":[0,{n}]}}]]}}"#
     ));
-    assert!(delta.check_shape().is_err());
+    refused_for(&delta, "reads a source section twice");
     assert!(delta.apply(&p).is_err(), "applied: the sections doubled");
 }
 
@@ -504,7 +512,7 @@ fn a_delta_that_copies_a_shot_twice_is_refused() {
         r#"{{"s":[{n},[{{"e":{{"at":0,"id":{id},"s":[{copy},{copy}]}}}},{{"k":[1,{}]}}]]}}"#,
         n - 1
     ));
-    assert!(delta.check_shape().is_err());
+    refused_for(&delta, "copies a source shot twice");
     assert!(delta.apply(&p).is_err());
 }
 
@@ -516,7 +524,7 @@ fn a_delta_that_copies_out_of_a_kept_section_is_refused() {
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":900}},"s":[{{"c":{{"sec":0,"at":0,"n":1}}}}]}}}}]]}}"#
     ));
-    assert!(delta.check_shape().is_err());
+    refused_for(&delta, "whose shots stay where they are");
     assert!(delta.apply(&p).is_err());
 }
 
@@ -528,7 +536,7 @@ fn a_delta_that_keeps_an_array_element_twice_is_refused() {
     let delta = hostile(&format!(
         r#"{{"f":{{"station_merges":{{"a":[{len},[{{"k":[0,{len}]}},{{"k":[0,{len}]}}]]}}}}}}"#
     ));
-    assert!(delta.check_shape().is_err());
+    refused_for(&delta, "reads an element twice");
     assert!(delta.apply(&p).is_err());
 }
 
@@ -540,7 +548,7 @@ fn a_new_section_with_an_id_past_the_bound_is_refused_not_overflowed() {
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":18446744073709551615,"next_shot_id":0}},"s":[]}}}}]]}}"#
     ));
-    assert!(delta.check_shape().is_err());
+    refused_for(&delta, "past the bound");
     assert!(delta.apply(&p).is_err());
 }
 
@@ -637,4 +645,50 @@ fn a_renamed_id_is_pinned_onto_the_shot_a_delta_copies() {
     let mut expected = target.clone();
     World::sections(&mut expected)[2]["shots"][0]["uuid"] = json!(renamed);
     assert!(same(&rebuilt, &expected), "rebuilt: {rebuilt}");
+}
+
+/// A section whose text differs but whose value is the same stays where it
+/// is, so its shots are not copied anywhere else: a new section holding a
+/// shot under one of its uuids carries that shot literally.
+#[test]
+fn a_section_kept_by_value_lends_no_shot_to_another() {
+    let source = r#"{"name":"p","next_section_id":3,"sections":[{"id":1,"name":"A","next_shot_id":100002,"shots":[{"id":100000,"uuid":"u-1","length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]}]}"#;
+    // Section 1 again, with its keys in another order; and a new section 2
+    // whose shot shares a uuid with one of section 1's.
+    let target = r#"{"name":"p","next_section_id":3,"sections":[{"name":"A","id":1,"next_shot_id":100002,"shots":[{"uuid":"u-1","id":100000,"length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]},{"id":2,"name":"B","next_shot_id":200001,"shots":[{"id":200000,"uuid":"u-2","length":3.0}]}]}"#;
+    let delta = ProjectDelta::between_texts(source, target).unwrap();
+    delta.check_shape().unwrap();
+    let rebuilt = delta.apply(&serde_json::from_str(source).unwrap()).unwrap();
+    assert!(
+        same(&rebuilt, &serde_json::from_str(target).unwrap()),
+        "rebuilt: {rebuilt}"
+    );
+}
+
+/// Two target sections under one id (no live project holds such a pair, but
+/// a delta must still encode it): the second is written as a new section, so
+/// no source section is read twice.
+#[test]
+fn a_repeated_section_id_reads_its_source_once() {
+    let mut world = World::new(53);
+    let source = world.project(2);
+    let mut target = source.clone();
+    let mut twin = World::sections(&mut target)[0].clone();
+    twin["name"] = json!("twin");
+    World::sections(&mut target)[0]["name"] = json!("renamed");
+    World::sections(&mut target).push(twin);
+    let delta = ProjectDelta::between(&source, &target).unwrap();
+    delta.check_shape().unwrap();
+    // The twin's shots repeat the first section's ids, so the apply settles
+    // them to fresh ones; the sections themselves are all there, in order.
+    let rebuilt = delta.apply(&source).unwrap();
+    let names = |p: &Value| -> Vec<String> {
+        p["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&rebuilt), names(&target));
 }

@@ -273,7 +273,9 @@ fn encode_sections(
             continue;
         }
         let section = parse_value(raw)?;
-        let at = section_id_of(&section).and_then(|id| by_id.get(&id).copied());
+        // A source section is read at most once (`check_shape`): a second
+        // target section under the same id is written as a new one.
+        let at = section_id_of(&section).and_then(|id| by_id.remove(&id));
         plans.push(match at.and_then(|at| Some((at, parsed.get(&at)?))) {
             Some((at, from)) if same(from, &section) => Plan::Keep(at),
             Some((at, _)) => Plan::Edit(at, section),
