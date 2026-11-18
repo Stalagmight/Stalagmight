@@ -374,14 +374,21 @@ pub(super) fn recorded_gauge_pairs(snapshot: &str) -> Option<RecordedGauges> {
 /// them is the edit's own (a combine that pins its kept section's gauge on the
 /// station it was on), not a save's capture, so it is not carried across: the
 /// restored half did not have it, and the step is an exact inverse.
+///
+/// Returns whether it changed `restored`.
 pub(super) fn reapply_heals_after_restore(
     restored: &mut Project,
     live: Option<&Project>,
     edited: Option<&RecordedGauges>,
-) {
+) -> bool {
+    let mut changed = restored
+        .sections
+        .iter()
+        .flat_map(|section| &section.shots)
+        .any(|shot| shot.uuid.as_deref().is_none_or(str::is_empty));
     restored.ensure_shot_uuids();
     let Some(live) = live else {
-        return;
+        return changed;
     };
     for section in &mut restored.sections {
         if section.gauge_shot_uuid.is_some() {
@@ -435,7 +442,9 @@ pub(super) fn reapply_heals_after_restore(
         }
         section.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
         section.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
+        changed = true;
     }
+    changed
 }
 
 impl AppState {

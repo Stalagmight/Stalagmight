@@ -821,6 +821,20 @@ impl AppState {
         snapshot: &str,
         edited: Option<&RecordedGauges>,
     ) -> bool {
+        Self::restore_snapshot_reporting(slot, snapshot, edited).is_some()
+    }
+
+    /// [`Self::restore_snapshot_into_with`], saying how it went: `None` when it
+    /// refused (the slot is untouched), else whether the installed project can
+    /// differ from `snapshot` because a heal or a carry-over changed it - what a
+    /// compact entry needs to know to record the way back from the state that
+    /// is really live (`step_through_delta`).
+    #[must_use]
+    pub(super) fn restore_snapshot_reporting(
+        slot: &mut Option<Project>,
+        snapshot: &str,
+        edited: Option<&RecordedGauges>,
+    ) -> Option<bool> {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -886,7 +900,7 @@ impl AppState {
                         max = crate::models::MAX_SECTION_ID,
                         "Refusing snapshot restore: section id or shot counter outside the shot-id encode bound"
                     );
-                    return false;
+                    return None;
                 }
                 // [#741] The GPS fixes ride beside `zero_datums`, not in it
                 // (`serialize_project_snapshot`); put them back in list order.
@@ -900,17 +914,20 @@ impl AppState {
                             reason = %e,
                             "Refusing snapshot restore: its GPS fixes cannot be read"
                         );
-                        return false;
+                        return None;
                     }
                 }
+                let mut healed = false;
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {
                         restored.validation = validation;
+                        healed = true;
                     }
                 }
                 if !snapshot_has_surface_elevation {
                     if let Some(surface_elevation) = current_surface_elevation {
                         restored.surface_elevation = Some(surface_elevation);
+                        healed = true;
                     }
                 }
                 restored.file_path = current_file_path;
@@ -918,7 +935,7 @@ impl AppState {
                 // shots carries each section's surveyor/date at section level;
                 // give it to the shots that have none (a no-op for a current
                 // snapshot, which never serializes those keys).
-                restored.absorb_legacy_section_credit();
+                healed |= restored.absorb_legacy_section_credit() > 0;
                 restored.rebuild_section_index();
                 restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
@@ -952,6 +969,7 @@ impl AppState {
                     found
                 };
                 if has_legacy_index {
+                    healed = true;
                     restored.ensure_shot_uuids();
                     restored.ensure_unique_shot_uuids();
                     restored.reanchor_station_refs();
@@ -964,7 +982,7 @@ impl AppState {
                 // up to the standard the live one is already held to; the
                 // heal-by-heal reasoning for what that includes (and what it
                 // deliberately does not) is on the function.
-                reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
+                healed |= reapply_heals_after_restore(&mut restored, slot.as_ref(), edited);
                 // The `section_offsets` invariant (`Project::write_section_offset`)
                 // has to hold for a map this app did not write, and a snapshot
                 // payload is exactly that case: undo/redo history is persisted to
@@ -975,6 +993,7 @@ impl AppState {
                 // above - it is an invariant, and a restore may not install a state
                 // the app cannot otherwise reach.
                 let dropped = restored.normalize_section_offsets();
+                healed |= dropped > 0;
                 if dropped > 0 {
                     tracing::info!(
                         dropped,
@@ -983,7 +1002,7 @@ impl AppState {
                     );
                 }
                 *slot = Some(restored);
-                true
+                Some(healed)
             }
             Err(e) => {
                 tracing::error!(
@@ -991,7 +1010,7 @@ impl AppState {
                     reason = %e,
                     "Failed to deserialize project snapshot; slot left unchanged"
                 );
-                false
+                None
             }
         }
     }

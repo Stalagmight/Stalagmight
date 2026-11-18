@@ -6,8 +6,8 @@
 //! the result through the same restore every snapshot takes
 //! (`restore_snapshot_into_with`: caches, the refusal bounds, the GPS-fix
 //! merge, the heal carry-forward, the dust-offset invariant), and re-encodes
-//! the entry as the delta from the project that restore installed back to the
-//! state it just left. So the entry always holds one direction, and the next
+//! the entry as the delta from the project that restore installed (read again
+//! when the restore healed it) back to the state it just left. So the entry always holds one direction, and the next
 //! step is exact by construction - the delta form of the self-refreshing wall
 //! a snapshot pair was (`refresh_snapshot_pair_counterpart`).
 //!
@@ -66,28 +66,45 @@ impl AppState {
             Ok(doc) => doc,
             Err(e) => return CommandResult::failure(format!("Failed to write undo state: {e}")),
         };
-        if !Self::restore_snapshot_into_with(&mut guard, &other_doc.text(), Some(&edited)) {
+        let Some(healed) =
+            Self::restore_snapshot_reporting(&mut guard, &other_doc.text(), Some(&edited))
+        else {
             return CommandResult::failure("Failed to restore the undo state".to_string());
-        }
-        // The way back, from the state just installed to the one just left -
-        // read off the project the restore installed, not the text it was
-        // given: the restore heals (a save's gauge carried forward, a dust
-        // offset dropped, ...), and the next step applies this delta to
-        // whatever is live then. Re-serializing it also gives the rebuilt
-        // sections the live serializer's text, so the encode matches them by
-        // text rather than by parsing them.
-        let installed_text = match guard.as_ref().map(Self::serialize_project_snapshot) {
-            Some(Ok(text)) => text,
-            Some(Err(e)) => {
-                return Self::roll_back_step(&mut guard, &live_text, &format!("serialize: {e}"));
-            }
-            None => return Self::roll_back_step(&mut guard, &live_text, "no project installed"),
         };
-        let installed_doc = match Doc::parse(&installed_text) {
-            Ok(doc) => doc,
-            Err(e) => return Self::roll_back_step(&mut guard, &live_text, &format!("read: {e}")),
+        // The way back, from the state just installed to the one just left.
+        // When the restore healed (a save's gauge carried forward, a uuid
+        // minted, a dust offset dropped, ...) the installed project is not the
+        // text it was handed, and the next step applies this delta to whatever
+        // is live then - so the way back is read off the project the restore
+        // installed. Otherwise the text in hand IS that project, and a second
+        // serialization of a large survey is saved.
+        let installed_text;
+        let installed_doc;
+        let from = if healed {
+            installed_text = match guard.as_ref().map(Self::serialize_project_snapshot) {
+                Some(Ok(text)) => text,
+                Some(Err(e)) => {
+                    return Self::roll_back_step(
+                        &mut guard,
+                        &live_text,
+                        &format!("serialize: {e}"),
+                    );
+                }
+                None => {
+                    return Self::roll_back_step(&mut guard, &live_text, "no project installed");
+                }
+            };
+            installed_doc = match Doc::parse(&installed_text) {
+                Ok(doc) => doc,
+                Err(e) => {
+                    return Self::roll_back_step(&mut guard, &live_text, &format!("read: {e}"));
+                }
+            };
+            &installed_doc
+        } else {
+            &other_doc
         };
-        match ProjectDelta::between_docs(&installed_doc, &live_doc) {
+        match ProjectDelta::between_docs(from, &live_doc) {
             Ok(delta) => {
                 entry.delta = delta;
                 CommandResult::success()
