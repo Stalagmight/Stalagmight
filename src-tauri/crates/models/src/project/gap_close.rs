@@ -37,9 +37,7 @@ impl Project {
             .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let n = line.shots.len();
         if start_pos > end_pos || end_pos >= n {
-            return Err(format!(
-                "Shot range {start_pos}..={end_pos} is not in line {line_id}"
-            ));
+            return Err("That shot range is not in the line any more.".to_string());
         }
         let range_shot_ids: Vec<ShotId> = line.shots[start_pos..=end_pos]
             .iter()

@@ -482,7 +482,7 @@ impl Project {
         let append = kept_end == LineEnd::End;
 
         let (Some(k), Some(o)) = (self.get_line(kept), self.get_line(other)) else {
-            return Err(format!("Lines {kept} and {other} not found"));
+            return Err(crate::LINE_GONE.to_string());
         };
         let (nk, no) = (k.shots.len() as u32, o.shots.len() as u32);
         let join_k = StationRef::new(kept, if append { nk } else { 0 });

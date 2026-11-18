@@ -151,7 +151,7 @@ impl AppState {
 
             // Get split data (safe after pre-checks above)
             let Some((pos, shots_before, shots_after)) = line.split_shots_at(shot_id) else {
-                return CommandResult::failure(format!("Failed to split at shot {shot_id}"));
+                return CommandResult::failure("Failed to split at that shot".to_string());
             };
 
             // Capture deleted shot data for offset calculation

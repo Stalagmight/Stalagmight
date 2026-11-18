@@ -487,7 +487,7 @@ impl Project {
 
         let new_shot = line
             .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
-            .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
+            .ok_or_else(|| "Failed to insert the split shot".to_string())?;
         let new_shot_id = new_shot.id;
         // The new station sits between the two pieces: the Mid rule (`4 -> 5`
         // gives `4a`).
@@ -1682,9 +1682,7 @@ impl Project {
             .get_line(line_id)
             .ok_or_else(|| crate::LINE_GONE.to_string())?;
         if line.shots.len() != 1 || line.shots[0].id != shot_id {
-            return Err(format!(
-                "Shot {shot_id} is not the only shot of line {line_id}"
-            ));
+            return Err("That shot is not the only shot of its line any more.".to_string());
         }
         // Which closures the sweep would act on ALREADY, before this inverse
         // touches anything - see the conversion below. Taken ahead of the

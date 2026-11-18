@@ -763,12 +763,19 @@ impl AppState {
                             .as_deref()
                             .and_then(|u| project.shot_id_by_uuid(*line_id, u));
                         if let Some(existing_id) = duplicate {
-                            CommandResult::failure(format!(
-                                "Refusing to redo the creation of shot {} in line {line_id}: \
-                                 the line already holds that uuid (as shot {existing_id}), so \
-                                 redoing would duplicate a shot identity",
-                                uuid.as_deref().unwrap_or_default()
-                            ))
+                            tracing::warn!(
+                                line_id,
+                                existing_id,
+                                uuid = uuid.as_deref().unwrap_or_default(),
+                                purpose = "refuse a redo that would duplicate a shot identity",
+                                "Line already holds the uuid of the shot the redo re-creates"
+                            );
+                            CommandResult::failure(
+                                "Refusing to redo the creation of this shot: its line already \
+                                 holds a shot with the same identity, so redoing would \
+                                 duplicate it"
+                                    .to_string(),
+                            )
                         } else {
                             let resolve_anchor = |project: &crate::models::Project,
                                                   recorded_id: Option<ShotId>,
