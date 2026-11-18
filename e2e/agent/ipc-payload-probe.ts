@@ -3,7 +3,7 @@
  *
  * A one-off experiment, kept because its answer is a number this repo's import
  * path depends on and nothing else measures it. `import-dialog-fuzz` found
- * `import_sections` failing with serde's `premature end of input` - an
+ * `import_lines` failing with serde's `premature end of input` - an
  * ARGUMENT-DESERIALIZATION failure, i.e. the JSON body the webview sent was not
  * the JSON body Rust received - and the question is what makes that happen.
  *
@@ -97,7 +97,7 @@ async function main(): Promise<number> {
   /**
    * One call, with a `comment` of `length` copies of `char`.
    *
-   * `import_sections` is invoked with a config that is missing every required
+   * `import_lines` is invoked with a config that is missing every required
    * field on purpose - it can never reach the app's state, so the probe is
    * read-only with respect to the project.
    */
@@ -110,7 +110,7 @@ async function main(): Promise<number> {
         if (!core || typeof core.invoke !== 'function') throw new Error('invoke unavailable');
         const filler = args[0].repeat(args[1]);
         try {
-          await core.invoke('import_sections', { sections: [{ comment: filler }] });
+          await core.invoke('import_lines', { lines: [{ comment: filler }] });
           return { error: null, arrived: true };
         } catch (err) {
           const message = String(err);
@@ -128,24 +128,24 @@ async function main(): Promise<number> {
       // the serializer would send an empty body, which is exactly what serde
       // reports as `premature end of input`.
       const cases: { label: string; body: string }[] = [
-        { label: 'plain object', body: '{ sections: [{ ok: 1 }] }' },
-        { label: 'BigInt field', body: '{ sections: [{ section_index: BigInt(1) }] }' },
-        { label: 'BigInt nested in shots', body: '{ sections: [{ shots: [{ id: BigInt(7) }] }] }' },
-        { label: 'NaN field', body: '{ sections: [{ length: NaN }] }' },
-        { label: 'Infinity field', body: '{ sections: [{ length: Infinity }] }' },
-        { label: 'undefined in array', body: '{ sections: [undefined] }' },
-        { label: 'function field', body: '{ sections: [{ f: function () {} }] }' },
-        { label: 'Map field', body: '{ sections: [{ m: new Map([[1, 2]]) }] }' },
-        { label: 'circular object', body: '(() => { const a = { sections: [{}] }; a.sections[0].self = a; return a; })()' },
-        // `ImportSectionConfig.date` is `Option<NaiveDate>` (models/section.rs:253).
+        { label: 'plain object', body: '{ lines: [{ ok: 1 }] }' },
+        { label: 'BigInt field', body: '{ lines: [{ line_index: BigInt(1) }] }' },
+        { label: 'BigInt nested in shots', body: '{ lines: [{ shots: [{ id: BigInt(7) }] }] }' },
+        { label: 'NaN field', body: '{ lines: [{ length: NaN }] }' },
+        { label: 'Infinity field', body: '{ lines: [{ length: Infinity }] }' },
+        { label: 'undefined in array', body: '{ lines: [undefined] }' },
+        { label: 'function field', body: '{ lines: [{ f: function () {} }] }' },
+        { label: 'Map field', body: '{ lines: [{ m: new Map([[1, 2]]) }] }' },
+        { label: 'circular object', body: '(() => { const a = { lines: [{}] }; a.lines[0].self = a; return a; })()' },
+        // `ImportLineConfig.date` is `Option<NaiveDate>` (models/line.rs:253).
         // chrono's TOO_SHORT parse error prints as "premature end of input",
         // so an EMPTY STRING where the wizard means "no date" reads to serde as
         // a malformed argument body rather than as an absent value.
-        { label: 'date empty string', body: '{ sections: [{ date: "" }] }' },
-        { label: 'date null', body: '{ sections: [{ date: null }] }' },
-        { label: 'date valid', body: '{ sections: [{ date: "2026-01-01" }] }' },
-        { label: 'date junk', body: '{ sections: [{ date: "not-a-date" }] }' },
-        { label: 'date impossible', body: '{ sections: [{ date: "2024-02-30" }] }' },
+        { label: 'date empty string', body: '{ lines: [{ date: "" }] }' },
+        { label: 'date null', body: '{ lines: [{ date: null }] }' },
+        { label: 'date valid', body: '{ lines: [{ date: "2026-01-01" }] }' },
+        { label: 'date junk', body: '{ lines: [{ date: "not-a-date" }] }' },
+        { label: 'date impossible', body: '{ lines: [{ date: "2024-02-30" }] }' },
       ];
       process.stdout.write('\nvalue shape sweep:\n');
       for (const probeCase of cases) {
@@ -155,7 +155,7 @@ async function main(): Promise<number> {
             `
             const core = window.__TAURI__.core;
             try {
-              await core.invoke('import_sections', ${probeCase.body});
+              await core.invoke('import_lines', ${probeCase.body});
               return { error: null, arrived: true };
             } catch (err) {
               const message = String(err && err.message ? err.message : err);
@@ -182,7 +182,7 @@ async function main(): Promise<number> {
             const core = window.__TAURI__.core;
             const filler = args[0].repeat(8);
             try {
-              await core.invoke('import_sections', { sections: [{ comment: filler }] });
+              await core.invoke('import_lines', { lines: [{ comment: filler }] });
               return { error: null, arrived: true };
             } catch (err) {
               const message = String(err);

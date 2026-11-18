@@ -360,7 +360,7 @@ describe('routeOpenedFile - import context (#411)', () => {
   const parseWalls = vi.fn();
 
   beforeEach(() => {
-    parseTml.mockResolvedValue({ sections: [] });
+    parseTml.mockResolvedValue({ lines: [] });
     parseCompass.mockResolvedValue({ survey_count: 0 });
     parseWalls.mockResolvedValue({ project_name: 'W' });
     parseGpx.mockResolvedValue({ waypoints: [] });
@@ -397,7 +397,7 @@ describe('routeOpenedFile - import context (#411)', () => {
   // The DMP branch is the one that always declared its context; pin both halves so
   // deleting either `setImportContext` call fails here rather than in the field.
   it('declares a new-project import context for a DMP with no project open', async () => {
-    importDmp.mockResolvedValue({ sections: [] });
+    importDmp.mockResolvedValue({ lines: [] });
     await routeOpenedFile('/cave/survey.dmp');
     expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
     expect(useUIStore.getState().importContext).toBe('new-project');
@@ -405,7 +405,7 @@ describe('routeOpenedFile - import context (#411)', () => {
 
   it('declares an existing-project import context for a DMP into an open project', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never });
-    importDmp.mockResolvedValue({ sections: [] });
+    importDmp.mockResolvedValue({ lines: [] });
     await routeOpenedFile('/cave/survey.dmp');
     expect(useUIStore.getState().activeDialog).toBe('dmp-selection');
     expect(useUIStore.getState().importContext).toBe('existing-project');
@@ -498,7 +498,7 @@ describe('routeOpenedFile - import context (#411)', () => {
   // calls startPlacementMode() and then closeDialog() so the user can work the
   // map, leaving activeDialog null while saveAfterImport is still to come.
   it('refuses a file during manual placement, when no dialog is open at all', async () => {
-    importDmp.mockResolvedValue({ sections: [] });
+    importDmp.mockResolvedValue({ lines: [] });
     await routeOpenedFile('/cave/survey.dmp');
     expect(useUIStore.getState().importContext).toBe('new-project');
 
@@ -559,7 +559,7 @@ describe('routeOpenedFile - default project name prefers the file-carried name (
       label: 'TML cave_name',
       path: '/cave/exports/some-file.tml',
       mock: parseTml,
-      base: { sections: [] },
+      base: { lines: [] },
       field: 'cave_name',
       fallback: 'some-file',
     },
@@ -595,7 +595,7 @@ describe('routeOpenedFile - default project name prefers the file-carried name (
   });
 
   it.each([
-    { label: 'TML cave_name', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name' },
+    { label: 'TML cave_name', path: '/cave/exports/some-file.tml', mock: parseTml, base: { lines: [] }, field: 'cave_name' },
     { label: 'Compass cave_name', path: '/cave/exports/some-file.mak', mock: parseCompass, base: { survey_count: 0, shot_count: 0 }, field: 'cave_name' },
     { label: 'Walls project_name', path: '/cave/exports/some-file.wpj', mock: parseWalls, base: { resolved_survey_count: 0, shot_count: 0 }, field: 'project_name' },
     { label: 'GPX name', path: '/cave/exports/some-file.gpx', mock: parseGpxFile, base: { waypoints: [], tracks: [], routes: [] }, field: 'name' },
@@ -606,11 +606,11 @@ describe('routeOpenedFile - default project name prefers the file-carried name (
   });
 
   it.each([
-    { label: 'TML cave_name empty', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name', value: '' },
+    { label: 'TML cave_name empty', path: '/cave/exports/some-file.tml', mock: parseTml, base: { lines: [] }, field: 'cave_name', value: '' },
     { label: 'Compass cave_name empty', path: '/cave/exports/some-file.mak', mock: parseCompass, base: { survey_count: 0, shot_count: 0 }, field: 'cave_name', value: '' },
     { label: 'Walls project_name empty', path: '/cave/exports/some-file.wpj', mock: parseWalls, base: { resolved_survey_count: 0, shot_count: 0 }, field: 'project_name', value: '' },
     { label: 'GPX name null', path: '/cave/exports/some-file.gpx', mock: parseGpxFile, base: { waypoints: [], tracks: [], routes: [] }, field: 'name', value: null },
-    { label: 'TML cave_name whitespace-only', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name', value: '   ' },
+    { label: 'TML cave_name whitespace-only', path: '/cave/exports/some-file.tml', mock: parseTml, base: { lines: [] }, field: 'cave_name', value: '   ' },
   ])('$label: falls back to the filename', async ({ path, mock, base, field, value }) => {
     mock.mockResolvedValue({ ...base, [field]: value });
     await routeOpenedFile(path);
@@ -644,7 +644,7 @@ describe('routeOpenedFile - hideReportHint is scoped to the parse call, not the 
   });
 
   it('keeps the report-a-bug hint when something OTHER than the parser throws (a routing/store bug)', async () => {
-    parseTml.mockResolvedValue({ sections: [], cave_name: 'Naharon' });
+    parseTml.mockResolvedValue({ lines: [], cave_name: 'Naharon' });
     // A throw from routing code AFTER a successful parse - not a file problem.
     useUIStore.setState({
       setImportContext: () => {

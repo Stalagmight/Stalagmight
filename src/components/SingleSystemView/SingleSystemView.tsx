@@ -1,4 +1,5 @@
 import { useCollaboratorsSync } from '../../store/speleoCollaboratorsStore';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { LeftWorkspace } from './LeftWorkspace';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -9,7 +10,7 @@ import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
-import type { SectionId } from '../../types/project';
+import type { LineId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
@@ -46,11 +47,11 @@ import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
-// #50: after double-click collapses the side panels, the map grows. fitToSection
+// #50: after double-click collapses the side panels, the map grows. fitToLine
 // reads the container size at call time, so re-fit once the layout has reflowed
 // and MapLibre's ResizeObserver has resized the map (a couple of frames). This
 // lives here rather than in SectionsPanel, which unmounts when it collapses.
-const SECTION_FOCUS_REFIT_DELAY_MS = 180;
+const LINE_FOCUS_REFIT_DELAY_MS = 180;
 
 // Top offsets (px) for the side opener tabs, aligning each tab with its panel's
 // header/content divider. These track the panel header layout - revisit if the
@@ -193,11 +194,11 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableHeight,
     dataTableFullScreen,
-    focusedSectionId,
-    exitSectionFocus,
-    setFocusedSection,
+    focusedLineId,
+    exitLineFocus,
+    setFocusedLine,
     selection,
-    triggerZoomToSection,
+    triggerZoomToLine,
     triggerFitToBounds,
     setSectionsPanelWidth,
     setDetailPanelWidth,
@@ -208,11 +209,11 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
-    focusedSectionId: s.focusedSectionId,
-    exitSectionFocus: s.exitSectionFocus,
-    setFocusedSection: s.setFocusedSection,
+    focusedLineId: s.focusedLineId,
+    exitLineFocus: s.exitLineFocus,
+    setFocusedLine: s.setFocusedLine,
     selection: s.selection,
-    triggerZoomToSection: s.triggerZoomToSection,
+    triggerZoomToLine: s.triggerZoomToLine,
     triggerFitToBounds: s.triggerFitToBounds,
     setSectionsPanelWidth: s.setSectionsPanelWidth,
     setDetailPanelWidth: s.setDetailPanelWidth,
@@ -305,6 +306,16 @@ export default function SingleSystemView() {
     const frame = requestAnimationFrame(() => document.getElementById('workspace-tab-speleodb')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [revealNonce, revealLeft]);
+  // A New Section row asks for its name in the Sections panel, which a line's
+  // menu on the map can be opened without: show the panel while it does.
+  // Only a closed panel is revealed: a temporary reveal of an open one would
+  // outlive it, floating the panel open again when it is next closed.
+  const pendingNewSectionId = useUIStore((s) => s.pendingNewSection?.id ?? null);
+  const sectionsOpenRef = useRef(sectionsReveal.isOpen);
+  sectionsOpenRef.current = sectionsReveal.isOpen;
+  useLayoutEffect(() => {
+    if (pendingNewSectionId !== null && !sectionsOpenRef.current) revealLeft();
+  }, [pendingNewSectionId, revealLeft]);
   const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
   const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
 
@@ -372,9 +383,9 @@ export default function SingleSystemView() {
   // height only in memory, so a focus-time drag must not leak to config.
   const handleDataResizeEnd = useCallback(
     (size: number) => {
-      if (focusedSectionId === null) savePanelSizes('data-table', resolveSize('data', size));
+      if (focusedLineId === null) savePanelSizes('data-table', resolveSize('data', size));
     },
-    [resolveSize, savePanelSizes, focusedSectionId],
+    [resolveSize, savePanelSizes, focusedLineId],
   );
 
   // Programmatic Details reveal (jump-to-warning from the data table). The store
@@ -441,71 +452,71 @@ export default function SingleSystemView() {
       ? 0
       : BAR;
 
-  // #50: name shown in place of the project name while focused on one section.
+  // #50: name shown in place of the project name while focused on one line.
   // A single lookup drives both existence (the auto-exit effect) and the name.
   // Memoized: SingleSystemView re-renders ~60×/s during a panel-resize drag (it
   // subscribes to the panel width/height being mutated each tick), so the O(n)
-  // .find() must not re-scan project.sections every frame when focus is active.
-  const focusedSection = useMemo(
+  // .find() must not re-scan project.lines every frame when focus is active.
+  const focusedLine = useMemo(
     () =>
-      focusedSectionId !== null
-        ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
+      focusedLineId !== null
+        ? project?.lines.find((s) => s.id === focusedLineId) ?? null
         : null,
-    [focusedSectionId, project?.sections],
+    [focusedLineId, project?.lines],
   );
-  const focusedSectionExists = focusedSection !== null;
-  const focusedSectionName =
-    focusedSectionId !== null
-      ? focusedSection?.name ?? t('sections.defaultName', { id: focusedSectionId })
+  const focusedLineExists = focusedLine !== null;
+  const focusedLineName =
+    focusedLineId !== null
+      ? lineDisplayName(focusedLine?.name)
       : null;
 
-  // The section that owns the current selection (section / shot / station) - the
-  // same mapping the data table uses to pick its section.
-  const selectedSectionId: SectionId | undefined =
-    selection?.type === 'section' || selection?.type === 'shot'
-      ? selection.sectionId
+  // The line that owns the current selection (line / shot / station) - the
+  // same mapping the data table uses to pick its line.
+  const selectedLineId: LineId | undefined =
+    selection?.type === 'line' || selection?.type === 'shot'
+      ? selection.lineId
       : selection?.type === 'station'
-        ? selection.stationRef?.section_id
+        ? selection.stationRef?.line_id
         : undefined;
 
   // #50: adjust the map once the layout settles, after the side panels collapse
-  // (entry) or return (exit). ENTRY (null -> id) frames the focused section in the
+  // (entry) or return (exit). ENTRY (null -> id) frames the focused line in the
   // enlarged map; EXIT (id -> null) returns to a neutral whole-map overview
-  // (fit-to-bounds) rather than staying zoomed into the section. NOT on a follow
-  // (id -> id'), so clicking another section never re-zooms - consistent with
+  // (fit-to-bounds) rather than staying zoomed into the line. NOT on a follow
+  // (id -> id'), so clicking another line never re-zooms - consistent with
   // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
-  const prevFocusedRef = useRef<SectionId | null>(null);
-  const focusedSectionIdRef = useRef<SectionId | null>(focusedSectionId);
-  focusedSectionIdRef.current = focusedSectionId;
+  const prevFocusedRef = useRef<LineId | null>(null);
+  const focusedLineIdRef = useRef<LineId | null>(focusedLineId);
+  focusedLineIdRef.current = focusedLineId;
   const refitTimerRef = useRef<number | null>(null);
   useEffect(() => {
     const prev = prevFocusedRef.current;
-    prevFocusedRef.current = focusedSectionId;
+    prevFocusedRef.current = focusedLineId;
     const transition =
-      prev === null && focusedSectionId !== null
+      prev === null && focusedLineId !== null
         ? 'enter'
-        : prev !== null && focusedSectionId === null
+        : prev !== null && focusedLineId === null
           ? 'exit'
           : null; // follow / no transition
     // A follow (id -> id') deliberately doesn't re-frame the map, and crucially
     // must NOT cancel a still-pending ENTER re-fit either: the entry timer reads
     // the latest focused id at fire time, so a quick follow during the settle
-    // window still frames the section the user landed on instead of dropping the
+    // window still frames the line the user landed on instead of dropping the
     // zoom. So leave any pending timer untouched on a follow.
     if (transition === null) return;
     if (refitTimerRef.current !== null) window.clearTimeout(refitTimerRef.current);
     refitTimerRef.current = window.setTimeout(() => {
       refitTimerRef.current = null;
       setSource('sections-panel');
-      const id = focusedSectionIdRef.current;
+      const id = focusedLineIdRef.current;
       if (transition === 'enter' && id !== null) {
-        triggerZoomToSection(id);
+        triggerZoomToLine(id);
       } else {
         triggerFitToBounds();
       }
-    }, SECTION_FOCUS_REFIT_DELAY_MS);
-  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
+    }, LINE_FOCUS_REFIT_DELAY_MS);
+  }, [focusedLineId, triggerZoomToLine, triggerFitToBounds]);
   // The effect above no longer returns a per-change cleanup (so a follow can't
   // cancel an in-flight entry zoom); clear any pending re-fit on unmount instead.
   useEffect(
@@ -515,25 +526,25 @@ export default function SingleSystemView() {
     [],
   );
 
-  // #50: while focused, follow the selected section so the toolbar heading tracks
-  // the data table (clicking another section on the map updates both).
+  // #50: while focused, follow the selected line so the toolbar heading tracks
+  // the data table (clicking another line on the map updates both).
   useEffect(() => {
     if (
-      focusedSectionId !== null &&
-      selectedSectionId !== undefined &&
-      selectedSectionId !== focusedSectionId
+      focusedLineId !== null &&
+      selectedLineId !== undefined &&
+      selectedLineId !== focusedLineId
     ) {
-      setFocusedSection(selectedSectionId);
+      setFocusedLine(selectedLineId);
     }
-  }, [focusedSectionId, selectedSectionId, setFocusedSection]);
+  }, [focusedLineId, selectedLineId, setFocusedLine]);
 
-  // #50: if the focused section disappears (e.g. deleted while focused), exit
+  // #50: if the focused line disappears (e.g. deleted while focused), exit
   // focus mode rather than stay in the collapsed layout showing a stale name.
   useEffect(() => {
-    if (focusedSectionId !== null && project && !focusedSectionExists) {
-      exitSectionFocus();
+    if (focusedLineId !== null && project && !focusedLineExists) {
+      exitLineFocus();
     }
-  }, [focusedSectionId, focusedSectionExists, project, exitSectionFocus]);
+  }, [focusedLineId, focusedLineExists, project, exitLineFocus]);
 
   // Fullscreen data table: the overlay's top edge tracks the live toolbar
   // height (it can change with wrapping/zoom), published as a CSS var on the
@@ -654,17 +665,17 @@ export default function SingleSystemView() {
   // with `pointer-events-none` (or move the dim to an overlay) - don't dim the
   // panel subtree with a filter while leaving it interactive.
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
-  const sections = project?.sections;
+  const lines = project?.lines;
   const sectionsContent = useMemo(
     () =>
-      sections ? (
+      lines ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Sections">
-            <SectionsPanel sections={sections} />
+            <SectionsPanel lines={lines} />
           </ErrorBoundary>
         </div>
       ) : null,
-    [sections, dimCls],
+    [lines, dimCls],
   );
   const detailContent = useMemo(
     () => (
@@ -700,14 +711,14 @@ export default function SingleSystemView() {
             </ErrorBoundary>
           </div>
         ) : null
-      ) : sections ? (
+      ) : lines ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Data Table">
-            <DataTable sections={sections} />
+            <DataTable lines={lines} />
           </ErrorBoundary>
         </div>
       ) : null,
-    [appMode, gasOriginChosen, sections, dimCls],
+    [appMode, gasOriginChosen, lines, dimCls],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and
@@ -747,11 +758,11 @@ export default function SingleSystemView() {
   return (
     <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
       {/* Page heading for screen readers. The toolbar center now shows the
-          active tool name (#51), so the project/focused-section name - the real
+          active tool name (#51), so the project/focused-line name - the real
           page heading - lives here, visually hidden but still in the heading
-          outline (follows the focused section in focus mode, per #50). */}
+          outline (follows the focused line in focus mode, per #50). */}
       <h1 className="sr-only" data-testid="page-heading">
-        {focusedSectionName ?? project.name}
+        {focusedLineName ?? project.name}
       </h1>
       {/* Toolbar */}
       <Toolbar
@@ -774,7 +785,7 @@ export default function SingleSystemView() {
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
         {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
-            with no section-editing affordances. */}
+            with no line-editing affordances. */}
         <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
         <Dock
           reveal={sectionsReveal}
@@ -922,14 +933,14 @@ export default function SingleSystemView() {
       >
         <span>
           {t('singleView.status.summary', {
-            sections: formatNumber(stats?.section_count ?? 0),
+            sections: formatNumber(stats?.line_count ?? 0),
             shots: formatNumber(stats?.shot_count ?? 0),
             length: formatLength(stats?.total_length ?? 0, precision.length),
           })}
-          {focusedSectionName !== null && (
-            <span data-testid="status-focused-section" className="ml-2 text-accent">
+          {focusedLineName !== null && (
+            <span data-testid="status-focused-line" className="ml-2 text-accent">
               {' | '}
-              {t('singleView.status.focusedSection', { name: focusedSectionName })}
+              {t('singleView.status.focusedSection', { name: focusedLineName })}
             </span>
           )}
         </span>

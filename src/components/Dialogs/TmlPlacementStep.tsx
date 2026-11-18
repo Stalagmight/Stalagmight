@@ -19,9 +19,9 @@ import type { TmlRootPlacement } from '../../types/commands';
 export interface TmlFileAnchor {
   latitude: number;
   longitude: number;
-  /** `root` - the first imported section's own first shot carries them, which
+  /** `root` - the first imported line's own first shot carries them, which
    *  is what the importer would have used anyway. `elsewhere` - the file has a
-   *  georeference but on some other section, which the importer ignores. */
+   *  georeference but on some other line, which the importer ignores. */
   source: 'root' | 'elsewhere';
 }
 
@@ -77,9 +77,9 @@ export interface TmlPlacementStepProps {
   onChange: (next: TmlPlacementState) => void;
   /** The coordinates the file offers, when it offers any. */
   anchor: TmlFileAnchor | null;
-  /** Name of the section this placement applies to, so the user can see that
-   *  deselecting sections moved it. */
-  rootSectionName: string | null;
+  /** Name of the line this placement applies to, so the user can see that
+   *  deselecting lines moved it. */
+  rootLineName: string | null;
   disabled: boolean;
 }
 
@@ -87,7 +87,7 @@ export function TmlPlacementStep({
   state,
   onChange,
   anchor,
-  rootSectionName,
+  rootLineName,
   disabled,
 }: TmlPlacementStepProps) {
   const { t } = useTranslation();
@@ -116,8 +116,8 @@ export function TmlPlacementStep({
     <div className="space-y-2" data-testid="tml-placement-step">
       <div className="text-sm font-medium">{t('dialogs.tmlImport.placement.heading')}</div>
       <div className="text-xs text-text-tertiary">
-        {rootSectionName
-          ? t('dialogs.tmlImport.placement.appliesTo', { section: rootSectionName })
+        {rootLineName
+          ? t('dialogs.tmlImport.placement.appliesTo', { section: rootLineName })
           : t('dialogs.tmlImport.placement.appliesToNothing')}
       </div>
       <div className="space-y-2 p-3 border border-border rounded">

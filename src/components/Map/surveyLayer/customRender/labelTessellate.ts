@@ -8,7 +8,7 @@
  * (lines/circles): the same anchor-relative-mercator float32 positions +
  * per-glyph-quad-as-4-verts + `UNSIGNED_INT` indices, and the same single-writer
  * discipline ({@link emitLabel} is the one function that stamps a label's glyph
- * quads, mirroring `emitLineSection` / `emitStation`).
+ * quads, mirroring `emitLineShots` / `emitStation`).
  *
  * TWO STAGES:
  *  1. {@link buildLabelDescriptors} walks the SoA once and emits a
@@ -16,7 +16,7 @@
  *     (anchor-relative mercator, exactly the projection `features.ts` uses), the
  *     text + color (via the shared `labelText.ts` helpers -> parity), the
  *     decimation ordinal, and the static flag bits (reference / all-reference /
- *     first-in-section). Interaction flags (DIM / HIDE) default 0 here and are a
+ *     first-in-line). Interaction flags (DIM / HIDE) default 0 here and are a
  *     later phase's concern.
  *  2. {@link buildLabelBuffers} shapes each descriptor's text (`labelLayout.ts`)
  *     and stamps its glyph quads into one set of typed arrays.
@@ -31,6 +31,7 @@ import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { buildStationLookup, computeStationAllReference, projectStationsRel } from './tessellate';
+import { mergedStationLabels } from './labelMergeGroups';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { shapeLabel, type ShapedLabel, type ShapeCache } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
@@ -62,11 +63,11 @@ import {
   formatShotLabel,
   formatStationLabel,
   formatStationNameLabel,
-  formatSectionLabel,
+  formatLineLabel,
   formatCommentLabel,
   resolveShotLabelColor,
   resolveStationLabelColor,
-  resolveSectionLabelColor,
+  resolveLineLabelColor,
   type LabelColorContext,
   type StationLabelText,
 } from './labelText';
@@ -87,30 +88,34 @@ export interface LabelDescriptor {
   /** Decimation key: shot running index (shot labels) / station global ordinal
    *  (station labels); 0 for kinds without decimation. */
   ordinal: number;
-  /** STATIC {@link LABEL_FLAG} bits only (FIRST_IN_SECTION / REFERENCE /
+  /** STATIC {@link LABEL_FLAG} bits only (FIRST_IN_LINE / REFERENCE /
    *  ALL_REFERENCE). Interaction bits (DIM / DRAG_HIDE) are NOT stored here -
    *  they are computed per build / per flag-refresh from the controller's
    *  dim/hide state so a cheap flags-only re-upload can flip them without
    *  disturbing the reveal zoom (which the reveal-only path owns). */
   flags: number;
-  /** Owning section id - keys anchored-dim + drag-section-hide for every kind. */
-  sectionId?: number;
+  /** Owning line id - keys anchored-dim + drag-line-hide for every kind. */
+  lineId?: number;
   /** Global station index (station label + station comment) - keys station
    *  drag-hide + (with {@link stationIndex}) immovable-station dim. */
   stationGlobal?: number;
-  /** Station index within its section (station label + station comment) - the
-   *  immovable feature id is `sectionId * FEATURE_ID_STRIDE + stationIndex`. */
+  /** Station index within its line (station label + station comment) - the
+   *  immovable feature id is `lineId * FEATURE_ID_STRIDE + stationIndex`. */
   stationIndex?: number;
+  /** Station label of a merge group's representative: every member's global
+   *  index (the representative's own included), so dragging any member hides
+   *  the one label the group draws. Absent for a station that is not merged. */
+  stationGroup?: readonly number[];
   /** Global shot index (shot label + shot comment) - keys shot drag-hide. */
   shotGlobal?: number;
-  /** Shot id within its section (shot label + shot comment) - the immovable
-   *  feature id is `sectionId * FEATURE_ID_STRIDE + shotId`. */
+  /** Shot id within its line (shot label + shot comment) - the immovable
+   *  feature id is `lineId * FEATURE_ID_STRIDE + shotId`. */
   shotId?: number;
   /** Errors labels: the severity score (0-3) that ranks them in the declutter. */
   score?: number;
-  /** Closure error label: the OTHER end's section + global station (the first
-   *  end is `sectionId` / `stationGlobal`), for drag-hide and dim. */
-  pairSectionId?: number;
+  /** Closure error label: the OTHER end's line + global station (the first
+   *  end is `lineId` / `stationGlobal`), for drag-hide and dim. */
+  pairLineId?: number;
   pairStationGlobal?: number;
 }
 
@@ -121,8 +126,8 @@ export interface LabelBuildContext {
   precision?: DecimalPrecision | undefined;
   /**
    * Comment-label text color resolver for the `move_comment` palette tint (#52).
-   * Given a comment's OWNER key (`${sectionId}:s${shotId}` for shot comments,
-   * `${sectionId}:st${stationIndex}` for station comments - the exact keys
+   * Given a comment's OWNER key (`${lineId}:s${shotId}` for shot comments,
+   * `${lineId}:st${stationIndex}` for station comments - the exact keys
    * `features.ts` / `colorResolvers.ts` use), returns the packed tint color.
    * ABSENT (the common case) = comments use the flat `labelColor`, matching the
    * stock `commentTextColor()` when the tool is not active. Injected (never
@@ -135,8 +140,9 @@ export interface LabelBuildContext {
   /** Theme for the Errors labels' severity colours (required with `errors`). */
   themeColors?: MapThemeColors | undefined;
   /**
-   * What station labels say. ABSENT = `'id'` (the station index). `'name'`
-   * labels each station with its name and skips unnamed stations - every other
+   * What station labels say. ABSENT = `'id'` (the Station ID, `stationIds`).
+   * `'name'` labels each station with its name and skips one whose name shows
+   * as nothing - every other
    * field of the descriptor (ordinal, flags, owner) is the same as for the ID,
    * so names declutter, decimate, dim and hide exactly like the IDs do.
    */
@@ -226,8 +232,8 @@ function anchorFilter(viewport: ViewportRel | readonly ViewportRel[]): (x: numbe
 /**
  * Walk the SoA once and emit a {@link LabelDescriptor} for every label the stock
  * layers would build: shot labels (+ shot comments), station labels (+ station
- * comments), and section names. Reproduces `features.ts`' anchor placement,
- * ordinals, all-reference / first-in-section predicates, and (via `labelText.ts`)
+ * comments), and line names. Reproduces `features.ts`' anchor placement,
+ * ordinals, all-reference / first-in-line predicates, and (via `labelText.ts`)
  * text + color exactly. `anchorX` / `anchorY` is the survey mercator anchor
  * (`computeMercatorAnchor`); all descriptor anchors are relative to it.
  */
@@ -249,7 +255,7 @@ export function buildLabelDescriptors(
   // running index / a station's global ordinal must stay stable regardless of
   // what is on screen, so decimation parity holds) - only the `push` is gated.
   // A list of rects keeps anchors inside ANY of them (the reservations around
-  // each jump / reference section name, see labelReveal's `reserved`).
+  // each jump / reference line name, see labelReveal's `reserved`).
   const inView = viewport === undefined ? () => true : anchorFilter(viewport);
   const lookup = buildStationLookup(data);
   // allRef[g] is the per-station kind mask (#27): 0 = a Normal shot touches it,
@@ -257,14 +263,14 @@ export function buildLabelDescriptors(
   // label flags per-kind rather than collapsed, so a station label cannot
   // outlive the station marker it sits on.
   const allRef = computeStationAllReference(data, lookup);
-  const stationKindFlags = (g: number): number => {
-    const mask = allRef[g]!;
+  const kindFlagsOfMask = (mask: number): number => {
     if (mask === 0) return 0;
     return (
       ((mask & 1) !== 0 ? LABEL_FLAG.ALL_JUMP : 0) |
       ((mask & 2) !== 0 ? LABEL_FLAG.ALL_REFERENCE : 0)
     );
   };
+  const stationKindFlags = (g: number): number => kindFlagsOfMask(allRef[g]!);
   const stationRel = projectStationsRel(data, gpsOrigin, anchorX, anchorY);
   const { colorCtx } = ctx;
 
@@ -274,11 +280,11 @@ export function buildLabelDescriptors(
   const errors = ctx.errors && ctx.themeColors ? ctx.errors : null;
   const wantShotError = errors !== null && wants(LABEL_KIND.SHOT_ERROR);
   let globalShotOrdinal = 0;
-  if (wantShotLabel || wantShotComment || wantShotError) for (const section of data.sections) {
-    const inner = lookup.get(section.id);
+  if (wantShotLabel || wantShotComment || wantShotError) for (const line of data.lines) {
+    const inner = lookup.get(line.id);
     if (!inner) continue;
-    for (let i = 0; i < section.shotCount; i++) {
-      const shotGlobalIdx = section.shotOffset + i;
+    for (let i = 0; i < line.shotCount; i++) {
+      const shotGlobalIdx = line.shotOffset + i;
       const fromG = inner.get(i);
       const toG = inner.get(i + 1);
       if (fromG === undefined || toG === undefined) continue;
@@ -311,7 +317,7 @@ export function buildLabelDescriptors(
         color: packCssColor(resolveShotLabelColor(avgDepth, colorCtx)),
         ordinal: globalShotOrdinal,
         flags: virtualFlag,
-        sectionId: section.id,
+        lineId: line.id,
         shotGlobal: shotGlobalIdx,
         shotId,
       });
@@ -324,7 +330,7 @@ export function buildLabelDescriptors(
         color: packCssColor(shotErrorLabelColor(errors!, shotGlobalIdx, ctx.themeColors!)),
         ordinal: 0,
         flags: virtualFlag,
-        sectionId: section.id,
+        lineId: line.id,
         shotGlobal: shotGlobalIdx,
         shotId,
         score: errors!.scores.labelScore[shotGlobalIdx] ?? 0,
@@ -337,7 +343,7 @@ export function buildLabelDescriptors(
           anchorX: ax,
           anchorY: ay,
           color: ctx.commentColor
-            ? ctx.commentColor(`${section.id}:s${shotId}`)
+            ? ctx.commentColor(`${line.id}:s${shotId}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
           // Mirror the shot label: a virtual shot's comment carries its own
@@ -345,7 +351,7 @@ export function buildLabelDescriptors(
           // geometry. Without it the comment orphans (stays visible) when that
           // kind is hidden, since flags:0 never matches the hide mask.
           flags: virtualFlag,
-          sectionId: section.id,
+          lineId: line.id,
           shotGlobal: shotGlobalIdx,
           shotId,
         });
@@ -359,29 +365,59 @@ export function buildLabelDescriptors(
   const wantStationComment = wants(LABEL_KIND.STATION_COMMENT);
   const namesMode = ctx.stationLabelText === 'name';
   if (wantStationLabel || wantStationComment) {
-    // Per-section min station index == the "first in section" predicate.
-    const sectionMinIndex = new Map<number, number>();
+    // Per-line min station index == the "first in line" predicate; the max is
+    // its counterpart, which a merge group's representative avoids next.
+    const lineMinIndex = new Map<number, number>();
+    const lineMaxIndex = new Map<number, number>();
     for (let g = 0; g < data.stationCount; g++) {
-      const sid = data.stationSectionIds[g]!;
+      const sid = data.stationLineIds[g]!;
       const idx = data.stationIndices[g]!;
-      const cur = sectionMinIndex.get(sid);
-      if (cur === undefined || idx < cur) sectionMinIndex.set(sid, idx);
+      const cur = lineMinIndex.get(sid);
+      if (cur === undefined || idx < cur) lineMinIndex.set(sid, idx);
+      const top = lineMaxIndex.get(sid);
+      if (top === undefined || idx > top) lineMaxIndex.set(sid, idx);
     }
+    // IDs mode draws the Station ID, never the station's position in its line.
+    const labelText = (g: number): string | null => {
+      if (namesMode) return formatStationNameLabel(data.stationNames.get(g));
+      const stationId = data.stationIds[g];
+      return stationId === undefined ? null : formatStationLabel(stationId);
+    };
+    // Merged stations are one point: ONE label per merge group, drawn for its
+    // representative (`labelMergeGroups.ts`); the other members draw none.
+    const merged = wantStationLabel
+      ? mergedStationLabels(data, lookup, lineMinIndex, lineMaxIndex, (m) => labelText(m) !== null)
+      : null;
     for (let g = 0; g < data.stationCount; g++) {
-      const sid = data.stationSectionIds[g]!;
+      const sid = data.stationLineIds[g]!;
       const stationIndex = data.stationIndices[g]!;
       const z = data.stationCoords[g * 3 + 2]!;
+      const group = merged?.members.get(g);
       let flags = 0;
-      if (stationIndex === sectionMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_SECTION;
-      flags |= stationKindFlags(g);
+      if (group === undefined) {
+        if (stationIndex === lineMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_LINE;
+        flags |= stationKindFlags(g);
+      } else {
+        // The group's label stands for every member: always shown when any
+        // member starts its line (the first-in-line rule), and hidden with
+        // the shots only when every member would be (a Normal shot at any
+        // member keeps it; otherwise the kinds touching them all).
+        let mask = 0;
+        let normal = false;
+        for (const m of group) {
+          if (data.stationIndices[m] === lineMinIndex.get(data.stationLineIds[m]!)) {
+            flags |= LABEL_FLAG.FIRST_IN_LINE;
+          }
+          if (allRef[m] === 0) normal = true;
+          mask |= allRef[m]!;
+        }
+        flags |= kindFlagsOfMask(normal ? 0 : mask);
+      }
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
-      const stationText = !(wantStationLabel && stationInView)
-        ? null
-        : namesMode
-          ? formatStationNameLabel(data.stationNames.get(g))
-          : formatStationLabel(stationIndex);
+      const represents = merged === null || merged.representative[g] === g;
+      const stationText = wantStationLabel && stationInView && represents ? labelText(g) : null;
       if (stationText !== null) descriptors.push({
         kind: LABEL_KIND.STATION_LABEL,
         text: stationText,
@@ -390,9 +426,10 @@ export function buildLabelDescriptors(
         color: packCssColor(resolveStationLabelColor(z, colorCtx)),
         ordinal: g,
         flags,
-        sectionId: sid,
+        lineId: sid,
         stationGlobal: g,
         stationIndex,
+        ...(group !== undefined ? { stationGroup: group } : {}),
       });
       const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {
@@ -410,7 +447,7 @@ export function buildLabelDescriptors(
           // geometry (the station comment shows below the station label). Without
           // it the comment orphans when reference shots are hidden.
           flags: stationKindFlags(g),
-          sectionId: sid,
+          lineId: sid,
           stationGlobal: g,
           stationIndex,
         });
@@ -422,8 +459,8 @@ export function buildLabelDescriptors(
   // One per closure, at the midpoint of its two stations (a single point in
   // the Closures Computed View, where a closed loop's ends coincide).
   if (errors !== null && closureErrorLabelsOn(errors) && wants(LABEL_KIND.CLOSURE_ERROR)) for (const closure of errors.closures) {
-    const gA = lookup.get(closure.station_a.section_id)?.get(closure.station_a.station_index);
-    const gB = lookup.get(closure.station_b.section_id)?.get(closure.station_b.station_index);
+    const gA = lookup.get(closure.station_a.line_id)?.get(closure.station_a.station_index);
+    const gB = lookup.get(closure.station_b.line_id)?.get(closure.station_b.station_index);
     if (gA === undefined || gB === undefined) continue;
     const ax = (stationRel[gA * 2]! + stationRel[gB * 2]!) / 2;
     const ay = (stationRel[gA * 2 + 1]! + stationRel[gB * 2 + 1]!) / 2;
@@ -441,29 +478,29 @@ export function buildLabelDescriptors(
       color: packCssColor(style.color),
       ordinal: 0,
       flags: 0,
-      sectionId: closure.station_a.section_id,
+      lineId: closure.station_a.line_id,
       stationGlobal: gA,
-      pairSectionId: closure.station_b.section_id,
+      pairLineId: closure.station_b.line_id,
       pairStationGlobal: gB,
       score: style.score,
     });
   }
 
-  // ─── Section names ─────────────────────────────────────────────
-  if (wants(LABEL_KIND.SECTION_NAME)) for (const section of data.sections) {
-    const inner = lookup.get(section.id);
+  // ─── Line names ─────────────────────────────────────────────
+  if (wants(LABEL_KIND.LINE_NAME)) for (const line of data.lines) {
+    const inner = lookup.get(line.id);
     if (!inner || inner.size === 0) continue;
     // Prefer the first NON-reference station (so the name doesn't float when
     // reference shots are hidden); fall back to the first station overall.
     let anchorGlobal: number | undefined;
     let anchorStationIdx = Infinity;
     let foundNonRef = false;
-    // Union of the kinds touching this section's stations, for the case where
-    // NONE of them has a Normal shot: the section name then hides on the same
+    // Union of the kinds touching this line's stations, for the case where
+    // NONE of them has a Normal shot: the line name then hides on the same
     // per-kind rule its stations do, not on a both-off rule (#27).
-    let sectionKindFlags = 0;
+    let lineKindFlags = 0;
     for (const [stIdx, gIdx] of inner.entries()) {
-      sectionKindFlags |= stationKindFlags(gIdx);
+      lineKindFlags |= stationKindFlags(gIdx);
       const hasNonRef = allRef[gIdx] === 0;
       if (foundNonRef && !hasNonRef) continue;
       if (hasNonRef && !foundNonRef) {
@@ -480,14 +517,14 @@ export function buildLabelDescriptors(
     const secY = stationRel[anchorGlobal * 2 + 1]!;
     if (!inView(secX, secY)) continue;
     descriptors.push({
-      kind: LABEL_KIND.SECTION_NAME,
-      text: formatSectionLabel(section.name),
+      kind: LABEL_KIND.LINE_NAME,
+      text: formatLineLabel(line.name),
       anchorX: secX,
       anchorY: secY,
-      color: packCssColor(resolveSectionLabelColor(section.color)),
+      color: packCssColor(resolveLineLabelColor(line.color)),
       ordinal: 0,
-      flags: foundNonRef ? 0 : sectionKindFlags,
-      sectionId: section.id,
+      flags: foundNonRef ? 0 : lineKindFlags,
+      lineId: line.id,
     });
   }
 
@@ -502,7 +539,7 @@ const CORNER_USE_B = [0, 0, 1, 1];
 /**
  * Stamp one shaped label's glyph quads into `b` starting at glyph `startGlyph`,
  * returning the next free glyph index. The single writer (mirrors
- * `emitLineSection` / `emitStation`): all 4 verts of a glyph share the label's
+ * `emitLineShots` / `emitStation`): all 4 verts of a glyph share the label's
  * anchor / color / kind / revealZoom / flags; `offsetEm` + `uv` come from the
  * shaped glyph corners. `revealZoom` (min live zoom at which the label draws)
  * defaults to 0 (visible from any zoom - the whole-survey / no-projector

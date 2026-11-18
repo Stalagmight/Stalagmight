@@ -4,32 +4,32 @@
 //! below is one the encoder keeps by construction, and together they bound
 //! what an apply can build: never more than the source holds plus the literals
 //! the delta itself carries. Without them a row of a few kilobytes that keeps
-//! the same sections or shots over and over grows the project it is applied
+//! the same lines or shots over and over grows the project it is applied
 //! to, step after step, until the allocation aborts the app.
 
 use serde_json::Value;
 
-use super::{DeltaError, Edit, ProjectDelta, Run, SectionRun, ShotRun, ID};
-use crate::models::MAX_SECTION_ID;
+use super::{DeltaError, Edit, LineRun, ProjectDelta, Run, ShotRun, ID};
+use crate::models::MAX_LINE_ID;
 
 /// A half-open range `[start, end)` of source positions.
 type Span = (usize, usize);
 
 impl ProjectDelta {
     /// Refuse a delta that breaks a rule the encoder keeps:
-    /// - the section runs read each source section at most once (a kept range
+    /// - the line runs read each source line at most once (a kept range
     ///   or an edited position), all within the source count the delta records;
     /// - the shot copies take each source shot at most once, and never out of a
-    ///   section whose shots stay where they are (kept, or edited without its
+    ///   line whose shots stay where they are (kept, or edited without its
     ///   shots rebuilt: `ShotPool` in `shots.rs`);
     /// - every positional array edit walks its source forwards, each element
     ///   at most once, within the length it records;
-    /// - a new section's id fits the section-id bound.
+    /// - a new line's id fits the line-id bound.
     pub fn check_shape(&self) -> Result<(), DeltaError> {
         for edit in self.fields.values() {
             check_edit(edit)?;
         }
-        let Some((count, runs)) = &self.sections else {
+        let Some((count, runs)) = &self.lines else {
             return Ok(());
         };
         let count = *count;
@@ -38,15 +38,15 @@ impl ProjectDelta {
         let mut copies: Vec<(usize, Span)> = Vec::new();
         for run in runs {
             match run {
-                SectionRun::Keep(at, len) => {
-                    let span = span(*at, *len, count, "a section run keeps sections")?;
+                LineRun::Keep(at, len) => {
+                    let span = span(*at, *len, count, "a line run keeps lines")?;
                     read.push(span);
                     in_place.push(span);
                 }
-                SectionRun::Edit {
+                LineRun::Edit {
                     at, fields, shots, ..
                 } => {
-                    let span = span(*at, 1, count, "a section run edits a section")?;
+                    let span = span(*at, 1, count, "a line run edits a line")?;
                     read.push(span);
                     for edit in fields.values() {
                         check_edit(edit)?;
@@ -56,11 +56,11 @@ impl ProjectDelta {
                         Some(shots) => collect_copies(shots, count, &mut copies)?,
                     }
                 }
-                SectionRun::New { fields, shots } => {
+                LineRun::New { fields, shots } => {
                     if let Some(id) = fields.get(ID).and_then(Value::as_u64) {
-                        if id > u64::from(MAX_SECTION_ID) {
+                        if id > u64::from(MAX_LINE_ID) {
                             return Err(format!(
-                                "a new section's id {id} is past the bound {MAX_SECTION_ID}"
+                                "a new line's id {id} is past the bound {MAX_LINE_ID}"
                             ));
                         }
                     }
@@ -72,7 +72,7 @@ impl ProjectDelta {
         }
         read.sort_unstable();
         if read.windows(2).any(|pair| pair[1].0 < pair[0].1) {
-            return Err("a section run reads a source section twice".to_string());
+            return Err("a line run reads a source line twice".to_string());
         }
         in_place.sort_unstable();
         copies.sort_unstable();
@@ -84,7 +84,7 @@ impl ProjectDelta {
         }
         if copies.iter().any(|(sec, _)| covers(&in_place, *sec)) {
             return Err(
-                "a shot run copies out of a section whose shots stay where they are".to_string(),
+                "a shot run copies out of a line whose shots stay where they are".to_string(),
             );
         }
         Ok(())
@@ -119,7 +119,7 @@ fn collect_copies(
         };
         if *sec >= count {
             return Err(format!(
-                "a shot run copies from section {sec}, past the source's {count}"
+                "a shot run copies from line {sec}, past the source's {count}"
             ));
         }
         for (_, edit) in m {
@@ -135,7 +135,7 @@ fn collect_copies(
         };
         let Some(range) = range else {
             return Err(format!(
-                "a shot run copies {n} shots from {at} of section {sec}, past any section"
+                "a shot run copies {n} shots from {at} of line {sec}, past any line"
             ));
         };
         copies.push((*sec, range));

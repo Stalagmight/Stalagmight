@@ -20,7 +20,7 @@
 //!   carry two trailing columns that are station depths below the surface -
 //!   these map straight onto Stalagmight's native `depth_in`/`depth_out`.
 //! - CT inclinations are integrated (`length·sin(inc)`) along the station
-//!   graph into absolute depths; the graph is split into linear sections
+//!   graph into absolute depths; the graph is split into linear lines
 //!   joined by `FromImporting` merges + loop closures.
 //! - A `#Fix`ed station with geographic coordinates becomes a GPS zero datum.
 //!
@@ -48,8 +48,8 @@ pub(crate) use srv::*;
 pub(crate) use units::*;
 pub(crate) use wpj::*;
 
-/// Section colors cycled across imported sections (matches the app palette).
-pub(crate) const SECTION_COLORS: &[&str] = &[
+/// Line colors cycled across imported lines (matches the app palette).
+pub(crate) const LINE_COLORS: &[&str] = &[
     "#4ecdc4", "#ff6b6b", "#ffd93d", "#6bcB77", "#4d96ff", "#c780fa", "#ff9f45", "#9bdeac",
 ];
 

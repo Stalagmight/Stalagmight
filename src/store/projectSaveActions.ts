@@ -12,7 +12,7 @@ import { noticeOlderVersionsDropFixes } from '../utils/gpsFixSaveNotice';
 /** Local-save completion belongs to the project and edits that issued it. */
 export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'], get: () => ProjectStore): ProjectStore['saveProject'] {
   return async (path?: string, isAutosave?: boolean) => {
-    // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
+    // The Rust save path heals duplicate shot UUIDs / orphan line offsets /
     // non-finite geometry in memory before persisting, which mutates the backend
     // project - so afterward the frontend's mirror can be stale. Those heals only
     // ever fire on a project the integrity check already flags, so capture that here
@@ -83,7 +83,7 @@ export function createSaveProjectAction(set: StoreApi<ProjectStore>['setState'],
       // The file holds GPS fixes an older version drops on its save (#741).
       noticeOlderVersionsDropFixes(result, issued.project?.created_at);
       // If the save healed the project in memory (re-minted duplicate UUIDs,
-      // dropped orphan section offsets, sanitized non-finite geometry), the
+      // dropped orphan line offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the
       // rendered state matches. Gated on hadIntegrityIssues so a clean save/autosave
       // skips the extra get_project_state fetch and re-render.

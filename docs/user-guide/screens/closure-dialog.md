@@ -8,15 +8,17 @@ order: 14
 
 Shows which two stations close the loop, and how far the survey misses. Opens
 instead of the merge dialog when the two stations are already connected, on
-one section or through other merges and loop closures. See
+one line or through other merges and loop closures. See
 [Closing a loop](../workflows/closing-a-loop.md).
 
 ![Create Loop Closure dialog](../images/closure-dialog.png)
 
 1. **Close**: nothing created.
 2. Why a closure is offered: merging would make a loop.
-3. **Station A**: the first station clicked, and its section.
-4. **Station B**: the second station clicked, and its section.
+3. **Station A**: the first station clicked, with its line: `Main Line / 17`.
+   The picture shows the older form, a number such as `28:7` beside the
+   line's name.
+4. **Station B**: the second station clicked, with its line.
 5. **Error**: misclosure distance (7) as a share of path length (6).
 6. **Path length**: the survey length around the loop.
 7. **Misclosure distance**: how far apart the two stations are. Split into
@@ -33,8 +35,9 @@ one section or through other merges and loop closures. See
 - A closure cannot join the two ends of one shot: it would squeeze that shot to
   zero length. When the two stations are the two ends of one shot (or are tied
   to them through merges and other closures), a red message replaces (2) and
-  names the shot, and **Create Closure** is off, even if another passage also
-  joins them. Pick other stations, or **Cancel**.
+  names the shot's two stations, such as `Main Line / 4` to `Main Line / 5`,
+  and **Create Closure** is off, even if another passage also joins them.
+  Pick other stations, or **Cancel**.
 - An older project can still hold such a closure. The Closures Computed View
   skips it, and the [Warnings panel](warnings-panel.md) lists it with **Remove
   this loop closure**.

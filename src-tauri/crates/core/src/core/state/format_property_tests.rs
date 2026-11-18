@@ -73,7 +73,7 @@ use super::fuzz_undo_tests::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+use crate::models::{LineId, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
@@ -170,7 +170,7 @@ pub(super) fn dump_database(path: &Path) -> Result<String, String> {
                     cells.push(format!("{name}={value}"));
                 }
                 // Joined with a unit separator rather than a space: a
-                // `description` or a section `name` can contain spaces, and a
+                // `description` or a line `name` can contain spaces, and a
                 // row split on the wrong character makes every later cell
                 // compare against the wrong column. Rendered back as spaces
                 // only when a failure payload prints it.
@@ -212,15 +212,15 @@ pub(super) fn dump_differences(left: &str, right: &str, labels: (&str, &str)) ->
     let mut out = Vec::new();
     let (mut a, mut b) = (left.lines(), right.lines());
     let width = labels.0.chars().count().max(labels.1.chars().count());
-    let mut line = 0;
+    let mut line_no = 0;
     loop {
         match (a.next(), b.next()) {
             (None, None) => break,
             (first, second) => {
-                line += 1;
+                line_no += 1;
                 if first != second {
                     out.push(format!(
-                        "  line {line}:\n    {:<width$} {}\n    {:<width$} {}",
+                        "  dump line {line_no}:\n    {:<width$} {}\n    {:<width$} {}",
                         format!("{}:", labels.0),
                         first.unwrap_or("<end of dump>").replace('\u{1f}', " "),
                         format!("{}:", labels.1),
@@ -250,16 +250,13 @@ fn allocators(state: &AppState) -> BTreeMap<String, u32> {
     let Some(project) = state.get_project_state() else {
         return out;
     };
-    out.insert("next_section_id".to_string(), project.next_section_id);
+    out.insert("next_line_id".to_string(), project.next_line_id);
     out.insert(
         "next_closure_id".to_string(),
         u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
     );
-    for section in &project.sections {
-        out.insert(
-            format!("section {}.next_shot_id", section.id),
-            section.next_shot_id,
-        );
+    for line in &project.lines {
+        out.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
     }
     out
 }
@@ -355,39 +352,40 @@ pub(super) fn build_state(seed: u32, closures: bool, moves: usize) -> Option<App
 /// the FILE rather than about a defect the project was built with.
 pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
     let targets = read_targets(state);
-    if targets.sections.is_empty() {
+    if targets.lines.is_empty() {
         return;
     }
     match rng.below(6) {
         0 => {
             let count = 1 + rng.below(3);
             let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
-            state.execute(Command::CreateSection {
+            state.execute(Command::CreateLine {
                 name: Some(format!("fmt-{}", rng.range(1000, 9999))),
                 surveyor: None,
                 date: None,
                 color: (*rng.pick(COLORS)).to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             });
         }
         1 => {
-            let (section_id, shots) = targets.sections[rng.below(targets.sections.len())].clone();
+            let (line_id, shots) = targets.lines[rng.below(targets.lines.len())].clone();
             let after =
                 (!shots.is_empty() && rng.chance(50)).then(|| shots[rng.below(shots.len())]);
             state.execute(Command::CreateShot {
-                section_id,
+                line_id,
                 shot: random_shot(rng),
                 after_shot_id: after,
                 before_shot_id: None,
             });
         }
         2 => {
-            let Some((section_id, shot_id)) = pick_shot(state, rng) else {
+            let Some((line_id, shot_id)) = pick_shot(state, rng) else {
                 return;
             };
             state.execute(Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     length: Some(rng.float(1.0, 15.0)),
@@ -396,8 +394,8 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
             });
         }
         3 => {
-            state.execute(Command::MoveSection {
-                section_id: targets.sections[rng.below(targets.sections.len())].0,
+            state.execute(Command::MoveLine {
+                line_id: targets.lines[rng.below(targets.lines.len())].0,
                 offset: random_offset(rng),
             });
         }
@@ -405,18 +403,18 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
             if targets.stations.is_empty() {
                 return;
             }
-            let (section_id, index) = targets.stations[rng.below(targets.stations.len())];
+            let (line_id, index) = targets.stations[rng.below(targets.stations.len())];
             state.execute(Command::SetStationComment {
-                station_ref: StationRef::new(section_id, index),
+                station_ref: StationRef::new(line_id, index),
                 comment: Some(format!("fmt-note-{}", rng.range(0, 9999))),
             });
         }
         _ => {
-            if targets.sections.len() < 2 || targets.stations.len() < 2 {
+            if targets.lines.len() < 2 || targets.stations.len() < 2 {
                 return;
             }
             let a = targets.stations[rng.below(targets.stations.len())];
-            let candidates: Vec<(SectionId, u32)> = targets
+            let candidates: Vec<(LineId, u32)> = targets
                 .stations
                 .iter()
                 .copied()
@@ -434,18 +432,18 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
     }
 }
 
-fn pick_shot(state: &AppState, rng: &mut Rng) -> Option<(SectionId, ShotId)> {
+fn pick_shot(state: &AppState, rng: &mut Rng) -> Option<(LineId, ShotId)> {
     let targets = read_targets(state);
-    let populated: Vec<&(SectionId, Vec<ShotId>)> = targets
-        .sections
+    let populated: Vec<&(LineId, Vec<ShotId>)> = targets
+        .lines
         .iter()
         .filter(|(_, shots)| !shots.is_empty())
         .collect();
     if populated.is_empty() {
         return None;
     }
-    let (section_id, shots) = populated[rng.below(populated.len())];
-    Some((*section_id, shots[rng.below(shots.len())]))
+    let (line_id, shots) = populated[rng.below(populated.len())];
+    Some((*line_id, shots[rng.below(shots.len())]))
 }
 
 /// Open `path` into a fresh `AppState`.
@@ -521,7 +519,7 @@ impl Fixpoint {
 ///   `serde_json`'s parser is not its printer's inverse
 ///   (`"right":2.7600000000000002` read back as the double that prints `2.76`)
 ///   - went with the `float_roundtrip` feature (src-tauri/Cargo.toml);
-/// * the last one was a `section_offsets` value settling on reload: the
+/// * the last one was a `line_offsets` value settling on reload: the
 ///   loader's from-scratch cascade did not bit-reproduce what the incremental
 ///   path had accumulated (`offset_y=2.58` saved, `2.579999999999999` after the
 ///   reload re-solved it, then stable). `cascade_bfs`
@@ -668,12 +666,12 @@ struct Degradation {
 }
 
 const DEGRADATIONS: &[Degradation] = &[
-    // `read.rs:261-277` probes `pragma_table_info('sections')` for the gauge
+    // `read.rs:261-277` probes `pragma_table_info('lines')` for the gauge
     // columns and selects NULL literals when they are missing, so a file written
     // before they existed still loads - with no gauge anchors, which is exactly
     // what a file without the columns can mean.
     Degradation {
-        id: "sections-without-the-gauge-columns",
+        id: "lines-without-the-gauge-columns",
         promise: "persistence/sqlite/read.rs:261-277 - `has_gauge_columns` selects NULL literals \
                   when the columns are absent, so a pre-gauge file still opens",
         surgery: |connection| {
@@ -737,6 +735,21 @@ const DEGRADATIONS: &[Degradation] = &[
                   and write.rs creates it before its DELETE, so a pre-names v18 file opens and \
                   saves",
         surgery: |connection| connection.execute_batch("DROP TABLE station_names;"),
+        must_open: true,
+    },
+    // `station_ids` and the `next_station_id` setting arrived the same way. A
+    // file without them opens with every id re-minted in line order, and saves.
+    Degradation {
+        id: "v18-file-without-station-ids",
+        promise: "persistence/sqlite/station_ids.rs reads an absent table and key as none, the \
+                  open re-mints the ids (`Project::ensure_station_identities`), and write.rs \
+                  creates the table before its DELETE",
+        surgery: |connection| {
+            connection.execute_batch(
+                "DROP TABLE station_ids;
+                 DELETE FROM project_settings WHERE key = 'next_station_id';",
+            )
+        },
         must_open: true,
     },
 ];
@@ -835,7 +848,7 @@ fn check_degradation(seed: u32, degradation: &Degradation) -> Vec<String> {
 
 /// PINNED. Clean today; `format_property_sweep` re-derives the set.
 const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6];
-/// Commands before the save. Enough for several sections, a merge or two, some
+/// Commands before the save. Enough for several lines, a merge or two, some
 /// station comments and an offset - the shapes the writer's `HashMap` walks
 /// touch.
 const GATE_MOVES: usize = 16;

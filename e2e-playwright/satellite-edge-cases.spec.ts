@@ -274,7 +274,7 @@ test.describe('Satellite Edge Cases', () => {
       // Go back to home and create empty project via the hamburger menu
       await closeProjectViaMenu(page);
 
-      // Create new project (mock has default sections, but test the flow)
+      // Create new project (mock has default lines, but test the flow)
       await createProject(page, 'Empty Satellite Test');
 
       // Toggle satellite

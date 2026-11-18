@@ -26,7 +26,7 @@ import { LABEL_KIND, LABEL_KIND_COUNT, type LabelKind } from './labelShaders';
  *  pairs in ascending zoom. A single stop == a constant (zoom-independent). */
 export type Stops = readonly (readonly [zoom: number, value: number])[];
 
-/** Which theme halo color a kind uses (parity: section names use `textHalo`,
+/** Which theme halo color a kind uses (parity: line names use `textHalo`,
  *  every other kind uses `textHaloAlt`). */
 type HaloThemeKey = 'textHalo' | 'textHaloAlt';
 
@@ -52,7 +52,7 @@ const COMMENT_HALO_WIDTH = 1.5;
  * the parity inventory §1):
  *   - shot label:     size 14→9 / 18→12,  opacity 14→0.7 / 18→1, halo 2,   minzoom 14, alt
  *   - station label:  size 14→9 / 18→11,  opacity 14→0.7 / 18→1, halo 2,   minzoom 14, alt
- *   - section name:   size 12→11 / 18→14, opacity 1 (const),     halo 1.5, minzoom 10, main
+ *   - line name:   size 12→11 / 18→14, opacity 1 (const),     halo 1.5, minzoom 10, main
  *   - comments:       size 14→8 / 18→10,  opacity 0.85 (const),  halo 1.5, minzoom 14, alt
  *   - errors (shot + closure): size 14→9 / 18→12, opacity 1, halo 2, minzoom 14, alt
  */
@@ -71,7 +71,7 @@ export const LABEL_KIND_STYLE: Record<LabelKind, KindStyle> = {
     minzoom: 14,
     halo: 'textHaloAlt',
   },
-  [LABEL_KIND.SECTION_NAME]: {
+  [LABEL_KIND.LINE_NAME]: {
     size: [[12, 11], [18, 14]],
     opacity: [[0, 1]],
     haloWidth: 1.5,
@@ -131,7 +131,7 @@ export function interpolateStops(zoom: number, stops: Stops): number {
   return last[1];
 }
 
-/** Resolve the per-kind halo colors from the theme (section names → `textHalo`,
+/** Resolve the per-kind halo colors from the theme (line names → `textHalo`,
  *  the rest → `textHaloAlt`), packed to RGBA8. The controller passes the result
  *  into {@link LabelStyleInputs.haloColors}; recomputed on theme change only. */
 export function resolveHaloColors(theme: MapThemeColors): Rgba8[] {
@@ -154,7 +154,7 @@ export interface LabelStyleInputs {
   /** setShowReferenceShots(false) → collapse Reference-shot labels. */
   hideReference: boolean;
   /** setShowJumps(false) → collapse Jump-shot labels (#27, independent of the
-   *  reference toggle). An all-reference station/section label needs BOTH. */
+   *  reference toggle). An all-reference station/line label needs BOTH. */
   hideJump: boolean;
 }
 

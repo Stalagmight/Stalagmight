@@ -2,6 +2,8 @@ import { getMapThemeColors } from './themeColors';
 import type { ExportImageOptions } from '../types/commands';
 import type { ExportColorScale, MapPaletteConfig } from '../types/ipc.generated';
 import { resolveChoice } from './palettes';
+import { computeMapHiddenLines } from '../store/sectionVisibility';
+import type { Line } from '../types/project';
 import {
   DEFAULT_PALETTE_CHOICE,
   THEME_PALETTE_ID,
@@ -121,5 +123,25 @@ export function withColorScales(options: ExportImageOptions, inputs: ExportScale
   else delete out.depth_scale;
   if (distance) out.distance_scale = distance;
   else delete out.distance_scale;
+  return out;
+}
+
+/**
+ * Stamp the lines of the hidden Sections (display setting `hiddenSections`)
+ * onto an export options object, so the image export leaves them out the way
+ * the map does. Unlike the map, a hidden line the user has SELECTED is still
+ * left out: the export draws the Sections, not the selection. Both image
+ * commands go through here (the export and its preview), so the preview shows
+ * exactly what the file will. Omitted when nothing is hidden.
+ */
+export function withHiddenLines(
+  options: ExportImageOptions,
+  lines: readonly Pick<Line, 'id' | 'cave_section_id'>[] | undefined,
+  hiddenSections: readonly number[],
+): ExportImageOptions {
+  const out: ExportImageOptions = { ...options };
+  const hidden = computeMapHiddenLines(lines ?? [], hiddenSections, new Set());
+  if (hidden.ids.size > 0) out.hidden_line_ids = [...hidden.ids];
+  else delete out.hidden_line_ids;
   return out;
 }

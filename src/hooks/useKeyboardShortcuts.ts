@@ -42,7 +42,7 @@ type ShortcutAction =
   | 'toggle_satellite'
   | 'toggle_station_labels'
   | 'toggle_shot_labels'
-  | 'toggle_section_labels'
+  | 'toggle_line_labels'
   | 'fit_to_bounds'
   | 'zoom_in'
   | 'zoom_out'
@@ -84,7 +84,7 @@ const DISPLAY_TOGGLE_ACTIONS: Partial<Record<ShortcutAction, DisplayToggleKey>> 
   toggle_satellite: 'showSatellite',
   toggle_station_labels: 'showStationLabels',
   toggle_shot_labels: 'showShotData',
-  toggle_section_labels: 'showSectionNames',
+  toggle_line_labels: 'showLineNames',
 };
 
 /**
@@ -98,7 +98,7 @@ const NON_OBVIOUS_ACTIONS: Set<ShortcutAction> = new Set([
   'toggle_satellite',
   'toggle_station_labels',
   'toggle_shot_labels',
-  'toggle_section_labels',
+  'toggle_line_labels',
   // Panel toggles
   'toggle_sections_panel',
   'toggle_detail_panel',
@@ -126,7 +126,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   toggle_satellite: 'Satellite',
   toggle_station_labels: 'Station IDs',
   toggle_shot_labels: 'Shot labels',
-  toggle_section_labels: 'Section labels',
+  toggle_line_labels: 'Line labels',
   fit_to_bounds: 'Fit to bounds',
   zoom_in: 'Zoom in',
   zoom_out: 'Zoom out',
@@ -154,7 +154,7 @@ const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'toggle_satellite',
   'toggle_station_labels',
   'toggle_shot_labels',
-  'toggle_section_labels',
+  'toggle_line_labels',
   'fit_to_bounds',
   'zoom_in',
   'zoom_out',
@@ -214,7 +214,7 @@ export function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, Shortc
     'toggle_satellite',
     'toggle_station_labels',
     'toggle_shot_labels',
-    'toggle_section_labels',
+    'toggle_line_labels',
     'fit_to_bounds',
     'zoom_in',
     'zoom_out',
@@ -467,10 +467,10 @@ export function useKeyboardShortcuts() {
         if (isNonInteractiveTool(currentToolDel)) return;
 
         if (selection) {
-          if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
+          if (selection.type === 'shot' && selection.lineId !== undefined && selection.shotId !== undefined) {
             openDialog('confirm-delete', {
               type: 'shot',
-              sectionId: selection.sectionId,
+              lineId: selection.lineId,
               shotId: selection.shotId,
             });
           } else if (selection.type === 'station' && selection.stationRef) {
@@ -478,10 +478,10 @@ export function useKeyboardShortcuts() {
               type: 'station',
               stationRef: selection.stationRef,
             });
-          } else if (selection.type === 'section' && selection.sectionId !== undefined) {
+          } else if (selection.type === 'line' && selection.lineId !== undefined) {
             openDialog('confirm-delete', {
-              type: 'section',
-              sectionId: selection.sectionId,
+              type: 'line',
+              lineId: selection.lineId,
             });
           }
         }
@@ -636,7 +636,7 @@ export function useKeyboardShortcuts() {
         case 'toggle_satellite':
         case 'toggle_station_labels':
         case 'toggle_shot_labels':
-        case 'toggle_section_labels': {
+        case 'toggle_line_labels': {
           const toggleKey = DISPLAY_TOGGLE_ACTIONS[action];
           if (toggleKey) {
             event.preventDefault();

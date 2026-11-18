@@ -127,9 +127,9 @@ describe('import fuzzer testid allowlists', () => {
       );
       expect(rejected).toEqual([]);
     }
-    // `check` also drives `section-checkbox-N`, built as a template literal.
+    // `check` also drives `line-checkbox-N`, built as a template literal.
     expect(
-      isDispatchable({ kind: 'input', testid: 'section-checkbox-12', value: 'true', mode: 'check', label: 'x' }),
+      isDispatchable({ kind: 'input', testid: 'line-checkbox-12', value: 'true', mode: 'check', label: 'x' }),
     ).toBe(true);
     // Selects reached through a variable rather than a literal (the wizard's
     // from-existing / manual families) still have to be allowed.
@@ -181,7 +181,7 @@ describe('import fuzzer testid allowlists', () => {
   it('allows the two dynamic checkbox families', () => {
     // Both are built into a local before the call, so the source scan above
     // cannot see them; they are named here instead of being missed.
-    for (const id of ['section-checkbox-12', 'walls-survey-7']) {
+    for (const id of ['line-checkbox-12', 'walls-survey-7']) {
       expect(
         isDispatchable({ kind: 'input', testid: id, value: 'true', mode: 'check', label: 'x' }),
         `${id} must be checkable`,

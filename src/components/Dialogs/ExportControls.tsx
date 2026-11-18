@@ -19,6 +19,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { ExportColorScaleControls } from './ExportColorScaleControls';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
@@ -68,7 +69,7 @@ export default function ExportControls({
   onComplete,
   onExportingChange,
 }: ExportControlsProps) {
-  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
+  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredLineIds } =
     useProjectStore();
   const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
@@ -85,10 +86,10 @@ export default function ExportControls({
   const [tmlUnanchoredSections, setTmlUnanchoredSections] = useState<
     Array<{ id: number; name: string | null }>
   >([]);
-  // Whether NO section in the project is connected to a zero datum (every
-  // section will export as its own separate entrance) vs. only some are
-  // (#411). Compared by section count, not `zero_datums.length`: a datum
-  // whose station no longer resolves also leaves every section unanchored.
+  // Whether NO line in the project is connected to a zero datum (every
+  // line will export as its own separate entrance) vs. only some are
+  // (#411). Compared by line count, not `zero_datums.length`: a datum
+  // whose station no longer resolves also leaves every line unanchored.
   const [tmlAllSectionsUnanchored, setTmlAllSectionsUnanchored] = useState(false);
   const [tmlTotalSectionCount, setTmlTotalSectionCount] = useState(0);
   // Track the loadingId we're expecting (to filter out events from other operations)
@@ -114,16 +115,6 @@ export default function ExportControls({
     [onExportingChange],
   );
 
-  const formatSectionLabel = useCallback(
-    (section: { id: number; name: string | null }): string => {
-      const trimmedName = section.name?.trim();
-      return trimmedName && trimmedName.length > 0
-        ? `${trimmedName} (#${section.id})`
-        : t('dialogs.tmlUnanchoredWarning.sectionFallbackName', { id: section.id });
-    },
-    [t],
-  );
-
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     // Only a chosen path counts as a completed export; a cancelled OS save
     // picker must leave the dialog open with options intact and must NOT
@@ -135,15 +126,15 @@ export default function ExportControls({
         const isTml = dataFormat === 'tml';
         if (isTml && !options?.skipTmlAnchorCheck) {
           try {
-            if (project && project.sections.length > 0) {
-              const anchoredSectionIds = new Set(await getAnchoredSectionIds());
-              const unanchoredSections = project.sections
-                .filter((section) => !anchoredSectionIds.has(section.id))
-                .map((section) => ({ id: section.id, name: section.name }));
-              if (unanchoredSections.length > 0) {
-                setTmlUnanchoredSections(unanchoredSections);
-                setTmlAllSectionsUnanchored(unanchoredSections.length === project.sections.length);
-                setTmlTotalSectionCount(project.sections.length);
+            if (project && project.lines.length > 0) {
+              const anchoredLineIds = new Set(await getAnchoredLineIds());
+              const unanchoredLines = project.lines
+                .filter((line) => !anchoredLineIds.has(line.id))
+                .map((line) => ({ id: line.id, name: line.name }));
+              if (unanchoredLines.length > 0) {
+                setTmlUnanchoredSections(unanchoredLines);
+                setTmlAllSectionsUnanchored(unanchoredLines.length === project.lines.length);
+                setTmlTotalSectionCount(project.lines.length);
                 setShowTmlUnanchoredWarning(true);
                 return;
               }
@@ -164,7 +155,7 @@ export default function ExportControls({
             // does change what the user can do, and it says so.
             console.error(
               'Failed to check zero-datum coverage before TML export; ' +
-                'skipping the unanchored-sections notice and exporting anyway:',
+                'skipping the unanchored-lines notice and exporting anyway:',
               error,
             );
           }
@@ -429,7 +420,7 @@ export default function ExportControls({
 
               {/* Comments & Labels Options: what the renderer draws. Collapsible,
                   default collapsed (mirrors the app's local-collapse pattern, e.g.
-                  DetailPanel's closures section). */}
+                  DetailPanel's closures line). */}
               <div>
                 <button
                   type="button"
@@ -454,16 +445,16 @@ export default function ExportControls({
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
-                        checked={imageOptions.show_section_names}
+                        checked={imageOptions.show_line_names}
                         onChange={(e) =>
                           onImageOptionsChange({
                             ...imageOptions,
-                            show_section_names: e.target.checked,
+                            show_line_names: e.target.checked,
                           })
                         }
-                        data-testid="export-show-section-names"
+                        data-testid="export-show-line-names"
                       />
-                      <span>Section names</span>
+                      <span>Line names</span>
                     </label>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -570,7 +561,7 @@ export default function ExportControls({
                         disabled={svgSelected}
                         options={[
                           { value: 'none', label: 'None (monochrome)' },
-                          { value: 'section', label: 'By section' },
+                          { value: 'line', label: 'By line' },
                           { value: 'depth', label: 'By depth' },
                           { value: 'distance', label: 'By distance' },
                         ]}
@@ -658,13 +649,13 @@ export default function ExportControls({
       </div>
 
       {/* Nothing here is ever discarded: `build_export_shots` (src-tauri/src/export/tml.rs)
-          emits every section. The copy deliberately claims only that no GPS reading places the
-          listed sections (each exports at the spot the map shows, measured from the frame datum,
+          emits every line. The copy deliberately claims only that no GPS reading places the
+          listed lines (each exports at the spot the map shows, measured from the frame datum,
           #741), never entrance topology: entrance-hood is decided by STATION MERGES (`build_parent_map`
           walks project.station_merges only), while this dialog's classifier is zero-datum
-          reachability (`get_anchored_section_ids` = merges + aligned closures from each
+          reachability (`get_anchored_line_ids` = merges + aligned closures from each
           datum) - the two predicates disagree in both directions (merged-but-undatumed
-          exports as ONE system; a closure-only-anchored section still exports as its own
+          exports as ONE system; a closure-only-anchored line still exports as its own
           entrance), so any entrance claim keyed on this list would lie for some project.
           This is informational, not a risk warning - see ExportControls.test.tsx. */}
       <AlertDialog
@@ -715,9 +706,10 @@ export default function ExportControls({
               {t('dialogs.tmlUnanchoredWarning.listHeading')}
             </p>
             <ul className="list-disc pl-5 space-y-1 text-sm max-h-40 overflow-y-auto">
-              {tmlUnanchoredSections.map((section) => (
-                <li key={section.id} data-testid={`tml-unanchored-section-item-${section.id}`}>
-                  {formatSectionLabel(section)}
+              {tmlUnanchoredSections.map((line) => (
+                <li key={line.id} data-testid={`tml-unanchored-section-item-${line.id}`}>
+                  {/* Line names are project-unique, so the name alone tells them apart. */}
+                  {lineDisplayName(line.name)}
                 </li>
               ))}
             </ul>

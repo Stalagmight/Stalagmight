@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -28,9 +28,9 @@ import {
  * entry per execute_batch call, each the snake_case commands array).
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Grid Edit Section',
+    name: 'Grid Edit Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1, left: 1.5, right: 2.5 },
@@ -52,7 +52,7 @@ interface ShotSnapshot {
 async function getShots(page: Page): Promise<ShotSnapshot[]> {
   return page.evaluate(() => {
     const e2e = (window as any).__E2E_TEST__;
-    const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
+    const shots = e2e?.projectStore.getState().project?.lines?.[0]?.shots ?? [];
     return shots.map((s: any) => ({
       id: s.id,
       length: s.length,
@@ -64,7 +64,7 @@ async function getShots(page: Page): Promise<ShotSnapshot[]> {
   });
 }
 
-type BatchCommand = { type: string; section_id: number; shot_id: number; updates: Record<string, unknown> };
+type BatchCommand = { type: string; line_id: number; shot_id: number; updates: Record<string, unknown> };
 
 async function getBatchCalls(page: Page): Promise<BatchCommand[][]> {
   return page.evaluate(() => ((window as any).__MOCK_EXECUTE_BATCH_CALLS__ ?? []) as BatchCommand[][]);
@@ -74,14 +74,14 @@ async function getBatchCalls(page: Page): Promise<BatchCommand[][]> {
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // 3 shots + the end draft row (auto-selects first section)
+  // 3 shots + the end draft row (auto-selects first line)
   await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/, { timeout: 5000 });
 }
 
 async function seedAndOpen(page: Page): Promise<void> {
   await setupMockedPage(page);
   await createProject(page, 'Grid Editing Test');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await openDataTable(page);

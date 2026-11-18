@@ -2,7 +2,7 @@
  * #394 F10: stepping BACK out of the import wizard returns to this dialog, and
  * it must come back holding what the user typed.
  *
- * The wizard withdraws the sections it imported on the way back - the forward
+ * The wizard withdraws the lines it imported on the way back - the forward
  * pass re-imports from scratch, so keeping them would duplicate - which means
  * the anchor really is configured again from here. Without the carry the user
  * would lose the GPS, the name and every metadata field as well, turning
@@ -39,9 +39,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({ t: (k: string) => k }),
 }));
 
-// SectionPreview draws on a MapLibre canvas, which jsdom cannot run.
+// LinePreview draws on a MapLibre canvas, which jsdom cannot run.
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 
 // The shot table reads validation settings and decimal precision off the store.
 vi.mock('../../../store/projectStore', () => ({
@@ -104,7 +104,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'FileName',
     direction: 'in',
@@ -112,7 +112,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: 3 }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 /** Defaults that differ from every carried value below, so a prefill that
@@ -126,7 +126,7 @@ const selectionConfig = {
 
 /** What the user entered before they pressed Back. */
 const carried = (): ZeroDatumConfigResult => ({
-  sectionIndex: 0,
+  lineIndex: 0,
   stationIndex: 0,
   gps: { latitude: 20.25, longitude: -87.5, depth_reference: 0 },
   metadata: {
@@ -149,7 +149,7 @@ function renderDialog(initialConfig?: ZeroDatumConfigResult, onBack: () => void 
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={onBack}
@@ -161,7 +161,7 @@ function renderDialog(initialConfig?: ZeroDatumConfigResult, onBack: () => void 
 
 /** The carried rows, with one value edited so a restore is distinguishable. */
 function editedCarriedShots() {
-  const shots = convertToEditableShots(dmpFile().sections[0]!.shots);
+  const shots = convertToEditableShots(dmpFile().lines[0]!.shots);
   shots[1] = { ...shots[1]!, length: 42 };
   return shots;
 }
@@ -191,10 +191,10 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     expect(screen.getByTestId('zero-datum-gps-parsed')).toBeInTheDocument();
     expect(screen.queryByTestId('zero-datum-gps-error')).not.toBeInTheDocument();
 
-    expect(screen.getByTestId('section-name-input')).toHaveValue('Typed Name');
-    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('Typed Surveyor');
-    expect(screen.getByTestId('section-explorers-pill-0-label')).toHaveTextContent('Typed Explorer');
-    expect(screen.getByTestId('section-reverse-checkbox')).toBeChecked();
+    expect(screen.getByTestId('line-name-input')).toHaveValue('Typed Name');
+    expect(screen.getByTestId('line-surveyors-pill-0-label')).toHaveTextContent('Typed Surveyor');
+    expect(screen.getByTestId('line-explorers-pill-0-label')).toHaveTextContent('Typed Explorer');
+    expect(screen.getByTestId('line-reverse-checkbox')).toBeChecked();
   });
 
   /**
@@ -233,10 +233,10 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     renderDialog(undefined);
 
     expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('');
-    expect(screen.getByTestId('section-name-input')).toHaveValue('FileName');
-    expect(screen.getByTestId('section-surveyors-pill-0-label')).toHaveTextContent('DefaultSurveyor');
-    expect(screen.getByTestId('section-explorers-pill-0-label')).toHaveTextContent('DefaultExplorer');
-    expect(screen.getByTestId('section-reverse-checkbox')).not.toBeChecked();
+    expect(screen.getByTestId('line-name-input')).toHaveValue('FileName');
+    expect(screen.getByTestId('line-surveyors-pill-0-label')).toHaveTextContent('DefaultSurveyor');
+    expect(screen.getByTestId('line-explorers-pill-0-label')).toHaveTextContent('DefaultExplorer');
+    expect(screen.getByTestId('line-reverse-checkbox')).not.toBeChecked();
   });
 
   /**
@@ -250,7 +250,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
    * out-of-range index, so the whole survey silently relocates by however far
    * the user's real anchor was down the passage.
    *
-   * Injection: pass `section` to `initialShotEditState` instead of the carried
+   * Injection: pass `line` to `initialShotEditState` instead of the carried
    * state and this confirms with `stationIndex` 0 and the file's 5m rows.
    */
   it('restores the edited rows and the station they were picked against', () => {
@@ -280,9 +280,9 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
   it('keeps a field the user cleared cleared', () => {
     renderDialog({ ...carried(), metadata: { ...carried().metadata, surveyors: [], explorers: [], date: null } });
 
-    expect(screen.queryByTestId('section-surveyors-pill-0')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('section-explorers-pill-0')).not.toBeInTheDocument();
-    expect(screen.getByTestId('section-date-input')).toHaveValue('');
+    expect(screen.queryByTestId('line-surveyors-pill-0')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('line-explorers-pill-0')).not.toBeInTheDocument();
+    expect(screen.getByTestId('line-date-input')).toHaveValue('');
   });
 
   /**
@@ -299,7 +299,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     /**
      * Injection A: restore `gpsInput.trim() !== ''` -> starts dirty (the seeded
      * GPS box reads as an edit).
-     * Injection B: restore `useRef(section?.name ?? '')` -> starts dirty
+     * Injection B: restore `useRef(line?.name ?? '')` -> starts dirty
      * ('Typed Name' !== 'FileName').
      */
     it('a dialog reopened with initialConfig starts CLEAN and goes dirty only on further edits', () => {
@@ -307,7 +307,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
 
       expect(lastIsDirty()).toBe(false);
 
-      fireEvent.change(screen.getByTestId('section-name-input'), {
+      fireEvent.change(screen.getByTestId('line-name-input'), {
         target: { value: 'Edited' },
       });
 
@@ -327,7 +327,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
       expect(lastIsDirty()).toBe(false);
 
       fireEvent.click(screen.getByTestId('zero-datum-station-select'));
-      fireEvent.click(screen.getByText('Station 1'));
+      fireEvent.click(screen.getByTestId('zero-datum-station-select-option-1'));
 
       expect(lastIsDirty()).toBe(true);
     });
@@ -356,7 +356,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
      * consequence: a reopened, untouched dialog leaves via Back with no prompt.
      * Since #534, that is no longer a silent discard of the carried config -
      * App.tsx relays `previousZeroDatumConfig` through 'zero-datum-selection'
-     * and back on a same-section forward pass (see ZeroDatumConfigDialog.back.test.tsx)
+     * and back on a same-line forward pass (see ZeroDatumConfigDialog.back.test.tsx)
      * - so no prompt is exactly right here: there is nothing typed in THIS
      * visit to lose.
      *
@@ -380,7 +380,7 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
       renderDialog(carried(), onBack);
 
       // A name typed but not added yet is an edit too (PeopleInput's onCommitPending).
-      fireEvent.change(screen.getByTestId('section-surveyors-input'), {
+      fireEvent.change(screen.getByTestId('line-surveyors-input'), {
         target: { value: 'Someone Else' },
       });
       fireEvent.click(screen.getByTestId('zero-datum-config-back'));

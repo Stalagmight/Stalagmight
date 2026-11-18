@@ -65,7 +65,7 @@ describe('computeGhostEnd', () => {
 
   it('returns null when the planar model cannot reproduce the solved endpoint', () => {
     // Solved end is north, but the shot azimuth says east - a rotated/offset
-    // section the model does not capture. No (misleading) ghost.
+    // line the model does not capture. No (misleading) ghost.
     const northEnd = { x: 0, y: 10 };
     expect(computeGhostEnd(start, northEnd, 90, 10, 0, 10)).toBeNull();
   });

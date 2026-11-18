@@ -125,7 +125,7 @@ describe('guardQuit', () => {
     { editState: 'read-only' as const, hasUnpushedEdits: false },
   ])('hands the lock back without a prompt, then quits: %j', async (state) => {
     useSpeleoStore.setState({ link: link(state) });
-    invokeIpcMock.mockResolvedValueOnce({ success: true, warnings: [], error: null, section_ids: [] } as never);
+    invokeIpcMock.mockResolvedValueOnce({ success: true, warnings: [], error: null, line_ids: [] } as never);
     expect(guardQuit()).toBe(true);
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_settle_open_lock', { releaseLock: true }, expect.anything());
@@ -192,8 +192,8 @@ describe('guardQuit on an update restart', () => {
   beforeEach(() => {
     saveProject.mockReset();
     closeProject.mockReset();
-    saveProject.mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
-    closeProject.mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
+    saveProject.mockResolvedValue({ success: true, warnings: [], error: null, line_ids: [] });
+    closeProject.mockResolvedValue({ success: true, warnings: [], error: null, line_ids: [] });
     useProjectStore.setState({ saveProject, closeProject } as never);
   });
 
@@ -215,7 +215,7 @@ describe('guardQuit on an update restart', () => {
     await requestUpdateRestart();
     closeMock.mockClear();
     invokeIpcMock.mockClear();
-    saveProject.mockResolvedValue({ success: false, warnings: [], error: 'disk full', section_ids: [] });
+    saveProject.mockResolvedValue({ success: false, warnings: [], error: 'disk full', line_ids: [] });
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link() });
     expect(guardQuit()).toBe(true);
@@ -239,7 +239,7 @@ describe('guardQuit leaves the dialog on screen alone', () => {
     useProjectStore.setState({ isDirty: true });
     useUIStore.setState({
       activeDialog: 'dmp-selection',
-      dialogData: { dmpFile: { sections: 3 } },
+      dialogData: { dmpFile: { lines: 3 } },
     });
 
     expect(guardQuit()).toBe(true);

@@ -81,7 +81,7 @@ use super::fuzz_undo_tests::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+use crate::models::{LineId, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
@@ -105,8 +105,8 @@ const OPERATIONS: &[&str] = &[
     "idle",
     "execute(CreateShot)",
     "execute(UpdateShot)",
-    "execute(CreateSection)",
-    "execute(MoveSection)",
+    "execute(CreateLine)",
+    "execute(MoveLine)",
     "execute(SetStationComment)",
     "execute(MergeStations)",
     "execute(DeleteShot)",
@@ -248,7 +248,7 @@ fn drain_panics(mine: &[std::thread::ThreadId]) -> Vec<String> {
 /// unanchored-group drift) were fixed - the structural edits now measure which
 /// side is anchored over the rigid merge forest
 /// (`Project::anchored_sides_of_edit`), an unanchored merge group is realigned
-/// against the edited section, and the self-heal gate is the assert's own
+/// against the edited line, and the self-heal gate is the assert's own
 /// `Project::MERGE_ALIGNMENT_INVARIANT_M`. The finding-24 overflow arm went
 /// when `shot_display_position` was made saturating. ANY panic, from ANY site,
 /// is a reportable problem again; the function stays so the next open finding
@@ -308,18 +308,18 @@ fn worker(
             progress.leave(thread);
             continue;
         };
-        let sections: Vec<SectionId> = targets.sections.iter().map(|(id, _)| *id).collect();
-        let pick_shot = |rng: &mut Rng| -> Option<(SectionId, ShotId)> {
-            let populated: Vec<&(SectionId, Vec<ShotId>)> = targets
-                .sections
+        let lines: Vec<LineId> = targets.lines.iter().map(|(id, _)| *id).collect();
+        let pick_shot = |rng: &mut Rng| -> Option<(LineId, ShotId)> {
+            let populated: Vec<&(LineId, Vec<ShotId>)> = targets
+                .lines
                 .iter()
                 .filter(|(_, shots)| !shots.is_empty())
                 .collect();
             if populated.is_empty() {
                 return None;
             }
-            let (section_id, shots) = populated[rng.below(populated.len())];
-            Some((*section_id, shots[rng.below(shots.len())]))
+            let (line_id, shots) = populated[rng.below(populated.len())];
+            Some((*line_id, shots[rng.below(shots.len())]))
         };
 
         // Weighted towards the mutation paths, because the lock discipline is
@@ -348,10 +348,10 @@ fn worker(
         progress.enter(thread, operation);
         match operation {
             1 => {
-                if !sections.is_empty() {
-                    let section_id = sections[rng.below(sections.len())];
+                if !lines.is_empty() {
+                    let line_id = lines[rng.below(lines.len())];
                     state.execute(Command::CreateShot {
-                        section_id,
+                        line_id,
                         shot: random_shot(&mut rng),
                         after_shot_id: None,
                         before_shot_id: None,
@@ -359,9 +359,9 @@ fn worker(
                 }
             }
             2 => {
-                if let Some((section_id, shot_id)) = pick_shot(&mut rng) {
+                if let Some((line_id, shot_id)) = pick_shot(&mut rng) {
                     state.execute(Command::UpdateShot {
-                        section_id,
+                        line_id,
                         shot_id,
                         updates: ShotUpdates {
                             length: Some(rng.float(1.0, 15.0)),
@@ -373,28 +373,29 @@ fn worker(
             3 => {
                 let count = rng.below(3);
                 let shots: Vec<ShotData> = (0..count).map(|_| random_shot(&mut rng)).collect();
-                state.execute(Command::CreateSection {
+                state.execute(Command::CreateLine {
                     name: Some(format!("t{thread}-{step}")),
                     surveyor: None,
                     date: None,
                     color: (*rng.pick(COLORS)).to_string(),
                     direction: None,
                     shots,
+                    cave_section_id: None,
                 });
             }
             4 => {
-                if !sections.is_empty() {
-                    state.execute(Command::MoveSection {
-                        section_id: sections[rng.below(sections.len())],
+                if !lines.is_empty() {
+                    state.execute(Command::MoveLine {
+                        line_id: lines[rng.below(lines.len())],
                         offset: random_offset(&mut rng),
                     });
                 }
             }
             5 => {
                 if !targets.stations.is_empty() {
-                    let (section_id, index) = targets.stations[rng.below(targets.stations.len())];
+                    let (line_id, index) = targets.stations[rng.below(targets.stations.len())];
                     state.execute(Command::SetStationComment {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         comment: rng.chance(70).then(|| format!("t{thread}-{step}")),
                     });
                 }
@@ -402,7 +403,7 @@ fn worker(
             6 => {
                 if targets.stations.len() >= 2 {
                     let a = targets.stations[rng.below(targets.stations.len())];
-                    let others: Vec<(SectionId, u32)> = targets
+                    let others: Vec<(LineId, u32)> = targets
                         .stations
                         .iter()
                         .copied()
@@ -418,11 +419,8 @@ fn worker(
                 }
             }
             7 => {
-                if let Some((section_id, shot_id)) = pick_shot(&mut rng) {
-                    state.execute(Command::DeleteShot {
-                        section_id,
-                        shot_id,
-                    });
+                if let Some((line_id, shot_id)) = pick_shot(&mut rng) {
+                    state.execute(Command::DeleteShot { line_id, shot_id });
                 }
             }
             8 => {
@@ -719,12 +717,9 @@ fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
     }
     let verdict = integrity_verdict(state);
     if adjusted_geometry_of(state).is_empty()
-        && state.get_project_state().is_some_and(|project| {
-            project
-                .sections
-                .iter()
-                .any(|section| !section.shots.is_empty())
-        })
+        && state
+            .get_project_state()
+            .is_some_and(|project| project.lines.iter().any(|line| !line.shots.is_empty()))
     {
         problems.push(
             "the adjusted solve returned nothing for a project that still has shots".to_string(),
@@ -747,8 +742,7 @@ fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
             let documented = error.contains("part of a loop")
                 || error.contains("zero datum")
                 || error.contains("Cannot delete a frozen shot")
-                || error.contains("not found in section")
-                || (error.starts_with("Shot ") && error.ends_with(" not found"));
+                || error.contains("no longer exists");
             if !documented {
                 problems.push(format!(
                     "the post-run undo walk failed at step {steps} for an undocumented reason: \

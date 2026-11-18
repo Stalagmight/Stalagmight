@@ -2,8 +2,8 @@
 //!
 //! An Ariane `<Section>` is a NAME on a set of shots, not a shape: the shots
 //! under one name form an arbitrary directed graph, with junctions and with
-//! parents that live under a different name entirely. A `models::Section`, by
-//! contrast, is a strictly linear polyline - `Section::shots` is consumed
+//! parents that live under a different name entirely. A `models::Line`, by
+//! contrast, is a strictly linear polyline - `Line::shots` is consumed
 //! positionally and every cross-reference into it is a single `station_index`
 //! - so this module has to cut the graph into linear runs, and the count of
 //! those runs is what the import wizard shows as fragments (#412).
@@ -15,27 +15,27 @@
 //!
 //! This module also owns the TRIP rule. Ariane records people, date and colour
 //! on every shot row; since #329 the people and date are per-shot credit, so
-//! the only value a `models::Section` still holds once is the COLOUR. A "trip"
+//! the only value a `models::Line` still holds once is the COLOUR. A "trip"
 //! here is therefore a colour: it decides where runs may merge
 //! (`join_contiguous_chains`) and where a run has to be cut
-//! (`split_runs_at_trip_boundaries`). Credit changes neither, so a section with
-//! mixed per-shot people and dates round-trips through Ariane as one section.
+//! (`split_runs_at_trip_boundaries`). Credit changes neither, so a line with
+//! mixed per-shot people and dates round-trips through Ariane as one line.
 
 use std::collections::HashMap;
 
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
 use crate::models::SurveyCredit;
-// Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
+// Lines whose shot ids all fit the `line_id * FEATURE_ID_STRIDE + seq`
 // encode, as a COUNT (42_949). Shared with the import/merge boundary checks
 // (#555) so the cut budget below and the mint-time refusals cannot drift apart.
-use crate::models::MAX_SECTIONS_IN_ID_SPACE;
+use crate::models::MAX_LINES_IN_ID_SPACE;
 
 /// How many declared names a merged run spells out before it starts counting.
 /// A run of eight joined names is not a label a person can read in the wizard's
 /// fragment list.
 const MAX_JOINED_NAMES: usize = 3;
 
-/// Character cap on a merged name. Section names are file-supplied and
+/// Character cap on a merged name. Line names are file-supplied and
 /// unbounded, so three of them concatenated is attacker-controlled length on
 /// a label that flows to the UI.
 const MAX_JOINED_NAME_LEN: usize = 200;
@@ -43,7 +43,7 @@ const MAX_JOINED_NAME_LEN: usize = 200;
 /// Build the merged run's label from the names it absorbed.
 ///
 /// Only merged names are sanitised and capped: a lone name is returned
-/// verbatim, so this cannot change how an unjoined section is presented.
+/// verbatim, so this cannot change how an unjoined line is presented.
 fn joined_name(names: &[String], extra: usize) -> String {
     if names.is_empty() {
         return String::new();
@@ -51,7 +51,7 @@ fn joined_name(names: &[String], extra: usize) -> String {
     if let ([only], 0) = (names, extra) {
         return only.clone();
     }
-    // Section names come from the file, so they can carry control characters
+    // Line names come from the file, so they can carry control characters
     // that would corrupt a log line or a UI label once concatenated.
     let mut out = names
         .iter()
@@ -77,11 +77,11 @@ struct JoinRefusals {
 
 /// Append every chain that begins exactly where another chain ends (#412).
 ///
-/// `linearize_section` cuts one chain per (declared section name, linear run),
+/// `linearize_line` cuts one chain per (declared line name, linear run),
 /// so a passage that carries on under a NEW name arrives as a separate chain
 /// whose first shot's parent is the LAST shot of the previous chain. That join
 /// is contiguous - the child's station 0 IS the parent's final station - so one
-/// linear run holds both, and a `models::Section` polyline can express it
+/// linear run holds both, and a `models::Line` polyline can express it
 /// losslessly. Every other adjacency in the file attaches MID-chain, where a
 /// polyline has nowhere to put it; see the module docs.
 ///
@@ -103,8 +103,8 @@ struct JoinRefusals {
 ///   ride on each shot (#329), so a chain surveyed by someone else on another
 ///   day merges and keeps its own credit.
 /// * **A shot UUID already in the run.** Ariane shot ids are unique per
-///   SECTION, so two sections may legally repeat a `<UUID>` (#423); merging
-///   them would turn that into an intra-section duplicate that
+///   LINE, so two lines may legally repeat a `<UUID>` (#423); merging
+///   them would turn that into an intra-line duplicate that
 ///   `ensure_unique_shot_uuids` re-mints. The run stops there and the child
 ///   starts a fresh run of its own.
 /// * **Everything, when the file has duplicate shot ids.** `ends_at` keys on
@@ -114,7 +114,7 @@ struct JoinRefusals {
 ///
 /// The absorbed chain's NAME does not just vanish, because every join here is
 /// necessarily cross-name: a chain that continues under the SAME declared
-/// section is never a candidate (it would have to attach at a chain end, and
+/// line is never a candidate (it would have to attach at a chain end, and
 /// the continuation walk always leaves its junction shot mid-chain). So the
 /// merged run is named `"A + B"`, capped by `MAX_JOINED_NAMES`.
 ///
@@ -125,10 +125,10 @@ struct JoinRefusals {
 ///
 /// Returns the number of joins performed.
 pub(super) fn join_contiguous_chains(
-    sections: &mut Vec<TmlSection>,
+    lines: &mut Vec<TmlSection>,
     duplicate_shot_ids: u32,
 ) -> usize {
-    if sections.len() < 2 {
+    if lines.len() < 2 {
         return 0;
     }
     if duplicate_shot_ids > 0 {
@@ -140,23 +140,23 @@ pub(super) fn join_contiguous_chains(
         return 0;
     }
 
-    let n = sections.len();
+    let n = lines.len();
 
     // A seam is only a station if the import keeps the shot on both sides of
     // it - same filter `convert_shots_to_shot_data` applies.
     let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
     let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
     let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
-    let same_trip = |a: &TmlSection, b: &TmlSection| section_trip(a) == section_trip(b);
+    let same_trip = |a: &TmlSection, b: &TmlSection| line_trip(a) == line_trip(b);
 
     // Which chain ends at a given shot id. Ids are unique here (duplicates bail
     // out above), so a shot ends at most one chain.
     let mut ends_at: HashMap<i64, usize> = HashMap::new();
-    for (idx, section) in sections.iter().enumerate() {
-        if !joinable_end(section) {
+    for (idx, line) in lines.iter().enumerate() {
+        if !joinable_end(line) {
             continue;
         }
-        if let Some(last) = section.shots.last() {
+        if let Some(last) = line.shots.last() {
             ends_at.insert(last.id, idx);
         }
     }
@@ -164,12 +164,12 @@ pub(super) fn join_contiguous_chains(
     // Group the chains that could extend each parent. A chain has ONE
     // start_ariane_id, so it can appear under at most one parent.
     let mut candidates: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (idx, section) in sections.iter().enumerate() {
-        if !joinable_start(section) {
+    for (idx, line) in lines.iter().enumerate() {
+        if !joinable_start(line) {
             continue;
         }
-        if let Some(&parent) = ends_at.get(&section.start_ariane_id) {
-            if parent != idx && same_trip(&sections[parent], section) {
+        if let Some(&parent) = ends_at.get(&line.start_ariane_id) {
+            if parent != idx && same_trip(&lines[parent], line) {
                 candidates.entry(parent).or_default().push(idx);
             }
         }
@@ -183,7 +183,7 @@ pub(super) fn join_contiguous_chains(
     for parent in parents {
         let Some(&best) = candidates[&parent]
             .iter()
-            .max_by_key(|&&i| (sections[i].shots.len(), std::cmp::Reverse(i)))
+            .max_by_key(|&&i| (lines[i].shots.len(), std::cmp::Reverse(i)))
         else {
             continue;
         };
@@ -201,7 +201,7 @@ pub(super) fn join_contiguous_chains(
     while let Some(root) = (0..n).find(|&i| group_of[i].is_none() && parent_of[i].is_none()) {
         let mut members = vec![root];
         group_of[root] = Some(root);
-        let mut uuids: std::collections::HashSet<&str> = sections[root]
+        let mut uuids: std::collections::HashSet<&str> = lines[root]
             .shots
             .iter()
             .filter_map(|s| s.uuid.as_deref())
@@ -216,7 +216,7 @@ pub(super) fn join_contiguous_chains(
                 child_of[cursor] = None;
                 break;
             }
-            if sections[child]
+            if lines[child]
                 .shots
                 .iter()
                 .filter_map(|s| s.uuid.as_deref())
@@ -229,12 +229,7 @@ pub(super) fn join_contiguous_chains(
                 parent_of[child] = None;
                 break;
             }
-            uuids.extend(
-                sections[child]
-                    .shots
-                    .iter()
-                    .filter_map(|s| s.uuid.as_deref()),
-            );
+            uuids.extend(lines[child].shots.iter().filter_map(|s| s.uuid.as_deref()));
             group_of[child] = Some(root);
             members.push(child);
             cursor = child;
@@ -256,7 +251,7 @@ pub(super) fn join_contiguous_chains(
     let mut roots: Vec<usize> = members_of.keys().copied().collect();
     roots.sort_unstable();
 
-    let mut slots: Vec<Option<TmlSection>> = sections.drain(..).map(Some).collect();
+    let mut slots: Vec<Option<TmlSection>> = lines.drain(..).map(Some).collect();
     let mut out: Vec<TmlSection> = Vec::with_capacity(roots.len());
     let mut joins = 0;
 
@@ -277,7 +272,7 @@ pub(super) fn join_contiguous_chains(
                 continue;
             };
             // Bounded: a HashSet probe, and at most MAX_JOINED_NAMES stored, so
-            // a file with thousands of one-shot sections cannot make this
+            // a file with thousands of one-shot lines cannot make this
             // quadratic in the number of joins.
             if seen_names.insert(tail.name.clone()) {
                 if names.len() < MAX_JOINED_NAMES {
@@ -300,7 +295,7 @@ pub(super) fn join_contiguous_chains(
     if refusals.uuid_backoff > 0 {
         tracing::warn!(
             chains = refusals.uuid_backoff,
-            "Stopped joining TML chains that would repeat a shot UUID inside one section"
+            "Stopped joining TML chains that would repeat a shot UUID inside one line"
         );
     }
     if refusals.cycle_break > 0 || refusals.cycle_stranded > 0 {
@@ -311,14 +306,14 @@ pub(super) fn join_contiguous_chains(
         );
     }
 
-    *sections = out;
+    *lines = out;
     // `debug_assert!` still type-checks its arguments in a release build, so the
     // call has to be behind `cfg` as well as the helper it calls.
     #[cfg(debug_assertions)]
     assert!(
-        first_linearity_violation(sections).is_none(),
+        first_linearity_violation(lines).is_none(),
         "join produced a non-linear run: {:?}",
-        first_linearity_violation(sections)
+        first_linearity_violation(lines)
     );
     joins
 }
@@ -331,14 +326,14 @@ pub(super) fn join_contiguous_chains(
 /// that could break it, so this backs a debug-only assertion after the join and
 /// is asserted directly by the join tests.
 #[cfg(any(debug_assertions, test))]
-pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<String> {
-    for section in sections {
-        for pair in section.shots.windows(2) {
+pub(super) fn first_linearity_violation(lines: &[TmlSection]) -> Option<String> {
+    for line in lines {
+        for pair in line.shots.windows(2) {
             let (previous, next) = (&pair[0], &pair[1]);
             if next.from_id != previous.id {
                 return Some(format!(
-                    "section {:?}: shot {} follows shot {} but its FromID is {}",
-                    section.name, next.id, previous.id, next.from_id
+                    "line {:?}: shot {} follows shot {} but its FromID is {}",
+                    line.name, next.id, previous.id, next.from_id
                 ));
             }
         }
@@ -349,7 +344,7 @@ pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<Strin
 /// The trip a run is attributed to, for sectioning: its COLOUR. Ariane writes
 /// people, date and colour on EVERY shot row, so a run can change any of them
 /// halfway down. The people and date are the shot's own credit and survive per
-/// shot wherever they change; the colour is the one value a `models::Section`
+/// shot wherever they change; the colour is the one value a `models::Line`
 /// holds once, so it alone cuts a run (and refuses a join).
 type Trip<'a> = &'a str;
 
@@ -357,9 +352,9 @@ fn trip_of(shot: &TmlShot) -> Trip<'_> {
     shot.color.as_str()
 }
 
-/// The trip a section was named after: its head shot's (see [`trip_head`]).
-fn section_trip(section: &TmlSection) -> Option<Trip<'_>> {
-    trip_head(&section.shots).map(trip_of)
+/// The trip a line was named after: its head shot's (see [`trip_head`]).
+fn line_trip(line: &TmlSection) -> Option<Trip<'_>> {
+    trip_head(&line.shots).map(trip_of)
 }
 
 /// Whether this shot can be the station on one side of a cut.
@@ -381,7 +376,7 @@ fn is_station_shot(shot: &TmlShot) -> bool {
 ///
 /// Not simply the first shot. A run whose head is EXCLUDED was named after a
 /// shot the default import does not keep, so every shot it does keep disagreed
-/// with its own section and [`collapsed_trip_report`] reported a loss that had
+/// with its own line and [`collapsed_trip_report`] reported a loss that had
 /// not happened. Falls back to the raw first shot when a run holds no station
 /// shot at all - that is what it carried before, and such a run imports as
 /// nothing anyway.
@@ -395,14 +390,14 @@ fn trip_head(shots: &[TmlShot]) -> Option<&TmlShot> {
 /// Most cuts one run may be given.
 ///
 /// Ariane writes the colour on every shot row, so a file whose rows carry a
-/// per-ROW colour (a crafted file) would otherwise mint one section per shot
+/// per-ROW colour (a crafted file) would otherwise mint one line per shot
 /// from a single declared name - unbounded
 /// amplification of file-controlled input into project objects, each with its
 /// own name, placement and undo entry.
 ///
 /// 256 is chosen to sit far above real multi-trip surveys and far below
 /// degeneracy: it is about five years of WEEKLY survey days recorded under one
-/// declared section name, and the largest real file measured (14 declared
+/// declared line name, and the largest real file measured (14 declared
 /// names, 17 runs) cuts zero. Past the cap the remaining trips stay on the last
 /// part and are named on the receipt by [`collapsed_trip_report`], so the
 /// bound costs reporting rather than data.
@@ -412,14 +407,14 @@ pub(super) const MAX_TRIP_CUTS_PER_RUN: usize = 256;
 ///
 /// [`MAX_TRIP_CUTS_PER_RUN`] alone bounds the wrong denominator: a file
 /// controls how many runs it has as well as how many trips each one holds, so
-/// 170 crafted runs of 257 trips would still mint 43k sections while obeying
+/// 170 crafted runs of 257 trips would still mint 43k lines while obeying
 /// the per-run cap.
 ///
-/// Sections are the numerator of the shot-id encode. Ids are handed out
-/// sequentially from 0 (`Project::add_section`), and `Section::new` computes
+/// Lines are the numerator of the shot-id encode. Ids are handed out
+/// sequentially from 0 (`Project::add_line`), and `Line::new` computes
 /// `next_shot_id = id * FEATURE_ID_STRIDE` (100_000) as a plain `u32` multiply,
-/// so the encode holds only while `section_id <= 42_948`
-/// ([`crate::models::MAX_SECTION_ID`]: 42_948 x 100_000 + 99_999 =
+/// so the encode holds only while `line_id <= 42_948`
+/// ([`crate::models::MAX_LINE_ID`]: 42_948 x 100_000 + 99_999 =
 /// 4_294_899_999 <= `u32::MAX`). Past that the multiply panics in debug and,
 /// where a site saturates instead, distinct shots ALIAS onto one id - which
 /// silently moves station cross-references.
@@ -435,31 +430,31 @@ pub(super) const MAX_TRIP_CUTS_PER_FILE: usize = 4_096;
 /// How many cuts a file with `existing_runs` runs may be given.
 ///
 /// Never more than the id space it has not already spent, so
-/// `existing_runs + cut_budget(existing_runs) <= MAX_SECTIONS_IN_ID_SPACE`
+/// `existing_runs + cut_budget(existing_runs) <= MAX_LINES_IN_ID_SPACE`
 /// holds for every input - which is the property that keeps the cut from
 /// carrying a file over the encode boundary. Saturating, so a file that is
 /// already past it gets no cuts rather than an underflow.
 ///
-/// [`crate::models::MAX_SECTIONS_IN_ID_SPACE`] is the count of sections whose
-/// shot ids all fit the encode (42_949; see [`crate::models::MAX_SECTION_ID`]
+/// [`crate::models::MAX_LINES_IN_ID_SPACE`] is the count of lines whose
+/// shot ids all fit the encode (42_949; see [`crate::models::MAX_LINE_ID`]
 /// for the arithmetic). The cut spends at most whatever is left of it after the
 /// runs the file already declared, so a file cannot use the CUT to cross the
 /// boundary - only to approach it. Getting there without the cut, by declaring
-/// tens of thousands of sections, is refused at the import boundary
-/// (`execute_import_sections_inner`, #555) rather than here: this parser has no
+/// tens of thousands of lines, is refused at the import boundary
+/// (`execute_import_lines_inner`, #555) rather than here: this parser has no
 /// view of what the target project has already spent.
 pub(super) fn cut_budget(existing_runs: usize) -> usize {
-    MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
+    MAX_TRIP_CUTS_PER_FILE.min(MAX_LINES_IN_ID_SPACE.saturating_sub(existing_runs))
 }
 
 /// Cut each run where the COLOUR changes between two ADJACENT stations (#427).
 ///
 /// A run takes its colour from its first station shot (see `trip_head`), and a
-/// `Section` holds one, so a chain drawn in two colours would otherwise import
+/// `Line` holds one, so a chain drawn in two colours would otherwise import
 /// entirely in the first. Cutting gives each colour its own run. People and
 /// dates never cut (#329): they are per-shot credit, and cutting on them broke
-/// the round trip of a section with mixed credit through Ariane into one
-/// section per credit change.
+/// the round trip of a line with mixed credit through Ariane into one
+/// line per credit change.
 ///
 /// This is the SAME rule `join_contiguous_chains` applies from the other side
 /// ("only chains of one colour merge"), so the two cannot fight over a seam. It runs AFTER the join all the same: see the call site for what
@@ -473,14 +468,14 @@ pub(super) fn cut_budget(existing_runs: usize) -> usize {
 /// [`collapsed_trip_report`] rather than lost quietly.
 ///
 /// Returns the number of cuts made.
-pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> usize {
-    let mut out: Vec<TmlSection> = Vec::with_capacity(sections.len());
+pub(super) fn split_runs_at_trip_boundaries(lines: &mut Vec<TmlSection>) -> usize {
+    let mut out: Vec<TmlSection> = Vec::with_capacity(lines.len());
     let mut cuts_made = 0;
     let mut clamped_runs = 0;
-    let mut budget = cut_budget(sections.len());
+    let mut budget = cut_budget(lines.len());
 
-    for section in sections.drain(..) {
-        let mut cuts = trip_cut_points(&section.shots);
+    for line in lines.drain(..) {
+        let mut cuts = trip_cut_points(&line.shots);
         // Both caps at once: a file may not buy its way past the file-wide
         // budget by spreading the same trip churn over more runs.
         let allowed = cuts.len().min(MAX_TRIP_CUTS_PER_RUN).min(budget);
@@ -489,12 +484,12 @@ pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> u
             cuts.truncate(allowed);
         }
         if cuts.is_empty() {
-            out.push(section);
+            out.push(line);
             continue;
         }
         budget -= cuts.len();
         cuts_made += cuts.len();
-        out.extend(cut_run(section, &cuts));
+        out.extend(cut_run(line, &cuts));
     }
 
     if clamped_runs > 0 {
@@ -510,7 +505,7 @@ pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> u
         );
     }
 
-    *sections = out;
+    *lines = out;
     cuts_made
 }
 
@@ -531,7 +526,7 @@ fn trip_cut_points(shots: &[TmlShot]) -> Vec<usize> {
 /// renamed, so the file's own name is still readable in the wizard's list. The
 /// suffix is deliberately NOT "(branch N)": nothing branched, and that label
 /// already means something else here.
-fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
+fn cut_run(line: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
     let TmlSection {
         name,
         mut shots,
@@ -539,7 +534,7 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
         start_ariane_id,
         start_depth,
         ..
-    } = section;
+    } = line;
 
     // Split from the back so each `split_off` leaves the earlier parts intact.
     let mut parts: Vec<Vec<TmlShot>> = Vec::with_capacity(cuts.len() + 1);
@@ -552,8 +547,8 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
     let mut out: Vec<TmlSection> = Vec::with_capacity(parts.len());
     // The station a cut part hangs off: the previous part's last shot, whose
     // cumulative depth is what `resolve_tml_depth_in` rebases the part's first
-    // `DepthIn` against. Both are the values `linearize_section` would have
-    // computed had the file declared these shots under their own section name.
+    // `DepthIn` against. Both are the values `linearize_line` would have
+    // computed had the file declared these shots under their own line name.
     let mut previous_end_depth = start_depth;
 
     for (index, part) in parts.into_iter().enumerate() {
@@ -561,7 +556,7 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
             continue;
         };
         // Metadata from the part's first STATION shot, exactly as
-        // `linearize_section` names a run; the start id is the first shot's
+        // `linearize_line` names a run; the start id is the first shot's
         // whatever it is, because that is where the part attaches.
         let head = trip_head(&part).unwrap_or(first);
         let (surveyor, date, color) = (head.explorer.clone(), head.date, head.color.clone());
@@ -597,37 +592,37 @@ fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
     out
 }
 
-/// One line naming the per-shot trip values that a section could not carry, or
+/// One line naming the per-shot trip values that a line could not carry, or
 /// `None` when nothing was dropped (#427).
 ///
 /// After [`split_runs_at_trip_boundaries`] the only shots left disagreeing with
-/// their own section are the ones whose trip changed where there was no seam to
+/// their own line are the ones whose trip changed where there was no seam to
 /// cut. Their surveyors, explorers and date import with them - the credit is
-/// per shot - so the one value that collapses is the COLOUR, which a section
+/// per shot - so the one value that collapses is the COLOUR, which a line
 /// holds once. This is the receipt's record of that.
 ///
 /// Counts against the toggle the import will actually run with: a shot the
 /// filter drops takes its metadata out of the project with it, and reporting
 /// that as a loss would name a shot the user is not importing.
 pub(super) fn collapsed_trip_report(
-    sections: &[TmlSection],
+    lines: &[TmlSection],
     include_excluded: bool,
 ) -> Option<String> {
     let mut shots = 0usize;
     let mut changes = 0usize;
-    let mut sections_hit = 0usize;
+    let mut lines_hit = 0usize;
 
-    for section in sections {
+    for line in lines {
         let mut hit = false;
         // The colour of the previous IMPORTABLE shot, while it was one this
-        // section could not carry. A thousand shots on one collapsed colour are
+        // line could not carry. A thousand shots on one collapsed colour are
         // one place the file lost a value, not a thousand.
         let mut collapsed_run: Option<&str> = None;
-        for shot in &section.shots {
+        for shot in &line.shots {
             if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
                 continue;
             }
-            if shot.color == section.color {
+            if shot.color == line.color {
                 collapsed_run = None;
                 continue;
             }
@@ -638,7 +633,7 @@ pub(super) fn collapsed_trip_report(
                 collapsed_run = Some(shot.color.as_str());
             }
         }
-        sections_hit += usize::from(hit);
+        lines_hit += usize::from(hit);
     }
 
     if shots == 0 {
@@ -646,19 +641,19 @@ pub(super) fn collapsed_trip_report(
     }
 
     Some(format!(
-        "{shots} shot{} at {changes} colour change{} in {sections_hit} section{} recorded a \
-         different colour from the section importing them; Ariane records it per shot, a \
-         section holds one, and there was no station boundary to split on",
+        "{shots} shot{} at {changes} colour change{} in {lines_hit} line{} recorded a \
+         different colour from the line importing them; Ariane records it per shot, a \
+         line holds one, and there was no station boundary to split on",
         if shots == 1 { "" } else { "s" },
         if changes == 1 { "" } else { "s" },
-        if sections_hit == 1 { "" } else { "s" },
+        if lines_hit == 1 { "" } else { "s" },
     ))
 }
 
-/// Linearize a group of shots belonging to one section name.
-/// Splits into multiple sub-sections if branching is detected.
-pub(super) fn linearize_section(
-    section_name: &str,
+/// Linearize a group of shots belonging to one line name.
+/// Splits into multiple sub-lines if branching is detected.
+pub(super) fn linearize_line(
+    line_name: &str,
     shots: &[&RawShot],
     successors: &HashMap<i64, Vec<i64>>,
     all_shots: &HashMap<i64, &RawShot>,
@@ -675,8 +670,8 @@ pub(super) fn linearize_section(
         shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
     let rank_key = |id: &i64| (order_rank.get(id).copied().unwrap_or(usize::MAX), *id);
 
-    // Successors constrained to this section, sorted deterministically.
-    let mut in_section_successors: HashMap<i64, Vec<i64>> = HashMap::new();
+    // Successors constrained to this line, sorted deterministically.
+    let mut in_line_successors: HashMap<i64, Vec<i64>> = HashMap::new();
     for shot in shots {
         let mut succs: Vec<i64> = successors
             .get(&shot.id)
@@ -687,17 +682,17 @@ pub(super) fn linearize_section(
             .collect();
         succs.sort_by_key(&rank_key);
         succs.dedup();
-        in_section_successors.insert(shot.id, succs);
+        in_line_successors.insert(shot.id, succs);
     }
 
-    let downstream = downstream_lengths(shots, &shot_by_id, &in_section_successors);
+    let downstream = downstream_lengths(shots, &shot_by_id, &in_line_successors);
 
-    // Find chain roots: shots whose from_id is not in this section's shot set.
+    // Find chain roots: shots whose from_id is not in this line's shot set.
     //
     // Ordered by downstream length, longest first, because the FIRST chain
-    // emitted keeps the section's own name and every later one becomes
+    // emitted keeps the line's own name and every later one becomes
     // "(branch N)". Walking roots in file order instead let an entrance stub
-    // written before the mainline take the section's name and demote the real
+    // written before the mainline take the line's name and demote the real
     // passage - the same file-order bias `choose_continuation` removes at
     // junctions, one level up. Ties fall back to encounter order then id, so
     // the result is still fixed for a given file.
@@ -723,7 +718,7 @@ pub(super) fn linearize_section(
         let chain = collect_linear_chain(
             root_id,
             &shot_ids,
-            &in_section_successors,
+            &in_line_successors,
             &downstream,
             &shot_by_id,
             &mut visited,
@@ -739,7 +734,7 @@ pub(super) fn linearize_section(
         let chain = collect_linear_chain(
             start_id,
             &shot_ids,
-            &in_section_successors,
+            &in_line_successors,
             &downstream,
             &shot_by_id,
             &mut visited,
@@ -751,7 +746,7 @@ pub(super) fn linearize_section(
     }
 
     // Guard pass for malformed/disconnected graphs:
-    // backtrack through in-section parents to find an upstream start.
+    // backtrack through in-line parents to find an upstream start.
     let mut unvisited_ids: Vec<i64> = shots
         .iter()
         .map(|s| s.id)
@@ -769,7 +764,7 @@ pub(super) fn linearize_section(
         loop {
             if !seen_backtrack.insert(start) {
                 tracing::warn!(
-                    section = section_name,
+                    line = line_name,
                     shot_id = start,
                     "Cycle detected while finding branch start; using cycle member as start"
                 );
@@ -778,7 +773,7 @@ pub(super) fn linearize_section(
 
             let Some(current) = shot_by_id.get(&start) else {
                 tracing::warn!(
-                    section = section_name,
+                    line = line_name,
                     shot_id = start,
                     "Shot missing while finding branch start; using current node as start"
                 );
@@ -795,7 +790,7 @@ pub(super) fn linearize_section(
         let chain = collect_linear_chain(
             start,
             &shot_ids,
-            &in_section_successors,
+            &in_line_successors,
             &downstream,
             &shot_by_id,
             &mut visited,
@@ -809,7 +804,7 @@ pub(super) fn linearize_section(
             let extra_chain = collect_linear_chain(
                 extra_start,
                 &shot_ids,
-                &in_section_successors,
+                &in_line_successors,
                 &downstream,
                 &shot_by_id,
                 &mut visited,
@@ -832,7 +827,7 @@ pub(super) fn linearize_section(
         let chain = collect_linear_chain(
             shot_id,
             &shot_ids,
-            &in_section_successors,
+            &in_line_successors,
             &downstream,
             &shot_by_id,
             &mut visited,
@@ -840,7 +835,7 @@ pub(super) fn linearize_section(
         );
         if !chain.is_empty() {
             tracing::warn!(
-                section = section_name,
+                line = line_name,
                 shot_id,
                 "Recovered unvisited shot via final guard pass"
             );
@@ -856,9 +851,9 @@ pub(super) fn linearize_section(
                 chain.push((*shot).clone());
             } else {
                 tracing::warn!(
-                    section = section_name,
+                    line = line_name,
                     shot_id,
-                    "Skipping missing shot while building linearized section"
+                    "Skipping missing shot while building linearized line"
                 );
             }
         }
@@ -869,14 +864,14 @@ pub(super) fn linearize_section(
 
         // The first chain is the mainline (the continuation rule in
         // `choose_continuation` keeps walking it through every junction), so
-        // it keeps the section's own name; only the deferred side chains get
+        // it keeps the line's own name; only the deferred side chains get
         // "(branch N)" suffixes, numbered as if the mainline were branch 1.
         let has_prior_chains = !result.is_empty();
         let branch_number = result.len() + 1;
         let name = if has_prior_chains {
-            format!("{section_name} (branch {branch_number})")
+            format!("{line_name} (branch {branch_number})")
         } else {
-            section_name.to_string()
+            line_name.to_string()
         };
         let is_branch_split = needs_split || has_prior_chains;
 
@@ -913,7 +908,7 @@ pub(super) fn linearize_section(
                 latitude: s.latitude,
                 longitude: s.longitude,
                 closure_to_id: s.closure_to_id,
-                section: s.section.clone(),
+                line: s.line.clone(),
             })
             .collect();
 
@@ -947,11 +942,11 @@ pub(super) fn linearize_section(
 }
 
 /// Walk a single linear chain, queueing extra branch starts when a node has
-/// multiple unvisited successors within the same section.
+/// multiple unvisited successors within the same line.
 fn collect_linear_chain(
     start_id: i64,
     shot_ids: &std::collections::HashSet<i64>,
-    in_section_successors: &HashMap<i64, Vec<i64>>,
+    in_line_successors: &HashMap<i64, Vec<i64>>,
     downstream: &HashMap<i64, f64>,
     shot_by_id: &HashMap<i64, &RawShot>,
     visited: &mut std::collections::HashSet<i64>,
@@ -970,7 +965,7 @@ fn collect_linear_chain(
         }
         chain.push(current);
 
-        let Some(successors) = in_section_successors.get(&current) else {
+        let Some(successors) = in_line_successors.get(&current) else {
             break;
         };
 
@@ -1004,7 +999,7 @@ const COMPARABLE_LENGTH_RATIO: f64 = 0.8;
 /// Decide which successor continues the current chain at a branch point (#412).
 ///
 /// The continuation should be the mainline; every other successor defers into
-/// its own "(branch N)" section. The rule is elimination, THEN azimuth - length
+/// its own "(branch N)" line. The rule is elimination, THEN azimuth - length
 /// never decides on its own:
 /// 1. Eliminate: a candidate below `COMPARABLE_LENGTH_RATIO` (80%) of the
 ///    longest downstream length is out. Being longest is not itself a win, so
@@ -1024,7 +1019,7 @@ const COMPARABLE_LENGTH_RATIO: f64 = 0.8;
 /// continues the chain, which keeps it inline instead of spawning a chain that
 /// would be dropped as empty at import.
 ///
-/// Deterministic by construction: `candidates` arrives in the section's
+/// Deterministic by construction: `candidates` arrives in the line's
 /// sorted encounter order (never HashMap iteration order), the partition below
 /// preserves that order, the downstream lengths are fixed-order IEEE 754 sums
 /// of parsed values (see `downstream_lengths`), and step 2 compares with
@@ -1101,10 +1096,10 @@ fn choose_continuation(
     best.map_or(candidates[0], |(id, _)| id)
 }
 
-/// Total downstream traverse length (own length plus all in-section
-/// descendants) for every shot in the section.
+/// Total downstream traverse length (own length plus all in-line
+/// descendants) for every shot in the line.
 ///
-/// Memoized via an iterative post-order walk, so the whole section costs
+/// Memoized via an iterative post-order walk, so the whole line costs
 /// O(V + E) - one linear pass even on 10^5-shot files, never a per-branch
 /// BFS. Children are summed in the pre-sorted successor order, so the f64
 /// accumulation order is fixed and the result is identical across runs and
@@ -1112,7 +1107,7 @@ fn choose_continuation(
 ///
 /// EXCLUDED shots count toward the length: segmentation must reflect the
 /// topology the file declares, and the excluded-shots import toggle (applied
-/// downstream of section building) must not change how sections split.
+/// downstream of line building) must not change how lines split.
 ///
 /// CLOSURE shots contribute 0. That is not the same call: their removal is
 /// unconditional, not toggle-controlled, so zero-weighting them cannot make
@@ -1120,8 +1115,8 @@ fn choose_continuation(
 /// ancestor look longer than the survey it actually holds, and could hand the
 /// mainline to an edge that then disappeared.
 ///
-/// This sums over PATHS, not over distinct shots. Where the section's graph
-/// rejoins - a diamond, i.e. a loop closed inside one section - the shared
+/// This sums over PATHS, not over distinct shots. Where the line's graph
+/// rejoins - a diamond, i.e. a loop closed inside one line - the shared
 /// tail is added once for every path into it, so in `A -> {B, C} -> D` the
 /// length of D lands in A's total twice. The result is therefore an upper
 /// bound on physical passage length, not a measurement of it.
@@ -1136,7 +1131,7 @@ fn choose_continuation(
 fn downstream_lengths(
     shots: &[&RawShot],
     shot_by_id: &HashMap<i64, &RawShot>,
-    in_section_successors: &HashMap<i64, Vec<i64>>,
+    in_line_successors: &HashMap<i64, Vec<i64>>,
 ) -> HashMap<i64, f64> {
     let empty: Vec<i64> = Vec::new();
     let mut lengths: HashMap<i64, f64> = HashMap::with_capacity(shots.len());
@@ -1149,7 +1144,7 @@ fn downstream_lengths(
         in_progress.insert(shot.id);
         let mut stack: Vec<(i64, usize)> = vec![(shot.id, 0)];
         while let Some(&(id, next_child)) = stack.last() {
-            let succs = in_section_successors.get(&id).unwrap_or(&empty);
+            let succs = in_line_successors.get(&id).unwrap_or(&empty);
             if let Some(&child) = succs.get(next_child) {
                 if let Some(frame) = stack.last_mut() {
                     frame.1 = next_child + 1;
@@ -1190,8 +1185,8 @@ fn has_branching_within(shots: &[&RawShot], successors: &HashMap<i64, Vec<i64>>)
     let shot_ids: std::collections::HashSet<i64> = shots.iter().map(|s| s.id).collect();
     for shot in shots {
         if let Some(succs) = successors.get(&shot.id) {
-            let in_section = succs.iter().filter(|id| shot_ids.contains(id)).count();
-            if in_section > 1 {
+            let in_line = succs.iter().filter(|id| shot_ids.contains(id)).count();
+            if in_line > 1 {
                 return true;
             }
         }

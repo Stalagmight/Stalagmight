@@ -110,7 +110,7 @@ use super::fuzz_undo_tests::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{Project, SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+use crate::models::{LineId, Project, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
@@ -132,7 +132,7 @@ enum Mask {
     Strict,
     /// Every uuid is replaced by a placeholder.
     ///
-    /// Only for pairs where BOTH routes MINT shots or sections. A fresh
+    /// Only for pairs where BOTH routes MINT shots or lines. A fresh
     /// `Uuid::new_v4()` cannot agree across two routes, so comparing them would be comparing the random number generator.
     /// Everything else - the field values, the ORDER, the count, whether a uuid
     /// is present at all - is still compared exactly, so "one route lost a uuid"
@@ -172,7 +172,7 @@ fn mask_timestamps(snapshot: &str) -> String {
 /// Replace every UUID-shaped string with a placeholder.
 ///
 /// Shape-matched rather than field-matched on purpose: a uuid appears as a shot
-/// field, as a section's gauge anchor, and INSIDE a `StationKey::AfterShot`
+/// field, as a line's gauge anchor, and INSIDE a `StationKey::AfterShot`
 /// anchor that keys merges, closures, datums and station comments. A rule that
 /// listed field names would leave the anchors comparing random numbers.
 fn mask_uuids(snapshot: &str) -> String {
@@ -222,16 +222,13 @@ fn allocators(state: &AppState) -> BTreeMap<String, u32> {
     let Some(project) = state.get_project_state() else {
         return out;
     };
-    out.insert("next_section_id".to_string(), project.next_section_id);
+    out.insert("next_line_id".to_string(), project.next_line_id);
     out.insert(
         "next_closure_id".to_string(),
         u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
     );
-    for section in &project.sections {
-        out.insert(
-            format!("section {}.next_shot_id", section.id),
-            section.next_shot_id,
-        );
+    for line in &project.lines {
+        out.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
     }
     out
 }
@@ -269,7 +266,12 @@ fn resort_set_like(snapshot: &str) -> String {
         return snapshot.to_string();
     };
     if let serde_json::Value::Object(map) = &mut value {
-        for key in ["station_offsets", "station_comments"] {
+        for key in [
+            "station_offsets",
+            "station_comments",
+            "station_names",
+            "station_ids",
+        ] {
             if let Some(serde_json::Value::Array(items)) = map.get_mut(key) {
                 items.sort_by_key(ToString::to_string);
             }
@@ -344,35 +346,35 @@ impl Comparison {
 /// to generalize; the claim was the defect. `execute_delete_shot_range_shift` is
 /// atomic on purpose - it defers the geometry cascade to ONE reconcile at the
 /// end - so on a range whose removed stations include one a merged partner
-/// section is anchored to, it leaves that partner where the surveyor put it,
+/// line is anchored to, it leaves that partner where the surveyor put it,
 /// where the single-delete sequence drags the partner along while the merge is
 /// still live and then strands it displaced. Both PR #95 tests
-/// (`test_delete_range_shift_does_not_displace_free_floating_merged_section`,
+/// (`test_delete_range_shift_does_not_displace_free_floating_merged_line`,
 /// `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`) pin the
 /// atomic behaviour, `a_doomed_anchor_range_shift_keeps_the_partner_in_place`
 /// (open_undo_bugs_tests.rs) pins it on a hand-built shape, and
 /// `command_delete_split.rs` now states it.
 ///
-/// So the allowance is narrow and directional. Only the PARTNER sections' own
+/// So the allowance is narrow and directional. Only the PARTNER lines' own
 /// placement may differ; every other path, every other station, both verdicts
 /// and both allocators are still compared exactly. And when the two routes do
 /// disagree about a partner, the ATOMIC route has to be the one that left it
 /// alone - a divergence the other way round is the atomic path breaking its own
 /// contract and fails.
 struct Documented {
-    /// Sections whose placement the two routes may disagree about: the far side
+    /// Lines whose placement the two routes may disagree about: the far side
     /// of every merge the delete removes, plus everything merged rigidly to
-    /// those without passing through the edited section (a displaced partner
+    /// those without passing through the edited line (a displaced partner
     /// drags its own merge group with it).
-    partners: std::collections::BTreeSet<SectionId>,
+    partners: std::collections::BTreeSet<LineId>,
     /// The adjusted station geometry BEFORE either route ran, keyed
-    /// `section:index`. The twins are asserted equal at that point, so one map
+    /// `line:index`. The twins are asserted equal at that point, so one map
     /// is both routes' starting position - which is what makes "the atomic route
     /// is the one that did not move it" a decidable question.
     before: BTreeMap<String, [f64; 3]>,
 }
 
-/// The adjusted geometry as a map, from the `section:index|x|y|z` rows
+/// The adjusted geometry as a map, from the `line:index|x|y|z` rows
 /// [`adjusted_geometry_of`] emits.
 fn adjusted_positions(text: &str) -> BTreeMap<String, [f64; 3]> {
     text.lines()
@@ -387,8 +389,8 @@ fn adjusted_positions(text: &str) -> BTreeMap<String, [f64; 3]> {
         .collect()
 }
 
-/// The section a `section:index` adjusted-geometry key belongs to.
-fn section_of_station_key(key: &str) -> Option<SectionId> {
+/// The line a `line:index` adjusted-geometry key belongs to.
+fn line_of_station_key(key: &str) -> Option<LineId> {
     key.split(':').next()?.parse().ok()
 }
 
@@ -399,15 +401,15 @@ const POSITION_TOLERANCE_M: f64 = 1e-6;
 /// Whether two solved positions differ IN THE HORIZONTAL PLANE.
 ///
 /// The plane, not the point, and not a convenience: the compensation a deferred
-/// cascade preserves is `section_offsets`, which is `(f64, f64)` - there is no
-/// stored z offset for a section. When a delete cuts a partner's merge, the
+/// cascade preserves is `line_offsets`, which is `(f64, f64)` - there is no
+/// stored z offset for a line. When a delete cuts a partner's merge, the
 /// partner's z falls back to its own raw layout on BOTH routes (measured: same
 /// z to the last bit), so comparing z here would report a drop neither route
 /// chose and that neither could have avoided. PR #95's
-/// `test_delete_range_shift_does_not_displace_free_floating_merged_section`
+/// `test_delete_range_shift_does_not_displace_free_floating_merged_line`
 /// asserts the same plane, through `assert_xy_close`. A z difference BETWEEN the
 /// two routes is still compared - by the adjusted-geometry oracle, which the
-/// allowance only lets through for a partner section.
+/// allowance only lets through for a partner line.
 fn positions_differ_in_plane(left: [f64; 3], right: [f64; 3]) -> bool {
     (0..2)
         .map(|axis| (left[axis] - right[axis]).abs())
@@ -418,22 +420,22 @@ fn positions_differ_in_plane(left: [f64; 3], right: [f64; 3]) -> bool {
 impl Documented {
     /// Whether a stored-project difference is one this allowance covers.
     ///
-    /// `section_offsets` is a map keyed by section id, so the diff path NAMES
-    /// the section it is about - `section_offsets.7` when a whole entry is
-    /// present on one side only, `section_offsets.7[0]` when one component of
-    /// the pair differs - and the allowance can be per-section rather than
-    /// per-collection. A `section_offsets` entry for the EDITED section, or for
-    /// any section the delete did not cut a merge to, is not this and still
+    /// `line_offsets` is a map keyed by line id, so the diff path NAMES
+    /// the line it is about - `line_offsets.7` when a whole entry is
+    /// present on one side only, `line_offsets.7[0]` when one component of
+    /// the pair differs - and the allowance can be per-line rather than
+    /// per-collection. A `line_offsets` entry for the EDITED line, or for
+    /// any line the delete did not cut a merge to, is not this and still
     /// fails.
     fn allows_stored(&self, diff: &Diff) -> bool {
         diff.path
-            .strip_prefix("section_offsets.")
+            .strip_prefix("line_offsets.")
             .map(|rest| {
                 rest.chars()
                     .take_while(char::is_ascii_digit)
                     .collect::<String>()
             })
-            .and_then(|id| id.parse::<SectionId>().ok())
+            .and_then(|id| id.parse::<LineId>().ok())
             .is_some_and(|id| self.partners.contains(&id))
     }
 
@@ -444,7 +446,7 @@ impl Documented {
     fn allows_geometry(&self, line: &str) -> bool {
         line.strip_prefix("station ")
             .and_then(|rest| rest.split_whitespace().next())
-            .and_then(section_of_station_key)
+            .and_then(line_of_station_key)
             .is_some_and(|id| self.partners.contains(&id))
     }
 }
@@ -457,8 +459,8 @@ struct Explains {
     /// the same comparison.
     ///
     /// True only where the geometry difference is DOWNSTREAM of the stored one -
-    /// a `section_offsets` entry that one route has and the other does not moves
-    /// every station of that section in the solve, and reporting it twice would
+    /// a `line_offsets` entry that one route has and the other does not moves
+    /// every station of that line in the solve, and reporting it twice would
     /// say there are two defects. False is the default and the safe answer: a
     /// solve that moved while the stored projects agree is exactly what the
     /// adjusted oracle exists to see.
@@ -467,41 +469,41 @@ struct Explains {
     ///
     /// This is what narrows a classifier that a path rule alone cannot: finding
     /// 22 is a claim about two specific entry points disagreeing, so the same
-    /// `section_offsets` difference arising between any OTHER two routes is not
+    /// `line_offsets` difference arising between any OTHER two routes is not
     /// it and still fails. `None` means the defect is not route-specific.
     only_for: Option<&'static str>,
 }
 
 const EXPLAINS: &[Explains] = &[
     // FINDING 2 (issue #413) was explained here, reached from a direction its
-    // own write-up does not mention: the mechanism is a `section_offsets` key
+    // own write-up does not mention: the mechanism is a `line_offsets` key
     // that is CREATED by an adjustment and never removed, so every route that
-    // adjusted an offset and then adjusted it back - a `MoveSection(+d)` and
-    // its `-d`, a `ReverseSection` applied twice - left an inert key its
+    // adjusted an offset and then adjusted it back - a `MoveLine(+d)` and
+    // its `-d`, a `ReverseLine` applied twice - left an inert key its
     // do-nothing twin did not have.
     //
-    // FIXED, in two halves, and the entry is gone. A `section_offsets` key
+    // FIXED, in two halves, and the entry is gone. A `line_offsets` key
     // present on one route and absent on the other is unexplained from here on,
     // whatever its value.
     //
-    // * The EXACT zero. `Project::write_section_offset`
+    // * The EXACT zero. `Project::write_line_offset`
     //   (models/project/offsets.rs) is THE write point for the map and drops
-    //   the key when the value is exactly (0, 0). `MoveSection(+d)` and its
+    //   the key when the value is exactly (0, 0). `MoveLine(+d)` and its
     //   `-d` DO land there (0 + d - d == 0 in IEEE for the same d), which is
     //   why `move-out-and-back-is-identity` went clean first.
-    // * The float DUST. `ReverseSection` applied twice does NOT cancel: the
+    // * The float DUST. `ReverseLine` applied twice does NOT cancel: the
     //   compensation is `shot_run_displacement` summed over the shots, and the
     //   second reverse sums the negated vectors in the OPPOSITE order, so the
     //   round trip lands on a residue under `Project::OFFSET_DUST_M` rather
     //   than on zero.
-    //   `Project::write_section_offset` normalizes an offset within
+    //   `Project::write_line_offset` normalizes an offset within
     //   `Project::OFFSET_DUST_M` of the origin to absent, and `cascade_bfs`
     //   (models/project/connectivity.rs) declines to "correct" a sub-bound gap
     //   at all, matching the merge-BFS gates in `reconcile_after_edit`.
     //
     // The rule binds EVERY writer, a restore included: a dust-zero
-    // `section_offsets` entry is UNREPRESENTABLE (the invariant on
-    // `Project::write_section_offset`), which is what closed the second half of
+    // `line_offsets` entry is UNREPRESENTABLE (the invariant on
+    // `Project::write_line_offset`), which is what closed the second half of
     // this pair - `move-out-and-back-is-identity` failed again the moment a
     // project carrying a legacy all-zero row reached it, because `+d` then `-d`
     // landed the key absent while the do-nothing route still held it.
@@ -524,18 +526,18 @@ const EXPLAINS: &[Explains] = &[
     // measurement, not a defect in either split route. Kept as a record for the
     // same reason finding 9's is.
     //
-    // What it looked like: the two routes disagreed about which SECTION a
+    // What it looked like: the two routes disagreed about which LINE a
     // station comment was keyed to after the split
-    // (`station_comments[i][0].section_id` 3 vs 9, with the rest of the list
+    // (`station_comments[i][0].line_id` 3 vs 9, with the rest of the list
     // shifted), intermittently, on identical inputs - which read as an
     // iteration-order-dependent re-key.
     //
     // What it was: a PERMUTATION, not a re-key. Every reported instance held the
-    // same multiset of `(section_id, comment)` pairs on both sides, with exactly
-    // one entry - always the newly minted section B - in a different slot.
+    // same multiset of `(line_id, comment)` pairs on both sides, with exactly
+    // one entry - always the newly minted line B - in a different slot.
     // `canonical_snapshot` sorts `station_comments` by the pair's whole JSON
     // text, which for a `StationKey::AfterShot` anchor includes the shot uuid;
-    // both routes MINT section B's shots, so that one sort key was a fresh
+    // both routes MINT line B's shots, so that one sort key was a fresh
     // random uuid on each side, and `Mask::MintedUuids` erases the uuids only
     // AFTER the sort has used them. See `resort_set_like` above, which sorts
     // again once the mask has run.
@@ -554,7 +556,7 @@ const EXPLAINS: &[Explains] = &[
 /// Every way two observed states differ, as readable lines. Empty means the two
 /// routes agree on all five oracles.
 ///
-/// `documented` is the one narrow, per-section allowance a pair may carry for a
+/// `documented` is the one narrow, per-line allowance a pair may carry for a
 /// difference the code is SUPPOSED to have - see [`Documented`]. `None` (every
 /// pair but one shape of one pair) means every difference is a problem.
 fn differences(
@@ -575,7 +577,7 @@ fn differences(
             geometry_explained = explains.explains_geometry;
         } else {
             // Per-path rather than all-or-nothing, unlike the classifiers
-            // above: the documented divergence names the sections it may
+            // above: the documented divergence names the lines it may
             // touch, so a run that shows it AND something else must still
             // report the something else.
             let unexpected: Vec<Diff> = diffs
@@ -658,16 +660,16 @@ enum Side {
     Right,
 }
 
-/// Give every section that has no `section_offsets` key one whose value is
+/// Give every line that has no `line_offsets` key one whose value is
 /// exactly `(0, 0)`, on the project about to be SAVED.
 ///
 /// This is what a build predating the invariant on
-/// `Project::write_section_offset` left in a `.stalx`, and it is planted directly
+/// `Project::write_line_offset` left in a `.stalx`, and it is planted directly
 /// on the map because there is no longer any API that can produce it - every
 /// writer drops it. It is planted here, into the file both twins load from, so
 /// every pair in this engine runs against the exact input that used to break one
 /// of them: `move-out-and-back-is-identity` failed on a project carrying such a
-/// row, because `MoveSection(+d)` then `MoveSection(-d)` computes the offset back
+/// row, because `MoveLine(+d)` then `MoveLine(-d)` computes the offset back
 /// to the origin and drops the key that the do-nothing route still held.
 ///
 /// It changes nothing about what the twins see, which is the point: the load
@@ -675,8 +677,8 @@ enum Side {
 /// project they always did, every seed's trajectory is unchanged, and the pair
 /// holds BY CONSTRUCTION rather than by luck of never meeting the input.
 ///
-/// FILL, never overwrite: a section that carries a real offset needs it, and
-/// zeroing it would displace the section from its merge partner and make the next
+/// FILL, never overwrite: a line that carries a real offset needs it, and
+/// zeroing it would displace the line from its merge partner and make the next
 /// reconcile look like an app defect.
 fn plant_legacy_zero_offset_rows(state: &AppState) {
     let mut guard = match state.project.lock() {
@@ -686,9 +688,9 @@ fn plant_legacy_zero_offset_rows(state: &AppState) {
     let Some(project) = guard.as_mut() else {
         return;
     };
-    let ids: Vec<SectionId> = project.sections.iter().map(|section| section.id).collect();
+    let ids: Vec<LineId> = project.lines.iter().map(|line| line.id).collect();
     for id in ids {
-        project.section_offsets.entry(id).or_insert((0.0, 0.0));
+        project.line_offsets.entry(id).or_insert((0.0, 0.0));
     }
 }
 
@@ -736,8 +738,8 @@ impl Twins {
             // is not allowed to hold, and `move-out-and-back-is-identity` is
             // measuring the wrong thing.
             let project = side.get_project_state()?;
-            let survivors: Vec<(SectionId, (f64, f64))> = project
-                .section_offsets
+            let survivors: Vec<(LineId, (f64, f64))> = project
+                .line_offsets
                 .iter()
                 .filter(|(_, offset)| {
                     offset.0.abs() <= Project::OFFSET_DUST_M
@@ -747,9 +749,9 @@ impl Twins {
                 .collect();
             assert!(
                 survivors.is_empty(),
-                "seed {seed}: a planted all-zero section_offsets row survived the load: \
+                "seed {seed}: a planted all-zero line_offsets row survived the load: \
                  {survivors:?}. A dust-zero entry is unrepresentable (see the invariant on \
-                 Project::write_section_offset), so the load boundary has to drop it"
+                 Project::write_line_offset), so the load boundary has to drop it"
             );
         }
 
@@ -876,39 +878,40 @@ impl Twins {
 /// closures, and nothing that has an open finding against it.
 fn prelude_command(state: &AppState, rng: &mut Rng) {
     let targets = read_targets(state);
-    if targets.sections.is_empty() {
+    if targets.lines.is_empty() {
         return;
     }
     match rng.below(6) {
         0 => {
             let count = 1 + rng.below(3);
             let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
-            state.execute(Command::CreateSection {
+            state.execute(Command::CreateLine {
                 name: Some(format!("pre-{}", rng.range(1000, 9999))),
                 surveyor: None,
                 date: None,
                 color: (*rng.pick(COLORS)).to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             });
         }
         1 => {
-            let (section_id, shots) = targets.sections[rng.below(targets.sections.len())].clone();
+            let (line_id, shots) = targets.lines[rng.below(targets.lines.len())].clone();
             let after =
                 (!shots.is_empty() && rng.chance(50)).then(|| shots[rng.below(shots.len())]);
             state.execute(Command::CreateShot {
-                section_id,
+                line_id,
                 shot: random_shot(rng),
                 after_shot_id: after,
                 before_shot_id: None,
             });
         }
         2 => {
-            let Some((section_id, shot_id)) = pick_shot(&targets, rng) else {
+            let Some((line_id, shot_id)) = pick_shot(&targets, rng) else {
                 return;
             };
             state.execute(Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     length: Some(rng.float(1.0, 15.0)),
@@ -917,9 +920,9 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
             });
         }
         3 => {
-            let section_id = targets.sections[rng.below(targets.sections.len())].0;
-            state.execute(Command::MoveSection {
-                section_id,
+            let line_id = targets.lines[rng.below(targets.lines.len())].0;
+            state.execute(Command::MoveLine {
+                line_id,
                 offset: random_offset(rng),
             });
         }
@@ -927,18 +930,18 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
             if targets.stations.is_empty() {
                 return;
             }
-            let (section_id, index) = targets.stations[rng.below(targets.stations.len())];
+            let (line_id, index) = targets.stations[rng.below(targets.stations.len())];
             state.execute(Command::SetStationComment {
-                station_ref: StationRef::new(section_id, index),
+                station_ref: StationRef::new(line_id, index),
                 comment: Some(format!("pre-note-{}", rng.range(0, 9999))),
             });
         }
         _ => {
-            if targets.sections.len() < 2 || targets.stations.len() < 2 {
+            if targets.lines.len() < 2 || targets.stations.len() < 2 {
                 return;
             }
             let a = targets.stations[rng.below(targets.stations.len())];
-            let candidates: Vec<(SectionId, u32)> = targets
+            let candidates: Vec<(LineId, u32)> = targets
                 .stations
                 .iter()
                 .copied()
@@ -956,40 +959,40 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
     }
 }
 
-/// A shot from a section that has one.
-fn pick_shot(targets: &Targets, rng: &mut Rng) -> Option<(SectionId, ShotId)> {
-    let populated: Vec<&(SectionId, Vec<ShotId>)> = targets
-        .sections
+/// A shot from a line that has one.
+fn pick_shot(targets: &Targets, rng: &mut Rng) -> Option<(LineId, ShotId)> {
+    let populated: Vec<&(LineId, Vec<ShotId>)> = targets
+        .lines
         .iter()
         .filter(|(_, shots)| !shots.is_empty())
         .collect();
     if populated.is_empty() {
         return None;
     }
-    let (section_id, shots) = populated[rng.below(populated.len())];
-    Some((*section_id, shots[rng.below(shots.len())]))
+    let (line_id, shots) = populated[rng.below(populated.len())];
+    Some((*line_id, shots[rng.below(shots.len())]))
 }
 
-/// Live shot ids of one section, in positional order, on one twin.
-fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
+/// Live shot ids of one line, in positional order, on one twin.
+fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
     state
         .get_project_state()
         .map(|project| {
             project
-                .sections
+                .lines
                 .iter()
-                .find(|section| section.id == section_id)
-                .map(|section| section.shots.iter().map(|shot| shot.id).collect())
+                .find(|line| line.id == line_id)
+                .map(|line| line.shots.iter().map(|shot| shot.id).collect())
                 .unwrap_or_default()
         })
         .unwrap_or_default()
 }
 
-/// A section with at least `count` shots, picked deterministically.
-fn section_with_shots(state: &AppState, rng: &mut Rng, count: usize) -> Option<SectionId> {
+/// A line with at least `count` shots, picked deterministically.
+fn line_with_shots(state: &AppState, rng: &mut Rng, count: usize) -> Option<LineId> {
     let targets = read_targets(state);
-    let candidates: Vec<SectionId> = targets
-        .sections
+    let candidates: Vec<LineId> = targets
+        .lines
         .iter()
         .filter(|(_, shots)| shots.len() >= count)
         .map(|(id, _)| *id)
@@ -1038,43 +1041,43 @@ struct PairOutcome {
 const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
-        id: "combine-sections-then-undo-is-identity",
-        promise: "command_combine_sections.rs execute_combine_sections - Combine Sections is ONE \
-                  undo entry (including the reverse of the other section when the two meet end \
-                  to end): undoing it restores every section, shot, reference and allocator",
-        run: pair_combine_sections_then_undo_is_identity,
+        id: "combine-lines-then-undo-is-identity",
+        promise: "command_combine_lines.rs execute_combine_lines - Combine Lines is ONE \
+                  undo entry (including the reverse of the other line when the two meet end \
+                  to end): undoing it restores every line, shot, reference and allocator",
+        run: pair_combine_lines_then_undo_is_identity,
     },
     // ---------------------------------------------------------------------
     Pair {
         id: "split-then-combine-at-the-join-is-identity",
-        promise: "combine_sections.rs module doc - Combine Sections is the inverse of Split \
-                  Section Here: combining a fresh split at its join, with the original name and \
-                  colour, gives back the section, every shot's survey credit included (shot ids \
+        promise: "combine_lines.rs module doc - Combine Lines is the inverse of Split \
+                  Line Here: combining a fresh split at its join, with the original name and \
+                  colour, gives back the line, every shot's survey credit included (shot ids \
                   and the id allocators aside)",
         run: pair_split_then_combine_at_the_join_is_identity,
     },
     // ---------------------------------------------------------------------
     Pair {
         id: "combine-end-to-end-is-reverse-then-combine",
-        promise: "combine_sections.rs module doc - when two sections meet end to end the other \
-                  section is reversed first with reverse_section, so combining them equals \
+        promise: "combine_lines.rs module doc - when two lines meet end to end the other \
+                  line is reversed first with reverse_line, so combining them equals \
                   reversing it yourself and combining end to start",
         run: pair_combine_end_to_end_is_reverse_then_combine,
     },
     // ---------------------------------------------------------------------
     Pair {
-        id: "split-section-then-undo-is-identity",
-        promise: "command_split_section.rs execute_split_section - Split Section Here is ONE \
-                  undo entry: undoing it restores every section, shot, merge, closure, datum, \
+        id: "split-line-then-undo-is-identity",
+        promise: "command_split_line.rs execute_split_line - Split Line Here is ONE \
+                  undo entry: undoing it restores every line, shot, merge, closure, datum, \
                   comment and per-shot survey credit exactly (#335)",
-        run: pair_split_section_then_undo_is_identity,
+        run: pair_split_line_then_undo_is_identity,
     },
     // ---------------------------------------------------------------------
     Pair {
         id: "range-shift-is-n-single-deletes",
         promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
                   gap-close: identical to the n single deletes on every range that removes no \
-                  merge, and on a range that removes one it keeps the partner section in place \
+                  merge, and on a range that removes one it keeps the partner line in place \
                   where the singles drag it (issue #413 finding 22; PR #95 tests)",
         run: pair_range_shift_vs_singles,
     },
@@ -1104,23 +1107,22 @@ const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
         id: "reverse-twice-is-identity",
-        promise: "ReverseSection reverses the shot order and the per-shot in/out fields; applying \
+        promise: "ReverseLine reverses the shot order and the per-shot in/out fields; applying \
                   it twice returns each to itself",
         run: pair_reverse_twice_is_identity,
     },
     // ---------------------------------------------------------------------
     Pair {
         id: "move-out-and-back-is-identity",
-        promise:
-            "MoveSection translates a rigid group by an offset; the negated offset translates \
+        promise: "MoveLine translates a rigid group by an offset; the negated offset translates \
                   it back",
         run: pair_move_out_and_back_is_identity,
     },
     // ---------------------------------------------------------------------
     Pair {
-        id: "create-section-with-shots-is-create-then-append",
-        promise: "CreateSection { shots } and CreateSection { shots: [] } + N CreateShot appends \
-                  both end in Section::add_shot with the same ShotData",
+        id: "create-line-with-shots-is-create-then-append",
+        promise: "CreateLine { shots } and CreateLine { shots: [] } + N CreateShot appends \
+                  both end in Line::add_shot with the same ShotData",
         run: pair_create_with_shots_vs_appends,
     },
 ];
@@ -1140,15 +1142,15 @@ const PAIRS: &[Pair] = &[
 /// equality on all five oracles - measured over prefix and interior ranges, they
 /// agree to the last bit.
 ///
-/// On a range whose removed stations include one a merged partner section is
+/// On a range whose removed stations include one a merged partner line is
 /// anchored to, they are supposed to differ, and this asserts the difference
 /// rather than tolerating it (issue #413 finding 22, resolved as intended
 /// behaviour - the doc comment that claimed a composition was the defect). The
 /// singles route re-anchors the partner from `execute`'s per-command epilogue
-/// while the merge is still live, drags it as the section shrinks and then
+/// while the merge is still live, drags it as the line shrinks and then
 /// deletes the merge, stranding it displaced; the atomic route leaves it where
 /// the surveyor put it. So on that shape three things are asserted: every
-/// difference is confined to the PARTNER sections' placement, the atomic route
+/// difference is confined to the PARTNER lines' placement, the atomic route
 /// is the one that left the partner alone, and a partner the delete cut loose
 /// entirely is exactly where it was. See [`Documented`] and the PR #95 tests it
 /// names.
@@ -1162,9 +1164,9 @@ fn pair_range_shift_vs_singles(
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
-    let section_id = section_with_shots(&twins.left, rng, 3)?;
-    let ids = shot_ids(&twins.left, section_id);
-    // An INTERIOR range, so the gap-close has a head and a tail and the section
+    let line_id = line_with_shots(&twins.left, rng, 3)?;
+    let ids = shot_ids(&twins.left, line_id);
+    // An INTERIOR range, so the gap-close has a head and a tail and the line
     // cannot be emptied - the two conditions the range path refuses on.
     let start = 1 + rng.below(ids.len().saturating_sub(2).max(1));
     let count = 1 + rng.below(2);
@@ -1174,20 +1176,20 @@ fn pair_range_shift_vs_singles(
     }
     // Read BEFORE either route runs, off the left twin - the twins are asserted
     // equal at this point, so this is both routes' starting position.
-    let partners = doomed_anchor_partners(&twins.left, section_id, ids[start], ids[end]);
+    let partners = doomed_anchor_partners(&twins.left, line_id, ids[start], ids[end]);
     let before = adjusted_positions(&adjusted_geometry_of(&twins.left));
 
     let ranged = twins
         .left
-        .execute_delete_shot_range_shift(section_id, ids[start], ids[end]);
+        .execute_delete_shot_range_shift(line_id, ids[start], ids[end]);
     if !ranged.success {
         return None;
     }
     for _ in start..=end {
-        let live = shot_ids(&twins.right, section_id);
+        let live = shot_ids(&twins.right, line_id);
         let &target = live.get(start)?;
         let single = twins.right.execute(Command::DeleteShot {
-            section_id,
+            line_id,
             shot_id: target,
         });
         if !single.success {
@@ -1214,35 +1216,35 @@ fn pair_range_shift_vs_singles(
 /// The name the doomed-anchor arm is counted under. See `Comparison::shapes`.
 const DOOMED_ANCHOR_SHAPE: &str = "doomed-anchor-range";
 
-/// The sections a gap-close of `[start_shot..=end_shot]` may move by cutting a
+/// The lines a gap-close of `[start_shot..=end_shot]` may move by cutting a
 /// merge, or `None` when it cuts none - which is the shape where the two delete
 /// routes have to agree exactly.
 ///
 /// The removed set comes from the app's own `preview_delete_shot_range` rather
 /// than from a second copy of the "which stations does a gap-close remove" rule,
-/// so a change to that rule cannot leave this oracle allowing the wrong sections.
+/// so a change to that rule cannot leave this oracle allowing the wrong lines.
 /// It is then closed over the merge graph WITHOUT passing through the edited
-/// section: a partner that the delete cuts loose drags whatever is merged to it.
+/// line: a partner that the delete cuts loose drags whatever is merged to it.
 fn doomed_anchor_partners(
     state: &AppState,
-    section_id: SectionId,
+    line_id: LineId,
     start_shot: ShotId,
     end_shot: ShotId,
-) -> Option<std::collections::BTreeSet<SectionId>> {
+) -> Option<std::collections::BTreeSet<LineId>> {
     let project = state.get_project_state()?;
     let impact = project
-        .preview_delete_shot_range(section_id, start_shot, end_shot)
+        .preview_delete_shot_range(line_id, start_shot, end_shot)
         .ok()?;
     if impact.removed_merges.is_empty() {
         return None;
     }
-    let mut partners: std::collections::BTreeSet<SectionId> = impact
+    let mut partners: std::collections::BTreeSet<LineId> = impact
         .removed_merges
         .iter()
-        .flat_map(|merge| [merge.station_a.section_id, merge.station_b.section_id])
-        .filter(|id| *id != section_id)
+        .flat_map(|merge| [merge.station_a.line_id, merge.station_b.line_id])
+        .filter(|id| *id != line_id)
         .collect();
-    // A merge wholly inside the edited section (a loop) removes no partner, and
+    // A merge wholly inside the edited line (a loop) removes no partner, and
     // is not the documented shape: nothing is allowed to differ.
     if partners.is_empty() {
         return None;
@@ -1252,7 +1254,7 @@ fn doomed_anchor_partners(
         let mut grew = false;
         for (a, b) in &merges {
             for (near, far) in [(a, b), (b, a)] {
-                if partners.contains(&near.0) && far.0 != section_id && partners.insert(far.0) {
+                if partners.contains(&near.0) && far.0 != line_id && partners.insert(far.0) {
                     grew = true;
                 }
             }
@@ -1272,10 +1274,10 @@ fn doomed_anchor_partners(
 ///    The divergence the other way round - the atomic path being the one that
 ///    moved the partner - is that path breaking the contract this pair now
 ///    documents, and is reported.
-/// 2. THE CUT-LOOSE PARTNER. A partner section the delete left with no merge and
+/// 2. THE CUT-LOOSE PARTNER. A partner line the delete left with no merge and
 ///    no datum has nothing to hold it anywhere; the atomic route must have left
 ///    it exactly where it was. This is the PR #95 property
-///    (`test_delete_range_shift_does_not_displace_free_floating_merged_section`)
+///    (`test_delete_range_shift_does_not_displace_free_floating_merged_line`)
 ///    asserted on random topology, and it fires whether or not the singles route
 ///    diverged, so the arm is never vacuous.
 fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec<String> {
@@ -1284,14 +1286,14 @@ fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec
     let anchors = read_targets(&twins.left);
     let mut problems = Vec::new();
     for (key, was) in &documented.before {
-        let Some(section_id) = section_of_station_key(key) else {
+        let Some(line_id) = line_of_station_key(key) else {
             continue;
         };
-        if !documented.partners.contains(&section_id) {
+        if !documented.partners.contains(&line_id) {
             continue;
         }
         let (Some(&now), Some(&other)) = (atomic.get(key), singles.get(key)) else {
-            // A partner section is not the one being edited, so none of its
+            // A partner line is not the one being edited, so none of its
             // stations may disappear on either side.
             problems.push(format!(
                 "partner station {key} is missing from one route's solve: atomic {:?}, singles {:?}",
@@ -1311,14 +1313,14 @@ fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec
         let held = anchors
             .merges
             .iter()
-            .any(|(a, b)| a.0 == section_id || b.0 == section_id)
-            || anchors.datums.iter().any(|(id, _)| *id == section_id);
+            .any(|(a, b)| a.0 == line_id || b.0 == line_id)
+            || anchors.datums.iter().any(|(id, _)| *id == line_id);
         if !held && positions_differ_in_plane(now, *was) {
             problems.push(format!(
-                "the range delete cut section {section_id} loose (no merge, no datum) and MOVED \
+                "the range delete cut line {line_id} loose (no merge, no datum) and MOVED \
                  it: station {key} was {was:?}, atomic {now:?} - a deferred cascade must leave a \
                  free-floating partner where it was (PR #95, \
-                 test_delete_range_shift_does_not_displace_free_floating_merged_section)"
+                 test_delete_range_shift_does_not_displace_free_floating_merged_line)"
             ));
         }
     }
@@ -1338,25 +1340,21 @@ fn pair_range_split_of_one_vs_delete_and_split(
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
-    let section_id = section_with_shots(&twins.left, rng, 3)?;
-    let ids = shot_ids(&twins.left, section_id);
+    let line_id = line_with_shots(&twins.left, rng, 3)?;
+    let ids = shot_ids(&twins.left, line_id);
     // Strictly interior: both paths refuse a prefix or suffix range.
     let position = 1 + rng.below(ids.len() - 2);
     let target = ids[position];
-    let ranged = twins.left.execute_delete_shot_range_split(
-        section_id,
-        target,
-        target,
-        "A".into(),
-        "B".into(),
-    );
+    let ranged =
+        twins
+            .left
+            .execute_delete_shot_range_split(line_id, target, target, "A".into(), "B".into());
     if !ranged.success {
         return None;
     }
-    let single =
-        twins
-            .right
-            .execute_delete_shot_and_split(section_id, target, "A".into(), "B".into());
+    let single = twins
+        .right
+        .execute_delete_shot_and_split(line_id, target, "A".into(), "B".into());
     if !single.success {
         return Some(Comparison {
             problems: vec![format!(
@@ -1368,7 +1366,7 @@ fn pair_range_split_of_one_vs_delete_and_split(
             shapes: BTreeMap::new(),
         });
     }
-    // Both routes MINT a section, so the new section's uuids cannot agree and
+    // Both routes MINT a line, so the new line's uuids cannot agree and
     // are masked. Everything else - the split point, which shots went to which
     // side, the offsets that keep B in place, the allocators - is strict.
     let mut found = twins.compare(pair, Mask::MintedUuids);
@@ -1394,6 +1392,7 @@ fn pair_batch_vs_sequential(
     let commands = batch_commands(&twins.left, rng)?;
     let batched = twins.left.execute(Command::Batch {
         commands: commands.clone(),
+        label: None,
     });
     if !batched.success {
         return None;
@@ -1432,14 +1431,15 @@ fn pair_poisoned_batch_is_a_no_op(
 ) -> Option<Comparison> {
     let mut commands = batch_commands(&twins.left, rng)?;
     let before = mask_timestamps(&canonical_snapshot(&twins.left, false));
-    // A section id that cannot exist. Placed LAST so everything before it
+    // A line id that cannot exist. Placed LAST so everything before it
     // succeeds and there is something real to roll back.
-    commands.push(Command::MoveSection {
-        section_id: 999_999,
+    commands.push(Command::MoveLine {
+        line_id: 999_999,
         offset: crate::models::Coordinates::new(1.0, 1.0, 1.0),
     });
     let batched = twins.left.execute(Command::Batch {
         commands: commands.clone(),
+        label: None,
     });
     let mut problems: Vec<String> = Vec::new();
     if batched.success {
@@ -1495,26 +1495,26 @@ fn pair_poisoned_batch_is_a_no_op(
 /// they are about actually runs.
 fn batch_commands(state: &AppState, rng: &mut Rng) -> Option<Vec<Command>> {
     let targets = read_targets(state);
-    if targets.sections.is_empty() {
+    if targets.lines.is_empty() {
         return None;
     }
     let mut commands = Vec::new();
     for _ in 0..rng.range(2, 4) {
         let built = match rng.below(3) {
-            0 => pick_shot(&targets, rng).map(|(section_id, shot_id)| Command::UpdateShot {
-                section_id,
+            0 => pick_shot(&targets, rng).map(|(line_id, shot_id)| Command::UpdateShot {
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     length: Some(rng.float(1.0, 15.0)),
                     ..ShotUpdates::default()
                 },
             }),
-            1 => Some(Command::MoveSection {
-                section_id: targets.sections[rng.below(targets.sections.len())].0,
+            1 => Some(Command::MoveLine {
+                line_id: targets.lines[rng.below(targets.lines.len())].0,
                 offset: random_offset(rng),
             }),
-            _ => Some(Command::ReverseSection {
-                section_id: targets.sections[rng.below(targets.sections.len())].0,
+            _ => Some(Command::ReverseLine {
+                line_id: targets.lines[rng.below(targets.lines.len())].0,
                 swap_left_right: rng.chance(50),
             }),
         };
@@ -1525,9 +1525,9 @@ fn batch_commands(state: &AppState, rng: &mut Rng) -> Option<Vec<Command>> {
     (!commands.is_empty()).then_some(commands)
 }
 
-/// PAIR 5. `ReverseSection` twice, against doing nothing at all.
+/// PAIR 5. `ReverseLine` twice, against doing nothing at all.
 ///
-/// The left twin is untouched and the right twin reverses the same section
+/// The left twin is untouched and the right twin reverses the same line
 /// twice, so the comparison is literally "is this an involution". Both flag
 /// values are tried in the same run because `swap_left_right` reverses a
 /// SECOND, independent thing (the L/R wall distances) and an involution in one
@@ -1537,11 +1537,11 @@ fn pair_reverse_twice_is_identity(
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
-    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    let line_id = line_with_shots(&twins.left, rng, 2)?;
     let swap = rng.chance(50);
     for _ in 0..2 {
-        let reversed = twins.right.execute(Command::ReverseSection {
-            section_id,
+        let reversed = twins.right.execute(Command::ReverseLine {
+            line_id,
             swap_left_right: swap,
         });
         if !reversed.success {
@@ -1554,19 +1554,19 @@ fn pair_reverse_twice_is_identity(
     Some(found)
 }
 
-/// Split Section Here (#335) at a random mid-section station, then undo it,
+/// Split Line Here (#335) at a random mid-line station, then undo it,
 /// against doing nothing. Every comment/datum side is drawn, so the copies the
 /// split makes onto the second half's start all have to vanish on undo.
-fn pair_split_section_then_undo_is_identity(
+fn pair_split_line_then_undo_is_identity(
     twins: &Twins,
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
-    let section_id = section_with_shots(&twins.left, rng, 2)?;
+    let line_id = line_with_shots(&twins.left, rng, 2)?;
     let shot_count = twins
         .left
         .get_project_state()?
-        .get_section(section_id)?
+        .get_line(line_id)?
         .shots
         .len();
     let station_index = 1 + rng.below(shot_count - 1) as u32;
@@ -1575,10 +1575,10 @@ fn pair_split_section_then_undo_is_identity(
         1 => crate::models::SplitSide::B,
         _ => crate::models::SplitSide::Both,
     };
-    let split = twins.right.execute_split_section(
-        section_id,
+    let split = twins.right.execute_split_line(
+        line_id,
         crate::models::SplitAt::Station { station_index },
-        crate::models::SplitSectionOptions {
+        crate::models::SplitLineOptions {
             name_a: "split-a".to_string(),
             name_b: "split-b".to_string(),
             color_a: "#111111".to_string(),
@@ -1593,7 +1593,7 @@ fn pair_split_section_then_undo_is_identity(
     let undo = twins.right.undo();
     assert!(
         undo.success,
-        "{pair}: the split of section {section_id} at station {station_index} succeeded but \
+        "{pair}: the split of line {line_id} at station {station_index} succeeded but \
          its undo failed: {:?}",
         undo.error
     );
@@ -1603,8 +1603,8 @@ fn pair_split_section_then_undo_is_identity(
     Some(found)
 }
 
-fn split_options(name: &str, color: &str) -> crate::models::SplitSectionOptions {
-    crate::models::SplitSectionOptions {
+fn split_options(name: &str, color: &str) -> crate::models::SplitLineOptions {
+    crate::models::SplitLineOptions {
         name_a: name.to_string(),
         name_b: format!("{name}-B"),
         color_a: color.to_string(),
@@ -1614,12 +1614,8 @@ fn split_options(name: &str, color: &str) -> crate::models::SplitSectionOptions 
     }
 }
 
-fn combine_options(
-    name: &str,
-    color: &str,
-    swap_lr: bool,
-) -> crate::models::CombineSectionsOptions {
-    crate::models::CombineSectionsOptions {
+fn combine_options(name: &str, color: &str, swap_lr: bool) -> crate::models::CombineLinesOptions {
+    crate::models::CombineLinesOptions {
         name: name.to_string(),
         color: color.to_string(),
         swap_lr,
@@ -1629,9 +1625,9 @@ fn combine_options(
     }
 }
 
-/// Split a random section at a mid station that no merge or closure touches
+/// Split a random line at a mid station that no merge or closure touches
 /// (a merge there makes the join a branch, which Combine refuses), on each of
-/// `sides`. Returns the two halves and the section's original name and colour.
+/// `sides`. Returns the two halves and the line's original name and colour.
 /// `None` when no such station exists, the split is refused, or it changed the
 /// merges (the orphan-closure sweep promoted a closure, which no combine
 /// undoes).
@@ -1639,15 +1635,12 @@ fn split_at_a_free_station(
     twins: &Twins,
     rng: &mut Rng,
     sides: &[Side],
-) -> Option<(SectionId, SectionId, String, String)> {
-    let section_id = section_with_shots(&twins.left, rng, 2)?;
-    credit_shots_distinctly(twins, rng, section_id);
+) -> Option<(LineId, LineId, String, String)> {
+    let line_id = line_with_shots(&twins.left, rng, 2)?;
+    credit_shots_distinctly(twins, rng, line_id);
     let project = twins.left.get_project_state()?;
-    let section = project.get_section(section_id)?;
-    let (name, color) = (
-        section.name.clone().unwrap_or_default(),
-        section.color.clone(),
-    );
+    let line = project.get_line(line_id)?;
+    let (name, color) = (line.name.clone().unwrap_or_default(), line.color.clone());
     let touched = |at: StationRef| {
         let hit = |key: &crate::models::StationKey| project.resolve_key(key) == Some(at);
         project
@@ -1659,8 +1652,8 @@ fn split_at_a_free_station(
                 .iter()
                 .any(|c| hit(&c.station_a) || hit(&c.station_b))
     };
-    let free: Vec<u32> = (1..section.shots.len() as u32)
-        .filter(|&i| !touched(StationRef::new(section_id, i)))
+    let free: Vec<u32> = (1..line.shots.len() as u32)
+        .filter(|&i| !touched(StationRef::new(line_id, i)))
         .collect();
     if free.is_empty() {
         return None;
@@ -1670,29 +1663,29 @@ fn split_at_a_free_station(
     let mut second = None;
     for &side in sides {
         let state = twins.state(side);
-        let split = state.execute_split_section(
-            section_id,
+        let split = state.execute_split_line(
+            line_id,
             crate::models::SplitAt::Station { station_index },
             split_options(&name, &color),
         );
         if !split.success || state.get_project_state()?.station_merges.len() != merges {
             return None;
         }
-        second = split.section_id;
+        second = split.line_id;
     }
-    Some((section_id, second?, name, color))
+    Some((line_id, second?, name, color))
 }
 
-/// Give every shot of `section_id` its own survey credit, the same on both
+/// Give every shot of `line_id` its own survey credit, the same on both
 /// twins (one shot in three left uncredited), so a pair that splits and
 /// combines it compares PER-SHOT credit rather than one template every shot
 /// shares. Written straight onto both projects: it is the twins' common
 /// starting state, not a step of either route.
-fn credit_shots_distinctly(twins: &Twins, rng: &mut Rng, section_id: SectionId) {
+fn credit_shots_distinctly(twins: &Twins, rng: &mut Rng, line_id: LineId) {
     let Some(count) = twins
         .left
         .get_project_state()
-        .and_then(|p| Some(p.get_section(section_id)?.shots.len()))
+        .and_then(|p| Some(p.get_line(line_id)?.shots.len()))
     else {
         return;
     };
@@ -1714,24 +1707,24 @@ fn credit_shots_distinctly(twins: &Twins, rng: &mut Rng, section_id: SectionId) 
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some(section) = guard.as_mut().and_then(|p| p.get_section_mut(section_id)) {
-            for (shot, credit) in section.shots.iter_mut().zip(&credits) {
+        if let Some(line) = guard.as_mut().and_then(|p| p.get_line_mut(line_id)) {
+            for (shot, credit) in line.shots.iter_mut().zip(&credits) {
                 shot.set_credit(credit.clone().unwrap_or_default());
             }
         }
     }
 }
 
-/// Two sections both twins can combine: a pair the project already holds, or
-/// one made by splitting a section on both twins.
-fn combinable_pair(twins: &Twins, rng: &mut Rng) -> Option<(SectionId, SectionId)> {
+/// Two lines both twins can combine: a pair the project already holds, or
+/// one made by splitting a line on both twins.
+fn combinable_pair(twins: &Twins, rng: &mut Rng) -> Option<(LineId, LineId)> {
     let project = twins.left.get_project_state()?;
-    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+    let ids: Vec<LineId> = project.lines.iter().map(|s| s.id).collect();
     let mut natural = Vec::new();
     for (i, &a) in ids.iter().enumerate() {
         for &b in &ids[i + 1..] {
             if project
-                .combine_candidate_for_sections(a, b)
+                .combine_candidate_for_lines(a, b)
                 .is_some_and(|c| c.blocked_reason.is_none())
             {
                 natural.push((a, b));
@@ -1745,21 +1738,21 @@ fn combinable_pair(twins: &Twins, rng: &mut Rng) -> Option<(SectionId, SectionId
     twins
         .left
         .get_project_state()?
-        .combine_candidate_for_sections(first, second)?
+        .combine_candidate_for_lines(first, second)?
         .blocked_reason
         .is_none()
         .then_some((first, second))
 }
 
-/// Combine Sections, then undo it, against doing nothing.
-fn pair_combine_sections_then_undo_is_identity(
+/// Combine Lines, then undo it, against doing nothing.
+fn pair_combine_lines_then_undo_is_identity(
     twins: &Twins,
     rng: &mut Rng,
     pair: &'static str,
 ) -> Option<Comparison> {
     let (a, b) = combinable_pair(twins, rng)?;
     let (kept, other) = if rng.chance(50) { (a, b) } else { (b, a) };
-    let combined = twins.right.execute_combine_sections(
+    let combined = twins.right.execute_combine_lines(
         kept,
         other,
         combine_options("c", "#333333", rng.chance(50)),
@@ -1791,12 +1784,12 @@ fn survey_content(state: &AppState) -> String {
         return snapshot;
     };
     if let serde_json::Value::Object(map) = &mut value {
-        map.remove("next_section_id");
-        if let Some(serde_json::Value::Array(sections)) = map.get_mut("sections") {
-            for section in sections {
-                if let serde_json::Value::Object(section) = section {
+        map.remove("next_line_id");
+        if let Some(serde_json::Value::Array(lines)) = map.get_mut("lines") {
+            for line in lines {
+                if let serde_json::Value::Object(line) = line {
                     for key in ["next_shot_id", "gauge_shot_uuid", "gauge_neighbour_uuid"] {
-                        section.remove(key);
+                        line.remove(key);
                     }
                 }
             }
@@ -1805,7 +1798,7 @@ fn survey_content(state: &AppState) -> String {
     value.to_string()
 }
 
-/// Split Section Here at a free mid station, then Combine Sections at the join
+/// Split Line Here at a free mid station, then Combine Lines at the join
 /// with the original name and colour, against doing nothing.
 fn pair_split_then_combine_at_the_join_is_identity(
     twins: &Twins,
@@ -1816,9 +1809,9 @@ fn pair_split_then_combine_at_the_join_is_identity(
     let candidate = twins
         .right
         .get_project_state()?
-        .combine_candidate_for_sections(first, second)?;
+        .combine_candidate_for_lines(first, second)?;
     if candidate.blocked_reason.is_some() {
-        // A section passes through the cut, the halves are tied elsewhere,
+        // A line passes through the cut, the halves are tied elsewhere,
         // or the cut's two copies sit more than 1 m apart in depth: Combine
         // refuses it.
         return None;
@@ -1826,7 +1819,7 @@ fn pair_split_then_combine_at_the_join_is_identity(
     let combined =
         twins
             .right
-            .execute_combine_sections(first, second, combine_options(&name, &color, false));
+            .execute_combine_lines(first, second, combine_options(&name, &color, false));
     assert!(combined.success, "{pair}: {:?}", combined.error);
 
     let mut found = Comparison::default();
@@ -1852,15 +1845,15 @@ fn pair_split_then_combine_at_the_join_is_identity(
         twins.left.get_project_state()?,
         twins.right.get_project_state()?,
     );
-    for section in &left.sections {
+    for line in &left.lines {
         let (l, r) = (
-            left.adjustment_anchor_for_tests(section.id),
-            right.adjustment_anchor_for_tests(section.id),
+            left.adjustment_anchor_for_tests(line.id),
+            right.adjustment_anchor_for_tests(line.id),
         );
         if l != r {
             found.problems.push(format!(
-                "section {}'s gauge station moved: {l:?} -> {r:?}",
-                section.id
+                "line {}'s gauge station moved: {l:?} -> {r:?}",
+                line.id
             ));
         }
     }
@@ -1872,7 +1865,7 @@ fn pair_split_then_combine_at_the_join_is_identity(
     Some(found)
 }
 
-/// Two sections that meet END to END: combine them directly (the combine
+/// Two lines that meet END to END: combine them directly (the combine
 /// reverses the other one), against reversing it first and combining end to
 /// start.
 fn pair_combine_end_to_end_is_reverse_then_combine(
@@ -1883,8 +1876,8 @@ fn pair_combine_end_to_end_is_reverse_then_combine(
     let (first, second, _, _) = split_at_a_free_station(twins, rng, &[Side::Left, Side::Right])?;
     // Reverse the second half on both twins: the halves now meet end to end.
     for side in [&twins.left, &twins.right] {
-        let reversed = side.execute(Command::ReverseSection {
-            section_id: second,
+        let reversed = side.execute(Command::ReverseLine {
+            line_id: second,
             swap_left_right: false,
         });
         if !reversed.success {
@@ -1894,7 +1887,7 @@ fn pair_combine_end_to_end_is_reverse_then_combine(
     let candidate = twins
         .left
         .get_project_state()?
-        .combine_candidate_for_sections(first, second)?;
+        .combine_candidate_for_lines(first, second)?;
     if candidate.blocked_reason.is_some() || !candidate.reverses {
         return None;
     }
@@ -1902,19 +1895,19 @@ fn pair_combine_end_to_end_is_reverse_then_combine(
     let options = combine_options("c", "#333333", swap_lr);
     let direct = twins
         .left
-        .execute_combine_sections(first, second, options.clone());
+        .execute_combine_lines(first, second, options.clone());
     assert!(direct.success, "{pair}: {:?}", direct.error);
-    let reversed = twins.right.execute(Command::ReverseSection {
-        section_id: second,
+    let reversed = twins.right.execute(Command::ReverseLine {
+        line_id: second,
         swap_left_right: swap_lr,
     });
     assert!(reversed.success, "{pair}: {:?}", reversed.error);
-    let combined = twins.right.execute_combine_sections(first, second, options);
+    let combined = twins.right.execute_combine_lines(first, second, options);
     assert!(combined.success, "{pair}: {:?}", combined.error);
     Some(twins.compare(pair, Mask::Strict))
 }
 
-/// PAIR 6. `MoveSection(+d)` then `MoveSection(-d)`, against doing nothing.
+/// PAIR 6. `MoveLine(+d)` then `MoveLine(-d)`, against doing nothing.
 ///
 /// An inverse pair rather than an involution, and the arithmetic is exact: the
 /// offsets are quantized to 1/1000 by the generator, so `+d` and `-d` cancel in
@@ -1925,19 +1918,17 @@ fn pair_move_out_and_back_is_identity(
     pair: &'static str,
 ) -> Option<Comparison> {
     let targets = read_targets(&twins.left);
-    if targets.sections.is_empty() {
+    if targets.lines.is_empty() {
         return None;
     }
-    let section_id = targets.sections[rng.below(targets.sections.len())].0;
+    let line_id = targets.lines[rng.below(targets.lines.len())].0;
     let offset = random_offset(rng);
-    let out = twins
-        .right
-        .execute(Command::MoveSection { section_id, offset });
+    let out = twins.right.execute(Command::MoveLine { line_id, offset });
     if !out.success {
         return None;
     }
-    let back = twins.right.execute(Command::MoveSection {
-        section_id,
+    let back = twins.right.execute(Command::MoveLine {
+        line_id,
         offset: crate::models::Coordinates::new(-offset.x, -offset.y, -offset.z),
     });
     if !back.success {
@@ -1949,15 +1940,15 @@ fn pair_move_out_and_back_is_identity(
     Some(found)
 }
 
-/// PAIR 7. `CreateSection { shots }` against `CreateSection { shots: [] }`
+/// PAIR 7. `CreateLine { shots }` against `CreateLine { shots: [] }`
 /// followed by one `CreateShot` append per shot.
 ///
-/// Both routes MINT everything, so uuids are masked - but the section's shape is
+/// Both routes MINT everything, so uuids are masked - but the line's shape is
 /// not: same shot count, same field values in the same order, same
-/// `next_shot_id`, same absence or presence of a `section_offsets` key. The last
+/// `next_shot_id`, same absence or presence of a `line_offsets` key. The last
 /// is the one worth having: the append path is offset-neutral by design (it is
 /// half of issue #413's finding 3) and the bulk constructor takes a different
-/// route into `Section::new`.
+/// route into `Line::new`.
 fn pair_create_with_shots_vs_appends(
     twins: &Twins,
     rng: &mut Rng,
@@ -1967,29 +1958,31 @@ fn pair_create_with_shots_vs_appends(
     let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
     let name = format!("pair-{}", rng.range(1000, 9999));
     let color = (*rng.pick(COLORS)).to_string();
-    let bulk = twins.left.execute(Command::CreateSection {
+    let bulk = twins.left.execute(Command::CreateLine {
         name: Some(name.clone()),
         surveyor: None,
         date: None,
         color: color.clone(),
         direction: None,
         shots: shots.clone(),
+        cave_section_id: None,
     });
     if !bulk.success {
         return None;
     }
-    let empty = twins.right.execute(Command::CreateSection {
+    let empty = twins.right.execute(Command::CreateLine {
         name: Some(name),
         surveyor: None,
         date: None,
         color,
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     });
-    let section_id = empty.section_id?;
+    let line_id = empty.line_id?;
     for shot in shots {
         let appended = twins.right.execute(Command::CreateShot {
-            section_id,
+            line_id,
             shot,
             after_shot_id: None,
             before_shot_id: None,
@@ -2111,7 +2104,7 @@ fn summarize(seed: u32, outcomes: &BTreeMap<&'static str, PairOutcome>) -> Strin
 /// `metamorphic_fuzz` for how the list was chosen and how to re-choose it.
 const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
 /// Prelude commands before the twins split. Enough to give the pairs varied
-/// topology (merged groups, sections of several lengths, an offset or two)
+/// topology (merged groups, lines of several lengths, an offset or two)
 /// without spending the run in the generator.
 const GATE_PRELUDE: usize = 12;
 /// Times each pair is built per seed, each on fresh twins.

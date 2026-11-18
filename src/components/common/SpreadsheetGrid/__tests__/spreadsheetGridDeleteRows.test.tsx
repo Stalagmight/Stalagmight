@@ -133,7 +133,7 @@ describe('SpreadsheetGrid row deletion', () => {
 
 describe('SpreadsheetGrid row deletion the host refuses', () => {
   it('keeps the selection when onDeleteRows returns false', () => {
-    // A host refuses (mid-section run) or defers behind a confirm. The rows are
+    // A host refuses (mid-line run) or defers behind a confirm. The rows are
     // still there, so clearing the selection would strand the user - and for the
     // confirm it would clear it before they answered.
     const onDeleteRows = vi.fn(() => false);

@@ -7,7 +7,7 @@
 //! unchanged; over it, the undo history is left out of the COPY when that is
 //! enough; otherwise the push is refused with a clear error and no request.
 //!
-//! Every file here is synthetic: a one-section project plus an undo history of
+//! Every file here is synthetic: a one-line project plus an undo history of
 //! incompressible payloads, sized against a small test limit.
 
 use std::path::{Path, PathBuf};

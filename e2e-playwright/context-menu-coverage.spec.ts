@@ -2,16 +2,16 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
 
-type StationRef = { section_id: number; station_index: number };
+type StationRef = { line_id: number; station_index: number };
 
 type MenuTargets = {
-  sectionId: number;
-  sectionName: string;
+  lineId: number;
+  lineName: string;
   shotIds: number[];
   stationRefs: StationRef[];
 };
@@ -37,9 +37,9 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Men
   await createProject(page, 'Context Menu Coverage');
 
   const shots = Array.from({ length: shotCount }, (_, idx) => buildShot(idx));
-  await seedProjectWithSections(page, [
+  await seedProjectWithLines(page, [
     {
-      name: 'Context Section',
+      name: 'Context Line',
       direction: 'in',
       shots,
     },
@@ -58,20 +58,20 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Men
     if (!e2e) return null;
 
     const state = e2e.projectStore.getState();
-    const section = state.project?.sections?.[0];
+    const line = state.project?.lines?.[0];
     const stations = (state.stations ?? [])
-      .filter((s) => s.station_ref.section_id === section?.id)
+      .filter((s) => s.station_ref.line_id === line?.id)
       .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
 
     return {
-      sectionId: section?.id ?? null,
-      sectionName: section?.name ?? `Section ${section?.id ?? 0}`,
-      shotIds: (section?.shots ?? []).map((s: any) => s.id),
+      lineId: line?.id ?? null,
+      lineName: line?.name ?? `Line ${line?.id ?? 0}`,
+      shotIds: (line?.shots ?? []).map((s: any) => s.id),
       stationRefs: stations.map((s) => s.station_ref),
     };
   });
 
-  if (!ids || !ids.sectionId || ids.shotIds.length < 1 || ids.stationRefs.length < 1) {
+  if (!ids || !ids.lineId || ids.shotIds.length < 1 || ids.stationRefs.length < 1) {
     throw new Error('Failed to resolve IDs for context menu tests.');
   }
 
@@ -89,7 +89,7 @@ async function setupProjectWithMergedStation(
   await setupMockedPage(page);
   await createProject(page, 'Context Menu Unmerge Coverage');
 
-  await seedProjectWithSections(page, [
+  await seedProjectWithLines(page, [
     { name: 'Merge A', direction: 'in', shots: [buildShot(0)] },
     { name: 'Merge B', direction: 'in', shots: [buildShot(1)] },
     { name: 'Merge C', direction: 'in', shots: [buildShot(2)] },
@@ -103,7 +103,7 @@ async function setupProjectWithMergedStation(
       __E2E_TEST__?: {
         projectStore: {
           getState: () => {
-            project: { sections: Array<{ id: number }> } | null;
+            project: { lines: Array<{ id: number }> } | null;
             mergeStations: (a: StationRef, b: StationRef) => Promise<unknown>;
           };
         };
@@ -112,12 +112,12 @@ async function setupProjectWithMergedStation(
 
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
-    const sectionIds = (state.project?.sections ?? []).map((section) => section.id);
-    if (sectionIds.length < 3) return null;
+    const lineIds = (state.project?.lines ?? []).map((line) => line.id);
+    if (lineIds.length < 3) return null;
 
-    const targetRef = { section_id: sectionIds[0]!, station_index: 0 };
-    const mergeRefA = { section_id: sectionIds[1]!, station_index: 0 };
-    const mergeRefB = { section_id: sectionIds[2]!, station_index: 0 };
+    const targetRef = { line_id: lineIds[0]!, station_index: 0 };
+    const mergeRefA = { line_id: lineIds[1]!, station_index: 0 };
+    const mergeRefB = { line_id: lineIds[2]!, station_index: 0 };
 
     await state.mergeStations(targetRef, mergeRefA);
     if (count > 1) {
@@ -151,7 +151,7 @@ async function setupProjectWithStationClosures(
   await setupMockedPage(page);
   await createProject(page, 'Context Menu Closure Coverage');
 
-  await seedProjectWithSections(page, [
+  await seedProjectWithLines(page, [
     { name: 'Closure A', direction: 'in', shots: [buildShot(0)] },
     { name: 'Closure B', direction: 'in', shots: [buildShot(1)] },
     { name: 'Closure C', direction: 'in', shots: [buildShot(2)] },
@@ -166,7 +166,7 @@ async function setupProjectWithStationClosures(
         projectStore: {
           getState: () => {
             project: {
-              sections: Array<{ id: number }>;
+              lines: Array<{ id: number }>;
               loop_closures: Array<{
                 id: bigint;
                 station_a: StationRef;
@@ -181,12 +181,12 @@ async function setupProjectWithStationClosures(
 
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
-    const sectionIds = (state.project?.sections ?? []).map((section) => section.id);
-    if (sectionIds.length < 3) return null;
+    const lineIds = (state.project?.lines ?? []).map((line) => line.id);
+    if (lineIds.length < 3) return null;
 
-    const targetRef = { section_id: sectionIds[0]!, station_index: 0 };
-    const closureRefA = { section_id: sectionIds[1]!, station_index: 0 };
-    const closureRefB = { section_id: sectionIds[2]!, station_index: 0 };
+    const targetRef = { line_id: lineIds[0]!, station_index: 0 };
+    const closureRefA = { line_id: lineIds[1]!, station_index: 0 };
+    const closureRefB = { line_id: lineIds[2]!, station_index: 0 };
 
     await state.createLoopClosure(targetRef, closureRefA, 'batch');
     if (count > 1) {
@@ -197,14 +197,14 @@ async function setupProjectWithStationClosures(
     const findByPair = (a: StationRef, b: StationRef) => {
       return closures.find((closure: any) => {
         const direct =
-          closure.station_a.section_id === a.section_id &&
+          closure.station_a.line_id === a.line_id &&
           closure.station_a.station_index === a.station_index &&
-          closure.station_b.section_id === b.section_id &&
+          closure.station_b.line_id === b.line_id &&
           closure.station_b.station_index === b.station_index;
         const reverse =
-          closure.station_a.section_id === b.section_id &&
+          closure.station_a.line_id === b.line_id &&
           closure.station_a.station_index === b.station_index &&
-          closure.station_b.section_id === a.section_id &&
+          closure.station_b.line_id === a.line_id &&
           closure.station_b.station_index === a.station_index;
         return direct || reverse;
       });
@@ -246,26 +246,26 @@ async function openContextMenu(page: Page, target: Record<string, unknown>) {
 
 test.describe('Context Menu Coverage', () => {
   test('shot menu sets the shot kind and routes delete dialogs', async ({ page }) => {
-    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const { lineId, shotIds, lineName } = await setupProjectWithShots(page, 3);
 
     const [firstShotId, midShotId] = shotIds;
 
-    await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
+    await openContextMenu(page, { type: 'shot', lineId, shotId: firstShotId });
     await expect(page.getByRole('button', { name: 'Edit Shot' })).toBeVisible();
 
     // #27: the menu offers the two kinds the shot is not, outright.
     await page.getByRole('button', { name: 'Mark as Reference' }).click();
 
     await expect.poll(async () => {
-      return page.evaluate(({ sectionId, shotId }) => {
+      return page.evaluate(({ lineId, shotId }) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
-        const section = state.project.sections.find((s: any) => s.id === sectionId);
-        const shot = section?.shots.find((s: any) => s.id === shotId);
+        const line = state.project.lines.find((s: any) => s.id === lineId);
+        const shot = line?.shots.find((s: any) => s.id === shotId);
         return shot?.kind ?? null;
-      }, { sectionId, shotId: firstShotId });
+      }, { lineId, shotId: firstShotId });
     }).toBe('Reference');
 
-    await openContextMenu(page, { type: 'shot', sectionId, shotId: midShotId });
+    await openContextMenu(page, { type: 'shot', lineId, shotId: midShotId });
     await page.getByRole('button', { name: 'Delete Shot' }).click();
 
     const deleteChoice = page.getByTestId('delete-shot-choice-dialog');
@@ -273,7 +273,7 @@ test.describe('Context Menu Coverage', () => {
     await deleteChoice.getByRole('button', { name: 'Cancel' }).click();
     await expect(deleteChoice).not.toBeVisible({ timeout: 5000 });
 
-    await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
+    await openContextMenu(page, { type: 'shot', lineId, shotId: firstShotId });
     await page.getByRole('button', { name: 'Delete Shot' }).click();
 
     const confirmDialog = page.getByTestId('confirm-dialog');
@@ -285,17 +285,17 @@ test.describe('Context Menu Coverage', () => {
   });
 
   test('datatable shot menu uses delete helper for mid-shot', async ({ page }) => {
-    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const { lineId, shotIds, lineName } = await setupProjectWithShots(page, 3);
     const midShotId = shotIds[1];
 
     await openContextMenu(page, {
       type: 'datatable-shot',
-      sectionId,
+      lineId,
       shotId: midShotId,
       isFirst: false,
       isLast: false,
       totalShots: 3,
-      sectionName,
+      lineName,
     });
 
     await page.getByRole('button', { name: 'Delete Shot' }).click();
@@ -303,7 +303,7 @@ test.describe('Context Menu Coverage', () => {
   });
 
   test('station menu exposes add-shot options and merge tool', async ({ page }) => {
-    const { sectionId, stationRefs } = await setupProjectWithShots(page, 3);
+    const { lineId, stationRefs } = await setupProjectWithShots(page, 3);
     const firstStation = stationRefs[0];
     const lastStation = stationRefs[stationRefs.length - 1];
 
@@ -342,13 +342,13 @@ test.describe('Context Menu Coverage', () => {
     });
   });
 
-  test('section menu opens adjust position dialog', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 2);
+  test('line menu opens adjust position dialog', async ({ page }) => {
+    const { lineId } = await setupProjectWithShots(page, 2);
 
-    await openContextMenu(page, { type: 'section', sectionId });
+    await openContextMenu(page, { type: 'line', lineId });
     await page.getByRole('button', { name: 'Adjust Position...' }).click();
 
-    const dialog = page.getByTestId('section-adjust-dialog');
+    const dialog = page.getByTestId('line-adjust-dialog');
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
@@ -384,7 +384,7 @@ test.describe('Context Menu Coverage', () => {
     const unmergeDialog = page.getByTestId('unmerge-stations-dialog');
     await expect(unmergeDialog).toBeVisible();
 
-    await page.getByTestId(`unmerge-station-option-${mergeRefB.section_id}-${mergeRefB.station_index}`).click();
+    await page.getByTestId(`unmerge-station-option-${mergeRefB.line_id}-${mergeRefB.station_index}`).click();
     await page.getByTestId('unmerge-stations-confirm').click();
     await expect(unmergeDialog).not.toBeVisible({ timeout: 5000 });
 
@@ -394,14 +394,14 @@ test.describe('Context Menu Coverage', () => {
         const merges = state.project?.station_merges ?? [];
         const hasRemovedPair = merges.some((merge: any) => {
           const direct =
-            merge.station_a.section_id === target.section_id &&
+            merge.station_a.line_id === target.line_id &&
             merge.station_a.station_index === target.station_index &&
-            merge.station_b.section_id === removed.section_id &&
+            merge.station_b.line_id === removed.line_id &&
             merge.station_b.station_index === removed.station_index;
           const reverse =
-            merge.station_b.section_id === target.section_id &&
+            merge.station_b.line_id === target.line_id &&
             merge.station_b.station_index === target.station_index &&
-            merge.station_a.section_id === removed.section_id &&
+            merge.station_a.line_id === removed.line_id &&
             merge.station_a.station_index === removed.station_index;
           return direct || reverse;
         });
@@ -463,10 +463,10 @@ test.describe('Context Menu Coverage', () => {
 
 test.describe('Insert Station (#59)', () => {
   test('shot menu offers Insert Station, opens the dialog, and confirms a split', async ({ page }) => {
-    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const { lineId, shotIds, lineName } = await setupProjectWithShots(page, 3);
     const firstShotId = shotIds[0];
 
-    await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
+    await openContextMenu(page, { type: 'shot', lineId, shotId: firstShotId });
     const insertItem = page.getByRole('button', { name: 'Insert Station...' });
     await expect(insertItem).toBeVisible();
     await expect(insertItem).toBeEnabled();
@@ -474,7 +474,7 @@ test.describe('Insert Station (#59)', () => {
 
     const dialog = page.getByTestId('insert-station-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText(sectionName);
+    await expect(dialog).toContainText(lineName);
     // buildShot(0) yields length 6.
     await expect(page.getByTestId('insert-station-preview')).toContainText('Total shot length: 6.00');
 
@@ -486,14 +486,14 @@ test.describe('Insert Station (#59)', () => {
       const calls = ((window as any).__MOCK_SPLIT_SHOT_CALLS__ ?? []) as Array<any>;
       return calls[calls.length - 1] ?? null;
     });
-    expect(call).toEqual({ sectionId, shotId: firstShotId, distance: 2.5 });
+    expect(call).toEqual({ lineId, shotId: firstShotId, distance: 2.5 });
   });
 
   test('a zero-length shot disables Insert Station', async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Zero Length Shot');
-    await seedProjectWithSections(page, [
-      { name: 'Zero Section', direction: 'in', shots: [buildShot(0, { length: 0 })] },
+    await seedProjectWithLines(page, [
+      { name: 'Zero Line', direction: 'in', shots: [buildShot(0, { length: 0 })] },
     ]);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
@@ -502,26 +502,26 @@ test.describe('Insert Station (#59)', () => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: { projectStore: { getState: () => { project: any } } };
       }).__E2E_TEST__;
-      const section = e2e?.projectStore.getState().project?.sections?.[0];
-      return { sectionId: section?.id ?? null, shotId: section?.shots?.[0]?.id ?? null };
+      const line = e2e?.projectStore.getState().project?.lines?.[0];
+      return { lineId: line?.id ?? null, shotId: line?.shots?.[0]?.id ?? null };
     });
-    if (!ids.sectionId || !ids.shotId) {
+    if (!ids.lineId || !ids.shotId) {
       throw new Error('Failed to resolve the zero-length shot');
     }
 
-    await openContextMenu(page, { type: 'shot', sectionId: ids.sectionId, shotId: ids.shotId });
+    await openContextMenu(page, { type: 'shot', lineId: ids.lineId, shotId: ids.shotId });
     await expect(page.getByRole('button', { name: 'Insert Station...' })).toBeDisabled();
   });
 
   test('Insert Station is absent for a shot target in Plan mode', async ({ page }) => {
-    const { sectionId, shotIds } = await setupProjectWithShots(page, 3);
+    const { lineId, shotIds } = await setupProjectWithShots(page, 3);
 
     await page.locator('[data-testid="mode-plan"]').click();
     await expect.poll(async () => {
       return page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().appMode);
     }).toBe('plan');
 
-    await openContextMenu(page, { type: 'shot', sectionId, shotId: shotIds[0] });
+    await openContextMenu(page, { type: 'shot', lineId, shotId: shotIds[0] });
     await expect(page.getByRole('button', { name: 'Insert Station...' })).toHaveCount(0);
   });
 

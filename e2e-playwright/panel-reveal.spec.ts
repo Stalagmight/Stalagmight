@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, type SectionSeed } from './helpers/app';
+import { seedProjectWithLines, waitForMapReady, type LineSeed } from './helpers/app';
 
 /**
  * E2E tests for the two-mode (hover/pin) panel reveal behavior and opener tabs
@@ -18,7 +18,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Panel Main',
     direction: 'in',
@@ -71,7 +71,7 @@ test.describe('Panel reveal (hover/pin)', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Panel Reveal Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
   });
 

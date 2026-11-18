@@ -8,7 +8,7 @@
 //! * The refusal probe at the edges of the reachable window: a step past the
 //!   floor or the top has to be refused and change nothing.
 //! * ALWAYS ON, every mode: after every step the id allocators sit above every
-//!   id they could hand out again and no section holds a shot id twice
+//!   id they could hand out again and no line holds a shot id twice
 //!   (`expect_ids_sound`); after every reload every compact entry the history
 //!   kept fits the state it will be applied to (`expect_entries_fit`), and a
 //!   file this run wrote and nothing touched never loses its history.
@@ -152,7 +152,7 @@ impl Fuzzer {
     /// Each stack is walked from the live project outwards - newest entry
     /// first, each delta applied to what the one before it produced - which is
     /// the route the steps will take. The load's own check
-    /// (`drop_history_that_does_not_fit`) walks the same route over section
+    /// (`drop_history_that_does_not_fit`) walks the same route over line
     /// and shot ownership only; this applies the whole delta, so a top-level
     /// list whose recorded length no longer matches is seen too. A typed entry
     /// cannot be followed without executing it, so the walk of a stack stops
@@ -203,9 +203,9 @@ impl Fuzzer {
         }
     }
 
-    /// ALWAYS ON, after every step: per section, every shot id is unique and
-    /// below the section's `next_shot_id`, and `next_section_id` is above every
-    /// section id. The snapshot oracle cannot see either - it replaces shot ids
+    /// ALWAYS ON, after every step: per line, every shot id is unique and
+    /// below the line's `next_shot_id`, and `next_line_id` is above every
+    /// line id. The snapshot oracle cannot see either - it replaces shot ids
     /// with positions once a run has reloaded, and it drops the allocators -
     /// so an allocator left behind the ids it hands out next would otherwise
     /// surface only as a later collision, if at all.
@@ -214,25 +214,25 @@ impl Fuzzer {
             return;
         };
         let mut wrong = Vec::new();
-        for section in &project.sections {
-            if section.id >= project.next_section_id {
+        for line in &project.lines {
+            if line.id >= project.next_line_id {
                 wrong.push(format!(
-                    "  section {} is not below next_section_id {}",
-                    section.id, project.next_section_id
+                    "  line {} is not below next_line_id {}",
+                    line.id, project.next_line_id
                 ));
             }
             let mut seen = BTreeSet::new();
-            for shot in &section.shots {
+            for shot in &line.shots {
                 if !seen.insert(shot.id) {
                     wrong.push(format!(
-                        "  section {} holds shot id {} twice",
-                        section.id, shot.id
+                        "  line {} holds shot id {} twice",
+                        line.id, shot.id
                     ));
                 }
-                if shot.id >= section.next_shot_id {
+                if shot.id >= line.next_shot_id {
                     wrong.push(format!(
-                        "  section {} holds shot id {}, not below its next_shot_id {}",
-                        section.id, shot.id, section.next_shot_id
+                        "  line {} holds shot id {}, not below its next_shot_id {}",
+                        line.id, shot.id, line.next_shot_id
                     ));
                 }
             }

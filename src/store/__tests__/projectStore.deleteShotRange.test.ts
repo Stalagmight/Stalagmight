@@ -20,14 +20,14 @@ describe('projectStore range deletion', () => {
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
   });
 
-  it('deleteShotRangeSplit invokes delete_shot_range_split with both section names', async () => {
+  it('deleteShotRangeSplit invokes delete_shot_range_split with both line names', async () => {
     const result = await useProjectStore
       .getState()
       .deleteShotRangeSplit(1, 10, 13, 'Left', 'Right');
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'delete_shot_range_split',
-      { sectionId: 1, startShotId: 10, endShotId: 13, nameA: 'Left', nameB: 'Right' },
+      { lineId: 1, startShotId: 10, endShotId: 13, nameA: 'Left', nameB: 'Right' },
       expect.objectContaining({ purpose: expect.any(String) })
     );
     expect(result.success).toBe(true);
@@ -38,7 +38,7 @@ describe('projectStore range deletion', () => {
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
       'delete_shot_range_shift',
-      { sectionId: 2, startShotId: 20, endShotId: 22 },
+      { lineId: 2, startShotId: 20, endShotId: 22 },
       expect.objectContaining({ purpose: expect.any(String) })
     );
     expect(result.success).toBe(true);

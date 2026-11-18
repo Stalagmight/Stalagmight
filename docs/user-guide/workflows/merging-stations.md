@@ -1,12 +1,12 @@
 ---
 title: Merging stations
-description: "Join two survey sections at a shared station with the Merge tool or the station menu, see which side moves, and unmerge stations again if needed."
+description: "Join two survey lines at a shared station with the Merge tool or the station menu, see which side moves, and unmerge stations again if needed."
 order: 6
 ---
 
 # Merging stations
 
-Joins two sections at a shared station. Useful when a section could not be
+Joins two lines at a shared station. Useful when a line could not be
 placed from reference shots and was placed by hand, or to join two parts of a
 cave that each have their own GPS position.
 
@@ -34,13 +34,13 @@ go. See the [station context menu](../screens/station-context-menu.md).
 ![Merge Stations dialog](../images/merge-dialog.png)
 
 - **Station A** (2) is the first station clicked, **Station B** (3) the second.
-- **Merge** (5). The first station's section moves onto the second, unless a
+- **Merge** (5). The first station's line moves onto the second, unless a
   zero datum holds it in place.
 
 ### Details
 
 - After the second click, Stalagmight checks that the merge is possible. If the
-  two sections are already connected, on one section or through other merges
+  two lines are already connected, on one line or through other merges
   and closures, it offers a [loop closure](closing-a-loop.md) instead. If the
   stations are already merged or already joined by a loop closure, a
   notification says so.

@@ -21,7 +21,7 @@ describe('SystemCard - onOpen delegation (#450)', () => {
         location={null}
         filePath={FILE_PATH}
         modifiedAt="2026-07-26T00:00:00Z"
-        sectionCount={3}
+        lineCount={3}
         totalLength={120}
         onOpen={onOpen}
       />,
@@ -40,7 +40,7 @@ describe('SystemCard - onOpen delegation (#450)', () => {
         location={null}
         filePath={FILE_PATH}
         modifiedAt="2026-07-26T00:00:00Z"
-        sectionCount={3}
+        lineCount={3}
         totalLength={120}
       />,
     );

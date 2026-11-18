@@ -1,7 +1,7 @@
 /**
  * E2E: the DetailPanel action-footer buttons are gated when editing is blocked (#260).
  *
- * The footer verbs (station Edit, shot Mark-as-<kind> / Delete, section Edit section)
+ * The footer verbs (station Edit, shot Mark-as-<kind> / Delete, line Edit line)
  * all sit behind `useEditingBlocked()`. This spec asserts that gating through the
  * stable `data-testid`s rather than by scraping label text, so a copy change can't
  * silently turn the read-only assertion into a no-op.
@@ -18,12 +18,12 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Main Tunnel',
     direction: 'in',
@@ -38,10 +38,10 @@ const sectionSeeds: SectionSeed[] = [
 const STATION_EDIT = 'station-edit-button';
 const SHOT_KIND_CYCLE = 'shot-kind-cycle-button';
 const SHOT_DELETE = 'shot-delete-button';
-const SECTION_EDIT = 'section-edit-button';
+const LINE_EDIT = 'line-edit-button';
 
 interface SeededIds {
-  sectionId: number;
+  lineId: number;
   shotId: number;
 }
 
@@ -51,13 +51,13 @@ async function seedIds(page: Page): Promise<SeededIds> {
       __E2E_TEST__?: {
         projectStore: {
           getState: () => {
-            project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+            project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
           };
         };
       };
     }).__E2E_TEST__;
-    const section = stores?.projectStore.getState().project?.sections[0];
-    return { sectionId: section?.id ?? -1, shotId: section?.shots[0]?.id ?? -1 };
+    const line = stores?.projectStore.getState().project?.lines[0];
+    return { lineId: line?.id ?? -1, shotId: line?.shots[0]?.id ?? -1 };
   });
 }
 
@@ -110,7 +110,7 @@ async function setSpeleoReadOnly(page: Page, readOnly: boolean): Promise<void> {
  * silently asserts nothing. `Batch` is one of the two eligible strategies -
  * see `hasEligibleClosures` in src/utils/closures.ts.
  */
-async function seedEligibleClosure(page: Page, sectionId: number): Promise<void> {
+async function seedEligibleClosure(page: Page, lineId: number): Promise<void> {
   await page.evaluate((secId) => {
     const stores = (window as unknown as {
       __E2E_TEST__?: {
@@ -129,8 +129,8 @@ async function seedEligibleClosure(page: Page, sectionId: number): Promise<void>
           ...project.loop_closures,
           {
             id: 1,
-            station_a: { section_id: secId, station_index: 0 },
-            station_b: { section_id: secId, station_index: 2 },
+            station_a: { line_id: secId, station_index: 0 },
+            station_b: { line_id: secId, station_index: 2 },
             path_length: 22,
             misclosure_distance: 0.3,
             error_percentage: 1.4,
@@ -142,7 +142,7 @@ async function seedEligibleClosure(page: Page, sectionId: number): Promise<void>
         ],
       },
     });
-  }, sectionId);
+  }, lineId);
 }
 
 async function readGeometryMode(page: Page): Promise<string | undefined> {
@@ -171,15 +171,15 @@ test.describe('DetailPanel footer verbs are gated when editing is blocked', () =
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Read-only Gating');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapIdle(page);
   });
 
   test('station Edit is enabled while editable and disabled read-only', async ({ page }) => {
-    const { sectionId } = await seedIds(page);
+    const { lineId } = await seedIds(page);
     await select(page, {
       type: 'station',
-      stationRef: { section_id: sectionId, station_index: 0 },
+      stationRef: { line_id: lineId, station_index: 0 },
     });
 
     const edit = page.getByTestId(STATION_EDIT);
@@ -193,8 +193,8 @@ test.describe('DetailPanel footer verbs are gated when editing is blocked', () =
   });
 
   test('shot Mark-as-kind and Delete are disabled read-only', async ({ page }) => {
-    const { sectionId, shotId } = await seedIds(page);
-    await select(page, { type: 'shot', sectionId, shotId });
+    const { lineId, shotId } = await seedIds(page);
+    await select(page, { type: 'shot', lineId, shotId });
 
     const markKind = page.getByTestId(SHOT_KIND_CYCLE);
     const del = page.getByTestId(SHOT_DELETE);
@@ -210,37 +210,37 @@ test.describe('DetailPanel footer verbs are gated when editing is blocked', () =
     await expect(del).toBeEnabled();
   });
 
-  test('section Edit-section is disabled read-only', async ({ page }) => {
-    const { sectionId } = await seedIds(page);
-    await select(page, { type: 'section', sectionId });
+  test('line Edit-line is disabled read-only', async ({ page }) => {
+    const { lineId } = await seedIds(page);
+    await select(page, { type: 'line', lineId });
 
-    const editSection = page.getByTestId(SECTION_EDIT);
-    await expect(editSection).toBeEnabled();
+    const editLine = page.getByTestId(LINE_EDIT);
+    await expect(editLine).toBeEnabled();
 
     await setSpeleoReadOnly(page, true);
-    await expect(editSection).toBeDisabled();
+    await expect(editLine).toBeDisabled();
   });
 
   test('the closure-adjusted view disables every footer verb too', async ({ page }) => {
-    const { sectionId, shotId } = await seedIds(page);
+    const { lineId, shotId } = await seedIds(page);
     // The mode only STICKS on a project with an eligible closure; without one
     // MapCanvas reverts it and this test would assert the measured view instead.
-    await seedEligibleClosure(page, sectionId);
+    await seedEligibleClosure(page, lineId);
     await setClosureAdjusted(page, true);
     await expect.poll(() => readGeometryMode(page)).toBe('closureAdjusted');
 
     await select(page, {
       type: 'station',
-      stationRef: { section_id: sectionId, station_index: 0 },
+      stationRef: { line_id: lineId, station_index: 0 },
     });
     await expect(page.getByTestId(STATION_EDIT)).toBeDisabled();
 
-    await select(page, { type: 'shot', sectionId, shotId });
+    await select(page, { type: 'shot', lineId, shotId });
     await expect(page.getByTestId(SHOT_KIND_CYCLE)).toBeDisabled();
     await expect(page.getByTestId(SHOT_DELETE)).toBeDisabled();
 
-    await select(page, { type: 'section', sectionId });
-    await expect(page.getByTestId(SECTION_EDIT)).toBeDisabled();
+    await select(page, { type: 'line', lineId });
+    await expect(page.getByTestId(LINE_EDIT)).toBeDisabled();
 
     // Still the adjusted view at the end: a mid-test revert to `measured` would
     // leave the SpeleoDB term as the only thing gating these buttons, quietly

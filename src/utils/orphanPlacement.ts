@@ -51,7 +51,7 @@ export function mergeOptionsOf(s: OrphanPlacementSuggestion, orphanShotCount: nu
 export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, project: Project): boolean {
   if (suggestion.matchedShots === 0) return false;
 
-  const sid = suggestion.targetSectionId;
+  const sid = suggestion.targetLineId;
 
   // BFS: can `start` reach a placement zero datum via merges + aligned
   // closures without traversing through `excluded`?
@@ -63,24 +63,24 @@ export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, pr
       if (current === excluded) continue;
       if (visited.has(current)) continue;
       visited.add(current);
-      if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.section_id === current)) {
+      if (project.zero_datums.some((zd) => zd.role === 'Placement' && zd.station_ref.line_id === current)) {
         return true;
       }
       for (const m of project.station_merges) {
-        if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
-          queue.push(m.station_b.section_id);
+        if (m.station_a.line_id === current && !visited.has(m.station_b.line_id)) {
+          queue.push(m.station_b.line_id);
         }
-        if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
-          queue.push(m.station_a.section_id);
+        if (m.station_b.line_id === current && !visited.has(m.station_a.line_id)) {
+          queue.push(m.station_a.line_id);
         }
       }
       for (const c of project.loop_closures) {
         if (!c.is_aligned) continue;
-        if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
-          queue.push(c.station_b.section_id);
+        if (c.station_a.line_id === current && !visited.has(c.station_b.line_id)) {
+          queue.push(c.station_b.line_id);
         }
-        if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
-          queue.push(c.station_a.section_id);
+        if (c.station_b.line_id === current && !visited.has(c.station_a.line_id)) {
+          queue.push(c.station_a.line_id);
         }
       }
     }
@@ -98,25 +98,25 @@ export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, pr
     maxShot = suggestion.targetStationIndex - 1;
   }
 
-  // Collect anchor station indices on the target section
+  // Collect anchor station indices on the target line
   const anchors: number[] = [];
   for (const zd of project.zero_datums) {
-    if (zd.role === 'Placement' && zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+    if (zd.role === 'Placement' && zd.station_ref.line_id === sid) anchors.push(zd.station_ref.station_index);
   }
   for (const m of project.station_merges) {
-    if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
+    if (m.station_a.line_id === sid && hasDatumPathExcluding(m.station_b.line_id, sid)) {
       anchors.push(m.station_a.station_index);
     }
-    if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
+    if (m.station_b.line_id === sid && hasDatumPathExcluding(m.station_a.line_id, sid)) {
       anchors.push(m.station_b.station_index);
     }
   }
   for (const c of project.loop_closures) {
     if (!c.is_aligned) continue;
-    if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
+    if (c.station_a.line_id === sid && hasDatumPathExcluding(c.station_b.line_id, sid)) {
       anchors.push(c.station_a.station_index);
     }
-    if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
+    if (c.station_b.line_id === sid && hasDatumPathExcluding(c.station_a.line_id, sid)) {
       anchors.push(c.station_b.station_index);
     }
   }
@@ -153,24 +153,24 @@ export async function placeSuggestion(
   const mergeImport = mergePair?.importStation ?? suggestion.orphanStationIndex;
   const mergeExisting = mergePair?.existingStation ?? suggestion.targetStationIndex;
   const merged = await actions.mergeStations(
-    { section_id: suggestion.orphanSectionId, station_index: mergeImport },
-    { section_id: suggestion.targetSectionId, station_index: mergeExisting },
+    { line_id: suggestion.orphanLineId, station_index: mergeImport },
+    { line_id: suggestion.targetLineId, station_index: mergeExisting },
   );
   if (!merged.success || suggestion.matchedShots === 0) return merged;
 
-  // Fresh sections: the merge above refreshed the project.
+  // Fresh lines: the merge above refreshed the project.
   const proj = actions.project();
-  const oSection = proj?.sections.find((s) => s.id === suggestion.orphanSectionId);
-  const tSection = proj?.sections.find((s) => s.id === suggestion.targetSectionId);
-  if (!oSection || !tSection) return merged;
+  const oLine = proj?.lines.find((s) => s.id === suggestion.orphanLineId);
+  const tLine = proj?.lines.find((s) => s.id === suggestion.targetLineId);
+  if (!oLine || !tLine) return merged;
 
   const params = overlapParamsOf(suggestion);
-  for (const repeat of repeatedShots(params, mergeImport, oSection.shots, tSection.shots)) {
-    await actions.setShotKind(suggestion.orphanSectionId, repeat.orphanShot.id, 'Reference');
+  for (const repeat of repeatedShots(params, mergeImport, oLine.shots, tLine.shots)) {
+    await actions.setShotKind(suggestion.orphanLineId, repeat.orphanShot.id, 'Reference');
     const choice = choices.get(repeat.orphanShotIndex) ?? 'keep_existing';
     const reading = resolvedReading(choice, repeat.targetShot, repeat.incoming);
     if (reading) {
-      await actions.updateShot(suggestion.targetSectionId, repeat.targetShot.id, reading);
+      await actions.updateShot(suggestion.targetLineId, repeat.targetShot.id, reading);
     }
   }
   return merged;

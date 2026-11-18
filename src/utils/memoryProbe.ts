@@ -24,7 +24,7 @@ export type FeatureSourceKind =
   | 'survey-stations'
   | 'survey-shot-labels'
   | 'survey-station-labels'
-  | 'survey-section-labels'
+  | 'survey-line-labels'
   | 'survey-loop-closures'
   | 'survey-ghost-shots'
   | 'survey-ghost-stations'
@@ -45,7 +45,7 @@ const EMPTY_COUNTS = (): FeatureCountSnapshot => ({
     'survey-stations': 0,
     'survey-shot-labels': 0,
     'survey-station-labels': 0,
-    'survey-section-labels': 0,
+    'survey-line-labels': 0,
     'survey-loop-closures': 0,
     'survey-ghost-shots': 0,
     'survey-ghost-stations': 0,
@@ -58,7 +58,7 @@ const EMPTY_COUNTS = (): FeatureCountSnapshot => ({
     'survey-stations': 0,
     'survey-shot-labels': 0,
     'survey-station-labels': 0,
-    'survey-section-labels': 0,
+    'survey-line-labels': 0,
     'survey-loop-closures': 0,
     'survey-ghost-shots': 0,
     'survey-ghost-stations': 0,
@@ -220,7 +220,7 @@ export function estimateFeatureBytes(kind: FeatureSourceKind): number {
     case 'survey-shot-labels':
     case 'survey-ghost-stations':
     case 'survey-ghost-merge':
-    case 'survey-section-labels':
+    case 'survey-line-labels':
       // Point feature + ~7 properties (label string included)
       return 320;
     case 'global-survey':

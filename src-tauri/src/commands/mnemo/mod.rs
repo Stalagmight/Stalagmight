@@ -2,7 +2,7 @@
 //!
 //! Reads the survey memory of a USB-connected MNemo v2 and saves it as a
 //! `.dmp` file. The frontend then opens that file through the normal import
-//! route, so the read-only guard, the no-project path, duplicate-section
+//! route, so the read-only guard, the no-project path, duplicate-line
 //! detection and the DMP wizard all apply unchanged. The file is written before
 //! anything is imported, so the data never exists only in memory.
 
@@ -78,11 +78,11 @@ pub struct MnemoPullResult {
     pub file_name: String,
     pub firmware: String,
     pub bytes: u32,
-    pub sections: u32,
+    pub lines: u32,
     pub shots: u32,
-    /// Sections found that could not be read (for example a corrupted date).
-    pub skipped_sections: u32,
-    /// Bytes after the last complete section: usually a final section with no end marker.
+    /// Lines found that could not be read (for example a corrupted date).
+    pub skipped_lines: u32,
+    /// Bytes after the last complete line: usually a final line with no end marker.
     pub unread_trailing_bytes: u32,
     /// Why nothing in the dump could be read, when that is the case. The file is
     /// still saved, so it can be attached to a bug report.
@@ -273,10 +273,10 @@ mod blocking {
             })?;
 
         let parsed = parse_dmp_bytes(&pulled.data);
-        let (sections, shots, loss, unreadable_reason) = match &parsed {
+        let (lines, shots, loss, unreadable_reason) = match &parsed {
             Ok((file, loss)) => (
-                file.sections.len(),
-                file.sections.iter().map(|s| s.shots.len()).sum::<usize>(),
+                file.lines.len(),
+                file.lines.iter().map(|s| s.shots.len()).sum::<usize>(),
                 *loss,
                 None,
             ),
@@ -286,8 +286,8 @@ mod blocking {
         tracing::info!(
             firmware = %pulled.firmware,
             bytes = pulled.data.len(),
-            sections,
-            skipped_sections = loss.skipped_sections,
+            lines,
+            skipped_lines = loss.skipped_lines,
             unread_trailing_bytes = loss.unread_trailing_bytes,
             readable = unreadable_reason.is_none(),
             purpose = "import from MNemo",
@@ -302,9 +302,9 @@ mod blocking {
             path: path.to_string_lossy().into_owned(),
             firmware: pulled.firmware,
             bytes: to_u32(pulled.data.len()),
-            sections: to_u32(sections),
+            lines: to_u32(lines),
             shots: to_u32(shots),
-            skipped_sections: to_u32(loss.skipped_sections),
+            skipped_lines: to_u32(loss.skipped_lines),
             unread_trailing_bytes: to_u32(loss.unread_trailing_bytes),
             unreadable_reason,
         })
@@ -542,8 +542,8 @@ mod tests {
                 "firmware={}\nbytes={}\nsections={}\nshots={}\nloss={loss:?}\nfile={}\n",
                 pulled.firmware,
                 pulled.data.len(),
-                file.sections.len(),
-                file.sections.iter().map(|s| s.shots.len()).sum::<usize>(),
+                file.lines.len(),
+                file.lines.iter().map(|s| s.shots.len()).sum::<usize>(),
                 path.display()
             ),
         )

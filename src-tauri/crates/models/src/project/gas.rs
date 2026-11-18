@@ -654,7 +654,7 @@ impl Project {
         }
     }
 
-    /// The connecting shot's kind for each ordered route leg; `None` for a cross-section tie (a
+    /// The connecting shot's kind for each ordered route leg; `None` for a cross-line tie (a
     /// merge / loop closure - coincident points, never swum) or a leg whose shot cannot be found.
     ///
     /// One scan, shared by two consumers that need different slices of it: the route highlight
@@ -670,9 +670,9 @@ impl Project {
                 if !is_swim_leg(&from, &to) {
                     return None;
                 }
-                self.sections
+                self.lines
                     .iter()
-                    .find(|s| s.id == from.section_id)
+                    .find(|s| s.id == from.line_id)
                     .and_then(|s| {
                         s.shots
                             .get(from.station_index.min(to.station_index) as usize)
@@ -685,7 +685,7 @@ impl Project {
 
 /// Build the route-highlight legs from the ordered route stations, flagging each leg whose
 /// connecting shot is a reference/jump (a normally-hidden swum shortcut) so the UI can dash it.
-/// A cross-section tie (a merge / loop closure - coincident points) is not a jump.
+/// A cross-line tie (a merge / loop closure - coincident points) is not a jump.
 fn route_legs(route_refs: &[StationRef], leg_kinds: &[Option<ShotKind>]) -> Vec<RouteLeg> {
     route_refs
         .windows(2)
@@ -1228,12 +1228,12 @@ fn cumulative_distances(pts: &[Coordinates], swim: &[bool]) -> Vec<f64> {
 }
 
 /// A route leg is a real **swum** leg - a shot (including a reference/jump shot the diver swims) -
-/// iff it joins two adjacent stations within one section. A station merge / loop-closure tie is a
-/// zero-distance graph edge between non-adjacent or cross-section stations whose endpoints are the
+/// iff it joins two adjacent stations within one line. A station merge / loop-closure tie is a
+/// zero-distance graph edge between non-adjacent or cross-line stations whose endpoints are the
 /// *same* surveyed point; the measured-coord gap there (a closure's misclosure) was never swum, so
 /// it must not count toward route distance or depth.
 fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
-    a.section_id == b.section_id && a.station_index.abs_diff(b.station_index) == 1
+    a.line_id == b.line_id && a.station_index.abs_diff(b.station_index) == 1
 }
 
 /// One stage's drop, as the override recompute (#246) needs it. `safe_in_litres` is the strategy's

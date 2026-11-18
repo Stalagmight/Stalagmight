@@ -47,7 +47,7 @@ vi.mock('../DialogWrapper', () => ({
 import '../../../i18n';
 import EditStationDialog from '../EditStationDialog';
 
-const REF = { section_id: 2, station_index: 3 };
+const REF = { line_id: 2, station_index: 3 };
 const GPS = { latitude: 20.5, longitude: -87.4, depth_reference: 0 };
 
 function station(extra: Record<string, unknown> = {}) {
@@ -72,7 +72,7 @@ function setProject(opts: { datum?: Record<string, unknown>; modified?: string }
       created_at: 'c',
       modified_at: opts.modified ?? 'm1',
       file_path: '/p.stalx',
-      sections: [{ id: 2, name: 'B', shots: [] }],
+      lines: [{ id: 2, name: 'B', shots: [] }],
       zero_datums: opts.datum ? [{ station_ref: REF, gps: GPS, ...opts.datum }] : [],
     },
   };

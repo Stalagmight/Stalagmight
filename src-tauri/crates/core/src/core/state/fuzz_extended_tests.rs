@@ -11,14 +11,16 @@
 //!
 //! | action | entry point | what it brings the engine |
 //! |---|---|---|
-//! | Edit Shot Credit | `Command::EditShotCredit`, one section or a multi-shot selection | the `ShotCredit` typed entry |
+//! | Edit Shot Credit | `Command::EditShotCredit`, one line or a multi-shot selection | the `ShotCredit` typed entry |
 //! | Unmerge Stations (whole station) | `Command::UnmergeStations` | every merge at a station removed by one entry |
 //! | Move Comment | `Command::MoveComment`, station or shot holders, with swap | a comment moving between holders |
 //! | Project Settings | `AppState::update_project_settings` | a delta that edits `name` / `validation` |
 //! | Entrance elevation | `AppState::set_surface_elevation` | a delta that edits `surface_elevation`, including back to unknown |
 //! | Untrack Import | `Command::UntrackImport` | positional edits of the tracked-hash lists |
-//! | a synthetic import | `AppState::execute_import_sections`, the route every importer ends in | several sections in one entry, `station_names` bag edits, the import hash lists |
+//! | a synthetic import | `AppState::execute_import_lines`, the route every importer ends in | several lines in one entry, `station_names` bag edits, the import hash lists |
 //! | Add .stalx | `Command::AddProjectFile` on a second synthetic project saved to disk | the `AddedProjectContent` entry, cross-file uuid repeats, `station_names` / `station_offsets` brought in, redo after a reload with no file to read |
+//! | Rename station | `Command::SetStationName`, a name the line may already hold (refused) | the `InverseCommand` rename entry, `station_names` restored exactly |
+//! | a Section command (#327) | `Command::{Create,Update,Delete}CaveSection`, `MoveLinesToCaveSection`, `ApplyCaveSectionColor`, on the project's Sections by position | the `CaveSections` typed entry; Sections and memberships then ride in every later delta (`cave_sections`, a line's `cave_section_id`) |
 //!
 //! Not drawn, and why: Merge Projects writes a NEW output project and opens it,
 //! which ends the run's history by design (there is nothing left to walk);
@@ -34,7 +36,7 @@
 //! held such a list (the peak was 32 merges), so that whole path went unrun.
 //! The large project adds, after the ordinary builder has run:
 //!
-//! * a chain of `LARGE_CHAIN` sections, each merged to the one before - so
+//! * a chain of `LARGE_CHAIN` lines, each merged to the one before - so
 //!   `station_merges` is well past 64 - with a loop closure across every two of
 //!   them, so `loop_closures` is too;
 //! * `LARGE_ISLANDS` unmerged one-shot islands, each holding its own gauge in
@@ -52,12 +54,12 @@ use tempfile::TempDir;
 use super::{random_shot, Drawn, Fuzzer, Op, Refs, Rng, ShotRefT, StationRefT, Targets, COLORS};
 use crate::core::{Command, CommentHolder};
 use crate::models::{
-    ClosureStrategy, CreditEdit, CreditTargets, HeldGauge, ImportPlacement, ImportSectionConfig,
-    Person, Project, SectionData, SectionId, ShotData, StationRef,
+    ClosureStrategy, CreditEdit, CreditTargets, HeldGauge, ImportLineConfig, ImportPlacement,
+    LineData, LineId, Person, Project, ShotData, StationRef,
 };
 use crate::persistence::Database;
 
-/// Sections in the LARGE chain.
+/// Lines in the LARGE chain.
 const LARGE_CHAIN: usize = 80;
 /// Unmerged islands in the LARGE project, each holding a gauge.
 const LARGE_ISLANDS: usize = 70;
@@ -75,8 +77,8 @@ pub(in crate::core::state) enum Holder {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(in crate::core::state) enum ExtOp {
     EditCredit {
-        /// The whole section when set, else `shots`.
-        section: Option<SectionId>,
+        /// The whole line when set, else `shots`.
+        line: Option<LineId>,
         shots: Vec<ShotRefT>,
         /// 0 set surveyors, 1 add explorers, 2 remove surveyors, 3 set a date,
         /// 4 clear the date.
@@ -99,44 +101,58 @@ pub(in crate::core::state) enum ExtOp {
         /// Millimetres, so the value is an integer draw.
         millimetres: Option<i64>,
     },
-    /// The withdrawal the DMP wizard sends: one batch of an optional section
+    /// The withdrawal the DMP wizard sends: one batch of an optional line
     /// delete and the untrack. A bare `UntrackImport` through `execute()` pushes
     /// no entry (see `untrack_import_alone_is_undoable`), so the route the app
     /// uses is the one drawn.
     UntrackImport {
-        delete: Option<SectionId>,
+        delete: Option<LineId>,
         file_hashes: Vec<String>,
-        section_hashes: Vec<String>,
+        line_hashes: Vec<String>,
     },
     Import {
         seed: u32,
-        sections: u8,
+        lines: u8,
         anchor: Option<StationRefT>,
         names: bool,
     },
     AddProjectFile {
         seed: u32,
-        sections: u8,
+        lines: u8,
         /// Live shots whose uuids the added file repeats.
         repeats: Vec<ShotRefT>,
+    },
+    /// Rename a station. `name` picks one of a few names, so a draw can land
+    /// on a name the line already holds and exercise the refusal.
+    RenameStation {
+        station: StationRefT,
+        name: u32,
+    },
+    /// A Section command, addressing the project's Sections by position at
+    /// apply time (`at` modulo their count): `kind` 0 creates one holding
+    /// `lines`, 1 renames, 2 moves `lines` into it (out of any when
+    /// `ungroup`), 3 applies its colour to its lines, 4 deletes it.
+    Section {
+        kind: u8,
+        at: u32,
+        lines: Vec<LineId>,
+        name: u32,
+        ungroup: bool,
     },
 }
 
 impl ExtOp {
     pub(super) fn describe(&self) -> String {
-        let station = |s: &StationRefT| format!("{}/{}", s.section, s.index);
+        let station = |s: &StationRefT| format!("{}/{}", s.line, s.index);
         let holder = |h: &Holder| match h {
             Holder::Station(s) => format!("station {}", station(s)),
-            Holder::Shot(s) => format!("shot {}:{}", s.section, s.id),
+            Holder::Shot(s) => format!("shot {}:{}", s.line, s.id),
         };
         match self {
             Self::EditCredit {
-                section,
-                shots,
-                role,
-                ..
-            } => match section {
-                Some(id) => format!("editShotCredit(section {id},role={role})"),
+                line, shots, role, ..
+            } => match line {
+                Some(id) => format!("editShotCredit(line {id},role={role})"),
                 None => format!("editShotCredit({} shot(s),role={role})", shots.len()),
             },
             Self::UnmergeStation { station: s } => format!("unmergeStations({})", station(s)),
@@ -161,30 +177,43 @@ impl ExtOp {
             Self::UntrackImport {
                 delete,
                 file_hashes,
-                section_hashes,
+                line_hashes,
             } => format!(
-                "batch(deleteSection={delete:?},untrackImport(files={},sections={}))",
+                "batch(deleteLine={delete:?},untrackImport(files={},lines={}))",
                 file_hashes.len(),
-                section_hashes.len()
+                line_hashes.len()
             ),
             Self::Import {
                 seed,
-                sections,
+                lines,
                 anchor,
                 names,
             } => format!(
-                "importSections(seed={seed},n={sections},anchor={},names={names})",
+                "importLines(seed={seed},n={lines},anchor={},names={names})",
                 anchor
                     .as_ref()
                     .map_or_else(|| "origin".to_string(), station)
             ),
             Self::AddProjectFile {
                 seed,
-                sections,
+                lines,
                 repeats,
             } => format!(
-                "addProjectFile(seed={seed},n={sections},repeats={})",
+                "addProjectFile(seed={seed},n={lines},repeats={})",
                 repeats.len()
+            ),
+            Self::RenameStation { station: s, name } => {
+                format!("setStationName({},r{name})", station(s))
+            }
+            Self::Section {
+                kind,
+                at,
+                lines,
+                ungroup,
+                ..
+            } => format!(
+                "caveSection(kind={kind},at={at},lines={},ungroup={ungroup})",
+                lines.len()
             ),
         }
     }
@@ -194,16 +223,16 @@ impl Fuzzer {
     /// Draw one extended action from the coverage stream. `None` when the
     /// project has no target of the drawn kind right now.
     pub(super) fn draw_extended(&mut self, targets: &Targets) -> Option<Op> {
-        let ext = match self.aux.below(8) {
+        let ext = match self.aux.below(10) {
             0 => self.draw_credit(targets),
             1 => {
                 if targets.merges.is_empty() {
                     return None;
                 }
                 let (a, b) = targets.merges[self.aux.below(targets.merges.len())];
-                let (section, index) = if self.aux.chance(50) { a } else { b };
+                let (line, index) = if self.aux.chance(50) { a } else { b };
                 Some(ExtOp::UnmergeStation {
-                    station: StationRefT { section, index },
+                    station: StationRefT { line, index },
                 })
             }
             2 => self.draw_move_comment(targets),
@@ -220,20 +249,47 @@ impl Fuzzer {
             5 => self.draw_untrack(targets),
             6 => Some(ExtOp::Import {
                 seed: u32::try_from(self.aux.below(1 << 30)).unwrap_or(0),
-                sections: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
+                lines: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
                 anchor: (!targets.stations.is_empty() && self.aux.chance(70)).then(|| {
-                    let (section, index) = targets.stations[self.aux.below(targets.stations.len())];
-                    StationRefT { section, index }
+                    let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
+                    StationRefT { line, index }
                 }),
                 names: self.aux.chance(60),
             }),
+            8 => {
+                if targets.stations.is_empty() {
+                    return None;
+                }
+                let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
+                Some(ExtOp::RenameStation {
+                    station: StationRefT { line, index },
+                    name: u32::try_from(self.aux.below(4)).unwrap_or(0),
+                })
+            }
+            9 => {
+                let count = self.aux.below(4);
+                let lines = if targets.lines.is_empty() {
+                    Vec::new()
+                } else {
+                    (0..count)
+                        .map(|_| targets.lines[self.aux.below(targets.lines.len())].0)
+                        .collect()
+                };
+                Some(ExtOp::Section {
+                    kind: u8::try_from(self.aux.below(5)).unwrap_or(0),
+                    at: u32::try_from(self.aux.below(8)).unwrap_or(0),
+                    lines,
+                    name: u32::try_from(self.aux.below(6)).unwrap_or(0),
+                    ungroup: self.aux.chance(25),
+                })
+            }
             _ => {
                 let repeats = (0..self.aux.below(3))
                     .filter_map(|_| self.pick_shot_ref(targets))
                     .collect();
                 Some(ExtOp::AddProjectFile {
                     seed: u32::try_from(self.aux.below(1 << 30)).unwrap_or(0),
-                    sections: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
+                    lines: 1 + u8::try_from(self.aux.below(3)).unwrap_or(0),
                     repeats,
                 })
             }
@@ -246,9 +302,9 @@ impl Fuzzer {
         if targets.shot_uuids.is_empty() {
             return None;
         }
-        let (section, id, uuid) = &targets.shot_uuids[self.aux.below(targets.shot_uuids.len())];
+        let (line, id, uuid) = &targets.shot_uuids[self.aux.below(targets.shot_uuids.len())];
         Some(ShotRefT {
-            section: *section,
+            line: *line,
             id: *id,
             uuid: Some(uuid.clone()),
         })
@@ -258,25 +314,25 @@ impl Fuzzer {
         let role = u8::try_from(self.aux.below(5)).unwrap_or(0);
         let person = u32::try_from(self.aux.below(4)).unwrap_or(0);
         if self.aux.chance(30) {
-            if targets.sections.is_empty() {
+            if targets.lines.is_empty() {
                 return None;
             }
-            let (section, _) = &targets.sections[self.aux.below(targets.sections.len())];
+            let (line, _) = &targets.lines[self.aux.below(targets.lines.len())];
             return Some(ExtOp::EditCredit {
-                section: Some(*section),
+                line: Some(*line),
                 shots: Vec::new(),
                 role,
                 person,
             });
         }
-        // A multi-shot selection, possibly across sections - the shape the
+        // A multi-shot selection, possibly across lines - the shape the
         // grid's credit editor sends.
         let count = 1 + self.aux.below(4);
         let shots: Vec<ShotRefT> = (0..count)
             .filter_map(|_| self.pick_shot_ref(targets))
             .collect();
         (!shots.is_empty()).then_some(ExtOp::EditCredit {
-            section: None,
+            line: None,
             shots,
             role,
             person,
@@ -288,22 +344,22 @@ impl Fuzzer {
         // Sources that hold a comment, so most moves move something: station
         // comments, then shot comments, both in a stable order.
         let mut sources: Vec<Holder> = Vec::new();
-        for &(section, index) in &targets.stations {
+        for &(line, index) in &targets.stations {
             let holds = project
-                .key_for_ref(StationRef::new(section, index))
+                .key_for_ref(StationRef::new(line, index))
                 .is_some_and(|key| project.station_comments.contains_key(&key));
             if holds {
-                sources.push(Holder::Station(StationRefT { section, index }));
+                sources.push(Holder::Station(StationRefT { line, index }));
             }
         }
-        for (section, id, uuid) in &targets.shot_uuids {
+        for (line, id, uuid) in &targets.shot_uuids {
             let holds = project
-                .get_section(*section)
+                .get_line(*line)
                 .and_then(|s| s.shots.iter().find(|shot| shot.id == *id))
                 .is_some_and(|shot| shot.comment.is_some());
             if holds {
                 sources.push(Holder::Shot(ShotRefT {
-                    section: *section,
+                    line: *line,
                     id: *id,
                     uuid: Some(uuid.clone()),
                 }));
@@ -314,8 +370,8 @@ impl Fuzzer {
         }
         let source = sources.swap_remove(self.aux.below(sources.len()));
         let target = if self.aux.chance(50) {
-            let (section, index) = targets.stations[self.aux.below(targets.stations.len())];
-            Holder::Station(StationRefT { section, index })
+            let (line, index) = targets.stations[self.aux.below(targets.stations.len())];
+            Holder::Station(StationRefT { line, index })
         } else {
             Holder::Shot(self.pick_shot_ref(targets)?)
         };
@@ -328,8 +384,8 @@ impl Fuzzer {
 
     fn draw_untrack(&mut self, targets: &Targets) -> Option<ExtOp> {
         let project = self.state.get_project_state()?;
-        let delete = (!targets.sections.is_empty() && self.aux.chance(50))
-            .then(|| targets.sections[self.aux.below(targets.sections.len())].0);
+        let delete = (!targets.lines.is_empty() && self.aux.chance(50))
+            .then(|| targets.lines[self.aux.below(targets.lines.len())].0);
         let mut pick = |all: &[String]| -> Vec<String> {
             all.iter()
                 .filter(|_| self.aux.chance(30))
@@ -337,11 +393,11 @@ impl Fuzzer {
                 .collect()
         };
         let file_hashes = pick(&project.imported_file_hashes);
-        let section_hashes = pick(&project.imported_section_hashes);
-        (!file_hashes.is_empty() || !section_hashes.is_empty()).then_some(ExtOp::UntrackImport {
+        let line_hashes = pick(&project.imported_line_hashes);
+        (!file_hashes.is_empty() || !line_hashes.is_empty()).then_some(ExtOp::UntrackImport {
             delete,
             file_hashes,
-            section_hashes,
+            line_hashes,
         })
     }
 
@@ -356,16 +412,16 @@ impl Fuzzer {
         let label = ext.describe();
         let result = match ext {
             ExtOp::EditCredit {
-                section,
+                line,
                 shots,
                 role,
                 person,
             } => {
-                let credit_targets = if let Some(id) = section {
-                    let Some(id) = refs.section(*id, targets) else {
+                let credit_targets = if let Some(id) = line {
+                    let Some(id) = refs.line(*id, targets) else {
                         return refs.skip(&label);
                     };
-                    CreditTargets::Section { section_id: id }
+                    CreditTargets::Line { line_id: id }
                 } else {
                     let mut resolved: Vec<_> =
                         shots.iter().filter_map(|s| refs.shot(s, targets)).collect();
@@ -381,11 +437,11 @@ impl Fuzzer {
                 })
             }
             ExtOp::UnmergeStation { station } => {
-                let Some((section, index)) = refs.station(*station, targets) else {
+                let Some((line, index)) = refs.station(*station, targets) else {
                     return refs.skip(&label);
                 };
                 self.state.execute(Command::UnmergeStations {
-                    station_ref: StationRef::new(section, index),
+                    station_ref: StationRef::new(line, index),
                 })
             }
             ExtOp::MoveComment {
@@ -418,21 +474,24 @@ impl Fuzzer {
             ExtOp::UntrackImport {
                 delete,
                 file_hashes,
-                section_hashes,
+                line_hashes,
             } => {
                 let mut commands = Vec::new();
-                if let Some(section_id) = delete.and_then(|id| refs.section(id, targets)) {
-                    commands.push(Command::DeleteSection { section_id });
+                if let Some(line_id) = delete.and_then(|id| refs.line(id, targets)) {
+                    commands.push(Command::DeleteLine { line_id });
                 }
                 commands.push(Command::UntrackImport {
                     file_hashes: file_hashes.clone(),
-                    section_hashes: section_hashes.clone(),
+                    line_hashes: line_hashes.clone(),
                 });
-                self.state.execute(Command::Batch { commands })
+                self.state.execute(Command::Batch {
+                    commands,
+                    label: None,
+                })
             }
             ExtOp::Import {
                 seed,
-                sections,
+                lines,
                 anchor,
                 names,
             } => {
@@ -443,38 +502,84 @@ impl Fuzzer {
                     },
                     None => None,
                 };
-                let (configs, file_hash, section_hashes) =
-                    import_configs(*seed, usize::from(*sections), anchor, *names);
-                self.state.execute_import_sections(
+                let (configs, file_hash, line_hashes) =
+                    import_configs(*seed, usize::from(*lines), anchor, *names);
+                self.state.execute_import_lines(
                     configs,
                     Vec::new(),
                     Some(file_hash),
-                    section_hashes,
+                    line_hashes,
                     Vec::new(),
                     super::super::command_import::VirtualShotMode::default(),
                 )
             }
             ExtOp::AddProjectFile {
                 seed,
-                sections,
+                lines,
                 repeats,
             } => {
                 let uuids: Vec<String> = repeats
                     .iter()
                     .filter_map(|r| {
-                        let (section, id) = refs.shot(r, targets)?;
-                        targets.uuid_of(section, id)
+                        let (line, id) = refs.shot(r, targets)?;
+                        targets.uuid_of(line, id)
                     })
                     .collect();
                 let temp = self.temp.get_or_insert_with(|| TempDir::new().unwrap());
                 let path: PathBuf = temp.path().join(format!("added-{seed}.stalx"));
-                let added = added_project(*seed, usize::from(*sections), &uuids);
+                let added = added_project(*seed, usize::from(*lines), &uuids);
                 Database::open(&path)
                     .and_then(|mut db| db.save_project(&added))
                     .expect("write the project to add");
                 let result = self.state.execute(Command::add_project_file(path.clone()));
                 let _ = std::fs::remove_file(&path);
                 result
+            }
+            ExtOp::RenameStation { station, name } => {
+                let Some((line, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&label);
+                };
+                self.state.execute(Command::SetStationName {
+                    station_ref: StationRef::new(line, index),
+                    name: format!("r{name}"),
+                })
+            }
+            ExtOp::Section {
+                kind,
+                at,
+                lines,
+                name,
+                ungroup,
+            } => {
+                let project = self.state.get_project_state()?;
+                let line_ids: Vec<LineId> = lines
+                    .iter()
+                    .filter_map(|id| refs.line(*id, targets))
+                    .collect();
+                let section = (!project.sections.is_empty()).then(|| {
+                    let len = u32::try_from(project.sections.len()).unwrap_or(u32::MAX);
+                    project.sections[(*at % len) as usize].id
+                });
+                let command = match (*kind, section) {
+                    (0, _) => Command::CreateCaveSection {
+                        name: format!("Region {name}"),
+                        color: COLORS[*name as usize % COLORS.len()].to_string(),
+                        line_ids,
+                    },
+                    (_, None) => return refs.skip(&label),
+                    (1, Some(section_id)) => Command::UpdateCaveSection {
+                        section_id,
+                        name: Some(format!("Region {name}")),
+                        color: None,
+                    },
+                    (2, Some(section_id)) => Command::MoveLinesToCaveSection {
+                        line_ids,
+                        section_id: (!*ungroup).then_some(section_id),
+                    },
+                    (3, Some(section_id)) => Command::ApplyCaveSectionColor { section_id },
+                    (_, Some(section_id)) => Command::DeleteCaveSection { section_id },
+                };
+                self.state.execute(command)
             }
         };
         Some(Drawn::new(label, result))
@@ -520,31 +625,28 @@ fn credit_edit(role: u8, person: u32) -> CreditEdit {
 fn resolve_holder(holder: &Holder, refs: &Refs, targets: &Targets) -> Option<CommentHolder> {
     Some(match holder {
         Holder::Station(at) => {
-            let (section, index) = refs.station(*at, targets)?;
+            let (line, index) = refs.station(*at, targets)?;
             CommentHolder::Station {
-                station_ref: StationRef::new(section, index),
+                station_ref: StationRef::new(line, index),
             }
         }
         Holder::Shot(shot) => {
-            let (section_id, shot_id) = refs.shot(shot, targets)?;
-            CommentHolder::Shot {
-                section_id,
-                shot_id,
-            }
+            let (line_id, shot_id) = refs.shot(shot, targets)?;
+            CommentHolder::Shot { line_id, shot_id }
         }
     })
 }
 
-/// A synthetic import of `count` sections, a function of `seed`: the first
+/// A synthetic import of `count` lines, a function of `seed`: the first
 /// placed on `anchor` (or at the origin), each later one hung off the one
 /// before it, with station names and comments on some stations. Returns the
-/// configs, the file hash and one section hash per section.
+/// configs, the file hash and one line hash per line.
 fn import_configs(
     seed: u32,
     count: usize,
-    anchor: Option<(SectionId, u32)>,
+    anchor: Option<(LineId, u32)>,
     names: bool,
-) -> (Vec<ImportSectionConfig>, String, Vec<String>) {
+) -> (Vec<ImportLineConfig>, String, Vec<String>) {
     let mut rng = Rng::new(seed);
     let file_hash = format!("fuzz-file-{seed:08x}");
     let mut configs = Vec::new();
@@ -553,14 +655,14 @@ fn import_configs(
         let shots: Vec<ShotData> = (0..=rng.below(4)).map(|_| random_shot(&mut rng)).collect();
         let stations = u32::try_from(shots.len()).unwrap_or(0);
         let placement = match (index, anchor) {
-            (0, Some((section, station))) => ImportPlacement::FromExisting {
+            (0, Some((line, station))) => ImportPlacement::FromExisting {
                 import_station: 0,
-                existing_station: StationRef::new(section, station),
+                existing_station: StationRef::new(line, station),
             },
             (0, None) => ImportPlacement::Origin,
             _ => ImportPlacement::FromImporting {
                 import_station: 0,
-                target_section_index: u32::try_from(index - 1).unwrap_or(0),
+                target_line_index: u32::try_from(index - 1).unwrap_or(0),
                 target_station_index: 1,
             },
         };
@@ -577,9 +679,9 @@ fn import_configs(
             .map(|at| (at, format!("imported note {at}")))
             .collect();
         hashes.push(format!("{file_hash}-s{index}"));
-        configs.push(ImportSectionConfig {
+        configs.push(ImportLineConfig {
             reverse: false,
-            section_index: u32::try_from(index).unwrap_or(0),
+            line_index: u32::try_from(index).unwrap_or(0),
             name: Some(format!("imported-{seed:x}-{index}")),
             surveyor: None,
             date: None,
@@ -594,14 +696,15 @@ fn import_configs(
             explorers: None,
             override_date: None,
             surveyors: None,
+            cave_section: None,
         });
     }
     (configs, file_hash, hashes)
 }
 
 /// The second project an Add .stalx brings in, a function of `seed`: a chain of
-/// `count` sections, the first `repeats.len()` shots carrying uuids the open
-/// project already holds, station names on every section and a station offset
+/// `count` lines, the first `repeats.len()` shots carrying uuids the open
+/// project already holds, station names on every line and a station offset
 /// on the last one (whose far end nothing is merged to).
 fn added_project(seed: u32, count: usize, repeats: &[String]) -> Project {
     let mut rng = Rng::new(seed);
@@ -611,29 +714,29 @@ fn added_project(seed: u32, count: usize, repeats: &[String]) -> Project {
         let shots: Vec<ShotData> = (0..2 + rng.below(3))
             .map(|_| random_shot(&mut rng))
             .collect();
-        let data = SectionData {
+        let data = LineData {
             name: Some(format!("added-{seed:x}-{index}")),
             color: (*rng.pick(COLORS)).to_string(),
             shots,
-            ..SectionData::default()
+            ..LineData::default()
         };
-        ids.push(project.add_section(data).id);
+        ids.push(project.add_line(data).id);
     }
     // The repeats: a later shot of the file takes a uuid the open project holds.
     let mut slots: Vec<(usize, usize)> = project
-        .sections
+        .lines
         .iter()
         .enumerate()
-        .flat_map(|(s, section)| (0..section.shots.len()).map(move |i| (s, i)))
+        .flat_map(|(s, line)| (0..line.shots.len()).map(move |i| (s, i)))
         .collect();
     slots.reverse();
     for (uuid, (s, i)) in repeats.iter().zip(slots) {
-        project.sections[s].shots[i].uuid = Some(uuid.clone());
+        project.lines[s].shots[i].uuid = Some(uuid.clone());
     }
     project.rebuild_shot_uuid_index();
     for pair in ids.windows(2) {
         let last =
-            u32::try_from(project.get_section(pair[0]).map_or(0, |s| s.shots.len())).unwrap_or(0);
+            u32::try_from(project.get_line(pair[0]).map_or(0, |s| s.shots.len())).unwrap_or(0);
         let _ = project.merge_stations(StationRef::new(pair[1], 0), StationRef::new(pair[0], last));
     }
     for (index, id) in ids.iter().enumerate() {
@@ -661,16 +764,16 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
         let mut chain = Vec::new();
         for index in 0..LARGE_CHAIN {
             let shots: Vec<ShotData> = (0..3).map(|_| random_shot(aux)).collect();
-            let data = SectionData {
+            let data = LineData {
                 name: Some(format!("chain-{index}")),
                 color: (*aux.pick(COLORS)).to_string(),
                 shots,
-                ..SectionData::default()
+                ..LineData::default()
             };
-            chain.push(project.add_section(data).id);
+            chain.push(project.add_line(data).id);
         }
-        // Hang the chain off the first ordinary section so it shares its datum.
-        let root = project.sections[0].id;
+        // Hang the chain off the first ordinary line so it shares its datum.
+        let root = project.lines[0].id;
         project
             .merge_stations(StationRef::new(chain[0], 0), StationRef::new(root, 0))
             .expect("hang the chain");
@@ -689,18 +792,18 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
             );
         }
         for index in 0..LARGE_ISLANDS {
-            let data = SectionData {
+            let data = LineData {
                 name: Some(format!("island-{index}")),
                 color: (*aux.pick(COLORS)).to_string(),
                 shots: vec![random_shot(aux), random_shot(aux)],
-                ..SectionData::default()
+                ..LineData::default()
             };
-            let id = project.add_section(data).id;
-            let section = project.get_section(id).expect("the island just added");
-            let shot = section.shots[1].uuid.clone().expect("a minted uuid");
-            let parity = project.shot_record_parity(section, Some(&shot));
+            let id = project.add_line(data).id;
+            let line = project.get_line(id).expect("the island just added");
+            let shot = line.shots[1].uuid.clone().expect("a minted uuid");
+            let parity = project.shot_record_parity(line, Some(&shot));
             project.held_gauges.push(HeldGauge {
-                section_id: id,
+                line_id: id,
                 shot,
                 neighbour: None,
                 end: false,
@@ -711,8 +814,8 @@ pub(super) fn grow_large(state: &super::AppState, aux: &mut Rng) -> TempDir {
             .imported_file_hashes
             .extend((0..LARGE_HASHES).map(|i| format!("large-file-{i:03}")));
         project
-            .imported_section_hashes
-            .extend((0..LARGE_HASHES).map(|i| format!("large-section-{i:03}")));
+            .imported_line_hashes
+            .extend((0..LARGE_HASHES).map(|i| format!("large-line-{i:03}")));
         project.touch();
     }
     let dir = TempDir::new().unwrap();
@@ -774,12 +877,12 @@ fn untrack_import_alone_is_undoable() {
             })
             .success
     );
-    let (configs, file_hash, section_hashes) = import_configs(7, 1, None, false);
-    let imported = state.execute_import_sections(
+    let (configs, file_hash, line_hashes) = import_configs(7, 1, None, false);
+    let imported = state.execute_import_lines(
         configs,
         Vec::new(),
         Some(file_hash.clone()),
-        section_hashes.clone(),
+        line_hashes.clone(),
         Vec::new(),
         super::super::command_import::VirtualShotMode::default(),
     );
@@ -787,7 +890,7 @@ fn untrack_import_alone_is_undoable() {
     let before = state.get_undo_stack().len();
     let untracked = state.execute(Command::UntrackImport {
         file_hashes: vec![file_hash],
-        section_hashes,
+        line_hashes,
     });
     assert!(untracked.success, "{:?}", untracked.error);
     let project = state.get_project_state().unwrap();
@@ -822,18 +925,18 @@ fn a_merge_of_two_held_components_survives_a_reopen() {
     let mut rng = Rng::new(3);
     let mut ids = Vec::new();
     for index in 0..2 {
-        let data = SectionData {
+        let data = LineData {
             name: Some(format!("island-{index}")),
             color: "#123456".to_string(),
             shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
-            ..SectionData::default()
+            ..LineData::default()
         };
-        let id = project.add_section(data).id;
-        let section = project.get_section(id).unwrap();
-        let shot = section.shots[1].uuid.clone().unwrap();
-        let parity = project.shot_record_parity(section, Some(&shot));
+        let id = project.add_line(data).id;
+        let line = project.get_line(id).unwrap();
+        let shot = line.shots[1].uuid.clone().unwrap();
+        let parity = project.shot_record_parity(line, Some(&shot));
         project.held_gauges.push(HeldGauge {
-            section_id: id,
+            line_id: id,
             shot,
             neighbour: None,
             end: false,

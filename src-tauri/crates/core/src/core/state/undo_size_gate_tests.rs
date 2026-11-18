@@ -28,23 +28,23 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::{Command, CommentHolder, UndoStack};
 use crate::models::{
-    ClosureStrategy, CombinePick, CombineSectionsOptions, Coordinates, CreditEdit, CreditTargets,
-    GpsCoordinates, Person, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, SplitAt, SplitSectionOptions, SplitSide, StationRef,
+    ClosureStrategy, CombineLinesOptions, CombinePick, Coordinates, CreditEdit, CreditTargets,
+    GpsCoordinates, LineData, LineId, LineUpdates, Person, Project, SectionId, ShotData, ShotId,
+    ShotKind, ShotUpdates, SplitAt, SplitLineOptions, SplitSide, StationRef,
 };
 use crate::persistence::Database;
 
 /// The cap: an entry may be at most this fraction of the saved file.
 const MAX_FRACTION: f64 = 0.01;
 
-const SHOTS_PER_SECTION: usize = 50;
+const SHOTS_PER_LINE: usize = 50;
 
-fn shot(section: usize, i: usize) -> ShotData {
-    let azimuth = ((section * 37 + i * 11) % 360) as f64 + 0.25;
+fn shot(line: usize, i: usize) -> ShotData {
+    let azimuth = ((line * 37 + i * 11) % 360) as f64 + 0.25;
     ShotData {
         azimuth_in: azimuth,
         azimuth_out: azimuth,
-        length: 3.0 + ((section + i * 7) % 9) as f64 * 1.125,
+        length: 3.0 + ((line + i * 7) % 9) as f64 * 1.125,
         depth_in: 5.0 + (i as f64) * 0.1,
         depth_out: 5.1 + (i as f64) * 0.1,
         left: Some(1.5),
@@ -53,41 +53,42 @@ fn shot(section: usize, i: usize) -> ShotData {
         down: Some(1.25),
         comment: i
             .is_multiple_of(10)
-            .then(|| format!("station note {section}-{i}")),
+            .then(|| format!("station note {line}-{i}")),
         marker_index: Some(i as u32),
         ..Default::default()
     }
 }
 
-fn section_data(section: usize, shots: usize) -> SectionData {
-    SectionData {
-        name: Some(format!("Line {section}")),
+fn line_data(line: usize, shots: usize) -> LineData {
+    LineData {
+        name: Some(format!("Line {line}")),
         color: "#4ecdc4".to_string(),
-        shots: (0..shots).map(|i| shot(section, i)).collect(),
+        shots: (0..shots).map(|i| shot(line, i)).collect(),
         ..Default::default()
     }
 }
 
-/// A tree of `sections` lines of `SHOTS_PER_SECTION` shots, each line's
+/// A tree of `lines` lines of `SHOTS_PER_LINE` shots, each line's
 /// start tied to a station of its parent, a loop closure every 25 lines, a
-/// GPS datum at the entrance, plus an unmerged 30-shot island and a 1-shot
-/// line hanging off the end of the root line (so the two can combine).
-fn survey(sections: usize) -> Project {
+/// GPS datum at the entrance, a Section grouping the first ten lines, plus an
+/// unmerged 30-shot island and a 1-shot line hanging off the end of the root
+/// line (so the two can combine).
+fn survey(lines: usize) -> Project {
     let mut project = Project::new("Gate".to_string(), None);
-    for s in 0..sections {
-        project.add_section(section_data(s, SHOTS_PER_SECTION));
+    for s in 0..lines {
+        project.add_line(line_data(s, SHOTS_PER_LINE));
     }
-    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
-    for s in 1..sections {
+    let ids: Vec<LineId> = project.lines.iter().map(|s| s.id).collect();
+    for s in 1..lines {
         let parent = ids[(s - 1) / 2];
-        let at = 1 + ((s * 7) % (SHOTS_PER_SECTION - 1)) as u32;
+        let at = 1 + ((s * 7) % (SHOTS_PER_LINE - 1)) as u32;
         project
             .merge_stations(StationRef::new(ids[s], 0), StationRef::new(parent, at))
             .unwrap();
     }
-    for s in (25..sections).step_by(25) {
+    for s in (25..lines).step_by(25) {
         let _ = project.create_loop_closure(
-            StationRef::new(ids[s], SHOTS_PER_SECTION as u32),
+            StationRef::new(ids[s], SHOTS_PER_LINE as u32),
             StationRef::new(ids[s - 3], 2),
             ClosureStrategy::Move,
         );
@@ -102,12 +103,16 @@ fn survey(sections: usize) -> Project {
             },
         )
         .unwrap();
-    project.add_section(section_data(9_000, 30));
-    let leaf = project.add_section(section_data(9_001, 1)).id;
+    let upper = project.add_section("Upper level".to_string(), "#ff6b6b".to_string());
+    for id in ids.iter().take(10) {
+        project.set_line_section(*id, Some(upper));
+    }
+    project.add_line(line_data(9_000, 30));
+    let leaf = project.add_line(line_data(9_001, 1)).id;
     project
         .merge_stations(
             StationRef::new(leaf, 0),
-            StationRef::new(ids[0], SHOTS_PER_SECTION as u32),
+            StationRef::new(ids[0], SHOTS_PER_LINE as u32),
         )
         .unwrap();
     project
@@ -118,15 +123,17 @@ struct Gate {
     _dir: TempDir,
     file_bytes: u64,
     /// The lines of the tree, in id order.
-    lines: Vec<SectionId>,
-    island: SectionId,
-    leaf: SectionId,
+    lines: Vec<LineId>,
+    island: LineId,
+    leaf: LineId,
+    /// The survey's one Section.
+    section: SectionId,
 }
 
-fn open(sections: usize) -> Gate {
+fn open(lines: usize) -> Gate {
     let dir = TempDir::new().unwrap();
     let path: PathBuf = dir.path().join("gate.stalx");
-    let project = survey(sections);
+    let project = survey(lines);
     Database::open(&path)
         .unwrap()
         .save_project(&project)
@@ -139,9 +146,10 @@ fn open(sections: usize) -> Gate {
     assert!(state.execute(Command::SaveProject { path: None }).success);
     let file_bytes = std::fs::metadata(&path).unwrap().len();
     let live = state.get_project_state().unwrap();
-    let mut lines: Vec<SectionId> = live.sections.iter().map(|s| s.id).collect();
+    let mut lines: Vec<LineId> = live.lines.iter().map(|s| s.id).collect();
     let leaf = lines.pop().unwrap();
     let island = lines.pop().unwrap();
+    let section = live.sections.first().expect("the survey's Section").id;
     Gate {
         state,
         _dir: dir,
@@ -149,13 +157,14 @@ fn open(sections: usize) -> Gate {
         lines,
         island,
         leaf,
+        section,
     }
 }
 
 impl Gate {
     /// A line in the middle of the tree that no loop closure touches (the
     /// closures sit on every 25th line and three before it).
-    fn mid(&self) -> SectionId {
+    fn mid(&self) -> LineId {
         self.lines[self.mid_index()]
     }
 
@@ -163,11 +172,11 @@ impl Gate {
         self.lines.len() / 2 + 1
     }
 
-    fn shot_ids(&self, section: SectionId) -> Vec<ShotId> {
+    fn shot_ids(&self, line: LineId) -> Vec<ShotId> {
         self.state
             .get_project_state()
             .unwrap()
-            .get_section(section)
+            .get_line(line)
             .unwrap()
             .shots
             .iter()
@@ -210,39 +219,38 @@ type Action = fn(&Gate) -> crate::core::CommandResult;
 
 fn actions() -> Vec<(&'static str, Action)> {
     vec![
-        ("create section (20 shots)", |g| {
-            g.state.execute(Command::CreateSection {
+        ("create line (20 shots)", |g| {
+            g.state.execute(Command::CreateLine {
                 name: Some("New".to_string()),
                 surveyor: None,
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: (0..20).map(|i| shot(7_777, i)).collect(),
+                cave_section_id: None,
             })
         }),
-        ("rename section", |g| {
-            g.state.execute(Command::UpdateSectionMetadata {
-                section_id: g.mid(),
-                updates: SectionUpdates {
+        ("rename line", |g| {
+            g.state.execute(Command::UpdateLineMetadata {
+                line_id: g.mid(),
+                updates: LineUpdates {
                     name: Some(Some("Renamed".to_string())),
                     ..Default::default()
                 },
             })
         }),
-        ("delete section", |g| {
-            g.state.execute(Command::DeleteSection {
-                section_id: g.mid(),
-            })
+        ("delete line", |g| {
+            g.state.execute(Command::DeleteLine { line_id: g.mid() })
         }),
-        ("reverse section", |g| {
-            g.state.execute(Command::ReverseSection {
-                section_id: g.mid(),
+        ("reverse line", |g| {
+            g.state.execute(Command::ReverseLine {
+                line_id: g.mid(),
                 swap_left_right: false,
             })
         }),
         ("insert shot", |g| {
             g.state.execute(Command::CreateShot {
-                section_id: g.mid(),
+                line_id: g.mid(),
                 shot: shot(1, 1),
                 after_shot_id: Some(g.shot_ids(g.mid())[20]),
                 before_shot_id: None,
@@ -250,7 +258,7 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("edit shot length", |g| {
             g.state.execute(Command::UpdateShot {
-                section_id: g.lines[1],
+                line_id: g.lines[1],
                 shot_id: g.shot_ids(g.lines[1])[5],
                 updates: ShotUpdates {
                     length: Some(12.5),
@@ -260,7 +268,7 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("edit shot comment", |g| {
             g.state.execute(Command::UpdateShot {
-                section_id: g.mid(),
+                line_id: g.mid(),
                 shot_id: g.shot_ids(g.mid())[5],
                 updates: ShotUpdates {
                     comment: Some(Some("edited".to_string())),
@@ -270,22 +278,20 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("set shot kind", |g| {
             g.state.execute(Command::SetShotKind {
-                section_id: g.mid(),
+                line_id: g.mid(),
                 shot_id: g.shot_ids(g.mid())[7],
                 kind: ShotKind::Jump,
             })
         }),
         ("delete shot", |g| {
             g.state.execute(Command::DeleteShot {
-                section_id: g.mid(),
+                line_id: g.mid(),
                 shot_id: g.shot_ids(g.mid())[25],
             })
         }),
         ("edit credit (one line)", |g| {
             g.state.execute(Command::EditShotCredit {
-                targets: CreditTargets::Section {
-                    section_id: g.mid(),
-                },
+                targets: CreditTargets::Line { line_id: g.mid() },
                 edit: CreditEdit {
                     set_surveyors: Some(vec![Person {
                         name: "Surveyor".to_string(),
@@ -308,7 +314,7 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("unmerge station pair", |g| {
             let parent = g.lines[(g.mid_index() - 1) / 2];
-            let at = 1 + ((g.mid_index() * 7) % (SHOTS_PER_SECTION - 1)) as u32;
+            let at = 1 + ((g.mid_index() * 7) % (SHOTS_PER_LINE - 1)) as u32;
             g.state.execute(Command::UnmergeStationPair {
                 station_a: StationRef::new(g.mid(), 0),
                 station_b: StationRef::new(parent, at),
@@ -316,7 +322,7 @@ fn actions() -> Vec<(&'static str, Action)> {
         }),
         ("create loop closure", |g| {
             g.state.execute(Command::CreateLoopClosure {
-                station_a: StationRef::new(g.mid(), SHOTS_PER_SECTION as u32),
+                station_a: StationRef::new(g.mid(), SHOTS_PER_LINE as u32),
                 station_b: StationRef::new(g.lines[g.mid_index() + 1], 4),
                 closure_strategy: ClosureStrategy::Move,
             })
@@ -361,16 +367,16 @@ fn actions() -> Vec<(&'static str, Action)> {
                 comment: Some("restriction".to_string()),
             })
         }),
-        ("move section", |g| {
-            g.state.execute(Command::MoveSection {
-                section_id: g.island,
+        ("move line", |g| {
+            g.state.execute(Command::MoveLine {
+                line_id: g.island,
                 offset: Coordinates::new(3.0, -2.0, 0.0),
             })
         }),
         // The tree's rigid group holds the datum, which pins it: the island moves.
         ("move segment", |g| {
             g.state.execute(Command::MoveSegment {
-                section_id: g.island,
+                line_id: g.island,
                 offset: Coordinates::new(1.5, 0.5, 0.0),
             })
         }),
@@ -384,11 +390,11 @@ fn actions() -> Vec<(&'static str, Action)> {
             let mid = g.mid();
             g.state.execute(Command::MoveComment {
                 source: CommentHolder::Shot {
-                    section_id: mid,
+                    line_id: mid,
                     shot_id: g.shot_ids(mid)[10],
                 },
                 target: CommentHolder::Shot {
-                    section_id: mid,
+                    line_id: mid,
                     shot_id: g.shot_ids(mid)[11],
                 },
                 swap: false,
@@ -399,7 +405,7 @@ fn actions() -> Vec<(&'static str, Action)> {
             let commands = g.shot_ids(mid)[..30]
                 .iter()
                 .map(|shot_id| Command::UpdateShot {
-                    section_id: mid,
+                    line_id: mid,
                     shot_id: *shot_id,
                     updates: ShotUpdates {
                         left: Some(Some(2.25)),
@@ -407,7 +413,10 @@ fn actions() -> Vec<(&'static str, Action)> {
                     },
                 })
                 .collect();
-            g.state.execute(Command::Batch { commands })
+            g.state.execute(Command::Batch {
+                commands,
+                label: None,
+            })
         }),
         ("project settings", |g| {
             let validation = g.state.get_project_state().unwrap().validation;
@@ -417,11 +426,11 @@ fn actions() -> Vec<(&'static str, Action)> {
         ("surface elevation", |g| {
             g.state.set_surface_elevation(Some(12.0))
         }),
-        ("split section here", |g| {
-            g.state.execute_split_section(
+        ("split line here", |g| {
+            g.state.execute_split_line(
                 g.mid(),
                 SplitAt::Station { station_index: 25 },
-                SplitSectionOptions {
+                SplitLineOptions {
                     name_a: "A".to_string(),
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
@@ -431,7 +440,7 @@ fn actions() -> Vec<(&'static str, Action)> {
                 },
             )
         }),
-        ("combine sections", |g| {
+        ("combine lines", |g| {
             let candidate = g
                 .state
                 .combine_candidates(StationRef::new(g.leaf, 0))
@@ -439,10 +448,10 @@ fn actions() -> Vec<(&'static str, Action)> {
                 .into_iter()
                 .next()
                 .expect("the leaf hangs off a line, so it can combine");
-            g.state.execute_combine_sections(
-                candidate.section_a,
-                candidate.section_b,
-                CombineSectionsOptions {
+            g.state.execute_combine_lines(
+                candidate.line_a,
+                candidate.line_b,
+                CombineLinesOptions {
                     name: "Combined".to_string(),
                     color: "#333333".to_string(),
                     swap_lr: false,
@@ -479,9 +488,71 @@ fn actions() -> Vec<(&'static str, Action)> {
             g.state
                 .execute_delete_shot_range_shift(g.mid(), ids[20], ids[24])
         }),
-        ("delete last shot and section", |g| {
+        ("delete last shot and line", |g| {
             g.state
-                .execute_delete_last_shot_and_section(g.leaf, g.shot_ids(g.leaf)[0])
+                .execute_delete_last_shot_and_line(g.leaf, g.shot_ids(g.leaf)[0])
+        }),
+        // Station identity and Sections (#327).
+        ("rename station", |g| {
+            g.state.execute(Command::SetStationName {
+                station_ref: StationRef::new(g.mid(), 10),
+                name: "10 renamed".to_string(),
+            })
+        }),
+        ("create line into a section", |g| {
+            g.state.execute(Command::CreateLine {
+                name: Some("Grouped".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: (0..20).map(|i| shot(7_778, i)).collect(),
+                cave_section_id: Some(g.section),
+            })
+        }),
+        ("create line and merge into a section", |g| {
+            g.state.execute_create_and_merge_in_cave_section(
+                Some("Snapped".to_string()),
+                None,
+                None,
+                "#00ff00".to_string(),
+                None,
+                (0..20).map(|i| shot(7_779, i)).collect(),
+                0,
+                StationRef::new(g.mid(), 30),
+                ClosureStrategy::Batch,
+                Some(g.section),
+            )
+        }),
+        ("create section (with a line)", |g| {
+            g.state.execute(Command::CreateCaveSection {
+                name: "Lower level".to_string(),
+                color: "#123456".to_string(),
+                line_ids: vec![g.mid()],
+            })
+        }),
+        ("rename section", |g| {
+            g.state.execute(Command::UpdateCaveSection {
+                section_id: g.section,
+                name: Some("Renamed level".to_string()),
+                color: None,
+            })
+        }),
+        ("move 20 lines to a section", |g| {
+            g.state.execute(Command::MoveLinesToCaveSection {
+                line_ids: g.lines[20..40].to_vec(),
+                section_id: Some(g.section),
+            })
+        }),
+        ("apply section colour", |g| {
+            g.state.execute(Command::ApplyCaveSectionColor {
+                section_id: g.section,
+            })
+        }),
+        ("delete section", |g| {
+            g.state.execute(Command::DeleteCaveSection {
+                section_id: g.section,
+            })
         }),
     ]
 }
@@ -598,8 +669,8 @@ fn report(text: &str) {
     }
 }
 
-fn gate(sections: usize, label: &str, exact: bool) {
-    let gate = open(sections);
+fn gate(lines: usize, label: &str, exact: bool) {
+    let gate = open(lines);
     let (rows, failed) = measure(&gate, exact);
     let mut text = table(label, &gate, &rows);
     for failure in &failed {

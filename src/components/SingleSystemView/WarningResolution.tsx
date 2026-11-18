@@ -9,6 +9,7 @@ import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { normalizeAzimuth, averageAzimuth } from '../../utils/azimuth';
 import {
   computeGhostEnd,
@@ -19,7 +20,7 @@ import {
 } from '../../utils/resolutionPreview';
 import { recordedPitch as recordedPitchOf, impliedPitchDeg } from '../../utils/shotGeometry';
 import { setSource } from '../../utils/telemetry';
-import type { Section, Shot, ShotUpdates } from '../../types/project';
+import type { Line, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
 import type { ProjectWarning } from '../../types/commands';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -87,7 +88,7 @@ interface ResolutionOption {
 
 interface WarningResolutionProps {
   warning: ProjectWarning;
-  section: Section | undefined;
+  line: Line | undefined;
   shot: Shot | undefined;
   /** Present only during "Resolve all"; drives the "n of N" header + Skip. */
   position?: { index: number; total: number } | undefined;
@@ -278,7 +279,7 @@ export function computeProposedRaw(
 
 export function WarningResolution({
   warning,
-  section,
+  line,
   shot,
   position,
   onExit,
@@ -286,6 +287,7 @@ export function WarningResolution({
   onSkip,
 }: WarningResolutionProps) {
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   const precision = useDecimalPrecision();
   const { updateShot, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
@@ -322,7 +324,7 @@ export function WarningResolution({
   const projectSaved = useProjectStore((s) => s.databaseOpen);
   const activeStations = useActiveStations();
 
-  const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);
+  const frozen = isShotFrozen(warning.lineId, warning.shotIndex);
   const geometryDisabled = editingBlocked || frozen;
 
   const [selected, setSelected] = useState<string>('');
@@ -511,7 +513,7 @@ export function WarningResolution({
             ? [{
                 id: 'go-to-station',
                 label: t('detailPanel.warnings.resolveOptions.goToClosureStation', {
-                  station: `${closureStation.section_id}:${closureStation.station_index}`,
+                  station: identity.station(closureStation, true),
                 }),
                 navigate: true,
               }]
@@ -529,7 +531,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision, identity]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
   // for an inclination in/out warning `pitchDeviationDefault` (average, unless
@@ -561,7 +563,7 @@ export function WarningResolution({
     // background project refresh rebuilds those references and would otherwise
     // wipe the user's in-progress manual edit and reset their selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [warning.sectionId, warning.shotId, warning.code, warning.closureId]);
+  }, [warning.lineId, warning.shotId, warning.code, warning.closureId]);
 
   // Strict parse of a manual field (NaN when empty/non-numeric/garbage). Used
   // only by the proposedCreatesError advisory; the proposal math lives in
@@ -573,7 +575,7 @@ export function WarningResolution({
   // (issue #57). Anchored to the real solved endpoint so it shows just the
   // change; returns null (no ghost) for options that don't move stations, or
   // when our planar model can't reproduce the current endpoint (e.g. a
-  // rotated/offset section) - better to show nothing than a misleading ghost.
+  // rotated/offset line) - better to show nothing than a misleading ghost.
   const preview = useMemo<GeometryPreview | null>(() => {
     if (!shot) return null;
     const opt = options.find((o) => o.id === selected);
@@ -582,7 +584,7 @@ export function WarningResolution({
 
     const stationAt = (stationIndex: number) =>
       activeStations.find(
-        (s) => s.station_ref.section_id === warning.sectionId && s.station_ref.station_index === stationIndex,
+        (s) => s.station_ref.line_id === warning.lineId && s.station_ref.station_index === stationIndex,
       )?.coordinates;
     const start = stationAt(warning.shotIndex);
     const end = stationAt(warning.shotIndex + 1);
@@ -647,7 +649,7 @@ export function WarningResolution({
       color: PREVIEW_COLOR,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, manual, shot, options, activeStations, negativeLrud, warning.sectionId, warning.shotIndex]);
+  }, [selected, manual, shot, options, activeStations, negativeLrud, warning.lineId, warning.shotIndex]);
 
   // Push the preview to the map; clear it when leaving the resolution view.
   useEffect(() => {
@@ -680,14 +682,14 @@ export function WarningResolution({
    * - 'failed': nothing applied (validation/command error); stay put.
    */
   const apply = async (): Promise<'resolved' | 'navigated' | 'failed'> => {
-    if (!shot || !section) return 'failed';
+    if (!shot || !line) return 'failed';
     const opt = options.find((o) => o.id === selected);
     if (!opt) return 'failed';
 
     if (opt.ignore) {
       // The backend can refuse (e.g. the shot no longer exists, or the code is
       // an error): only count it resolved if it actually persisted (#57 #1).
-      const ok = await resolveWarning(warning.sectionId, warning.shotId, warning.code);
+      const ok = await resolveWarning(warning.lineId, warning.shotId, warning.code);
       if (!ok) {
         showToast(t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
         return 'failed';
@@ -700,11 +702,11 @@ export function WarningResolution({
       // could not adjust) the start of the shot the warning is on.
       const ref =
         warning.datumStationIndex !== undefined
-          ? { section_id: warning.sectionId, station_index: warning.datumStationIndex }
+          ? { line_id: warning.lineId, station_index: warning.datumStationIndex }
           : warning.code === 'CLOSURE_ACROSS_ONE_SHOT'
             ? closureStation
             : warning.code === 'CLOSURE_ADJUSTMENT_FAILED'
-              ? { section_id: warning.sectionId, station_index: warning.shotIndex }
+              ? { line_id: warning.lineId, station_index: warning.shotIndex }
               : undefined;
       if (ref) {
         setSource('detail-panel');
@@ -729,13 +731,13 @@ export function WarningResolution({
     }
 
     if (opt.id === 'delete-shot') {
-      const result = await deleteShot(warning.sectionId, warning.shotId);
+      const result = await deleteShot(warning.lineId, warning.shotId);
       if (result.success) {
         // The shot no longer exists; the resolve flow had it selected, so move
-        // the selection to its parent section - otherwise Details renders
+        // the selection to its parent line - otherwise Details renders
         // "Selection not found" for the now-dangling shot selection.
         setSource('detail-panel');
-        setSelection({ type: 'section', sectionId: warning.sectionId });
+        setSelection({ type: 'line', lineId: warning.lineId });
       }
       // (failure surfacing owned by executeCommand's catch-all toast)
       return result.success ? 'resolved' : 'failed';
@@ -790,7 +792,7 @@ export function WarningResolution({
     }
 
     // Failure surfacing is owned by executeCommand's catch-all toast.
-    const result = await updateShot(warning.sectionId, warning.shotId, patch);
+    const result = await updateShot(warning.lineId, warning.shotId, patch);
     return result.success ? 'resolved' : 'failed';
   };
 
@@ -830,7 +832,7 @@ export function WarningResolution({
           {/* Each click zooms one step closer onto the problematic shot. */}
           <button
             type="button"
-            onClick={() => triggerZoomToShot(warning.sectionId, warning.shotId)}
+            onClick={() => triggerZoomToShot(warning.lineId, warning.shotId)}
             className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
             title={t('detailPanel.warnings.zoomToShot')}
             aria-label={t('detailPanel.warnings.zoomToShot')}
@@ -843,7 +845,10 @@ export function WarningResolution({
 
       {/* The warning + current values */}
       <div className="px-1 mb-3">
-        <div className="text-sm text-text-primary">{warning.message}</div>
+        {/* The backend names the shot (`Shot Main Line: 4 → 5 ...`). */}
+        <div className="text-sm text-text-primary" data-testid="warning-resolution-message">
+          {warning.message}
+        </div>
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">
             {t('detailPanel.labels.azimuthIn')} {az(shot.azimuth_in)} · {t('detailPanel.labels.azimuthOut')} {az(shot.azimuth_out)}

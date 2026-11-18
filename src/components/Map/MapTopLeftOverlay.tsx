@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 import { AlertTriangleIcon, FitToViewIcon, LockIcon } from '../common/icons';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 import {
   PILL_LABEL_CLS,
@@ -69,6 +69,7 @@ const SHOW_WARNINGS_CLS =
  */
 function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   const openWarningsTab = useUIStore((s) => s.openWarningsTab);
   const skipped = report.skipped_closures.length;
   const failed = report.failures.length;
@@ -89,7 +90,7 @@ function AdjustmentNotice({ report }: { report: AdjustmentReport }) {
           <span data-testid="adjustment-notice-far-gps-fix">
             {t('map.geometry.farGpsFixes', {
               count: far.length,
-              station: formatStationId(largest.station.section_id, largest.station.station_index),
+              station: identity.station(largest.station, true),
               gap: formatDatumMetres(largest.gap_m),
             })}
           </span>
@@ -110,7 +111,7 @@ export function MapTopLeftOverlay({
   showClosureComputing,
   adjustmentReport = null,
 }: {
-  /** In section-focus mode, the fit button doubles as "exit focus". */
+  /** In line-focus mode, the fit button doubles as "exit focus". */
   focused: boolean;
   onFitOrExitFocus: () => void;
   /** Remote project open without the write lock (Survey mode only). */

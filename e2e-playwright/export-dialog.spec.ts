@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { setupMockedPage, createProject, createLineViaStore } from './helpers/app';
 
 test.describe('Export Dialog', () => {
   test.beforeEach(async ({ page }) => {
@@ -205,11 +205,11 @@ test.describe('Export Dialog', () => {
     await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
   });
 
-  test('should warn for TML export when sections are not anchored and allow cancel', async ({ page }) => {
+  test('should warn for TML export when lines are not anchored and allow cancel', async ({ page }) => {
     await createProject(page, 'TML Warning Cancel Project');
 
-    await createSectionViaStore(page, {
-      name: 'Anchored Section',
+    await createLineViaStore(page, {
+      name: 'Anchored Line',
       shots: [{
         azimuth_in: 45,
         azimuth_out: 45,
@@ -218,8 +218,8 @@ test.describe('Export Dialog', () => {
         depth_out: 0,
       }],
     });
-    await createSectionViaStore(page, {
-      name: 'Floating Section',
+    await createLineViaStore(page, {
+      name: 'Floating Line',
       shots: [{
         azimuth_in: 120,
         azimuth_out: 120,
@@ -235,7 +235,7 @@ test.describe('Export Dialog', () => {
           projectStore: {
             getState: () => {
               setZeroDatum: (
-                stationRef: { section_id: number; station_index: number },
+                stationRef: { line_id: number; station_index: number },
                 coordinates: { latitude: number; longitude: number; depth_reference: number }
               ) => Promise<unknown>;
             };
@@ -244,7 +244,7 @@ test.describe('Export Dialog', () => {
       }).__E2E_TEST__;
       if (!e2e) throw new Error('E2E stores not available on window');
       await e2e.projectStore.getState().setZeroDatum(
-        { section_id: 1, station_index: 0 },
+        { line_id: 1, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
       );
     });
@@ -276,20 +276,20 @@ test.describe('Export Dialog', () => {
     const warningDialog = page.getByTestId('tml-unanchored-warning-dialog');
     await expect(warningDialog).toBeVisible();
     // The claims a7d12ad0 settled this copy on, as #741 corrected it: no GPS
-    // reading places the section (it exports at the spot the map shows),
+    // reading places the line (it exports at the spot the map shows),
     // nothing is discarded, and the fix is named.
     // It must NOT promise entrance topology - that is merge-derived in the
     // exporter while this dialog classifies by zero-datum reachability, and the
     // two predicates disagree in both directions (see the comment above the
     // AlertDialog in ExportControls.tsx, and ExportControls.test.tsx).
-    await expect(warningDialog).toContainText('1 of 2 sections is not connected to a zero datum');
+    await expect(warningDialog).toContainText('1 of 2 lines is not connected to a zero datum');
     await expect(warningDialog).toContainText('no GPS reading places it');
     await expect(warningDialog).toContainText('Nothing is discarded');
     await expect(warningDialog).toContainText('Set Zero Datum');
     await expect(warningDialog).not.toContainText('entrance');
-    await expect(warningDialog).not.toContainText('only include sections');
-    await expect(warningDialog).toContainText('Floating Section (#2)');
-    await expect(warningDialog).not.toContainText('Anchored Section');
+    await expect(warningDialog).not.toContainText('only include lines');
+    await expect(warningDialog).toContainText('Floating Line (#2)');
+    await expect(warningDialog).not.toContainText('Anchored Line');
     await expect(page.getByTestId('tml-unanchored-warning-continue')).toHaveAttribute('data-primary-action', '');
 
     await page.getByTestId('tml-unanchored-warning-cancel').click();
@@ -303,8 +303,8 @@ test.describe('Export Dialog', () => {
   test('should continue TML export after unanchored warning confirmation', async ({ page }) => {
     await createProject(page, 'TML Warning Continue Project');
 
-    await createSectionViaStore(page, {
-      name: 'Anchored Section',
+    await createLineViaStore(page, {
+      name: 'Anchored Line',
       shots: [{
         azimuth_in: 30,
         azimuth_out: 30,
@@ -313,8 +313,8 @@ test.describe('Export Dialog', () => {
         depth_out: 0,
       }],
     });
-    await createSectionViaStore(page, {
-      name: 'Unanchored Section',
+    await createLineViaStore(page, {
+      name: 'Unanchored Line',
       shots: [{
         azimuth_in: 210,
         azimuth_out: 210,
@@ -330,7 +330,7 @@ test.describe('Export Dialog', () => {
           projectStore: {
             getState: () => {
               setZeroDatum: (
-                stationRef: { section_id: number; station_index: number },
+                stationRef: { line_id: number; station_index: number },
                 coordinates: { latitude: number; longitude: number; depth_reference: number }
               ) => Promise<unknown>;
             };
@@ -339,7 +339,7 @@ test.describe('Export Dialog', () => {
       }).__E2E_TEST__;
       if (!e2e) throw new Error('E2E stores not available on window');
       await e2e.projectStore.getState().setZeroDatum(
-        { section_id: 1, station_index: 0 },
+        { line_id: 1, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
       );
     });

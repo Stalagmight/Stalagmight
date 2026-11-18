@@ -3,11 +3,11 @@ use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
 use crate::core::{
-    Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
+    Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedLine, UndoData,
     ValidationWarning,
 };
 use crate::models::{
-    ClosuresBeforeSweep, DatumLayout, Project, SectionData, SectionId, ViolationSeverity,
+    ClosuresBeforeSweep, DatumLayout, LineData, LineId, Project, ViolationSeverity,
 };
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
@@ -24,7 +24,7 @@ struct CommandIntegrity {
     /// source. Geometry-only commands add valid refs or shift offsets but cannot
     /// dangle a reference, so they skip the serialize.
     can_dangle_refs: bool,
-    /// Can REMOVE connectivity and strand a section so its only attachment is a
+    /// Can REMOVE connectivity and strand a line so its only attachment is a
     /// loop closure - which must then be converted to a merge (issue #8). Commands
     /// that add or keep connectivity are excluded (a move must leave an inert
     /// closure independent).
@@ -53,10 +53,10 @@ impl AppState {
             | SaveProject { .. }
             | CloseProject
             | MergeProjects { .. } => true,
-            CreateSection { .. }
-            | DeleteSection { .. }
-            | UpdateSectionMetadata { .. }
-            | ReverseSection { .. }
+            CreateLine { .. }
+            | DeleteLine { .. }
+            | UpdateLineMetadata { .. }
+            | ReverseLine { .. }
             | CreateShot { .. }
             | UpdateShot { .. }
             | DeleteShot { .. }
@@ -70,12 +70,18 @@ impl AppState {
             | SetZeroDatum { .. }
             | RemoveZeroDatum { .. }
             | SetStationComment { .. }
-            | MoveSection { .. }
+            | SetStationName { .. }
+            | MoveLine { .. }
             | MoveSegment { .. }
             | MoveStation { .. }
             | MoveComment { .. }
             | Batch { .. }
             | UntrackImport { .. }
+            | CreateCaveSection { .. }
+            | UpdateCaveSection { .. }
+            | DeleteCaveSection { .. }
+            | MoveLinesToCaveSection { .. }
+            | ApplyCaveSectionColor { .. }
             // Adding a file INTO the open project is an edit of it (#674),
             // unlike MergeProjects, which writes a new file.
             | AddProjectFile { .. }
@@ -85,18 +91,18 @@ impl AppState {
         }
     }
 
-    /// The sections a command reverses, WITHOUT the parity reduction
-    /// `Command::reversed_section_ids` applies - `None` when the command is not purely
+    /// The lines a command reverses, WITHOUT the parity reduction
+    /// `Command::reversed_line_ids` applies - `None` when the command is not purely
     /// reverses. Parity reduction is right for the settle step (which asks "what moved?") and
     /// wrong here, where a `[A, A]` batch must still be recognised as touching A.
-    fn reverse_only_sections(cmd: &Command) -> Option<Vec<SectionId>> {
+    fn reverse_only_lines(cmd: &Command) -> Option<Vec<LineId>> {
         match cmd {
-            Command::ReverseSection { section_id, .. } => Some(vec![*section_id]),
-            Command::Batch { commands } => {
+            Command::ReverseLine { line_id, .. } => Some(vec![*line_id]),
+            Command::Batch { commands, .. } => {
                 let mut out = Vec::with_capacity(commands.len());
                 for c in commands {
                     match c {
-                        Command::ReverseSection { section_id, .. } => out.push(*section_id),
+                        Command::ReverseLine { line_id, .. } => out.push(*line_id),
                         // Anything else in the batch can change something.
                         _ => return None,
                     }
@@ -107,11 +113,27 @@ impl AppState {
         }
     }
 
-    /// Whether this command is a reverse (or a batch of reverses) whose every named section has
+    /// Whether `cmd` is a `SetStationName` giving a station the name it
+    /// already holds, compared trimmed as the rename stores it.
+    fn is_unchanged_station_name(&self, cmd: &Command) -> bool {
+        let Command::SetStationName { station_ref, name } = cmd else {
+            return false;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.as_ref().is_some_and(|project| {
+            let name = name.trim();
+            !name.is_empty() && project.station_name_at(*station_ref) == Some(name)
+        })
+    }
+
+    /// Whether this command is a reverse (or a batch of reverses) whose every named line has
     /// no shots - i.e. provably a no-op, so it must not consume the redo branch or dirty a
-    /// remote project. A missing section counts as "nothing to change" for the same reason.
+    /// remote project. A missing line counts as "nothing to change" for the same reason.
     fn is_provable_reverse_noop(&self, cmd: &Command) -> bool {
-        let Some(sections) = Self::reverse_only_sections(cmd) else {
+        let Some(lines) = Self::reverse_only_lines(cmd) else {
             return false;
         };
         let guard = match self.project.lock() {
@@ -121,13 +143,11 @@ impl AppState {
         let Some(project) = guard.as_ref() else {
             return false;
         };
-        // A MISSING section is not a no-op - it is an error, and must still fall through so the
-        // command fails. Only a section that exists and has no shots is provably inert.
-        sections.iter().all(|sid| {
-            project
-                .get_section(*sid)
-                .is_some_and(|s| s.shots.is_empty())
-        })
+        // A MISSING line is not a no-op - it is an error, and must still fall through so the
+        // command fails. Only a line that exists and has no shots is provably inert.
+        lines
+            .iter()
+            .all(|sid| project.get_line(*sid).is_some_and(|s| s.shots.is_empty()))
     }
 
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
@@ -173,7 +193,7 @@ impl AppState {
             | OpenProject { .. }
             | SaveProject { .. }
             | CloseProject
-            | UpdateSectionMetadata { .. }
+            | UpdateLineMetadata { .. }
             | SetShotKind { .. }
             // Survey credit is per-shot metadata: no geometry, no references.
             | EditShotCredit { .. }
@@ -184,16 +204,26 @@ impl AppState {
             // edit, while their undo (restore the previous comment) does not invert
             // that geometry change - an asymmetric undo.
             | SetStationComment { .. }
+            // A station name is metadata keyed by station identity, exactly
+            // like a comment (see above).
+            | SetStationName { .. }
             | MoveComment { .. }
             | RepairIntegrity
             | UpdateProjectSettings
             // Import-dedup bookkeeping: a set of hashes, referenced by nothing.
             | UntrackImport { .. }
+            // Sections (#327) group lines by id: no station reference, no
+            // geometry, nothing a closure hangs on.
+            | CreateCaveSection { .. }
+            | UpdateCaveSection { .. }
+            | DeleteCaveSection { .. }
+            | MoveLinesToCaveSection { .. }
+            | ApplyCaveSectionColor { .. }
             | SetSurfaceElevation => SAFE_REFS,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
-            // section behind a sole-bridge closure.
-            DeleteSection { .. } | DeleteShot { .. } | MergeProjects { .. } => REMOVES,
+            // line behind a sole-bridge closure.
+            DeleteLine { .. } | DeleteShot { .. } | MergeProjects { .. } => REMOVES,
 
             // A batch is exactly as dangerous as the worst thing in it. Taking
             // the union rather than a blanket REMOVES matters for the data
@@ -203,7 +233,7 @@ impl AppState {
             // already-drifted project as a side effect of an edit whose undo
             // does not invert that geometry change (the asymmetric-undo hazard
             // spelled out for SetStationComment above).
-            Batch { commands } => commands.iter().fold(SAFE_REFS, |acc, c| {
+            Batch { commands, .. } => commands.iter().fold(SAFE_REFS, |acc, c| {
                 let f = Self::command_integrity(c);
                 CommandIntegrity {
                     can_dangle_refs: acc.can_dangle_refs || f.can_dangle_refs,
@@ -212,10 +242,10 @@ impl AppState {
             }),
 
             // Inserting a shot renumbers later stations (can dangle a positional
-            // ref) but cannot strand a section.
+            // ref) but cannot strand a line.
             CreateShot { .. } => CREATE_SHOT,
 
-            // Unmerge removes connectivity (can strand a section) but adds no
+            // Unmerge removes connectivity (can strand a line) but adds no
             // dangling reference.
             UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
 
@@ -238,8 +268,8 @@ impl AppState {
             // Everything else keeps references valid and cannot strand a closure.
             // Whether it also needs geometry reconciliation is the separate,
             // exhaustive Command::affects_geometry classification.
-            ReverseSection { .. }
-            | CreateSection { .. }
+            ReverseLine { .. }
+            | CreateLine { .. }
             | UpdateShot { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
@@ -247,12 +277,12 @@ impl AppState {
             // convertible orphan into a refused one, and a refused orphan is what
             // the loader leaves alone too, so session and disk already agree.
             | SetZeroDatum { .. }
-            | MoveSection { .. }
+            | MoveLine { .. }
             | MoveSegment { .. }
             | MoveStation { .. } => SAFE_REFS,
 
             // A pure addition (#674): it copies a source's own references
-            // between the sections it creates and links nothing existing, so
+            // between the lines it creates and links nothing existing, so
             // it can neither dangle a ref nor strand a closure. No rollback
             // snapshot either - `add_project_file` blocks introduced corruption
             // itself by removing what it appended, which costs the size of the
@@ -337,8 +367,8 @@ impl AppState {
     /// frame that is no longer the origin.
     ///
     /// Derived, not hooked. At least six routes can promote a different datum to
-    /// first - `remove_zero_datum`, `cleanup_section_references` on a
-    /// `DeleteSection`, the delete/split entry points, `repair_structural_integrity`,
+    /// first - `remove_zero_datum`, `cleanup_line_references` on a
+    /// `DeleteLine`, the delete/split entry points, `repair_structural_integrity`,
     /// `set_zero_datum`, and the `ZeroDatumInfo` undo arm - and a hook set that is
     /// one call site short does not degrade, it silently skips. Comparing the frame
     /// station across the command catches all of them, including the ones nobody
@@ -372,13 +402,13 @@ impl AppState {
     /// Stated as what holds rather than as a blanket claim, because the gate now
     /// admits `None -> Some` as well and that is a different set of routes:
     ///
-    /// * The commands that PROMOTE a datum (`RemoveZeroDatum`, `DeleteSection`,
+    /// * The commands that PROMOTE a datum (`RemoveZeroDatum`, `DeleteLine`,
     ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
     ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
     ///   map back verbatim.
     /// * `SetZeroDatum` - the command that ordinarily ESTABLISHES a frame -
     ///   records `UndoData::ZeroDatumInfo` with a whole-project
-    ///   `previous_offsets` (`Project::capture_all_section_offsets`, taken before
+    ///   `previous_offsets` (`Project::capture_all_line_offsets`, taken before
     ///   the mutation), which is exactly the blast radius of the translation it
     ///   performs.
     /// * `AddProjectFile` (#674) can establish one too, when the copied file
@@ -390,13 +420,13 @@ impl AppState {
     /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
     /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
     /// pre-anchor builds) can go from dangling to resolving when a command GROWS
-    /// its section - `CreateShot` is the reachable one - which flips the frame
+    /// its line - `CreateShot` is the reachable one - which flips the frame
     /// key under a command whose undo captures only its rigid group
     /// (`CreatedShotSnapshot`). The resulting translation is then not restored
     /// exactly by that undo. It is reachable on master already in the
     /// `Some -> Some` form (an index datum un-dangling ahead of the datum that
     /// was the frame); widening the gate adds the `None -> Some` form of the same
-    /// shape. Anchors written by any current build are `SectionStart`/`AfterShot`,
+    /// shape. Anchors written by any current build are `LineStart`/`AfterShot`,
     /// which no forward command can un-dangle, so this stays a legacy-file
     /// question and is deliberately left to the anchor work rather than patched
     /// here.
@@ -479,7 +509,7 @@ impl AppState {
     /// corruption rolls back.
     ///
     /// No sole-bridge scan runs here. Only an operation that can SEVER
-    /// connectivity can strand a section behind a sole-bridge closure (issue #8),
+    /// connectivity can strand a line behind a sole-bridge closure (issue #8),
     /// and the one remaining caller is a pure-addition path (a fresh import) that
     /// never creates one - so it would only pay the O(closures × connectivity)
     /// cost that used to dominate a large import.
@@ -523,7 +553,7 @@ impl AppState {
     }
 
     /// Repair the open project's integrity: drop dangling refs/orphans, re-mint
-    /// duplicate shot UUIDs, then re-cascade section offsets so drifted merges
+    /// duplicate shot UUIDs, then re-cascade line offsets so drifted merges
     /// line up again. Returns `{ fixed, remaining }` measured as the change in
     /// the FULL violation set (the same set the banner counts), so the reported
     /// numbers match what the user sees. `remaining > 0` means some issues are
@@ -610,12 +640,12 @@ impl AppState {
             let datums_before = project.datum_layout();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             let repaired = project.repair_structural_integrity();
-            // A cross-section repeat is healed by renaming, exactly as a load
+            // A cross-line repeat is healed by renaming, exactly as a load
             // does, so ignores stored against the old ids need the same alias
             // lookup until the next save re-keys them.
             if repaired
                 .iter()
-                .any(|v| v.category == "duplicate_shot_uuid_across_sections")
+                .any(|v| v.category == "duplicate_shot_uuid_across_lines")
             {
                 self.load_renamed_shots
                     .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -637,6 +667,9 @@ impl AppState {
           // Repair mutated measured geometry (and convert_orphan_closures_to_merges
           // doesn't bump modified_at), so drop any cached closure-adjusted solve.
         self.invalidate_adjusted_cache();
+        // A repair can re-mint a shot uuid and drop a dangling key: settle the
+        // station identities before the after-snapshot records the repair.
+        self.settle_station_identities();
         let after = self.integrity_violation_messages().len();
         // Record an undo entry (before -> after) so the user can revert the repair.
         // Only when it actually changed the project, so a no-op repair doesn't add
@@ -690,7 +723,7 @@ impl AppState {
             if let Err(f) = self.speleodb_collect_reverify() {
                 return f;
             }
-            if let Err(f) = self.guard_mutation(&cmd.description()) {
+            if let Err(f) = self.guard_mutation_for(&cmd) {
                 return f;
             }
             // Lazy 20-min lock re-verify (#202): on a lock-held remote edit through
@@ -703,8 +736,8 @@ impl AppState {
             // release-time fence + a 403 on push are the correctness backstops).
             self.speleodb_verify_lock_if_expired();
         }
-        // A reverse of a section that has no shots provably changes nothing (#24):
-        // `Project::reverse_section` returns `true` on `shot_count == 0` without touching a
+        // A reverse of a line that has no shots provably changes nothing (#24):
+        // `Project::reverse_line` returns `true` on `shot_count == 0` without touching a
         // single field. Returning here - BEFORE the cache invalidation, the undo/redo epilogue
         // and the dirty flip - is what makes that a true no-op. Previously it fell through,
         // cleared the whole redo branch and stamped `has_unpushed_edits`, proliferating a
@@ -712,11 +745,22 @@ impl AppState {
         //
         // Guarded in the BACKEND rather than trusting the dialog's filter: the batch path, the
         // raw IPC command and the agent harness all reach this function without passing through
-        // that filter, and shot-less sections are real (a GPX waypoint imports as one).
+        // that filter, and shot-less lines are real (a GPX waypoint imports as one).
         if self.is_provable_reverse_noop(&cmd) {
             tracing::debug!(
-                command = %cmd.description(),
-                "Reverse of shot-less section(s) changes nothing; skipping undo, redo-clear and dirty flip"
+                command = ?cmd.description(),
+                "Reverse of shot-less line(s) changes nothing; skipping undo, redo-clear and dirty flip"
+            );
+            return CommandResult::success();
+        }
+        // Renaming a station to the name it already has (after trimming, as
+        // the rename stores it) is the same kind of no-op: it succeeds with no
+        // undo entry, no redo-clear and no dirty flip, so the Edit Station
+        // dialog's Save with the name untouched leaves no history behind.
+        if self.is_unchanged_station_name(&cmd) {
+            tracing::debug!(
+                command = ?cmd.description(),
+                "Station already has that name; skipping undo, redo-clear and dirty flip"
             );
             return CommandResult::success();
         }
@@ -783,63 +827,51 @@ impl AppState {
             Command::OpenProject { path } => self.open_project(path.clone()),
             Command::SaveProject { path } => self.save_project(path.clone()),
             Command::CloseProject => self.close_project(),
-            Command::CreateSection {
+            Command::CreateLine {
                 name,
                 surveyor,
                 date,
                 color,
                 direction,
                 shots,
-            } => self.create_section(SectionData {
-                name: name.clone(),
-                surveyor: surveyor.clone(),
-                date: *date,
-                color: color.clone(),
-                direction: *direction,
-                quality: 1.0,
-                // Identity is not the caller's to name (#423): this Command
-                // arrives verbatim off IPC (create_section, execute_batch), so
-                // strip uuids HERE, not in `AppState::create_section` - the
-                // importers funnel through that executor with identities our
-                // own parser legitimately adopted.
-                shots: shots
-                    .iter()
-                    .cloned()
-                    .map(|mut s| {
-                        s.uuid = None;
-                        s
-                    })
-                    .collect(),
-            }),
-            Command::DeleteSection { section_id } => self.delete_section(*section_id),
-            Command::UpdateSectionMetadata {
-                section_id,
-                updates,
-            } => self.update_section(*section_id, updates.clone()),
-            Command::ReverseSection {
-                section_id,
+                cave_section_id,
+            } => self.create_line_command(
+                LineData {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: *date,
+                    color: color.clone(),
+                    direction: *direction,
+                    quality: 1.0,
+                    shots: shots.clone(),
+                },
+                *cave_section_id,
+            ),
+            Command::DeleteLine { line_id } => self.delete_line(*line_id),
+            Command::UpdateLineMetadata { line_id, updates } => self
+                .refuse_line_rename(&cmd)
+                .unwrap_or_else(|| self.update_line(*line_id, updates.clone())),
+            Command::ReverseLine {
+                line_id,
                 swap_left_right,
-            } => self.reverse_section(*section_id, *swap_left_right),
+            } => self.reverse_line(*line_id, *swap_left_right),
             Command::CreateShot {
-                section_id,
+                line_id,
                 shot,
                 after_shot_id,
                 before_shot_id,
-            } => self.create_shot(*section_id, shot.clone(), *after_shot_id, *before_shot_id),
+            } => self.create_shot(*line_id, shot.clone(), *after_shot_id, *before_shot_id),
             Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates,
-            } => self.update_shot(*section_id, *shot_id, updates.clone()),
-            Command::DeleteShot {
-                section_id,
-                shot_id,
-            } => self.delete_shot(*section_id, *shot_id),
+            } => self.update_shot(*line_id, *shot_id, updates.clone()),
+            Command::DeleteShot { line_id, shot_id } => self.delete_shot(*line_id, *shot_id),
             Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 kind,
-            } => self.set_shot_kind(*section_id, *shot_id, *kind),
+            } => self.set_shot_kind(*line_id, *shot_id, *kind),
             Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
             Command::MergeStations {
                 station_a,
@@ -867,8 +899,11 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
-            Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
-            Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name)
+            }
+            Command::MoveLine { line_id, offset } => self.move_line(*line_id, *offset),
+            Command::MoveSegment { line_id, offset } => self.move_segment(*line_id, *offset),
             Command::MoveStation {
                 station_ref,
                 offset,
@@ -878,7 +913,9 @@ impl AppState {
                 target,
                 swap,
             } => return self.execute_move_comment(source.clone(), target.clone(), *swap, cmd),
-            Command::Batch { commands } => self.execute_batch(commands.clone(), true),
+            Command::Batch { commands, label } => {
+                self.execute_batch(commands.clone(), label.clone(), true)
+            }
             Command::MergeProjects {
                 source_paths,
                 output_path,
@@ -895,8 +932,26 @@ impl AppState {
             // exhaustiveness.
             Command::UntrackImport {
                 file_hashes,
-                section_hashes,
-            } => self.untrack_import(file_hashes, section_hashes),
+                line_hashes,
+            } => self.untrack_import(file_hashes, line_hashes),
+            Command::CreateCaveSection {
+                name,
+                color,
+                line_ids,
+            } => self.create_cave_section(name, color, line_ids),
+            Command::UpdateCaveSection {
+                section_id,
+                name,
+                color,
+            } => self.update_cave_section(*section_id, name.as_deref(), color.as_deref()),
+            Command::DeleteCaveSection { section_id } => self.delete_cave_section(*section_id),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => self.move_lines_to_cave_section(line_ids, *section_id),
+            Command::ApplyCaveSectionColor { section_id } => {
+                self.apply_cave_section_color(*section_id)
+            }
             Command::AddProjectFile { path, .. } => {
                 self.add_project_file(path, Self::add_slot_generation(&undo_data))
             }
@@ -928,8 +983,8 @@ impl AppState {
             }
         }
 
-        // A command that REMOVES connectivity (delete shot/section, unmerge) can
-        // strand a section so its only attachment is a loop closure - which is
+        // A command that REMOVES connectivity (delete shot/line, unmerge) can
+        // strand a line so its only attachment is a loop closure - which is
         // then a merge, not a loop. Convert before reconciling offsets so the new
         // merge is solved immediately (#8). Scoped to removal commands so a move
         // still leaves an inert closure independent.
@@ -957,13 +1012,29 @@ impl AppState {
             self.settle_datum_layout(&datums_before);
         }
 
-        // Treat section offsets as derived: after any structural command,
+        // Treat line offsets as derived: after any structural command,
         // reconcile geometry so no command path can leave merged stations
         // drifted (a no-op when nothing moved; skipped during bulk import). A
         // metadata-only UpdateShot (comment/LRUD/reference) is excluded - see
         // `Command::affects_geometry` - so it can't silently heal drift with no undo.
         if result.success && cmd.affects_geometry() {
             self.reconcile_geometry();
+        }
+
+        // Every station a command created gets its Station ID (and, when the
+        // command did not name it, its name) here, BEFORE the undo entry below
+        // is finalized, so the entry records the state with the ids in it.
+        // Lifecycle commands load or create a project that the load path has
+        // already settled; a Batch settles once, inside `execute_batch`, before
+        // its after-snapshot; a command that cannot change station identity
+        // (`Command::can_change_station_identity`) leaves a settled project
+        // settled, so it skips the whole-project pass.
+        if result.success
+            && !Self::is_lifecycle_passthrough(&cmd)
+            && !matches!(cmd, Command::Batch { .. })
+            && cmd.can_change_station_identity()
+        {
+            self.settle_station_identities();
         }
 
         // An add finalizes and pushes under ONE `project` guard, bound to the
@@ -984,7 +1055,7 @@ impl AppState {
             let mut final_undo_data = self.finalize_undo_data(&cmd, undo_data);
             if let Ok(guard) = self.project.lock() {
                 if let Some(project) = guard.as_ref() {
-                    final_undo_data.keep_changed_offsets(&project.section_offsets);
+                    final_undo_data.keep_changed_offsets(&project.line_offsets);
                 }
             }
 
@@ -995,7 +1066,7 @@ impl AppState {
             // stack is persisted, so the wedge survives close/reopen (stacks
             // written before this guard are healed at load - see
             // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
-            // section (a GPX waypoint section, and the context menu offers Reverse
+            // line (a GPX waypoint line, and the context menu offers Reverse
             // with no shot-count guard): the command succeeds as a no-op while
             // `generate_undo_data` returns `None`. Guarded here rather than per
             // command so any future command with the same shape is covered.
@@ -1009,7 +1080,7 @@ impl AppState {
             // to be undone, not the fact that a forward command ran; the redo branch
             // replays onto a state the project has left either way. (Accepted cost:
             // a provably-no-op forward command, such as reversing a shot-less
-            // section, also drops the redo branch. "A successful forward command
+            // line, also drops the redo branch. "A successful forward command
             // invalidates redo" outranks preserving redo across a no-op.)
             // A snapshot pair becomes its compact delta here, outside the
             // stack's lock: the conversion diffs two whole projects.
@@ -1017,7 +1088,7 @@ impl AppState {
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 if matches!(final_undo_data, UndoData::None) {
                     tracing::debug!(
-                        command = %cmd.description(),
+                        command = ?cmd.description(),
                         "Command produced no undo data; not pushing an unundoable entry, clearing redo"
                     );
                     undo_stack.clear_redo();
@@ -1036,23 +1107,23 @@ impl AppState {
         }
 
         if result.success {
-            result = self.settle_reversed_sections(&cmd, result);
+            result = self.settle_reversed_lines(&cmd, result);
         }
 
         result
     }
 
-    /// Finish a successful operation that REVERSED some sections' station numbering
-    /// (a forward `ReverseSection`, a batch of them, or an undo/redo of either - all
+    /// Finish a successful operation that REVERSED some lines' station numbering
+    /// (a forward `ReverseLine`, a batch of them, or an undo/redo of either - all
     /// re-reverse the numbering).
     ///
     /// The warning re-pin is driven off the PARITY-REDUCED list
-    /// `Command::reversed_section_ids` returns, and each named section is fixed up exactly
+    /// `Command::reversed_line_ids` returns, and each named line is fixed up exactly
     /// once; it rebuilds its map from the CURRENT project, so what makes undo/redo safe is the
     /// intervening re-reverse, not any self-inverse property of the call.
     ///
     /// `resolved_warnings` rows still keyed by position are out of reach of
-    /// `reverse_section`'s own cross-reference rewrite (which walks `for_each_station_ref`:
+    /// `reverse_line`'s own cross-reference rewrite (which walks `for_each_station_ref`:
     /// merges, closures, zero datums, station offsets, station comments), because the reverse
     /// detached their `shot_id` from its record.
     ///
@@ -1060,28 +1131,28 @@ impl AppState {
     /// it sits BETWEEN, and a reverse does not change what a station sits between - so there is
     /// no re-pointing to do, and no window in which the two files could disagree.
     ///
-    /// It also reports the sections on the result, each with the shot count now in
+    /// It also reports the lines on the result, each with the shot count now in
     /// force. A reverse keeps every station's world position, so there is nothing
     /// in the geometry for a consumer to diff: without this signal the frontend had
     /// to INFER a reverse from station positions, which cannot tell a reversed
-    /// section from one that was reversed and moved in the same action.
+    /// line from one that was reversed and moved in the same action.
     ///
-    /// A named section that is gone or has no shots is DROPPED from the report:
-    /// `Project::reverse_section` returns early on a shot-less section, so nothing
+    /// A named line that is gone or has no shots is DROPPED from the report:
+    /// `Project::reverse_line` returns early on a shot-less line, so nothing
     /// was renumbered and there is no divisor for the frontend's mirror.
-    pub(super) fn settle_reversed_sections(
+    pub(super) fn settle_reversed_lines(
         &self,
         cmd: &Command,
         result: CommandResult,
     ) -> CommandResult {
-        let reversed = cmd.reversed_section_ids();
+        let reversed = cmd.reversed_line_ids();
         if reversed.is_empty() {
             return result;
         }
         self.pin_position_keyed_warnings_after_reverse(&reversed);
         // One project lock for the whole list; both fix-ups above take (and
         // release) it themselves, and the mutex is not reentrant.
-        let entries: Vec<ReversedSection> = {
+        let entries: Vec<ReversedLine> = {
             let guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
@@ -1091,10 +1162,10 @@ impl AppState {
             };
             reversed
                 .iter()
-                .filter_map(|section_id| {
-                    let shot_count = project.get_section(*section_id)?.shots.len() as u32;
-                    (shot_count > 0).then_some(ReversedSection {
-                        section_id: *section_id,
+                .filter_map(|line_id| {
+                    let shot_count = project.get_line(*line_id)?.shots.len() as u32;
+                    (shot_count > 0).then_some(ReversedLine {
+                        line_id: *line_id,
                         shot_count,
                     })
                 })
@@ -1103,7 +1174,7 @@ impl AppState {
         if entries.is_empty() {
             return result;
         }
-        result.with_reversed_sections(entries)
+        result.with_reversed_lines(entries)
     }
 
     // === Shot operations ===
@@ -1123,25 +1194,25 @@ impl AppState {
     /// (see `command_integrity_profiles_are_stable`), so it would never carry the
     /// geometry that justifies a batch; comment edits stay one-command-per-undo.
     ///
-    /// `DeleteSection` is permitted so an abandoned import can be withdrawn as ONE
+    /// `DeleteLine` is permitted so an abandoned import can be withdrawn as ONE
     /// user action (#394): the DMP wizard imports eagerly (the zero-datum anchor on
     /// mount, then each reachable segment), so "Cancel, remove what was imported"
-    /// names N sections that must come back together on a single undo, and N
+    /// names N lines that must come back together on a single undo, and N
     /// separate commands would leave N undo entries and N chances to stop half way.
-    /// It does NOT weaken the parity reduction in `Command::reversed_section_ids`:
-    /// deleting a whole section cannot change a SURVIVING section's shot count
-    /// (`cleanup_section_references` touches merges/closures/offsets/comments/
-    /// datums, never shots), and a batch that reverses a section it also deleted
-    /// fails on the second command ("Section N not found") and rolls back whole.
+    /// It does NOT weaken the parity reduction in `Command::reversed_line_ids`:
+    /// deleting a whole line cannot change a SURVIVING line's shot count
+    /// (`cleanup_line_references` touches merges/closures/offsets/comments/
+    /// datums, never shots), and a batch that reverses a line it also deleted
+    /// fails on the second command ("Line N not found") and rolls back whole.
     pub(super) fn is_batch_allowed(cmd: &Command) -> bool {
         // The allowlist also prevents a path-bearing lifecycle command from being
         // nested inside an otherwise undoable Batch and uploaded in Full mode.
         matches!(
             cmd,
-            Command::CreateSection { .. }
+            Command::CreateLine { .. }
                 | Command::CreateLoopClosure { .. }
                 | Command::MergeStations { .. }
-                | Command::MoveSection { .. }
+                | Command::MoveLine { .. }
                 | Command::MoveSegment { .. }
                 | Command::MoveStation { .. }
                 | Command::SetZeroDatum { .. }
@@ -1149,19 +1220,28 @@ impl AppState {
                 // Reversing a multi-selection is one user action: batching gives
                 // it all-or-nothing rollback and a single undo entry, instead of
                 // N commands that can strand the project half-reversed.
-                | Command::ReverseSection { .. }
+                | Command::ReverseLine { .. }
                 // Withdrawing an abandoned import is one user action too (#394) -
                 // the deletes and the dedup bookkeeping that describes them have
                 // to come back together, so both are batchable.
-                | Command::DeleteSection { .. }
+                | Command::DeleteLine { .. }
                 | Command::UntrackImport { .. }
                 // Metadata only, and already one step for many shots; a batch
                 // may still group it with other edits of the same action.
                 | Command::EditShotCredit { .. }
-                // Edit Section's Save renames / recolours a section AND edits its
+                // A data-table paste of station names is one user action.
+                | Command::SetStationName { .. }
+                // Edit Line's Save renames / recolours a line AND edits its
                 // shots' credit in one user action, so both go in one batch and
                 // come back with one undo.
-                | Command::UpdateSectionMetadata { .. }
+                | Command::UpdateLineMetadata { .. }
+                // Sections (#327) are metadata like the line edits above, so
+                // an action that also moves a line into one stays one step.
+                | Command::CreateCaveSection { .. }
+                | Command::UpdateCaveSection { .. }
+                | Command::DeleteCaveSection { .. }
+                | Command::MoveLinesToCaveSection { .. }
+                | Command::ApplyCaveSectionColor { .. }
         )
     }
 
@@ -1169,7 +1249,12 @@ impl AppState {
     /// When `push_undo` is true (called from `execute()`), pushes a ProjectSnapshotPair
     /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
     /// Caller must already hold `command_lock`.
-    pub(super) fn execute_batch(&self, commands: Vec<Command>, push_undo: bool) -> CommandResult {
+    pub(super) fn execute_batch(
+        &self,
+        commands: Vec<Command>,
+        label: Option<String>,
+        push_undo: bool,
+    ) -> CommandResult {
         // No-op for empty batch: skip snapshot/undo overhead
         if commands.is_empty() {
             return CommandResult::success();
@@ -1180,7 +1265,7 @@ impl AppState {
             if !Self::is_batch_allowed(cmd) {
                 return CommandResult::failure(format!(
                     "Command '{}' is not allowed in batch context",
-                    cmd.description()
+                    self.command_label(cmd)
                 ));
             }
         }
@@ -1226,25 +1311,37 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // The history label, from the names the project holds before the
+        // batch runs (a deleted line is gone after it). One the caller
+        // worded already is kept.
+        let label = if push_undo {
+            label.or_else(|| self.batch_summary(&commands))
+        } else {
+            None
+        };
 
         let mut all_warnings = Vec::new();
-        let mut section_ids = Vec::new();
+        let mut line_ids = Vec::new();
 
         for cmd in &commands {
             // Use execute_without_undo to avoid pushing individual undo entries;
-            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair
-            let result = self.execute_without_undo(cmd.clone());
+            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair.
+            // A rename in a batch (Edit Line's Save) is a forward user edit,
+            // checked like a single one.
+            let result = self
+                .refuse_line_rename(cmd)
+                .unwrap_or_else(|| self.execute_without_undo(cmd.clone()));
             if !result.success {
                 // Rollback: restore pre-batch state to avoid partial mutations
                 self.rollback_project(&before_snapshot);
                 return result;
             }
             all_warnings.extend(result.warnings);
-            // Collect section IDs from CreateSection commands
-            if let Some(id) = result.section_id {
-                section_ids.push(id);
+            // Collect line IDs from CreateLine commands
+            if let Some(id) = result.line_id {
+                line_ids.push(id);
             }
-            section_ids.extend(result.section_ids);
+            line_ids.extend(result.line_ids);
         }
 
         // Block corruption at the source - BEFORE pushing the undo entry. The
@@ -1285,24 +1382,33 @@ impl AppState {
         }
 
         if push_undo {
-            // Capture after-snapshot for redo support; failure means rollback
-            let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            // Capture after-snapshot for redo support; failure means rollback.
+            // The batch's one station-identity settle runs inside it, skipped
+            // when no member can change station identity (a paste of comments
+            // or LRUD).
+            let settle = commands.iter().any(Command::can_change_station_identity);
+            let after_snapshot = match self.capture_after_snapshot_settled(&before_snapshot, settle)
+            {
                 Ok(s) => s,
                 Err(result) => return result,
             };
 
             // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
-            self.push_snapshot_undo(Command::Batch { commands }, before_snapshot, after_snapshot);
+            self.push_snapshot_undo(
+                Command::Batch { commands, label },
+                before_snapshot,
+                after_snapshot,
+            );
             // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
             // (never a lifecycle command), so mark the remote project dirty after
             // its undo entry is pushed. Set-only; no-op for local-only.
             self.mark_remote_forward_edit();
         }
 
-        let result = if section_ids.is_empty() {
+        let result = if line_ids.is_empty() {
             CommandResult::success()
         } else {
-            CommandResult::success().with_section_ids(section_ids)
+            CommandResult::success().with_line_ids(line_ids)
         };
         if all_warnings.is_empty() {
             result
@@ -1372,14 +1478,17 @@ mod integrity_capability_tests {
         // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
         // + reconcile + orphan-closure conversion).
         assert_eq!(
-            caps(&Command::DeleteSection { section_id: 1 }),
+            caps(&Command::DeleteLine { line_id: 1 }),
             (true, true, true)
         );
         // A batch is the UNION of what it contains, not a blanket REMOVES.
         // Empty batches never reach execute() (it early-returns), so INERT here
         // is just the identity of the fold.
         assert_eq!(
-            caps(&Command::Batch { commands: vec![] }),
+            caps(&Command::Batch {
+                commands: vec![],
+                label: None,
+            }),
             (false, false, false)
         );
         // Metadata-only bulk edit - the data table's fill-drag / paste over the
@@ -1387,13 +1496,14 @@ mod integrity_capability_tests {
         assert_eq!(
             caps(&Command::Batch {
                 commands: vec![Command::UpdateShot {
-                    section_id: 1,
+                    line_id: 1,
                     shot_id: 1,
                     updates: ShotUpdates {
                         kind: Some(ShotKind::Jump),
                         ..Default::default()
                     },
                 }],
+                label: None,
             }),
             (false, false, false)
         );
@@ -1402,7 +1512,7 @@ mod integrity_capability_tests {
             caps(&Command::Batch {
                 commands: vec![
                     Command::UpdateShot {
-                        section_id: 1,
+                        line_id: 1,
                         shot_id: 1,
                         updates: ShotUpdates {
                             kind: Some(ShotKind::Jump),
@@ -1410,7 +1520,7 @@ mod integrity_capability_tests {
                         },
                     },
                     Command::UpdateShot {
-                        section_id: 1,
+                        line_id: 1,
                         shot_id: 2,
                         updates: ShotUpdates {
                             length: Some(5.0),
@@ -1418,6 +1528,7 @@ mod integrity_capability_tests {
                         },
                     },
                 ],
+                label: None,
             }),
             (true, false, false)
         );
@@ -1425,7 +1536,7 @@ mod integrity_capability_tests {
         // An UpdateShot is graded by what it actually changes.
         assert_eq!(
             caps(&Command::UpdateShot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 1,
                 updates: ShotUpdates {
                     kind: Some(ShotKind::Reference),
@@ -1437,7 +1548,7 @@ mod integrity_capability_tests {
         );
         assert_eq!(
             caps(&Command::UpdateShot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 1,
                 updates: ShotUpdates {
                     length: Some(5.0),
@@ -1451,7 +1562,7 @@ mod integrity_capability_tests {
         // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
         assert_eq!(
             caps(&Command::CreateShot {
-                section_id: 1,
+                line_id: 1,
                 shot: ShotData::default(),
                 after_shot_id: None,
                 before_shot_id: None,
@@ -1469,8 +1580,8 @@ mod integrity_capability_tests {
 
         // GEOMETRY_ONLY (shifts offsets only).
         assert_eq!(
-            caps(&Command::MoveSection {
-                section_id: 1,
+            caps(&Command::MoveLine {
+                line_id: 1,
                 offset: Coordinates::new(1.0, 2.0, 0.0),
             }),
             (true, false, false)
@@ -1482,7 +1593,7 @@ mod integrity_capability_tests {
         // so using it here asserted the profile of a no-op, not of an edit.
         assert_eq!(
             caps(&Command::UpdateShot {
-                section_id: 1,
+                line_id: 1,
                 shot_id: 0,
                 updates: ShotUpdates {
                     azimuth_in: Some(90.0),
@@ -1502,7 +1613,7 @@ mod integrity_capability_tests {
     #[test]
     fn update_shot_is_batch_allowed_but_station_comment_is_not() {
         assert!(AppState::is_batch_allowed(&Command::UpdateShot {
-            section_id: 1,
+            line_id: 1,
             shot_id: 0,
             updates: ShotUpdates::default(),
         }));
@@ -1530,25 +1641,26 @@ mod update_shot_clear_undo_tests {
         }
     }
 
-    fn state_with_one_shot(left: Option<f64>) -> (AppState, SectionId, ShotId) {
+    fn state_with_one_shot(left: Option<f64>) -> (AppState, LineId, ShotId) {
         let state = AppState::new().unwrap();
         state.execute(Command::CreateProject {
             name: "Clear".to_string(),
             location: None,
         });
-        let section_id = state
-            .execute(Command::CreateSection {
+        let line_id = state
+            .execute(Command::CreateLine {
                 name: None,
                 surveyor: None,
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![shot_data(left)],
+                cave_section_id: None,
             })
-            .section_id
+            .line_id
             .unwrap();
-        let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
-        (state, section_id, shot_id)
+        let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
+        (state, line_id, shot_id)
     }
 
     /// A grid cell clear arrives as JSON `null` (deserialized to `Some(None)`,
@@ -1556,24 +1668,24 @@ mod update_shot_clear_undo_tests {
     /// the cleared value through the serialized `values_json` round-trip.
     #[test]
     fn update_shot_null_clears_field_and_undo_restores_it() {
-        let (state, section_id, shot_id) = state_with_one_shot(Some(0.5));
+        let (state, line_id, shot_id) = state_with_one_shot(Some(0.5));
 
         let updates: ShotUpdates =
             serde_json::from_value(serde_json::json!({ "left": null })).unwrap();
         let result = state.execute(Command::UpdateShot {
-            section_id,
+            line_id,
             shot_id,
             updates,
         });
         assert!(result.success, "{:?}", result.error);
         assert_eq!(
-            state.get_project_state().unwrap().sections[0].shots[0].left,
+            state.get_project_state().unwrap().lines[0].shots[0].left,
             None
         );
 
         assert!(state.undo().success);
         assert_eq!(
-            state.get_project_state().unwrap().sections[0].shots[0].left,
+            state.get_project_state().unwrap().lines[0].shots[0].left,
             Some(0.5),
             "undo must restore the cleared value"
         );
@@ -1584,24 +1696,24 @@ mod update_shot_clear_undo_tests {
     /// `values_json` round-trip as `null` rather than fold into "no update".
     #[test]
     fn update_shot_set_on_empty_field_undoes_back_to_empty() {
-        let (state, section_id, shot_id) = state_with_one_shot(None);
+        let (state, line_id, shot_id) = state_with_one_shot(None);
 
         let updates: ShotUpdates =
             serde_json::from_value(serde_json::json!({ "left": 1.2 })).unwrap();
         let result = state.execute(Command::UpdateShot {
-            section_id,
+            line_id,
             shot_id,
             updates,
         });
         assert!(result.success, "{:?}", result.error);
         assert_eq!(
-            state.get_project_state().unwrap().sections[0].shots[0].left,
+            state.get_project_state().unwrap().lines[0].shots[0].left,
             Some(1.2)
         );
 
         assert!(state.undo().success);
         assert_eq!(
-            state.get_project_state().unwrap().sections[0].shots[0].left,
+            state.get_project_state().unwrap().lines[0].shots[0].left,
             None,
             "undo must clear the field back to its previous empty state"
         );

@@ -14,7 +14,7 @@ use super::physics::{
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
 use crate::{
-    Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
+    Coordinates, GpsCoordinates, LineData, Project, ShotData, ShotKind, StationRef, ZeroDatum,
 };
 
 const EPS: f64 = 1e-9;
@@ -173,11 +173,11 @@ fn make_shot(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     }
 }
 
-/// One straight section of 3 shots descending 0 → 10 → 20 → 30 m, 100 m each (4 stations).
+/// One straight line of 3 shots descending 0 → 10 → 20 → 30 m, 100 m each (4 stations).
 fn linear_descent_project() -> (Project, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(100.0, 0.0, 10.0),
                 make_shot(100.0, 10.0, 20.0),
@@ -427,7 +427,7 @@ fn gas_free_places_a_drop_for_every_stage_with_usable() {
     // its own drop point. Long descent so all three cumulative thresholds are reachable.
     let mut project = Project::new("Gas".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: (0..8)
                 .map(|i| make_shot(50.0, f64::from(i), f64::from(i) + 1.0))
                 .collect(),
@@ -994,7 +994,7 @@ fn gas_reach_field_one_stage_route_drop_and_final_turn() {
     };
     let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage], &cfg);
 
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     assert!((field.budget_litres - 800.0).abs() < 1e-6);
     // Stage drops where cumulative in-gas first reaches stage_in (300 L) = station 1; the route runs
     // origin → deepest in-budget station (index 2) = the final turn.
@@ -1038,7 +1038,7 @@ fn gas_reach_field_two_stage_places_two_drops_in_order() {
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage(), stage()], &cfg);
 
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     assert!((field.budget_litres - 1500.0).abs() < 1e-6);
     assert_eq!(
         field.stage_drop_refs,
@@ -1083,7 +1083,7 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
 
     // Baseline (no override): drop @ station 2, turn @ station 3, budget 1500, not over-reserve.
     let base = project.compute_gas_reach_field(
@@ -1124,7 +1124,7 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
 
     // Drag the drop DEEPER to station 3 (1500 L). Contribution 1500 > 600 safe (and < the 1800 L
     // tank cap) ⇒ over-reserve. Budget 1500 + (1500 - 600) = 2400. Drop bar: held = 1800 - 1500 =
@@ -1175,7 +1175,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         default_reserve: ReservePreset::OneStage,
         ..GasConfig::default()
     };
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     // base budget = 900 (¼ back gas) + 200 (stage_in) = 1100.
     let overrides = vec![Some(StationRef::new(sec, 3))];
     let f = project.compute_gas_reach_field_with_overrides(
@@ -1200,7 +1200,7 @@ fn gas_reach_field_override_none_and_overlong_fall_through_to_default() {
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let base = project.compute_gas_reach_field(
         Some(&origin),
         None,
@@ -1236,7 +1236,7 @@ fn gas_reach_field_override_ignored_for_all_thirds_no_drops() {
         None,
     )
     .unwrap();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let base = project.compute_gas_reach_field(
         Some(&origin),
         None,
@@ -1289,7 +1289,7 @@ fn gas_reach_field_override_recomputes_free_strategy_drop() {
         default_reserve: ReservePreset::Free,
         ..GasConfig::default()
     };
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let base = project.compute_gas_reach_field(
         Some(&origin),
         None,
@@ -1359,7 +1359,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
         default_reserve: ReservePreset::TwoStage,
         ..GasConfig::default()
     };
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let overrides = vec![Some(StationRef::new(sec, 2))]; // only stage 0 pinned
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
@@ -1388,7 +1388,7 @@ fn gas_reach_field_override_to_default_station_is_a_no_op() {
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let base = project.compute_gas_reach_field(
         Some(&origin),
         None,
@@ -1413,12 +1413,12 @@ fn gas_reach_field_override_to_default_station_is_a_no_op() {
 
 #[test]
 fn gas_reach_field_override_unresolvable_ref_falls_through_to_default() {
-    // A Some(ref) that resolves to no station (index past the section) is dropped by the
+    // A Some(ref) that resolves to no station (index past the line) is dropped by the
     // `resolve_key`/`station_index` miss, so the field equals the un-overridden default.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let base = project.compute_gas_reach_field(
         Some(&origin),
         None,
@@ -1478,7 +1478,7 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
         default_reserve: ReservePreset::TwoStage,
         ..GasConfig::default()
     };
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let overrides = vec![Some(StationRef::new(sec, 2)), Some(StationRef::new(sec, 1))];
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
@@ -1633,17 +1633,17 @@ fn gas_reach_field_staged_with_no_stages_falls_back_to_all_thirds() {
 
 #[test]
 fn gas_reach_field_endpoint_selects_the_route_for_drops() {
-    // Two branches from a shared origin (section A merged to B at station 0); flat shots ⇒ gas =
+    // Two branches from a shared origin (line A merged to B at station 0); flat shots ⇒ gas =
     // 2×length. A: a1 300, a2 500 (deepest). B: b1 200, b2 400.
     let mut project = Project::new("Gas".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(150.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -1733,7 +1733,7 @@ fn gas_reach_field_threshold_past_deepest_clamps_drop_to_turnaround() {
     };
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage(), stage()], &cfg);
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     assert!((field.budget_litres - 500.0).abs() < 1e-6);
     assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 1)));
     assert_eq!(
@@ -1751,12 +1751,12 @@ fn gas_reach_field_threshold_past_deepest_clamps_drop_to_turnaround() {
 
 #[test]
 fn is_swim_leg_distinguishes_shots_from_ties() {
-    // Adjacent stations within a section = a swum shot (incl. a reference/jump).
+    // Adjacent stations within a line = a swum shot (incl. a reference/jump).
     assert!(is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 1)));
     assert!(is_swim_leg(&StationRef::new(1, 2), &StationRef::new(1, 1)));
-    // Cross-section (a merge / closure tie) = NOT a swum leg.
+    // Cross-line (a merge / closure tie) = NOT a swum leg.
     assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(2, 0)));
-    // Same section but non-adjacent (a closure within one section) = NOT a swum leg.
+    // Same line but non-adjacent (a closure within one line) = NOT a swum leg.
     assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 2)));
 }
 
@@ -1803,7 +1803,7 @@ fn gas_reach_field_reports_route_distance_and_depths() {
     // station, so the route is the whole descent: line length 3×100 = 300 m, deepest 30 m, and the
     // depth-weighted average over the three equal-length legs (mids 5/15/25 m) = 15 m.
     let (project, origin) = linear_descent_project();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
         1000.0,
@@ -1879,14 +1879,14 @@ fn penetration_budget_reserve_at_or_above_fill_zeroes_stage() {
 fn gas_reach_field_monotonic_and_disconnected_is_none() {
     let mut project = Project::new("Gas".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 10.0), make_shot(100.0, 10.0, 20.0)],
             ..Default::default()
         })
         .id;
-    // A second, unconnected section (no merge/closure) → separate component.
+    // A second, unconnected line (no merge/closure) → separate component.
     let other = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(50.0, 0.0, 5.0)],
             ..Default::default()
         })
@@ -1905,14 +1905,14 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
 
-    // Same-section stations: gas_to_reach is monotonically non-decreasing along the line.
+    // Same-line stations: gas_to_reach is monotonically non-decreasing along the line.
     let g0 = field_gas(&field, StationRef::new(sec, 0));
     let g1 = field_gas(&field, StationRef::new(sec, 1));
     let g2 = field_gas(&field, StationRef::new(sec, 2));
     assert!(g0 <= g1 && g1 <= g2);
     assert!(g0.abs() < EPS); // origin is 0
 
-    // The disconnected section is unreachable: gas_to_reach None, reachable false.
+    // The disconnected line is unreachable: gas_to_reach None, reachable false.
     let oidx = field
         .station_refs
         .iter()
@@ -1924,20 +1924,20 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
 
 #[test]
 fn gas_reach_field_reaches_across_a_station_merge() {
-    // Cross-section reachability over a survey-tied StationMerge (0-cost edge in
+    // Cross-line reachability over a survey-tied StationMerge (0-cost edge in
     // build_survey_graph_weighted). The disconnected test above proves separate
-    // components stay unreachable; this proves a merge bridges them - the multi-section
+    // components stay unreachable; this proves a merge bridges them - the multi-line
     // integrity case (a diver swimming A→B via the join). LoopClosures take the same
     // 0-cost path in the graph builder, so the merge exercises that edge class.
     let mut project = Project::new("Gas".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 10.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 10.0, 20.0)],
             ..Default::default()
         })
@@ -1969,7 +1969,7 @@ fn gas_reach_field_reaches_across_a_station_merge() {
         .unwrap();
     assert!(
         field.reachable[bidx],
-        "station in section B must be reachable across the merge"
+        "station in line B must be reachable across the merge"
     );
     // Crossing the 0-cost merge adds no gas: A's terminal and B's entry are the same
     // physical point, so they share a gas_to_reach.
@@ -1981,7 +1981,7 @@ fn gas_reach_field_reaches_across_a_station_merge() {
     );
 
     // Route metrics across the merge TIE (#236): the route is A:0→A:1→[merge tie]→B:0→B:1. The two
-    // SWUM shots are 100 m each; the 0-cost merge tie (A:1→B:0, cross-section) must NOT be counted in
+    // SWUM shots are 100 m each; the 0-cost merge tie (A:1→B:0, cross-line) must NOT be counted in
     // the line length - is_swim_leg excludes it - so the distance is ~200 m end-to-end. This pins the
     // integration wiring (route_refs → is_swim_leg mask → route_metrics); a regression that dropped
     // the mask would count the tie's measured-coord gap and inflate the length. Deepest station is
@@ -2003,7 +2003,7 @@ fn gas_reach_field_turn_frontier_crosses_a_station_merge() {
     // Dijkstra ran on, not a separately-built topology graph, so a merge tie must show
     // up as an edge on both sides for the frontier to be correct across it.
     //
-    // Section A: A:0 -> A:1, a 1 m leg (trivially cheap). Section B: B:0 -> B:1, a
+    // Line A: A:0 -> A:1, a 1 m leg (trivially cheap). Line B: B:0 -> B:1, a
     // 2000 m leg (expensive enough to fall outside the small cylinder's budget).
     // A:1 is merged onto B:0 (the 0-cost tie). So the only reachable/unreachable
     // boundary is exactly at the merge: B:0 is reachable (cheap: just the 1 m A leg
@@ -2011,13 +2011,13 @@ fn gas_reach_field_turn_frontier_crosses_a_station_merge() {
     // the reachable A:1/B:0, so it is NOT on the frontier.
     let mut project = Project::new("Gas".to_string(), None);
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(2000.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -2080,7 +2080,7 @@ fn gas_reach_field_pins_in_leg_gas_values() {
     // RMV wiring end-to-end (a flattened depth, a swapped length↔speed, or a dropped multiplier
     // would all change these - the structural tests would not catch it).
     let (project, origin) = linear_descent_project();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
         1000.0,
@@ -2103,7 +2103,7 @@ fn gas_reach_field_honors_survey_speed_and_multiplier() {
     // survey_speed 5 (½ the swim 10) and survey_rmv_multiplier 1.3 scale the in-leg gas by
     // (10/5)·1.3 = 2.6× - station-1 reach 300 → 780 L. Pins the §5.2 in-leg inputs.
     let (project, origin) = linear_descent_project();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
         1000.0,
@@ -2127,7 +2127,7 @@ fn gas_reach_field_honors_survey_speed_and_multiplier() {
 fn project_with_jump_second_leg() -> (Project, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let sec = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(100.0, 0.0, 10.0),
                 ShotData {
@@ -2151,8 +2151,8 @@ fn gas_reach_field_excludes_reference_legs() {
     // station 1 (reached over a permanent shot) is untouched. This is the safe
     // direction: excluding an edge can only shrink reach, never overstate it.
     let (mut project, origin) = project_with_jump_second_leg();
-    let sec = origin.section_id;
-    project.sections[0].shots[1].kind = ShotKind::Reference;
+    let sec = origin.line_id;
+    project.lines[0].shots[1].kind = ShotKind::Reference;
 
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
@@ -2212,9 +2212,9 @@ fn gas_reach_field_excludes_reference_legs() {
 #[test]
 fn opted_in_reference_legs_carry_the_jump_rmv_multiplier() {
     let (mut project, origin) = project_with_jump_second_leg();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     // Leg 1 (station 1 -> 2) becomes a non-swimmable tie, opted back in below.
-    project.sections[0].shots[1].kind = ShotKind::Reference;
+    project.lines[0].shots[1].kind = ShotKind::Reference;
 
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
@@ -2268,7 +2268,7 @@ fn gas_reach_field_route_legs_flag_jumps() {
     .unwrap();
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     assert_eq!(field.route.len(), 2);
     assert!(!field.route[0].is_jump);
     assert!(field.route[1].is_jump);
@@ -2284,7 +2284,7 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
     // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets jump
     // legs and nothing else (a misapplied multiplier would also move station 1).
     let (project, origin) = project_with_jump_second_leg();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
         1000.0,
@@ -2328,7 +2328,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     // reach {0,1,2}, turn at station 2. The budget is pinned to an INDEPENDENT hand-computed
     // literal (catches a wrong /3, a dropped Z, or a bad fit), not re-derived from the function.
     let (project, origin) = linear_descent_project();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let cyl = Cylinder::new(
         12.0,
@@ -2458,7 +2458,7 @@ fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
         None,
     )
     .unwrap();
-    let ghost = StationRef::new(origin.section_id + 999, 0); // section that does not exist
+    let ghost = StationRef::new(origin.line_id + 999, 0); // line that does not exist
     let field =
         project.compute_gas_reach_field(Some(&ghost), None, &diver, &[big], &GasConfig::default());
     assert!(field.reachable.iter().all(|&r| r)); // fell back to the entrance, not all-grey
@@ -2476,7 +2476,7 @@ fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
 fn branching_project() -> (Project, StationRef, StationRef, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let trunk = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(100.0, 0.0, 10.0),
                 make_shot(100.0, 10.0, 20.0),
@@ -2486,7 +2486,7 @@ fn branching_project() -> (Project, StationRef, StationRef, StationRef) {
         })
         .id;
     let side = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 10.0)],
             ..Default::default()
         })
@@ -2589,8 +2589,8 @@ fn gas_reach_field_no_waypoints_is_identical_to_the_plain_field() {
     let (_p, entrance2, side_tip, _tip) = branching_project();
     assert_eq!(entrance2, entrance);
     assert!(field_gas(&plain, entrance).abs() < 1e-6);
-    assert!((field_gas(&plain, StationRef::new(trunk_tip.section_id, 1)) - 300.0).abs() < 1e-6);
-    assert!((field_gas(&plain, StationRef::new(trunk_tip.section_id, 2)) - 800.0).abs() < 1e-6);
+    assert!((field_gas(&plain, StationRef::new(trunk_tip.line_id, 1)) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&plain, StationRef::new(trunk_tip.line_id, 2)) - 800.0).abs() < 1e-6);
     assert!((field_gas(&plain, trunk_tip) - 1500.0).abs() < 1e-6);
     assert!((field_gas(&plain, side_tip) - 300.0).abs() < 1e-6);
 }
@@ -2649,7 +2649,7 @@ fn gas_reach_field_waypoints_are_visited_in_the_given_order() {
     // Two way points are an ORDERED constraint, not a set: swapping them swaps the visit order (and
     // here also the total cost, since the two detours are different depths).
     let (project, entrance, side_tip, trunk_tip) = branching_project();
-    let trunk_mid = StationRef::new(entrance.section_id, 2);
+    let trunk_mid = StationRef::new(entrance.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig::default();
     let field_for = |waypoints: &[StationRef]| {
@@ -2694,7 +2694,7 @@ fn gas_reach_field_disconnected_waypoint_stalls_the_whole_plan() {
     // readout says which way point broke.
     let (mut project, entrance, side_tip, _trunk_tip) = branching_project();
     let island = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 10.0)],
             ..Default::default()
         })
@@ -2728,7 +2728,7 @@ fn gas_reach_field_unresolvable_waypoint_stalls_rather_than_being_skipped() {
     // that would quietly relax a constraint the diver set. Contrast the origin, which deliberately
     // degrades to the entrance.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let ghost = StationRef::new(entrance.section_id + 999, 0);
+    let ghost = StationRef::new(entrance.line_id + 999, 0);
     let diver = Diver::new(20.0, None).unwrap();
     let field = project.compute_gas_reach_field_with_overrides(
         Some(&entrance),
@@ -2840,7 +2840,7 @@ fn gas_reach_field_default_drop_on_a_revisited_station_reports_the_right_pass_di
     );
     // The stage's IN gas is first cleared on the way BACK through the entrance point (its outbound
     // pass is at 0 L), so the drop sits on the return leg. (The entrance is a merged pair, so the
-    // engine may name it by either section's ref - what matters is the distance.)
+    // engine may name it by either line's ref - what matters is the distance.)
     assert_eq!(field.stage_drop_refs.len(), 1);
     assert_eq!(
         field.final_turn_ref,
@@ -2946,11 +2946,11 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
 /// surface, so gas is proportional to distance: a 100 m shot costs 200 L at the default 20 L/min and
 /// 10 m/min.
 ///
-/// Returns `(project, entrance, north_section, east_section, north_tip, east_mid)`.
+/// Returns `(project, entrance, north_line, east_line, north_tip, east_mid)`.
 fn two_branch_project() -> (Project, StationRef, u32, u32, StationRef, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let north = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(100.0, 0.0, 0.0),
                 make_shot(100.0, 0.0, 0.0),
@@ -2960,7 +2960,7 @@ fn two_branch_project() -> (Project, StationRef, u32, u32, StationRef, StationRe
         })
         .id;
     let east = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(130.0, 0.0, 0.0),
                 make_shot(130.0, 0.0, 0.0),
@@ -3057,7 +3057,7 @@ fn gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch() {
 
     // NON-VACUITY: the old rule (deepest in budget anywhere) really would have jumped branches here.
     assert_eq!(
-        deepest_reachable(&detoured).section_id,
+        deepest_reachable(&detoured).line_id,
         east,
         "setup: the deepest reachable station must be on the OTHER branch, else this test would \
          pass under the old rule too"
@@ -3065,7 +3065,7 @@ fn gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch() {
 
     // THE PROPERTY: the turnaround stays on the endpoint's own branch, just closer in.
     assert_eq!(
-        turn.section_id, north,
+        turn.line_id, north,
         "the turnaround jumped to another passage instead of turning early on the chosen one"
     );
     assert!(
@@ -3092,7 +3092,7 @@ fn gas_reach_field_disconnected_endpoint_still_falls_back_to_deepest() {
     // rather than returning no route at all.
     let (mut project, entrance, _north, _east, _north_tip, _east_mid) = two_branch_project();
     let island = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 0.0, 0.0)],
             ..Default::default()
         })
@@ -3175,7 +3175,7 @@ fn gas_reach_field_waypoint_does_not_offer_a_transit_station_as_a_turn_candidate
     // (the pass-through price the overlay paints). And a station the route commits to swimming
     // through is transit, never a destination.
     //
-    // The entrance is the sharp case: it is a merge of the two sections, so the graph holds it as two
+    // The entrance is the sharp case: it is a merge of the two lines, so the graph holds it as two
     // zero-cost-joined nodes. Only ONE of them lies on the route, which is why the route-walking
     // assertion in the test above did not catch this - the twin bordered the out-of-budget east
     // branch and became a frontier on its own.
@@ -3361,7 +3361,7 @@ fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default()
     let deeper = route
         .iter()
         .skip_while(|r| **r != default_drop)
-        .find(|r| **r != default_drop && r.section_id == north)
+        .find(|r| **r != default_drop && r.line_id == north)
         .copied();
     if let Some(deeper) = deeper {
         let pinned_on_route = plan_north(&[Some(deeper)]);
@@ -3521,7 +3521,7 @@ fn route_profile_is_empty_when_the_whole_route_is_a_zero_distance_tie() {
     // This is why the gate is a positive swum distance rather than a station count - counting
     // stations passes here, and `branching_project`'s entrance is exactly such a merged pair.
     let (project, entrance, side_tip, _trunk_tip) = branching_project();
-    let twin = StationRef::new(side_tip.section_id, 0);
+    let twin = StationRef::new(side_tip.line_id, 0);
     let diver = Diver::new(20.0, None).unwrap();
     let field = project.compute_gas_reach_field_with_overrides(
         Some(&entrance),
@@ -3796,7 +3796,7 @@ fn route_profile_is_empty_when_no_route_exists() {
     // and an empty series is what the panel must be handed rather than a one-point stub.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
-    let orphan = StationRef::new(origin.section_id + 999, 0);
+    let orphan = StationRef::new(origin.line_id + 999, 0);
     let field = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
@@ -3951,7 +3951,7 @@ fn the_plan_speed_still_reaches_the_engine_through_a_full_length_segment_list() 
     // survey_speed 5 against the swim default 10 doubles the in-leg gas: station 1 costs 300 L at
     // 10 m/min and 600 L at 5. Any regression that ignores the config speed reads 300.
     let (project, origin) = linear_descent_project();
-    let sec = origin.section_id;
+    let sec = origin.line_id;
     let diver = Diver::new(20.0, None).unwrap();
     let big = Cylinder::new(
         1000.0,
@@ -4017,7 +4017,7 @@ fn merged_mid_branch_project() -> (
 ) {
     let mut project = Project::new("Gas".to_string(), None);
     let trunk = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![
                 make_shot(100.0, 0.0, 10.0),
                 make_shot(100.0, 10.0, 20.0),
@@ -4027,7 +4027,7 @@ fn merged_mid_branch_project() -> (
         })
         .id;
     let branch = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![make_shot(100.0, 10.0, 20.0)],
             ..Default::default()
         })
@@ -4056,8 +4056,8 @@ fn gas_reach_field_prices_each_segment_at_its_own_speed() {
     //   span 1, trunk 1 -> trunk 2 @ 10:   20 x 2.5 x 100 / 10 = 500 L  (cumulative  560)
     //   span 1, trunk 2 -> trunk 3 @ 10:   20 x 3.5 x 100 / 10 = 700 L  (cumulative 1260)
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig::default();
 
@@ -4097,8 +4097,8 @@ fn gas_reach_field_scooter_range_binds_before_gas() {
     // trunk's stations sit at 100 / 200 / 300 m of line, so the range - not the budget - is what
     // turns the dive, and it turns at 200 m.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         dpv: Some(rig_covering(220.0)),
@@ -4154,7 +4154,7 @@ fn gas_reach_field_gas_still_binds_when_the_scooter_range_is_ample() {
     // At 55 m/min the trunk costs 54.5 / 145.5 / 272.7 L cumulative, and a 3 L tank at 200 bar
     // yields an All-thirds budget near 192 L - between the last two.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let small = Cylinder::new(
         3.0,
@@ -4193,8 +4193,8 @@ fn gas_reach_field_a_swim_segment_spends_no_scooter_range() {
     // The tow case: scooter, swim a restriction, scooter again. The swum span costs gas at swim
     // rates but no range at all, so the 300 m route spends only 200 m of the rig.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         dpv: Some(rig_covering(550.0)),
@@ -4226,8 +4226,8 @@ fn gas_reach_field_derives_the_scooter_drop_at_the_park_way_point() {
     // Scooter, scooter, then swim on: the units are left at the boundary after the last scootered
     // span, which is the second way point. Nothing places that marker - it is derived.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         dpv: Some(rig_covering(550.0)),
@@ -4447,7 +4447,7 @@ fn gas_reach_field_a_stalled_plan_parks_no_scooters() {
     // that no longer exists, for a dive it had just declared unflyable. Gated on a target now, like
     // the stage drops and the profile.
     let (project, entrance, side_tip, _trunk_tip) = branching_project();
-    let ghost = StationRef::new(entrance.section_id + 999, 0);
+    let ghost = StationRef::new(entrance.line_id + 999, 0);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         dpv: Some(rig_covering(1000.0)),
@@ -4548,7 +4548,7 @@ fn route_profile_runtime_follows_the_per_segment_speeds() {
     //   span 1, trunk 1 -> trunk 3 @ the plan's 10:  200 / 10 = 20 min   (cumulative 21.8181...)
     // The old single-speed form reports 300 / 10 = 30: the whole dive at the slow span's pace.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         swim_speed_m_per_min: 20.0,
@@ -4620,7 +4620,7 @@ fn route_profile_scootered_span_rides_out_at_scooter_pace() {
     //   span 1 (WP 1 -> endpoint): inherited survey pace, 10
     // Way out: 200 m swum home at 20, then the ridden 100 m at 55.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
     let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         swim_speed_m_per_min: 20.0,
@@ -4696,8 +4696,8 @@ fn gas_reach_field_riding_below_cruise_turns_the_dive_earlier() {
     //   at 15 m/min:   each metre spends three, so 200 m of line spends 600 -> past the 450 m cap.
     // Before the fix BOTH reached the tip.
     let (project, entrance, _side, trunk_tip) = branching_project();
-    let mid = StationRef::new(trunk_tip.section_id, 1);
-    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let mid = StationRef::new(trunk_tip.line_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.line_id, 2);
     let diver = Diver::new(20.0, None).unwrap();
     // Both units cruise at 45, so the "slower cruise" is unambiguous; the weaker covers 450 m.
     let cfg = GasConfig {

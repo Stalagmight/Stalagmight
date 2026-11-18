@@ -19,7 +19,7 @@ export const MEASURE_TINT = '#22d3ee';
 export function buildMeasuredPathIds(pathShots: PathShot[]): Set<number> {
   const ids = new Set<number>();
   for (const s of pathShots) {
-    ids.add(encodeFeatureId(s.section_id, s.shot_id));
+    ids.add(encodeFeatureId(s.line_id, s.shot_id));
   }
   return ids;
 }
@@ -32,7 +32,7 @@ export function buildMeasuredPathIds(pathShots: PathShot[]): Set<number> {
 export function buildMeasuredStationIds(pathStations: StationRef[]): Set<number> {
   const ids = new Set<number>();
   for (const s of pathStations) {
-    ids.add(encodeFeatureId(s.section_id, s.station_index));
+    ids.add(encodeFeatureId(s.line_id, s.station_index));
   }
   return ids;
 }

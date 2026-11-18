@@ -11,7 +11,7 @@ use std::io::{Read as _, Write as _};
 // `impl Database` split into child modules, so gate them to the test build.
 #[cfg(test)]
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, StationKey, StationMerge,
+    ClosureStrategy, GpsCoordinates, LineData, LoopClosure, Project, StationKey, StationMerge,
     SurveyDirection, ZeroDatum,
 };
 #[cfg(test)]
@@ -26,7 +26,7 @@ use std::path::Path;
 /// v8 adds a nullable `shot_uuid` column to `resolved_warnings` (issue #57):
 /// "Ignore" suppression is keyed by the shot's stable UUID so it survives shot
 /// inserts/deletes/reorders. Backfilled lazily from the legacy
-/// `(section_id, shot_id)` key - no rewrite of existing rows at migration time.
+/// `(line_id, shot_id)` key - no rewrite of existing rows at migration time.
 ///
 /// v9 adds the additive single-row `speleo_link` table (SpeleoDB hand-off
 /// identity + dirty bit, #189). No existing column or row is touched;
@@ -43,8 +43,8 @@ use std::path::Path;
 /// v12 normalises stored pitch to the +down convention (#296). DMP import used
 /// to keep the MNemo's +up reading, so pre-v12 files mix conventions: DMP-sourced
 /// shots are +up while Walls/Compass-sourced shots are already +down, and nothing
-/// records which importer produced a section. `migrate_pitch_to_down_convention`
-/// infers it from the geometry and negates only the sections that need it. No
+/// records which importer produced a line. `migrate_pitch_to_down_convention`
+/// infers it from the geometry and negates only the lines that need it. No
 /// column changes, so the carry-forward fence is unaffected.
 ///
 /// v14 normalises stored azimuth readings into `[0, 360)` (#24). Nothing changed
@@ -72,7 +72,7 @@ use std::path::Path;
 /// `speleo_undo_chain` is per-machine progress through history, so it is stripped
 /// from every push snapshot (`PUSH_SNAPSHOT_LOCAL_TABLES`).
 ///
-/// v17 gives `SectionUpdates`' three nullable fields (`name`, `surveyor`, `date`)
+/// v17 gives `LineUpdates`' three nullable fields (`name`, `surveyor`, `date`)
 /// the `double_option` + `skip_serializing_if` pair `ShotUpdates` has carried
 /// since v7 (#413 finding 5). No column changes, so the carry-forward fence is
 /// unaffected - but it is a meaning-flip of a PERSISTED payload, exactly the v7
@@ -81,16 +81,16 @@ use std::path::Path;
 /// migration drops the persisted undo/redo stacks for the same reason v7 did;
 /// see the v17 arm of `ensure_schema_version`.
 ///
-/// v18 adds four additive, nullable `sections` columns - `azimuth_north`,
+/// v18 adds four additive, nullable `lines` columns - `azimuth_north`,
 /// `azimuth_correction`, `azimuth_source`, `azimuth_epoch_year` - plus the
 /// optional `project_settings` key `default_azimuth_reference` (#438: the
-/// stored azimuth is the measured one, and the section declares how it relates
+/// stored azimuth is the measured one, and the line declares how it relates
 /// to true north). All NULL, which is what an existing file has after the
 /// `ALTER`, means "no reference recorded" and resolves to a ZERO correction, so
 /// an upgraded file computes exactly the geometry it did before - the property
 /// that makes this bump safe without a data migration. No column changes to any
 /// fenced table, so the carry-forward fence is unaffected, and the persisted
-/// undo payloads keep their meaning (`SectionIdentity` gained an OPTIONAL field,
+/// undo payloads keep their meaning (`LineIdentity` gained an OPTIONAL field,
 /// absent in every pre-v18 entry), so the stacks are NOT dropped.
 ///
 /// Public so readers outside the app (the `stalx-reader` crate) can refuse a
@@ -133,7 +133,7 @@ pub const SCHEMA_VERSION: i32 = 18;
 ///   meaning; the migration still drops it explicitly.)
 ///
 /// v11→v12 drops the stacks as well, but conditionally - only when the pitch
-/// flip actually moved a section (see `invalidate_pre_pitch_flip_state`).
+/// flip actually moved a line (see `invalidate_pre_pitch_flip_state`).
 ///
 /// So the rule for a future bump is narrower than "any time history is
 /// dropped": bump this constant only when the payload format changes such that
@@ -550,6 +550,7 @@ pub struct Database {
     conn: Connection,
 }
 
+mod cave_sections;
 mod datum_extras;
 mod integrity;
 // The #706 fuzzer's live-connection probe; see the module doc.
@@ -563,6 +564,7 @@ mod schema;
 mod schema_guard;
 mod settings;
 mod shot_credits;
+mod station_ids;
 mod station_texts;
 mod undo;
 mod warnings;
@@ -617,20 +619,20 @@ pub struct RepairResult {
 pub struct SalvagedData {
     pub project_name: Option<String>,
     pub project_location: Option<String>,
-    pub section_count: usize,
+    pub line_count: usize,
     pub shot_count: usize,
     pub merge_count: usize,
-    /// Sections as JSON (for display/re-import)
-    pub sections_json: Option<String>,
+    /// Lines as JSON (for display/re-import)
+    pub lines_json: Option<String>,
     /// Full project as JSON (if loadable despite corruption)
     pub full_project_json: Option<String>,
     /// Errors encountered while reading individual tables
     pub errors: Vec<String>,
 }
 
-/// Minimal section info for salvage display.
+/// Minimal line info for salvage display.
 #[derive(Debug, Clone, serde::Serialize)]
-struct SalvagedSection {
+struct SalvagedLine {
     id: u32,
     name: Option<String>,
     surveyor: Option<String>,
@@ -641,7 +643,7 @@ struct SalvagedSection {
 /// Resolved warning record
 #[derive(Debug, Clone)]
 pub struct ResolvedWarning {
-    pub section_id: u32,
+    pub line_id: u32,
     pub shot_id: u32,
     pub warning_code: String,
     pub resolved_at: chrono::DateTime<Utc>,
@@ -650,7 +652,7 @@ pub struct ResolvedWarning {
     /// raised against shots that have a UUID (the normal case); `None` only for
     /// pre-v8 rows or shots loaded from pre-v6 .stalx files without a UUID yet.
     /// The suppression is matched by `(shot_uuid, warning_code)` when present,
-    /// falling back to the legacy `(section_id, shot_id, warning_code)` key
+    /// falling back to the legacy `(line_id, shot_id, warning_code)` key
     /// otherwise. See `AppState::compute_project_warnings`.
     pub shot_uuid: Option<String>,
 }
@@ -675,6 +677,21 @@ mod newer_schema_tests;
 )]
 mod station_names_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod station_ids_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod cave_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

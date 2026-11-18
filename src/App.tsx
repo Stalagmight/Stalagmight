@@ -36,7 +36,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, SplitSectionHereDialog, MnemoImportDialog, CombineSectionsDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, AddOrOpenProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseLineDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditLineDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, LineAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitLineDialog, SplitLineHereDialog, MnemoImportDialog, CombineLinesDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, AddOrOpenProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -166,7 +166,7 @@ function App() {
   // Track whether we're hovering with a valid import file (DMP/TML/TMLU)
   const [isDraggingImport, setIsDraggingImport] = useState(false);
 
-  // Determine if import dialog is open and has placed sections
+  // Determine if import dialog is open and has placed lines
   // This is used to show a confirmation when closing the app
   const isImportInProgress = useMemo(() => {
     // Also block during DMP selection if we have a parsed file
@@ -174,7 +174,7 @@ function App() {
       return true;
     }
     // Block during the DMP placing wizard - it holds un-finalized, in-memory
-    // imported/placed sections that an OS window-close would otherwise drop (#110).
+    // imported/placed lines that an OS window-close would otherwise drop (#110).
     if (activeDialog === 'dmp-import-new' && dialogData.dmpFile) {
       return true;
     }
@@ -345,7 +345,7 @@ function App() {
    * guards.
    */
   const handleDroppedFile = useCallback(async (filePath: string) => {
-    // Tag the entry point so the routed import command (import_sections /
+    // Tag the entry point so the routed import command (import_lines /
     // create_project_full / execute*Import) is attributed to drag-drop, like the
     // toolbar / menu / keyboard paths all set their source. routeOpenedFile clears
     // it on every terminal/abandon path.
@@ -855,7 +855,7 @@ function App() {
                 dmpFile: dialogData.dmpFile,
                 filePath: dialogData.filePath,
                 selectionConfig: dialogData.selectionConfig,
-                zeroDatumSectionIndex: (dialogData.zeroDatumConfig as ZeroDatumConfigResult).sectionIndex,
+                zeroDatumLineIndex: (dialogData.zeroDatumConfig as ZeroDatumConfigResult).lineIndex,
                 [ZERO_DATUM_CARRY_KEY]: dialogData.zeroDatumConfig,
               });
             } else {
@@ -865,7 +865,7 @@ function App() {
               });
             }
           }}
-          onComplete={async (newSectionIds?: number[], receipt?: import('./types/ipc/ImportReceipt').ImportReceipt) => {
+          onComplete={async (newLineIds?: number[], receipt?: import('./types/ipc/ImportReceipt').ImportReceipt) => {
             // Persist the freshly-imported project before anything else (#92) -
             // including before handing off to orphan placement - so the import
             // can never be lost. If the save failed, an error/permission dialog is
@@ -885,12 +885,12 @@ function App() {
             // `finishImportWithoutOrphanSuggestions` sits outside it and
             // completes the import exactly once, so a throw partway through
             // IT can never fall through to a duplicate completion.
-            if (newSectionIds?.length) {
+            if (newLineIds?.length) {
               let suggestions: OrphanPlacementSuggestion[] = [];
               try {
                 suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
                   'suggest_orphan_placements',
-                  { newlyImportedSectionIds: newSectionIds },
+                  { newlyImportedLineIds: newLineIds },
                   { purpose: 'suggest orphan placements after DMP import' }
                 );
               } catch {
@@ -900,7 +900,7 @@ function App() {
                 openDialog('orphan-placement', { suggestions, receipt });
                 return;
               }
-              await finishImportWithoutOrphanSuggestions('dmp-import-new', importUi, newSectionIds, receipt);
+              await finishImportWithoutOrphanSuggestions('dmp-import-new', importUi, newLineIds, receipt);
               return;
             }
             // The shared exit, not a hand-rolled copy of it (#477). The inline
@@ -935,18 +935,18 @@ function App() {
               selectionConfig: dialogData.selectionConfig,
             });
           }}
-          onSelectSection={(sectionIndex) => {
-            // Re-seed the carry (#534) only when the re-picked section matches
+          onSelectLine={(lineIndex) => {
+            // Re-seed the carry (#534) only when the re-picked line matches
             // the one it was entered for - `carryZeroDatumConfig` owns that
             // decision so App.tsx and the routing tests share one expression.
             openDialog('zero-datum-config', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: dialogData.selectionConfig,
-              zeroDatumSectionIndex: sectionIndex,
+              zeroDatumLineIndex: lineIndex,
               [ZERO_DATUM_CARRY_KEY]: carryZeroDatumConfig(
                 readCarriedZeroDatumConfig(dialogData),
-                sectionIndex
+                lineIndex
               ),
             });
           }}
@@ -956,19 +956,19 @@ function App() {
         <ZeroDatumConfigDialog
           dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
           selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
-          sectionIndex={dialogData.zeroDatumSectionIndex as number}
+          lineIndex={dialogData.zeroDatumLineIndex as number}
           filePath={dialogData.filePath as string}
           // Set by the wizard's Back handler above (one hop), OR relayed
           // through zero-datum-selection's own Back/forward pass when the
-          // same section is re-picked (#534). A first visit, or a different
-          // section pick, has no previous answers and the dialog falls back
+          // same line is re-picked (#534). A first visit, or a different
+          // line pick, has no previous answers and the dialog falls back
           // to its defaults.
           initialConfig={readCarriedZeroDatumConfig(dialogData)}
           onCancel={closeDialog}
           onBack={(current) => {
             // Hand back the dialog's LIVE state, not just what it opened with
             // (#534) - a first-visit Back (no prior carry at all) still has
-            // something worth restoring on a same-section forward pass.
+            // something worth restoring on a same-line forward pass.
             openDialog('zero-datum-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
@@ -1014,14 +1014,14 @@ function App() {
         <GpxPlacementDialog />
       ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
-      {activeDialog === 'reverse-section' && <ReverseSectionDialog />}
+      {activeDialog === 'reverse-line' && <ReverseLineDialog />}
       {activeDialog === 'delete-shot-choice' && <DeleteShotChoiceDialog />}
       {activeDialog === 'bulk-delete' && <BulkDeleteDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
       {activeDialog === 'closure' && <ClosureDialog />}
       {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
       {activeDialog === 'draw-shot' && <DrawShotDialog />}
-      {activeDialog === 'edit-section' && <EditSectionDialog />}
+      {activeDialog === 'edit-line' && <EditLineDialog />}
       {activeDialog === 'edit-shot' && <EditShotDialog />}
       {activeDialog === 'edit-station' && <EditStationDialog />}
       {activeDialog === 'unmerge-stations' && <UnmergeStationsDialog />}
@@ -1033,13 +1033,13 @@ function App() {
       {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
       {activeDialog === 'delete-project' && <DeleteProjectDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
-      {activeDialog === 'section-adjust' && <SectionAdjustDialog />}
+      {activeDialog === 'line-adjust' && <LineAdjustDialog />}
       {activeDialog === 'settings' && <SettingsDialog />}
       {activeDialog === 'project-settings' && <ProjectSettingsDialog />}
-      {activeDialog === 'split-section' && <SplitSectionDialog />}
-      {activeDialog === 'split-section-here' && <SplitSectionHereDialog />}
+      {activeDialog === 'split-line' && <SplitLineDialog />}
+      {activeDialog === 'split-line-here' && <SplitLineHereDialog />}
       {activeDialog === 'mnemo-import' && <MnemoImportDialog />}
-      {activeDialog === 'combine-sections' && <CombineSectionsDialog />}
+      {activeDialog === 'combine-lines' && <CombineLinesDialog />}
       {activeDialog === 'insert-station' && <InsertStationDialog />}
       {activeDialog === 'corruption-recovery' && <CorruptionRecoveryDialog />}
       {activeDialog === 'debug' && <DebugDialog />}

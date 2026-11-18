@@ -6,6 +6,7 @@ mod map_palette;
 mod panels;
 mod people;
 mod speleodb_file;
+mod toml_names;
 mod types;
 mod webkit;
 

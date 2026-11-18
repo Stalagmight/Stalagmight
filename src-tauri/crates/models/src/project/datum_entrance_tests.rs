@@ -1,8 +1,8 @@
 //! Which zero datums are entrances (#741): placement datums always, a GPS fix
-//! by the user's answer or, by default, when it sits on a section's first or
+//! by the user's answer or, by default, when it sits on a line's first or
 //! last station. Synthetic surveys only.
 
-use crate::{local_to_gps, GpsCoordinates, Project, SectionData, SectionId, ShotData, StationRef};
+use crate::{local_to_gps, GpsCoordinates, LineData, LineId, Project, ShotData, StationRef};
 
 const ORIGIN_LAT: f64 = 20.5;
 const ORIGIN_LON: f64 = -87.25;
@@ -17,9 +17,9 @@ fn gps_north(north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-/// One section of six 50 m shots due north (stations 0..=6, 300 m), placed by
+/// One line of six 50 m shots due north (stations 0..=6, 300 m), placed by
 /// a datum on station 0.
-fn line() -> (Project, SectionId) {
+fn line() -> (Project, LineId) {
     let mut project = Project::new("Line".to_string(), None);
     let shots = (0..6)
         .map(|_| ShotData {
@@ -30,7 +30,7 @@ fn line() -> (Project, SectionId) {
         })
         .collect();
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -60,7 +60,7 @@ fn wire_entrances(project: &Project) -> Vec<(u32, bool)> {
 }
 
 #[test]
-fn a_mid_passage_fix_is_not_an_entrance_and_a_fix_at_a_section_end_is() {
+fn a_mid_passage_fix_is_not_an_entrance_and_a_fix_at_a_line_end_is() {
     let (mut project, a) = line();
     fix(&mut project, StationRef::new(a, 3), None);
     fix(&mut project, StationRef::new(a, 6), None);
@@ -130,7 +130,7 @@ fn the_preview_reports_the_entrance_a_new_or_stored_datum_would_have() {
     };
     assert!(preview(&project, 0), "the placement datum");
     assert!(!preview(&project, 3), "a new mid-passage fix");
-    assert!(preview(&project, 6), "a new fix at the section's end");
+    assert!(preview(&project, 6), "a new fix at the line's end");
 
     fix(&mut project, StationRef::new(a, 3), Some(true));
     assert!(preview(&project, 3), "a stored fix keeps its answer");

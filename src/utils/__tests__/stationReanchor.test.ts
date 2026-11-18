@@ -41,7 +41,7 @@ describe('reanchorAfterRunDelete', () => {
   it('collapses a pick inside the removed run onto the run start', () => {
     // Stations 2..7 deleted with 5 picked: the pick has to land on 2, the
     // boundary the span closed up to. Plain reanchorStation would compute
-    // 5 - 6 = -1 and clamp to the head of the section.
+    // 5 - 6 = -1 and clamp to the head of the line.
     expect(reanchorAfterRunDelete(5, 2, 6, 4)).toBe(2);
     expect(reanchorAfterRunDelete(3, 2, 6, 4)).toBe(2);
     // The last station OF the run is still inside it.

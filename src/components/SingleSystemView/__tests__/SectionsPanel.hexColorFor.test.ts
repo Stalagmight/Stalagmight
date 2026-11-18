@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { hexColorFor } from '../SectionsPanel';
 
 /**
- * The section color dot seeds a native color input, which can only hold
- * `#rrggbb`. A section may carry any CSS color (Edit Section's free-text field
+ * The line color dot seeds a native color input, which can only hold
+ * `#rrggbb`. A line may carry any CSS color (Edit Line's free-text field
  * accepts one), so the seed is read back from the painted dot.
  */
 describe('hexColorFor', () => {

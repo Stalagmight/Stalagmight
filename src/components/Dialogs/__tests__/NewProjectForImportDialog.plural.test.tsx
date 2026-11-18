@@ -1,6 +1,6 @@
 /**
  * #447 item 1: the create-for-import summary used to interpolate a raw count
- * into a hardcoded plural ("1 sections - 12 shots"). Renders through the real
+ * into a hardcoded plural ("1 lines - 12 shots"). Renders through the real
  * i18next instance (unlike the sibling suite's stubbed `t`) so the `_one`/
  * `_other` plural forms in en.json are actually exercised.
  *
@@ -20,8 +20,8 @@ import { render, screen } from '@testing-library/react';
 import '../../../i18n';
 
 const dialogData: {
-  dmpFile: { sections: Array<{ shots: Array<{ shot_type: string }> }> } | undefined;
-  tmlFile: { sections: unknown[]; cave_name?: string } | undefined;
+  dmpFile: { lines: Array<{ shots: Array<{ shot_type: string }> }> } | undefined;
+  tmlFile: { lines: unknown[]; cave_name?: string } | undefined;
   compassFile:
     | {
         survey_count: number;
@@ -79,9 +79,9 @@ vi.mock('../../common/Button', () => ({
 
 import NewProjectForImportDialog from '../NewProjectForImportDialog';
 
-function dmpFileWithSections(count: number): { sections: Array<{ shots: Array<{ shot_type: string }> }> } {
+function dmpFileWithSections(count: number): { lines: Array<{ shots: Array<{ shot_type: string }> }> } {
   return {
-    sections: Array.from({ length: count }, () => ({ shots: [{ shot_type: 'Standard' }] })),
+    lines: Array.from({ length: count }, () => ({ shots: [{ shot_type: 'Standard' }] })),
   };
 }
 
@@ -102,37 +102,37 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
     resetDialogData();
   });
 
-  it('uses the singular form for exactly one section and one shot (DMP)', () => {
+  it('uses the singular form for exactly one line and one shot (DMP)', () => {
     dialogData.dmpFile = dmpFileWithSections(1);
 
     render(<NewProjectForImportDialog />);
 
-    expect(screen.getByText('1 section - 1 shot')).toBeInTheDocument();
+    expect(screen.getByText('1 line - 1 shot')).toBeInTheDocument();
   });
 
-  it('uses the plural form for multiple sections and shots (DMP)', () => {
+  it('uses the plural form for multiple lines and shots (DMP)', () => {
     dialogData.dmpFile = dmpFileWithSections(3);
 
     render(<NewProjectForImportDialog />);
 
-    expect(screen.getByText('3 sections - 3 shots')).toBeInTheDocument();
+    expect(screen.getByText('3 lines - 3 shots')).toBeInTheDocument();
   });
 
-  it('uses the plural form for zero sections/shots (DMP)', () => {
+  it('uses the plural form for zero lines/shots (DMP)', () => {
     dialogData.dmpFile = dmpFileWithSections(0);
 
     render(<NewProjectForImportDialog />);
 
-    expect(screen.getByText('0 sections - 0 shots')).toBeInTheDocument();
+    expect(screen.getByText('0 lines - 0 shots')).toBeInTheDocument();
   });
 
   it('pluralizes the TML summary and keeps the cave-name suffix', () => {
-    dialogData.tmlFile = { sections: [], cave_name: 'Naharon' };
+    dialogData.tmlFile = { lines: [], cave_name: 'Naharon' };
     dialogData.importType = 'tml';
 
     render(<NewProjectForImportDialog />);
 
-    expect(screen.getByText('0 sections - 0 shots - Naharon')).toBeInTheDocument();
+    expect(screen.getByText('0 lines - 0 shots - Naharon')).toBeInTheDocument();
   });
 
   it('pluralizes the Compass summary (surveys_one) and keeps the cave-name suffix', () => {

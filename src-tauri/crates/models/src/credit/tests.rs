@@ -21,7 +21,7 @@ fn legacy_splitter_table() {
         // One half empty, as the importer wrote it for a missing role.
         (" / ds", &[], &["ds"]),
         ("nh / ", &["nh"], &[]),
-        // Explorers only survives trimming (an older build's Edit Section
+        // Explorers only survives trimming (an older build's Edit Line
         // trims on every save): a trimmed text ending in " /", with no other
         // " / ", is explorers only too.
         ("nh /", &["nh"], &[]),
@@ -72,7 +72,7 @@ fn legacy_splitter_table() {
 /// The same splitter for text from an Ariane file (#719 review): a name list
 /// everywhere, so only the `Last, First` cases differ from the legacy column's
 /// free text, and a single name is still a surveyor. Mirrored by the vitest
-/// table in `src/utils/__tests__/sectionCredit.test.ts`.
+/// table in `src/utils/__tests__/lineCredit.test.ts`.
 #[test]
 fn ariane_name_list_splitter_table() {
     // (input, explorers, surveyors)
@@ -255,7 +255,7 @@ fn legacy_credit_text_table() {
     for (explorers, surveyors, text, read_explorers, read_surveyors) in cases {
         let written = legacy_credit_text(&people(explorers), &people(surveyors));
         assert_eq!(written.as_deref(), *text, "{explorers:?} / {surveyors:?}");
-        // The text as written, and as an older build's Edit Section saves it.
+        // The text as written, and as an older build's Edit Line saves it.
         let written = written.unwrap_or_default();
         for read in [written.as_str(), written.trim()] {
             let (e, s) = legacy_people(read);
@@ -322,7 +322,7 @@ fn legacy_credit_text_always_splits_back_into_its_roles() {
     };
     let check = |explorers: &[Person], surveyors: &[Person]| {
         let text = legacy_credit_text(explorers, surveyors).unwrap_or_default();
-        // Trimmed too: an older build's Edit Section trims it on every save.
+        // Trimmed too: an older build's Edit Line trims it on every save.
         for read in [text.as_str(), text.trim()] {
             let (e, s) = legacy_people(read);
             let got = |list: Vec<Person>| list.into_iter().map(|p| p.name).collect::<Vec<_>>();
@@ -448,7 +448,7 @@ fn summary_counts_people_per_shot_in_first_appearance_order() {
         },
         SurveyCredit::default(),
     ];
-    let summary = SectionCreditSummary::from_credits(credits.iter());
+    let summary = LineCreditSummary::from_credits(credits.iter());
     assert_eq!(summary.shot_count, 3);
     let counted: Vec<(&str, u32)> = summary
         .surveyors
@@ -461,8 +461,8 @@ fn summary_counts_people_per_shot_in_first_appearance_order() {
     assert_eq!(summary.date_max, d1);
     assert_eq!(names(&summary.surveyor_people()), ["B", "A"]);
 
-    let empty = SectionCreditSummary::from_credits(std::iter::empty());
-    assert_eq!(empty, SectionCreditSummary::default());
+    let empty = LineCreditSummary::from_credits(std::iter::empty());
+    assert_eq!(empty, LineCreditSummary::default());
 }
 
 #[test]
@@ -589,9 +589,8 @@ fn credit_edit_wire_shape() {
             shots: vec![(1, 100_001)]
         }
     );
-    let targets: CreditTargets =
-        serde_json::from_str(r#"{"type":"section","section_id":4}"#).unwrap();
-    assert_eq!(targets, CreditTargets::Section { section_id: 4 });
+    let targets: CreditTargets = serde_json::from_str(r#"{"type":"line","line_id":4}"#).unwrap();
+    assert_eq!(targets, CreditTargets::Line { line_id: 4 });
 }
 
 /// A crafted legacy or imported text with a hundred thousand names used to cost

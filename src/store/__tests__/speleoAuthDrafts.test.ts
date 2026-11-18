@@ -131,7 +131,7 @@ describe('one question for unsaved edits and unsent SpeleoDB input', () => {
     parkDescription();
     const saveProject = vi.fn(async () => {
       useProjectStore.setState({ isDirty: false });
-      return { success: true, warnings: [], error: null, section_ids: [] };
+      return { success: true, warnings: [], error: null, line_ids: [] };
     });
     useProjectStore.setState({ isDirty: true, saveProject: saveProject as never });
     stageLogin('other@example.com');

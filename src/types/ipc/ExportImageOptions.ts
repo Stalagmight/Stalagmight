@@ -3,4 +3,4 @@ import type { ColorMode } from "./ColorMode";
 import type { ExportColorScale } from "./ExportColorScale";
 import type { ImageFormat } from "./ImageFormat";
 
-export interface ExportImageOptions { format: ImageFormat, dpi: number, branching_threshold: number, show_penetration_labels: boolean, color_mode: ColorMode, show_station_labels: boolean, show_station_names: boolean, show_section_names: boolean, show_station_comments: boolean, show_shot_comments: boolean, show_shot_data: boolean, depth_shallow?: string, depth_deep?: string, depth_scale?: ExportColorScale, distance_scale?: ExportColorScale, }
+export interface ExportImageOptions { format: ImageFormat, dpi: number, branching_threshold: number, show_penetration_labels: boolean, color_mode: ColorMode, show_station_labels: boolean, show_station_names: boolean, show_line_names: boolean, show_station_comments: boolean, show_shot_comments: boolean, show_shot_data: boolean, depth_shallow?: string, depth_deep?: string, depth_scale?: ExportColorScale, distance_scale?: ExportColorScale, hidden_line_ids?: Array<number>, }

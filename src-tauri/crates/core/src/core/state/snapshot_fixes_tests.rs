@@ -6,16 +6,16 @@
 use super::AppState;
 use crate::core::{Command, UndoData};
 use crate::models::{
-    DatumRole, GpsCoordinates, Project, SectionId, ShotData, StationRef, SurveyDirection,
+    DatumRole, GpsCoordinates, LineId, Project, ShotData, StationRef, SurveyDirection,
 };
 
 fn gps(lat: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, -87.25, 0.0).unwrap()
 }
 
-fn create_section(state: &AppState, name: &str) -> SectionId {
+fn create_line(state: &AppState, name: &str) -> LineId {
     state
-        .execute(Command::CreateSection {
+        .execute(Command::CreateLine {
             name: Some(name.to_string()),
             surveyor: None,
             date: None,
@@ -27,8 +27,9 @@ fn create_section(state: &AppState, name: &str) -> SectionId {
                     ..Default::default()
                 })
                 .collect(),
+            cave_section_id: None,
         })
-        .section_id
+        .line_id
         .unwrap()
 }
 
@@ -46,16 +47,16 @@ fn set_datum(state: &AppState, station_ref: StationRef, lat: f64, accuracy_m: Op
 /// A0 places A+B, B3 is a fix, C0 places C, A2 is a fix (accuracy 4 m). The
 /// fix B3 sits between two placements, so the order is observable. D carries
 /// nothing: deleting it is a whole-project snapshot that changes no datum.
-fn surveyed() -> (AppState, SectionId) {
+fn surveyed() -> (AppState, LineId) {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Fixes".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A");
-    let b = create_section(&state, "B");
-    let c = create_section(&state, "C");
-    let d = create_section(&state, "D");
+    let a = create_line(&state, "A");
+    let b = create_line(&state, "B");
+    let c = create_line(&state, "C");
+    let d = create_line(&state, "D");
     let r = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 3),
         station_b: StationRef::new(b, 0),
@@ -91,7 +92,7 @@ fn summary(project: &Project) -> Summary {
 /// ignores keys it does not know.
 fn as_an_older_build_reads(snapshot: &str) -> Project {
     let mut project: Project = serde_json::from_str(snapshot).unwrap();
-    project.rebuild_section_index();
+    project.rebuild_line_index();
     project.rebuild_shot_uuid_index();
     project
 }
@@ -150,13 +151,13 @@ fn a_compact_delete_entry_is_unreadable_to_older_builds_and_undo_restores_the_fi
     let (state, d) = surveyed();
     let expected = summary(&state.get_project_state().unwrap());
 
-    let r = state.execute(Command::DeleteSection { section_id: d });
+    let r = state.execute(Command::DeleteLine { line_id: d });
     assert!(r.success, "{:?}", r.error);
     let persisted = {
         let stack = state.undo_stack.lock().unwrap();
         assert!(
             matches!(stack.peek_undo_data(), Some(UndoData::Delta(_))),
-            "premise: Delete Section records a compact entry"
+            "premise: Delete Line records a compact entry"
         );
         let entry = stack.undo_entries().last().unwrap();
         crate::core::UndoStack::serialize_entry(entry).unwrap().1
@@ -233,7 +234,7 @@ fn a_save_reports_that_older_builds_drop_fixes_and_accuracies() {
         name: "Placed".to_string(),
         location: None,
     });
-    let a = create_section(&state, "A");
+    let a = create_line(&state, "A");
     set_datum(&state, StationRef::new(a, 0), 20.1, None);
     assert!(
         !save_reports_fixes(&state, &dir, "placed.stalx"),

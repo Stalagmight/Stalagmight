@@ -16,16 +16,22 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
-import type { Project, SectionId, ShotId } from '../../types/project';
+import type { Project, LineId, ShotId } from '../../types/project';
 import type { CommandResult } from '../../types/commands';
 
-const SECTION_ID = 1 as SectionId;
+const LINE_ID = 1 as LineId;
 const SHOT_ID = 2 as ShotId;
 const SHOT_LENGTH = 10;
 
 const baseProject = {
-  sections: [{ id: SECTION_ID, shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
+  lines: [{ id: LINE_ID, name: 'Main Passage', shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
 } as unknown as Project;
+
+// The shot runs from station 0 to station 1, named unlike their indices.
+const baseStations = [
+  { station_ref: { line_id: LINE_ID, station_index: 0 }, name: '4' },
+  { station_ref: { line_id: LINE_ID, station_index: 1 }, name: '5' },
+];
 
 let splitShotAtDistance: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
@@ -39,11 +45,13 @@ beforeEach(() => {
   closeDialog = vi.fn();
   setSelection = vi.fn();
   useProjectStore.setState({
-    // The dialog reads the freshest project.sections via getState() after the
+    // The dialog reads the freshest project.lines via getState() after the
     // split resolves, to find the split shot's post-split index (#59 fix D).
     project: baseProject,
+    stations: baseStations,
+    surveyData: null,
     splitShotAtDistance,
-  });
+  } as never);
   useUIStore.setState({
     // Editable baseline (the read-only-guard test flips this to closureAdjusted;
     // reset here so it doesn't bleed into the other tests).
@@ -53,11 +61,21 @@ beforeEach(() => {
     closeDialog,
     setSelection,
     dialogData: {
-      sectionId: SECTION_ID,
+      lineId: LINE_ID,
       shotId: SHOT_ID,
       shotLength: SHOT_LENGTH,
-      sectionName: 'Main Passage',
+      lineName: 'Main Passage',
     },
+  });
+});
+
+describe('InsertStationDialog identity', () => {
+  it('names the line in the title and the shot it splits by its station names', () => {
+    render(<InsertStationDialog />);
+    expect(screen.getByText('Insert Station in Main Passage')).toBeInTheDocument();
+    expect(
+      screen.getByText('Splits the shot 4 \u2192 5 into two, adding a station at the given distance from its start.')
+    ).toBeInTheDocument();
   });
 });
 
@@ -99,7 +117,7 @@ describe('InsertStationDialog (#59)', () => {
       await waitFor(() => {
         // What the metres field shows is exactly what gets split - no hidden
         // extra precision from the percentage.
-        expect(splitShotAtDistance).toHaveBeenCalledWith(SECTION_ID, SHOT_ID, 3);
+        expect(splitShotAtDistance).toHaveBeenCalledWith(LINE_ID, SHOT_ID, 3);
       });
     });
 
@@ -126,10 +144,10 @@ describe('InsertStationDialog (#59)', () => {
       // alongT is the fraction along the shot the pointer landed on.
       useUIStore.setState({
         dialogData: {
-          sectionId: SECTION_ID,
+          lineId: LINE_ID,
           shotId: SHOT_ID,
           shotLength: SHOT_LENGTH,
-          sectionName: 'Main Passage',
+          lineName: 'Main Passage',
           alongT: 0.35,
         },
       });
@@ -144,17 +162,17 @@ describe('InsertStationDialog (#59)', () => {
       splitShotAtDistance.mockResolvedValue({ success: true } as CommandResult);
       useUIStore.setState({
         dialogData: {
-          sectionId: SECTION_ID,
+          lineId: LINE_ID,
           shotId: SHOT_ID,
           shotLength: SHOT_LENGTH,
-          sectionName: 'Main Passage',
+          lineName: 'Main Passage',
           alongT: 0.6,
         },
       });
       render(<InsertStationDialog />);
       fireEvent.click(screen.getByTestId('insert-station-confirm'));
       await waitFor(() => {
-        expect(splitShotAtDistance).toHaveBeenCalledWith(SECTION_ID, SHOT_ID, 6);
+        expect(splitShotAtDistance).toHaveBeenCalledWith(LINE_ID, SHOT_ID, 6);
       });
     });
 
@@ -220,9 +238,9 @@ describe('InsertStationDialog (#59)', () => {
       // before the split target, so the tail (SHOT_ID) now sits at index 1.
       useProjectStore.setState({
         project: {
-          sections: [
+          lines: [
             {
-              id: SECTION_ID,
+              id: LINE_ID,
               shots: [{ id: 999 as ShotId }, { id: SHOT_ID }],
             },
           ],
@@ -236,19 +254,19 @@ describe('InsertStationDialog (#59)', () => {
     fireEvent.click(screen.getByTestId('insert-station-confirm'));
 
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(splitShotAtDistance).toHaveBeenCalledWith(SECTION_ID, SHOT_ID, 4);
+    expect(splitShotAtDistance).toHaveBeenCalledWith(LINE_ID, SHOT_ID, 4);
     expect(setSelection).toHaveBeenCalledWith({
       type: 'station',
-      stationRef: { section_id: SECTION_ID, station_index: 1 },
+      stationRef: { line_id: LINE_ID, station_index: 1 },
     });
   });
 
   it('closes without selecting when the shot is gone from the refreshed state', async () => {
     splitShotAtDistance.mockImplementation(async () => {
       // Simulates a racing mutation / project switch: by the time the split
-      // resolves, the target section no longer exists in the store.
+      // resolves, the target line no longer exists in the store.
       useProjectStore.setState({
-        project: { sections: [] } as unknown as Project,
+        project: { lines: [] } as unknown as Project,
       });
       return { success: true, error: null } as CommandResult;
     });

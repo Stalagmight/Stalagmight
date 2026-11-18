@@ -4,13 +4,13 @@ use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource, NorthReference};
-use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
+use crate::models::line::{ImportClosure, ImportLineConfig, ImportPlacement};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 
 use super::{
     ParsedSurvey, ParsedWalls, WallsFile, WallsImportOptions, WallsRef, WallsSurveySummary,
-    WallsVector, SECTION_COLORS,
+    WallsVector, LINE_COLORS,
 };
 
 // ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ pub(crate) struct AnchorGeo {
 pub fn convert_walls_to_import_configs(
     parsed: &ParsedWalls,
     opts: &WallsImportOptions,
-) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+) -> Result<(Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>)> {
     let mut warnings = parsed.warnings.clone();
 
     // Every `#Fix` with a geographic position is a candidate GPS anchor. Each
@@ -220,6 +220,8 @@ pub fn convert_walls_to_import_configs(
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         vectors: Vec<KeptVector>,
+        /// The survey's segment path, for the auto-grouping (#327).
+        segment: String,
     }
     struct KeptVector {
         from: String,
@@ -414,6 +416,7 @@ pub fn convert_walls_to_import_configs(
             surveyor: survey.surveyor.clone(),
             date: survey.date,
             vectors: kept_vectors,
+            segment: survey.segment.trim().to_string(),
         });
     }
 
@@ -426,9 +429,9 @@ pub fn convert_walls_to_import_configs(
     let depths = build_station_depths(&edges, &known_depth, &anchor_depths, &mut warnings);
     let depth_of = |s: &str| depths.get(s).copied().unwrap_or(0.0);
 
-    // Pass 2a: split each survey into head-to-tail chains -> sections.
+    // Pass 2a: split each survey into head-to-tail chains -> lines.
     struct PendingChain {
-        section_index: u32,
+        line_index: u32,
         names: Vec<String>,
         shots: Vec<ShotData>,
         station_comments: Vec<(u32, String)>,
@@ -436,6 +439,8 @@ pub fn convert_walls_to_import_configs(
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         azimuth_reference: AzimuthReference,
+        /// The survey's segment path (#327 auto-grouping); empty for none.
+        segment: String,
     }
     // The model has no zero-length shot (it can't place two stations at one
     // point as a leg), so a Walls zero-length coincident-station tie is nudged to
@@ -450,7 +455,7 @@ pub fn convert_walls_to_import_configs(
             if chain.is_empty() {
                 continue;
             }
-            let section_index = chains.len() as u32;
+            let line_index = chains.len() as u32;
             let mut names = Vec::with_capacity(chain.len() + 1);
             names.push(survey.vectors[chain[0]].from.clone());
             for &idx in chain {
@@ -490,7 +495,7 @@ pub fn convert_walls_to_import_configs(
                 // From-typed leg contributes its own LRUD; a To-typed leg's LRUD
                 // belongs to its TO station - i.e. the FROM of the NEXT shot - so
                 // it is adopted from the previous leg in the chain. (A To survey
-                // thus shifts each cross-section one shot forward; the final To
+                // thus shifts each cross-line one shot forward; the final To
                 // station's LRUD has no outgoing shot and is dropped.)
                 let own_lrud = if v.lrud_is_to {
                     (None, None, None, None)
@@ -521,7 +526,7 @@ pub fn convert_walls_to_import_configs(
                     down,
                     comment: v.comment.clone(),
                     // A Walls splay (anonymous `-`/`--` endpoint) is a passage
-                    // cross-section, not a swum leg, so it seeds as Reference and
+                    // cross-line, not a swum leg, so it seeds as Reference and
                     // the chain classifier refines it at import finalize (#27 q10).
                     kind: if v.is_reference {
                         ShotKind::Reference
@@ -548,7 +553,7 @@ pub fn convert_walls_to_import_configs(
             } else {
                 survey.label.clone()
             };
-            // #438: one reference per section, so the chain's per-vector
+            // #438: one reference per line, so the chain's per-vector
             // corrections have to agree. They do for every ordinary survey (one
             // `Decl=`, one datum). When they do not - a `Decl=` changed
             // mid-survey, or RECT vectors mixed with compass ones - no single
@@ -590,7 +595,7 @@ pub fn convert_walls_to_import_configs(
                         // geometry - only what the UI may say about it and what
                         // the export may recompute. Taking `chain[0]`'s over a
                         // chain whose vectors disagree would attribute the whole
-                        // section to whichever entry happened to come first.
+                        // line to whichever entry happened to come first.
                         let source = if declared.all(|(_, _, s)| s == source) {
                             source
                         } else {
@@ -605,9 +610,9 @@ pub fn convert_walls_to_import_configs(
                             shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
                         }
                         warnings.push(format!(
-                            "Section '{}': the shots declare more than one declination, which a \
-                             single section-level north reference cannot express. Each shot's own \
-                             correction was applied to its readings and the section is recorded \
+                            "Line '{}': the shots declare more than one declination, which a \
+                             single line-level north reference cannot express. Each shot's own \
+                             correction was applied to its readings and the line is recorded \
                              as true north.",
                             label
                         ));
@@ -617,7 +622,7 @@ pub fn convert_walls_to_import_configs(
                 }
             };
             chains.push(PendingChain {
-                section_index,
+                line_index,
                 names,
                 shots,
                 station_comments,
@@ -625,6 +630,7 @@ pub fn convert_walls_to_import_configs(
                 surveyor: survey.surveyor.clone(),
                 date: survey.date,
                 azimuth_reference,
+                segment: survey.segment.clone(),
             });
         }
     }
@@ -651,17 +657,21 @@ pub fn convert_walls_to_import_configs(
     let closures = build_closures(
         &chains
             .iter()
-            .map(|c| (c.section_index, c.names.clone()))
+            .map(|c| (c.line_index, c.names.clone()))
             .collect::<Vec<_>>(),
         &placements,
     );
 
+    // Auto-grouping (#327): every line of a survey in a segment joins a
+    // Section named after the segment.
+    let segment_sections = segment_section_names(chains.iter().map(|c| c.segment.as_str()));
+
     // Emit configs in BFS creation order.
-    let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
+    let mut configs: Vec<ImportLineConfig> = Vec::with_capacity(chains.len());
     for &ci in &placements.creation_order {
         let chain = &chains[ci];
         // The team are the surveyors of every shot of the survey, on its date;
-        // the credit rides on the shots, so the section template stays empty.
+        // the credit rides on the shots, so the line template stays empty.
         // One allocation for the whole survey: every shot shares it
         // (`ShotData::credit`), however long the team line and the survey.
         let credit = crate::models::SurveyCredit::from_team(chain.surveyor.as_deref(), chain.date)
@@ -676,13 +686,14 @@ pub fn convert_walls_to_import_configs(
                 shot
             })
             .collect();
-        configs.push(ImportSectionConfig {
+        configs.push(ImportLineConfig {
+            cave_section: segment_sections.get(chain.segment.as_str()).cloned(),
             reverse: false,
-            section_index: chain.section_index,
+            line_index: chain.line_index,
             name: Some(chain.label.clone()),
             surveyor: None,
             date: None,
-            color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
+            color: LINE_COLORS[chain.line_index as usize % LINE_COLORS.len()].to_string(),
             direction: None,
             quality: 1.0,
             shots,
@@ -709,8 +720,41 @@ pub fn convert_walls_to_import_configs(
     Ok((configs, closures, warnings))
 }
 
+/// The Section name for each non-empty segment path (#327): its last
+/// component (`Cave/North branch` -> `North branch`), or the whole path when
+/// another path in the same import ends in the same component, so two
+/// different segments never fall into one Section.
+pub(crate) fn segment_section_names<'a>(
+    segments: impl Iterator<Item = &'a str>,
+) -> HashMap<&'a str, String> {
+    let paths: std::collections::BTreeSet<&str> = segments.filter(|s| !s.is_empty()).collect();
+    let last = |path: &str| -> String {
+        path.rsplit('/')
+            .map(str::trim)
+            .find(|part| !part.is_empty())
+            .unwrap_or(path)
+            .to_string()
+    };
+    let mut by_last: HashMap<String, usize> = HashMap::new();
+    for path in &paths {
+        *by_last.entry(last(path)).or_insert(0) += 1;
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            let short = last(path);
+            let name = if by_last.get(&short).copied().unwrap_or(0) > 1 {
+                path.to_string()
+            } else {
+                short
+            };
+            (path, name)
+        })
+        .collect()
+}
+
 /// The declination for one vector, and where the number came from (#438 - the
-/// provenance is recorded on the section so the UI can explain it).
+/// provenance is recorded on the line so the UI can explain it).
 pub(crate) fn resolve_declination(
     v: &WallsVector,
     georef: &Option<WallsRef>,
@@ -761,7 +805,7 @@ pub(crate) fn survey_label(survey: &ParsedSurvey) -> String {
     } else if !survey.name.trim().is_empty() {
         survey.name.trim().to_string()
     } else {
-        "Unnamed section".to_string()
+        "Unnamed line".to_string()
     }
 }
 
@@ -1135,7 +1179,7 @@ pub(crate) fn place_chains(
             placement[root] = Some(ImportPlacement::Origin);
             if have_any_anchor {
                 warnings.push(format!(
-                    "Section '{}' is a separate component with no fixed station; placed at origin.",
+                    "Line '{}' is a separate component with no fixed station; placed at origin.",
                     label_of(root)
                 ));
             }
@@ -1154,7 +1198,7 @@ pub(crate) fn place_chains(
                 if let Some((child_st, parent_st)) = shared_station(nb, p) {
                     placement[nb] = Some(ImportPlacement::FromImporting {
                         import_station: child_st,
-                        target_section_index: p as u32,
+                        target_line_index: p as u32,
                         target_station_index: parent_st,
                     });
                     merge_station[nb] = Some(child_st);
@@ -1181,47 +1225,47 @@ pub(crate) fn build_closures(
     placements: &Placements,
 ) -> Vec<ImportClosure> {
     let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
-    for (section_index, names) in chains {
+    for (line_index, names) in chains {
         for (k, name) in names.iter().enumerate() {
             canonical
                 .entry(name.as_str())
                 .and_modify(|prev| {
-                    if *section_index < prev.0 {
-                        *prev = (*section_index, k as u32);
+                    if *line_index < prev.0 {
+                        *prev = (*line_index, k as u32);
                     }
                 })
-                .or_insert((*section_index, k as u32));
+                .or_insert((*line_index, k as u32));
         }
     }
     let mut closures = Vec::new();
     let mut seen: HashSet<(u32, u32, u32, u32)> = HashSet::new();
-    for (ci, (section_index, names)) in chains.iter().enumerate() {
+    for (ci, (line_index, names)) in chains.iter().enumerate() {
         let merge_st = placements.merge_station[ci];
-        let parent_section = placements.parent[ci].map(|p| chains[p].0);
+        let parent_line = placements.parent[ci].map(|p| chains[p].0);
         for (k, name) in names.iter().enumerate() {
             if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
                 // The canonical occurrence itself needs no closure.
-                if canon_sec == *section_index && canon_st == k as u32 {
+                if canon_sec == *line_index && canon_st == k as u32 {
                     continue;
                 }
                 // A station revisited later within the SAME chain (a contiguous
                 // intra-chain loop, e.g. A->B->C->A) is the same physical station
                 // as its canonical occurrence and must be tied by an
-                // intra-section closure - fall through to emit it. The
-                // already-joined-by-merge shortcut only applies to cross-section
+                // intra-line closure - fall through to emit it. The
+                // already-joined-by-merge shortcut only applies to cross-line
                 // ties.
-                if canon_sec != *section_index
+                if canon_sec != *line_index
                     && Some(k as u32) == merge_st
-                    && parent_section == Some(canon_sec)
+                    && parent_line == Some(canon_sec)
                 {
                     continue;
                 }
-                let key = (*section_index, k as u32, canon_sec, canon_st);
+                let key = (*line_index, k as u32, canon_sec, canon_st);
                 if seen.insert(key) {
                     closures.push(ImportClosure {
-                        from_section_index: *section_index,
+                        from_line_index: *line_index,
                         from_station_index: k as u32,
-                        to_section_index: canon_sec,
+                        to_line_index: canon_sec,
                         to_station_index: canon_st,
                     });
                 }
@@ -1232,22 +1276,21 @@ pub(crate) fn build_closures(
 }
 
 /// Reorder configs so any `FromImporting` target precedes its dependent.
-pub(crate) fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
+pub(crate) fn topological_sort_configs(configs: &mut Vec<ImportLineConfig>) {
     if configs.len() <= 1 {
         return;
     }
     let pos_of: HashMap<u32, usize> = configs
         .iter()
         .enumerate()
-        .map(|(i, c)| (c.section_index, i))
+        .map(|(i, c)| (c.line_index, i))
         .collect();
     let dep: Vec<Option<usize>> = configs
         .iter()
         .map(|c| match &c.placement {
             ImportPlacement::FromImporting {
-                target_section_index,
-                ..
-            } => pos_of.get(target_section_index).copied(),
+                target_line_index, ..
+            } => pos_of.get(target_line_index).copied(),
             _ => None,
         })
         .collect();
@@ -1278,7 +1321,7 @@ pub(crate) fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
             order.push(i);
         }
     }
-    let mut reordered: Vec<Option<ImportSectionConfig>> = configs.drain(..).map(Some).collect();
+    let mut reordered: Vec<Option<ImportLineConfig>> = configs.drain(..).map(Some).collect();
     for idx in order {
         if let Some(config) = reordered[idx].take() {
             configs.push(config);

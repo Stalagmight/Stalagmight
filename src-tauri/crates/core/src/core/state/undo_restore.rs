@@ -1,10 +1,10 @@
 use crate::core::{Command, CommandResult};
-use crate::models::{Section, SectionData, SectionId, SectionIdentity};
+use crate::models::{Line, LineData, LineId, LineIdentity};
 
 use super::AppState;
 
 impl AppState {
-    /// Re-derive the geometry every command leaves behind: the section offsets
+    /// Re-derive the geometry every command leaves behind: the line offsets
     /// that keep merged stations colocated, and the alignment claims the loop
     /// closures make about their own endpoints.
     ///
@@ -25,11 +25,11 @@ impl AppState {
     ///   taken to a state rather than on the state - a forward command's realign
     ///   would see the pre-command flags while the undo's realign saw the swept
     ///   ones, and the two cascades would settle on offsets that differ by float
-    ///   dust (a `section_offsets` key that exists on one route and not the
+    ///   dust (a `line_offsets` key that exists on one route and not the
     ///   other, which is #413 finding 2's shape and what the fuzz roundtrip
     ///   oracle reports). Sweeping first makes the solver's input a function of
     ///   the geometry alone.
-    /// * AFTER, because the realign can MOVE a section, which changes the very
+    /// * AFTER, because the realign can MOVE a line, which changes the very
     ///   gaps the claims are measured from. This function must exit with the
     ///   claims true of the geometry it is leaving, or the NEXT command's sweep
     ///   would correct them - producing a difference against a snapshot recorded
@@ -65,64 +65,53 @@ impl AppState {
     /// Execute a command without pushing to undo stack (used for undo operations and batch)
     pub(super) fn execute_without_undo(&self, cmd: Command) -> CommandResult {
         match &cmd {
-            Command::CreateSection {
+            Command::CreateLine {
                 name,
                 surveyor,
                 date,
                 color,
                 direction,
                 shots,
-            } => self.create_section(SectionData {
-                name: name.clone(),
-                surveyor: surveyor.clone(),
-                date: *date,
-                color: color.clone(),
-                direction: *direction,
-                quality: 1.0,
-                // Batch sub-commands arrive verbatim off IPC (#423): strip
-                // uuids here like `execute`'s own CreateSection arm does -
-                // never in `AppState::create_section`, which the importers
-                // share with legitimately-adopted identities.
-                shots: shots
-                    .iter()
-                    .cloned()
-                    .map(|mut s| {
-                        s.uuid = None;
-                        s
-                    })
-                    .collect(),
-            }),
-            Command::DeleteSection { section_id } => self.delete_section(*section_id),
-            Command::UpdateSectionMetadata {
-                section_id,
-                updates,
-            } => self.update_section(*section_id, updates.clone()),
+                cave_section_id,
+            } => self.create_line_command(
+                LineData {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: *date,
+                    color: color.clone(),
+                    direction: *direction,
+                    quality: 1.0,
+                    shots: shots.clone(),
+                },
+                *cave_section_id,
+            ),
+            Command::DeleteLine { line_id } => self.delete_line(*line_id),
+            Command::UpdateLineMetadata { line_id, updates } => {
+                self.update_line(*line_id, updates.clone())
+            }
             // Reachable as a batch sub-command: reversing a multi-selection is
             // one atomic user action (#24).
-            Command::ReverseSection {
-                section_id,
+            Command::ReverseLine {
+                line_id,
                 swap_left_right,
-            } => self.reverse_section(*section_id, *swap_left_right),
+            } => self.reverse_line(*line_id, *swap_left_right),
             Command::CreateShot {
-                section_id,
+                line_id,
                 shot,
                 after_shot_id,
                 before_shot_id,
-            } => self.create_shot(*section_id, shot.clone(), *after_shot_id, *before_shot_id),
+            } => self.create_shot(*line_id, shot.clone(), *after_shot_id, *before_shot_id),
             Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates,
-            } => self.update_shot(*section_id, *shot_id, updates.clone()),
-            Command::DeleteShot {
-                section_id,
-                shot_id,
-            } => self.delete_shot(*section_id, *shot_id),
+            } => self.update_shot(*line_id, *shot_id, updates.clone()),
+            Command::DeleteShot { line_id, shot_id } => self.delete_shot(*line_id, *shot_id),
             Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 kind,
-            } => self.set_shot_kind(*section_id, *shot_id, *kind),
+            } => self.set_shot_kind(*line_id, *shot_id, *kind),
             Command::MergeStations {
                 station_a,
                 station_b,
@@ -145,44 +134,66 @@ impl AppState {
                 entrance,
             } => self.set_zero_datum(*station_ref, *coordinates, *accuracy_m, *entrance),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
-            Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
-            Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
+            Command::MoveLine { line_id, offset } => self.move_line(*line_id, *offset),
+            Command::MoveSegment { line_id, offset } => self.move_segment(*line_id, *offset),
             Command::SetStationComment {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
+            Command::SetStationName { station_ref, name } => {
+                self.set_station_name(*station_ref, name)
+            }
             Command::MoveStation {
                 station_ref,
                 offset,
             } => self.move_station(*station_ref, *offset),
-            Command::Batch { commands } => self.execute_batch(commands.clone(), false),
+            Command::Batch { commands, .. } => self.execute_batch(commands.clone(), None, false),
             // Reachable through a Batch, which runs its sub-commands here (#394):
-            // the DMP wizard's withdrawal deletes its sections and forgets their
+            // the DMP wizard's withdrawal deletes its lines and forgets their
             // import tracking in ONE batch. Without this arm the catch-all below
             // would fail that sub-command and roll the whole withdrawal back.
             Command::UntrackImport {
                 file_hashes,
-                section_hashes,
-            } => self.untrack_import(file_hashes, section_hashes),
+                line_hashes,
+            } => self.untrack_import(file_hashes, line_hashes),
             // Batchable (`is_batch_allowed`): a data-table paste of credit cells
-            // and Edit Section's Save run it here. Without this arm the
+            // and Edit Line's Save run it here. Without this arm the
             // catch-all failed the sub-command and rolled the whole batch back.
             Command::EditShotCredit { targets, edit } => self.edit_shot_credit(targets, edit),
+            // Batchable too (#327); the batch's snapshot pair is their undo.
+            Command::CreateCaveSection {
+                name,
+                color,
+                line_ids,
+            } => self.create_cave_section(name, color, line_ids),
+            Command::UpdateCaveSection {
+                section_id,
+                name,
+                color,
+            } => self.update_cave_section(*section_id, name.as_deref(), color.as_deref()),
+            Command::DeleteCaveSection { section_id } => self.delete_cave_section(*section_id),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => self.move_lines_to_cave_section(line_ids, *section_id),
+            Command::ApplyCaveSectionColor { section_id } => {
+                self.apply_cave_section_color(*section_id)
+            }
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }
 
-    /// Restore a deleted section with its original ID and its original identity.
+    /// Restore a deleted line with its original ID and its original identity.
     ///
-    /// `identity` carries what `SectionData` cannot: the shots' uuids, the
+    /// `identity` carries what `LineData` cannot: the shots' uuids, the
     /// reverse parity and the gauge pair. A default `identity` (a legacy
     /// persisted entry, which has no such field) mints fresh uuids and resets
     /// the pair, which is the pre-fix behaviour (#413, finding 1).
-    pub(super) fn restore_section(
+    pub(super) fn restore_line(
         &self,
-        original_id: SectionId,
-        data: SectionData,
-        identity: &SectionIdentity,
+        original_id: LineId,
+        data: LineData,
+        identity: &LineIdentity,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -193,41 +204,51 @@ impl AppState {
         };
 
         // #557: a PERSISTED undo entry carries a file-supplied id, and
-        // `Section::restore_with_identity` -> `Section::new` computes
+        // `Line::restore_with_identity` -> `Line::new` computes
         // `id * FEATURE_ID_STRIDE` unchecked. Live undo cannot hold an
         // over-bound id (#556 bounds the mint), so this only fires on a
         // crafted or corrupted undo table - refuse the single entry.
-        if original_id > crate::models::MAX_SECTION_ID {
+        if original_id > crate::models::MAX_LINE_ID {
             return CommandResult::failure(format!(
-                "Cannot restore section {original_id}: section ids past {} cannot hold shots",
-                crate::models::MAX_SECTION_ID
+                "Cannot restore line {original_id}: line ids past {} cannot hold shots",
+                crate::models::MAX_LINE_ID
             ));
         }
 
-        // Create section with original ID
-        let section = Section::restore_with_identity(original_id, data, identity);
-        // Keep section_index_cache in step.  The matching
-        // `remove_section` cleared the cache; without this insert
-        // every subsequent `get_section` would fall back to the O(N)
+        // Create line with original ID
+        let mut line = Line::restore_with_identity(original_id, data, identity);
+        // The recorded Section (#327) only while the project still holds it.
+        if line
+            .section_id
+            .is_some_and(|section| project.section(section).is_none())
+        {
+            line.section_id = None;
+        }
+        // Keep line_index_cache in step.  The matching
+        // `remove_line` cleared the cache; without this insert
+        // every subsequent `get_line` would fall back to the O(N)
         // linear scan until something else rebuilds the cache.
         project
-            .section_index_cache
-            .insert(section.id, project.sections.len());
-        project.sections.push(section);
+            .line_index_cache
+            .insert(line.id, project.lines.len());
+        project.lines.push(line);
         // The restored shots keep the uuids the entry recorded, so the
-        // `(section, uuid) -> index` cache `add_section` maintains incrementally
+        // `(line, uuid) -> index` cache `add_line` maintains incrementally
         // has to be refreshed for them too; a missing entry is not wrong (
         // `resolve_key` falls back to a linear scan) but every AfterShot lookup
-        // into this section would pay for it.
-        project.reindex_section_shot_uuids(original_id);
+        // into this line would pay for it.
+        project.reindex_line_shot_uuids(original_id);
+        // The stations' ids and names, as the entry recorded them (empty
+        // for a legacy entry: the epilogue mints and seeds).
+        project.restore_line_station_identity(original_id, identity);
         project.touch();
 
-        // Update next_section_id if needed
-        if original_id >= project.next_section_id {
-            project.next_section_id = original_id + 1;
+        // Update next_line_id if needed
+        if original_id >= project.next_line_id {
+            project.next_line_id = original_id + 1;
         }
 
-        tracing::info!(section_id = original_id, "Section restored");
-        CommandResult::success().with_section_id(original_id)
+        tracing::info!(line_id = original_id, "Line restored");
+        CommandResult::success().with_line_id(original_id)
     }
 }

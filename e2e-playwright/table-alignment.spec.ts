@@ -2,15 +2,15 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   openDmpSelectionDialog,
   waitForMapReady,
   waitForNoDialogs,
   waitForMapIdle,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Alignment Test',
     direction: 'in',
@@ -43,27 +43,27 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-async function createProjectWithSections(page: Page): Promise<void> {
+async function createProjectWithLines(page: Page): Promise<void> {
   await createProject(page, 'Alignment Test Project');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
 }
 
-async function openEditSectionDialog(page: Page): Promise<void> {
-  const sectionId = await page.evaluate(() => {
+async function openEditLineDialog(page: Page): Promise<void> {
+  const lineId = await page.evaluate(() => {
     const project = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore: { getState: () => { project: { sections: Array<{ id: number; name: string }> } | null } };
+        projectStore: { getState: () => { project: { lines: Array<{ id: number; name: string }> } | null } };
       };
     }).__E2E_TEST__?.projectStore.getState().project;
 
-    return project?.sections.find((s) => s.name === 'Alignment Test')?.id ?? null;
+    return project?.lines.find((s) => s.name === 'Alignment Test')?.id ?? null;
   });
 
-  if (sectionId === null) {
-    throw new Error('Section not found: Alignment Test');
+  if (lineId === null) {
+    throw new Error('Line not found: Alignment Test');
   }
 
   await page.evaluate((id) => {
@@ -73,20 +73,20 @@ async function openEditSectionDialog(page: Page): Promise<void> {
 
     if (!uiStore) return;
 
-    uiStore.getState().openDialog('edit-section', { sectionId: id });
-  }, sectionId);
+    uiStore.getState().openDialog('edit-line', { lineId: id });
+  }, lineId);
 
-  await expect(page.getByTestId('edit-section-dialog')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByTestId('edit-line-dialog')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Table Numeric Column Alignment', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
-    await createProjectWithSections(page);
+    await createProjectWithLines(page);
   });
 
   test('numeric columns render in the shot-table grid', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
     // The shot table is a SpreadsheetGrid now, so headers are divs keyed by
     // column rather than <th>s, and (as everywhere else in the app) they are
@@ -97,9 +97,9 @@ test.describe('Table Numeric Column Alignment', () => {
   });
 
   test('numeric cells are right-aligned, the comment cell is not', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible();
 
     // The grid aligns with flex rather than `text-align`: the cell content
@@ -116,9 +116,9 @@ test.describe('Table Numeric Column Alignment', () => {
   });
 
   test('numeric cells use the tabular-nums font variant', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog).toBeVisible();
 
     // Fixed-width digits so a column of numbers lines up. The old table set this
@@ -134,9 +134,9 @@ test.describe('Table Numeric Column Alignment', () => {
   });
 
   test('the warnings column is centered', async ({ page }) => {
-    await openEditSectionDialog(page);
+    await openEditLineDialog(page);
 
-    const dialog = page.getByTestId('edit-section-dialog');
+    const dialog = page.getByTestId('edit-line-dialog');
     await expect(dialog.getByTestId('shot-editor-cell-0-_warnings')).toHaveCSS(
       'justify-content',
       'center'
@@ -155,10 +155,10 @@ test.describe('DmpSelectionDialog Numeric Cell Alignment', () => {
 
     const dialog = page.getByTestId('dmp-selection-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId('line-row-0')).toBeVisible({ timeout: 5000 });
 
     // The Shots column is the last td in each row
-    const firstRow = dialog.getByTestId('section-row-0');
+    const firstRow = dialog.getByTestId('line-row-0');
     const lastTd = firstRow.locator('td').last();
 
     // Numeric <td> cells should be right-aligned

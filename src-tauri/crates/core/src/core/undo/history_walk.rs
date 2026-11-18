@@ -1,12 +1,12 @@
-//! Which section holds which shot, in every state a loaded history records.
+//! Which line holds which shot, in every state a loaded history records.
 //!
 //! The load's uuid remap (`uuid_remap.rs`) has to judge each entry against the
 //! project that entry replays into: a shot a later split or combine moved is
-//! held by one section in an older entry and by another live, and that is a
+//! held by one line in an older entry and by another live, and that is a
 //! move, not a repeat (#732). A whole-project snapshot pair recorded that
 //! state outright. A compact delta does not, so the remap walks each stack
 //! from the live project outwards with a [`HolderWalk`] - shot uuids by
-//! section, nothing else - stepping it through every entry the way undo (or
+//! line, nothing else - stepping it through every entry the way undo (or
 //! redo) would step the project.
 
 use std::collections::HashMap;
@@ -14,16 +14,16 @@ use std::rc::Rc;
 
 use serde::Deserialize;
 
-use super::delta::HolderSection;
+use super::delta::HolderLine;
 use super::{UndoData, UndoEntry};
-use crate::models::{Project, SectionId};
+use crate::models::{LineId, Project};
 
 /// The shot ownership of one state, and an index of it.
 pub(super) struct HolderWalk {
-    view: Vec<HolderSection>,
-    /// Every uuid the view holds, with the section of each shot holding it
+    view: Vec<HolderLine>,
+    /// Every uuid the view holds, with the line of each shot holding it
     /// (repeated for a uuid held twice).
-    index: HashMap<Rc<str>, Vec<SectionId>>,
+    index: HashMap<Rc<str>, Vec<LineId>>,
     /// False once an entry could not be followed; the remap then judges the
     /// rest against the live project, as it did before there were walls.
     pub(super) known: bool,
@@ -33,14 +33,14 @@ pub(super) struct HolderWalk {
     pub(super) unfit_delta: bool,
 }
 
-/// What a step changed: the sections that are new or rebuilt in the state it
+/// What a step changed: the lines that are new or rebuilt in the state it
 /// reached, with their shots.
-pub(super) type Changed = Vec<HolderSection>;
+pub(super) type Changed = Vec<HolderLine>;
 
 impl HolderWalk {
     pub(super) fn of(project: &Project) -> Self {
         let view = project
-            .sections
+            .lines
             .iter()
             .map(|s| {
                 let shots = s
@@ -62,19 +62,19 @@ impl HolderWalk {
     }
 
     /// The state reached so far.
-    pub(super) fn view(&self) -> &[HolderSection] {
+    pub(super) fn view(&self) -> &[HolderLine] {
         &self.view
     }
 
-    /// Does a section other than `section` hold `uuid` in this state?
-    pub(super) fn held_elsewhere(&self, section: SectionId, uuid: &str) -> bool {
+    /// Does a line other than `line` hold `uuid` in this state?
+    pub(super) fn held_elsewhere(&self, line: LineId, uuid: &str) -> bool {
         self.index
             .get(uuid)
-            .is_some_and(|holders| holders.iter().any(|s| *s != section))
+            .is_some_and(|holders| holders.iter().any(|s| *s != line))
     }
 
-    /// The sections holding `uuid`, once each.
-    pub(super) fn holders_of(&self, uuid: &str) -> Vec<SectionId> {
+    /// The lines holding `uuid`, once each.
+    pub(super) fn holders_of(&self, uuid: &str) -> Vec<LineId> {
         let mut holders = self.index.get(uuid).cloned().unwrap_or_default();
         holders.sort_unstable();
         holders.dedup();
@@ -82,7 +82,7 @@ impl HolderWalk {
     }
 
     /// Step through `entry`, undoing it (`undoing`) or redoing it. Returns
-    /// the sections the step rebuilt when it reached a RECORDED state (a
+    /// the lines the step rebuilt when it reached a RECORDED state (a
     /// delta's other side, a snapshot half), `None` otherwise.
     pub(super) fn step(&mut self, entry: &UndoEntry, undoing: bool) -> Option<Changed> {
         if !self.known {
@@ -104,7 +104,7 @@ impl HolderWalk {
                 None
             }
             UndoData::CreatedShotSnapshot {
-                section_id,
+                line_id,
                 uuid,
                 position,
                 after_shot_uuid,
@@ -112,7 +112,7 @@ impl HolderWalk {
                 ..
             } => {
                 let uuid = uuid.as_deref();
-                self.edit_section(*section_id, |shots| {
+                self.edit_line(*line_id, |shots| {
                     if undoing {
                         let at = uuid
                             .and_then(|u| shots.iter().position(|s| s.as_deref() == Some(u)))
@@ -133,16 +133,16 @@ impl HolderWalk {
                 });
                 None
             }
-            UndoData::CreatedSectionSnapshot {
-                section_id,
-                section_data,
+            UndoData::CreatedLineSnapshot {
+                line_id,
+                line_data,
                 identity,
             } => {
                 if undoing {
-                    self.remove_sections(&[*section_id]);
+                    self.remove_lines(&[*line_id]);
                 } else {
                     let shots = if identity.shot_uuids.is_empty() {
-                        section_data
+                        line_data
                             .shots
                             .iter()
                             .map(|s| s.uuid.as_deref().map(Rc::from))
@@ -154,17 +154,17 @@ impl HolderWalk {
                             .map(|u| u.as_deref().map(Rc::from))
                             .collect()
                     };
-                    self.append(vec![(*section_id, Rc::new(shots))]);
+                    self.append(vec![(*line_id, Rc::new(shots))]);
                 }
                 None
             }
             UndoData::AddedProjectContent(content) => {
                 if undoing {
-                    let ids: Vec<SectionId> = content.section_ids().into_iter().collect();
-                    self.remove_sections(&ids);
+                    let ids: Vec<LineId> = content.line_ids().into_iter().collect();
+                    self.remove_lines(&ids);
                 } else {
                     let added = content
-                        .sections
+                        .lines
                         .iter()
                         .map(|s| {
                             let shots = s
@@ -183,22 +183,22 @@ impl HolderWalk {
         }
     }
 
-    /// Install `next`, keeping the index in step. Returns the sections of
+    /// Install `next`, keeping the index in step. Returns the lines of
     /// `next` that `self` did not already share.
-    fn replace(&mut self, next: Vec<HolderSection>) -> Changed {
-        let identity = |list: &[HolderSection]| -> HashMap<SectionId, *const Vec<Option<Rc<str>>>> {
+    fn replace(&mut self, next: Vec<HolderLine>) -> Changed {
+        let identity = |list: &[HolderLine]| -> HashMap<LineId, *const Vec<Option<Rc<str>>>> {
             list.iter()
                 .map(|(id, shots)| (*id, Rc::as_ptr(shots)))
                 .collect()
         };
         let before = identity(&self.view);
         let after = identity(&next);
-        let shared = |map: &HashMap<SectionId, *const Vec<Option<Rc<str>>>>,
-                      (id, shots): &HolderSection| {
+        let shared = |map: &HashMap<LineId, *const Vec<Option<Rc<str>>>>,
+                      (id, shots): &HolderLine| {
             map.get(id)
                 .is_some_and(|ptr| std::ptr::eq(*ptr, Rc::as_ptr(shots)))
         };
-        for (id, shots) in self.view.iter().filter(|section| !shared(&after, section)) {
+        for (id, shots) in self.view.iter().filter(|line| !shared(&after, line)) {
             for uuid in shots.iter().flatten() {
                 if let Some(holders) = self.index.get_mut(uuid) {
                     if let Some(k) = holders.iter().position(|s| s == id) {
@@ -212,7 +212,7 @@ impl HolderWalk {
         }
         let changed: Changed = next
             .iter()
-            .filter(|section| !shared(&before, section))
+            .filter(|line| !shared(&before, line))
             .cloned()
             .collect();
         for (id, shots) in &changed {
@@ -224,9 +224,9 @@ impl HolderWalk {
         changed
     }
 
-    fn edit_section(
+    fn edit_line(
         &mut self,
-        id: SectionId,
+        id: LineId,
         edit: impl FnOnce(&mut Vec<Option<Rc<str>>>) -> Option<()>,
     ) {
         let Some(at) = self.view.iter().position(|(s, _)| *s == id) else {
@@ -243,7 +243,7 @@ impl HolderWalk {
         self.replace(next);
     }
 
-    fn remove_sections(&mut self, ids: &[SectionId]) {
+    fn remove_lines(&mut self, ids: &[LineId]) {
         let next = self
             .view
             .iter()
@@ -253,9 +253,9 @@ impl HolderWalk {
         self.replace(next);
     }
 
-    fn append(&mut self, sections: Vec<HolderSection>) {
+    fn append(&mut self, lines: Vec<HolderLine>) {
         let mut next = self.view.clone();
-        next.extend(sections);
+        next.extend(lines);
         self.replace(next);
     }
 
@@ -263,11 +263,11 @@ impl HolderWalk {
         #[derive(Deserialize)]
         struct Probe {
             #[serde(default)]
-            sections: Vec<ProbeSection>,
+            lines: Vec<ProbeLine>,
         }
         #[derive(Deserialize)]
-        struct ProbeSection {
-            id: SectionId,
+        struct ProbeLine {
+            id: LineId,
             #[serde(default)]
             shots: Vec<ProbeShot>,
         }
@@ -281,7 +281,7 @@ impl HolderWalk {
             return;
         };
         let next = probe
-            .sections
+            .lines
             .into_iter()
             .map(|s| {
                 let shots = s

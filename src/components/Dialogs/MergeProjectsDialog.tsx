@@ -40,14 +40,14 @@ export default function MergeProjectsDialog() {
   // Calculate totals for display
   const totals = useMemo(() => {
     if (!selectedProjects || selectedProjects.length === 0) {
-      return { sections: 0, length: 0 };
+      return { lines: 0, length: 0 };
     }
     return selectedProjects.reduce(
       (acc, p) => ({
-        sections: acc.sections + p.section_count,
+        lines: acc.lines + p.line_count,
         length: acc.length + p.total_length,
       }),
-      { sections: 0, length: 0 }
+      { lines: 0, length: 0 }
     );
   }, [selectedProjects]);
 
@@ -168,7 +168,7 @@ export default function MergeProjectsDialog() {
                 <div className="truncate flex-1">
                   <span className="font-medium">{project.name}</span>
                   <span className="text-text-secondary text-xs ml-2">
-                    ({project.section_count} sections, {formatLength(project.total_length)})
+                    ({project.line_count} lines, {formatLength(project.total_length)})
                   </span>
                 </div>
               </div>
@@ -179,8 +179,8 @@ export default function MergeProjectsDialog() {
         {/* Totals */}
         <div className="p-3 bg-background rounded">
           <div className="flex justify-between text-sm">
-            <span className="text-text-secondary">Total sections:</span>
-            <span className="font-medium">{totals.sections}</span>
+            <span className="text-text-secondary">Total lines:</span>
+            <span className="font-medium">{totals.lines}</span>
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-text-secondary">Total length:</span>
@@ -233,7 +233,7 @@ export default function MergeProjectsDialog() {
         {/* Info about merge behavior */}
         <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
           <p className="text-text-secondary">
-            Merging combines all sections from the selected projects into a new project file.
+            Merging combines all lines from the selected projects into a new project file.
             Projects with a GPS zero point are placed at their real positions; a project without
             one keeps its own layout and may need connecting afterwards.
           </p>

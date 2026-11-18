@@ -15,9 +15,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-// SectionPreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
+// LinePreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
 // execute. Stub it - this test is about completion wiring, not the preview.
-vi.mock('./SectionPreview', () => ({ default: () => null }));
+vi.mock('./LinePreview', () => ({ default: () => null }));
 // Telemetry is fire-and-forget; keep it from reaching Tauri IPC under jsdom.
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
@@ -44,11 +44,11 @@ const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResu
  *  accept → persist → close wiring. */
 function makeSuggestion(over: Partial<OrphanPlacementSuggestion> = {}): OrphanPlacementSuggestion {
   return {
-    orphanSectionId: 1,
-    orphanSectionName: 'Orphan',
+    orphanLineId: 1,
+    orphanLineName: 'Orphan',
     orphanStationIndex: 0,
-    targetSectionId: 2,
-    targetSectionName: 'Mainline',
+    targetLineId: 2,
+    targetLineName: 'Mainline',
     targetStationIndex: 1,
     score: 0.9,
     matchedShots: 0,
@@ -130,7 +130,7 @@ describe('OrphanPlacementDialog - completion persists the import (#92 / #107)', 
  *
  * INJECTION (tried), each seen red with the fix removed:
  * - the old code, handleAccept's own `await finish()` with no `finishingRef`
- *   guard: reds "one Accept on the last section" (saveAfterImport and the toast
+ *   guard: reds "one Accept on the last line" (saveAfterImport and the toast
  *   twice, from handleAccept and the auto-close effect);
  * - dropping only the `finishingRef` guard: reds "the X while the last Accept
  *   is still saving";
@@ -139,11 +139,11 @@ describe('OrphanPlacementDialog - completion persists the import (#92 / #107)', 
 describe('OrphanPlacementDialog - finishes once (#681)', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  it('one Accept on the last section saves, closes and toasts once', async () => {
+  it('one Accept on the last line saves, closes and toasts once', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast, openDialog: vi.fn() });
     const receipt: ImportReceipt = {
-      source_format: 'MNemo DMP', file_name: 'cave.dmp', sections_found: 1, sections_imported: 1,
+      source_format: 'MNemo DMP', file_name: 'cave.dmp', lines_found: 1, lines_imported: 1,
       shot_count: 12, closures_requested: 0, closures_created: 0, unit_conversion: null,
       warnings: [], info: [], zero_datum_created: null,
     };
@@ -177,7 +177,7 @@ describe('OrphanPlacementDialog - finishes once (#681)', () => {
   it('two Accept clicks in the same task merge once', async () => {
     const mergeStations = vi.fn(ok);
     useProjectStore.setState({ mergeStations });
-    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second' });
+    const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second' });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
     const accept = screen.getByTestId('orphan-accept');
@@ -191,10 +191,10 @@ describe('OrphanPlacementDialog - finishes once (#681)', () => {
     expect(screen.getByTestId('wizard-suggestion').textContent).toContain('Second');
   });
 
-  it('two Accept All clicks in the same task merge each section once', async () => {
+  it('two Accept All clicks in the same task merge each line once', async () => {
     const mergeStations = vi.fn(ok);
     useProjectStore.setState({ mergeStations });
-    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second' });
+    const second = makeSuggestion({ orphanLineId: 3, orphanLineName: 'Second' });
     render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
 
     const acceptAll = screen.getByTestId('orphan-accept-all');
@@ -214,8 +214,8 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
   const RECEIPT: ImportReceipt = {
     source_format: 'MNemo DMP',
     file_name: 'cave.dmp',
-    sections_found: 1,
-    sections_imported: 1,
+    lines_found: 1,
+    lines_imported: 1,
     shot_count: 12,
     closures_requested: 0,
     closures_created: 0,
@@ -256,7 +256,7 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
   });
 
   it('opens the modal for a zero-count receipt even with no warnings (#442)', async () => {
-    const empty: ImportReceipt = { ...RECEIPT, sections_imported: 0, shot_count: 0 };
+    const empty: ImportReceipt = { ...RECEIPT, lines_imported: 0, shot_count: 0 };
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={empty} />);
 
     await userEvent.click(screen.getByTestId('orphan-accept'));
@@ -265,8 +265,8 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
     expect(showToast).not.toHaveBeenCalled();
   });
 
-  it('opens the modal when sections_imported is zero even if shot_count disagrees (#442)', async () => {
-    const disagreeing: ImportReceipt = { ...RECEIPT, sections_imported: 0, shot_count: 12 };
+  it('opens the modal when lines_imported is zero even if shot_count disagrees (#442)', async () => {
+    const disagreeing: ImportReceipt = { ...RECEIPT, lines_imported: 0, shot_count: 12 };
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={disagreeing} />);
 
     await userEvent.click(screen.getByTestId('orphan-accept'));

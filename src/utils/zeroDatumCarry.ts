@@ -18,7 +18,7 @@ export function readCarriedZeroDatumConfig(
 /**
  * Decide whether a config carried out of `ZeroDatumConfigDialog`'s own Back
  * (#534) survives the forward pass from 'zero-datum-selection': only when the
- * re-picked section matches the one the carry was entered for. A different
+ * re-picked line matches the one the carry was entered for. A different
  * pick means the name/GPS/shots answered a different question, so it starts
  * fresh.
  *
@@ -28,7 +28,7 @@ export function readCarriedZeroDatumConfig(
  */
 export function carryZeroDatumConfig(
   carried: ZeroDatumConfigDraft | undefined,
-  sectionIndex: number
+  lineIndex: number
 ): ZeroDatumConfigDraft | undefined {
-  return carried?.sectionIndex === sectionIndex ? carried : undefined;
+  return carried?.lineIndex === lineIndex ? carried : undefined;
 }

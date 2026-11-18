@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, info, trace, warn};
 
 use crate::{
-    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates,
-    LoopClosure, SectionId, StationKey, StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LineId,
+    LoopClosure, StationKey, StationMerge, StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -33,16 +33,16 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Reject only if the two sections are already RIGIDLY connected (via merges
+        // Reject only if the two lines are already RIGIDLY connected (via merges
         // or *aligned* closures) - adding a merge there would create a redundant
         // rigid cycle, which is what a loop closure is for. An INERT (unaligned)
         // closure does not constrain the two stations yet, so a merge across one is
         // the first real connection and must be allowed; rejecting it (the old
-        // get_connected_section_ids walk, which followed inert closures too) forced
+        // get_connected_line_ids walk, which followed inert closures too) forced
         // users into the sole-bridge-closure-that-should-be-a-merge bug. This asserts
         // the same graph the cascade actually solves (catalog #8 / #integrity Root 3).
-        let connected_a = self.get_rigid_connected_section_ids(station_a.section_id);
-        if connected_a.contains(&station_b.section_id) {
+        let connected_a = self.get_rigid_connected_line_ids(station_a.line_id);
+        if connected_a.contains(&station_b.line_id) {
             return Err(
                 "Stations are already connected. Use Create Loop Closure instead.".to_string(),
             );
@@ -51,8 +51,8 @@ impl Project {
         // Which side is placed by a zero datum - transitively through existing
         // merges, so a B merged earlier onto datum-holding C counts as placed. The
         // value is the placement datum's position in `zero_datums`.
-        let a_placement = self.placement_datum_index(station_a.section_id);
-        let b_placement = self.placement_datum_index(station_b.section_id);
+        let a_placement = self.placement_datum_index(station_a.line_id);
+        let b_placement = self.placement_datum_index(station_b.line_id);
 
         // Both sides placed (#741): the merge is allowed. The group whose placement
         // datum comes LATER in the list moves to meet the merge, and that datum is a
@@ -89,20 +89,20 @@ impl Project {
             .compute_station_raw_xy(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
-        // Datum propagation: When merging a section without datum into a datum group,
-        // the non-datum section is repositioned to align with the datum coordinate system.
+        // Datum propagation: When merging a line without datum into a datum group,
+        // the non-datum line is repositioned to align with the datum coordinate system.
         // This is similar to set_zero_datum() offset calculation but triggered by merge.
         //
-        // Determine which section group needs to move:
+        // Determine which line group needs to move:
         // - If A is placed (and B is not, or B's placement datum is later in the
         //   list), B's group moves to align with A
         // - Otherwise, if B is placed, A's group moves to align with B
         // - If neither is placed, A's group moves to align with B (arbitrary choice)
-        let ((anchor_x, anchor_y), (moving_x, moving_y), moving_section_id) = if a_has_zd {
-            (coords_a, coords_b, station_b.section_id)
+        let ((anchor_x, anchor_y), (moving_x, moving_y), moving_line_id) = if a_has_zd {
+            (coords_a, coords_b, station_b.line_id)
         } else {
             // B has zero datum OR neither has one (in which case B is the anchor)
-            (coords_b, coords_a, station_a.section_id)
+            (coords_b, coords_a, station_a.line_id)
         };
 
         // Calculate offset to move the merge point station from its current position
@@ -110,29 +110,29 @@ impl Project {
         let offset_x = anchor_x - moving_x;
         let offset_y = anchor_y - moving_y;
 
-        // Apply offset to all sections in the moving merge group (rigid body)
+        // Apply offset to all lines in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
-        let moving_sections = self.get_merged_section_ids(moving_section_id);
+        let moving_lines = self.get_merged_line_ids(moving_line_id);
         if both_placed {
             info!(
-                moving_section_id,
+                moving_line_id,
                 offset_x,
                 offset_y,
-                moving_section_count = moving_sections.len(),
+                moving_line_count = moving_lines.len(),
                 purpose = "merge two placed groups",
                 "Merging two placed groups; the later placement datum becomes a GPS fix"
             );
         }
 
         debug!(
-            moving_section_id,
-            moving_section_count = moving_sections.len(),
+            moving_line_id,
+            moving_line_count = moving_lines.len(),
             offset_x,
             offset_y,
             purpose = "merge stations",
-            "Computed merge offset for moving sections"
+            "Computed merge offset for moving lines"
         );
-        self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
+        self.adjust_rigid_group_offsets(moving_line_id, offset_x, offset_y);
 
         // Record the merge through the named entry point (it forwards to
         // MergeTopology::push, which carries the adjacency memo forward with an
@@ -148,7 +148,7 @@ impl Project {
         });
 
         // Cascade through any further connections that the new merge may ripple into
-        self.cascade_connection_offsets(&[station_a.section_id, station_b.section_id]);
+        self.cascade_connection_offsets(&[station_a.line_id, station_b.line_id]);
         self.debug_assert_merge_alignment("merge_stations");
         self.touch();
         Ok(true)
@@ -250,11 +250,11 @@ impl Project {
         }
 
         // Check stations are connected (via merges or closures)
-        let connected_a = self.get_connected_section_ids(station_a.section_id);
-        let connected = connected_a.contains(&station_b.section_id);
+        let connected_a = self.get_connected_line_ids(station_a.line_id);
+        let connected = connected_a.contains(&station_b.line_id);
         if !connected {
-            let a_has_zd = self.section_has_zero_datum(station_a.section_id);
-            let b_has_zd = self.section_has_zero_datum(station_b.section_id);
+            let a_has_zd = self.line_has_zero_datum(station_a.line_id);
+            let b_has_zd = self.line_has_zero_datum(station_b.line_id);
             if !(a_has_zd && b_has_zd) {
                 return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
             }
@@ -272,7 +272,7 @@ impl Project {
         // `Move` closure either. A pair other merges and closures already tie
         // together is NOT refused: it changes nothing for the solve.
         if let Some(shot) = self.closure_spans_one_shot(station_a, station_b) {
-            return Err(super::closure_shots::closure_across_one_shot_refusal(shot));
+            return Err(self.closure_across_one_shot_message(shot));
         }
 
         // Compute closure values using shared helper
@@ -339,11 +339,11 @@ impl Project {
     /// `create_loop_closure(a, b, ClosureStrategy::Batch)` for each pair IN
     /// ORDER, but builds the graph invariants ONCE and reuses them: station
     /// coordinates, a station-level merge-group union-find (the "already merged?"
-    /// check → O(α) instead of a BFS per closure), a section-level connectivity
+    /// check → O(α) instead of a BFS per closure), a line-level connectivity
     /// union-find (merges + closures; grown as closures are added), the
     /// station-merge adjacency, the closure adjacency, a duplicate-pair set, and
     /// the constraint knots behind the across-one-shot refusal (#737).
-    /// Sections/merges/offsets are fixed for the batch (the import's cascade ran
+    /// Lines/merges/offsets are fixed for the batch (the import's cascade ran
     /// first and Batch closures are never `is_aligned`, so they don't rigidify),
     /// so only the closure-dependent state (connectivity UF, closure adjacency,
     /// dup set, knots) updates per created closure - exactly what path-length needs to
@@ -355,7 +355,7 @@ impl Project {
     ) -> Vec<Result<LoopClosure, String>> {
         // Order-independent pair key (StationRef is not Ord).
         fn norm(a: StationRef, b: StationRef) -> (StationRef, StationRef) {
-            if (a.section_id, a.station_index) <= (b.section_id, b.station_index) {
+            if (a.line_id, a.station_index) <= (b.line_id, b.station_index) {
                 (a, b)
             } else {
                 (b, a)
@@ -408,20 +408,20 @@ impl Project {
             }
         }
 
-        // Section-level connectivity union-find (merges + closures); grows below.
-        let mut conn_uf: HashMap<SectionId, SectionId> = HashMap::new();
+        // Line-level connectivity union-find (merges + closures); grows below.
+        let mut conn_uf: HashMap<LineId, LineId> = HashMap::new();
         for merge in &self.station_merges {
             uf_union(
                 &mut conn_uf,
-                merge.station_a.section_id,
-                merge.station_b.section_id,
+                merge.station_a.line_id,
+                merge.station_b.line_id,
             );
         }
         for closure in &self.loop_closures {
             uf_union(
                 &mut conn_uf,
-                closure.station_a.section_id,
-                closure.station_b.section_id,
+                closure.station_a.line_id,
+                closure.station_b.line_id,
             );
         }
 
@@ -464,16 +464,16 @@ impl Project {
                 continue;
             }
             conn_uf
-                .entry(station_a.section_id)
-                .or_insert(station_a.section_id);
+                .entry(station_a.line_id)
+                .or_insert(station_a.line_id);
             conn_uf
-                .entry(station_b.section_id)
-                .or_insert(station_b.section_id);
-            let connected = uf_find(&mut conn_uf, station_a.section_id)
-                == uf_find(&mut conn_uf, station_b.section_id);
+                .entry(station_b.line_id)
+                .or_insert(station_b.line_id);
+            let connected = uf_find(&mut conn_uf, station_a.line_id)
+                == uf_find(&mut conn_uf, station_b.line_id);
             if !connected
-                && !(self.section_has_zero_datum(station_a.section_id)
-                    && self.section_has_zero_datum(station_b.section_id))
+                && !(self.line_has_zero_datum(station_a.line_id)
+                    && self.line_has_zero_datum(station_b.line_id))
             {
                 results.push(Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string()));
                 continue;
@@ -485,9 +485,7 @@ impl Project {
                 continue;
             }
             if let Some(shot) = knots.collapsed_shot(station_a, station_b) {
-                results.push(Err(super::closure_shots::closure_across_one_shot_refusal(
-                    shot,
-                )));
+                results.push(Err(self.closure_across_one_shot_message(shot)));
                 continue;
             }
             let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {
@@ -532,7 +530,7 @@ impl Project {
             closure_adj.entry(station_a).or_default().push(station_b);
             closure_adj.entry(station_b).or_default().push(station_a);
             closure_pairs.insert(norm(station_a, station_b));
-            uf_union(&mut conn_uf, station_a.section_id, station_b.section_id);
+            uf_union(&mut conn_uf, station_a.line_id, station_b.line_id);
             // A `Batch` closure is eligible, so the next pair sees it tied.
             knots.join(station_a, station_b);
             created_any = true;
@@ -658,15 +656,15 @@ impl Project {
 
     /// Check if a station reference is valid
     pub fn station_exists(&self, station_ref: StationRef) -> bool {
-        if let Some(section) = self.get_section(station_ref.section_id) {
+        if let Some(line) = self.get_line(station_ref.line_id) {
             // Station index 0 is before first shot, subsequent indices are after each shot
-            station_ref.station_index as usize <= section.shots.len()
+            station_ref.station_index as usize <= line.shots.len()
         } else {
             false
         }
     }
 
-    /// The role a datum stored on `datum_key` (in `station_ref`'s section) would
+    /// The role a datum stored on `datum_key` (in `station_ref`'s line) would
     /// have: the role it already has when the station holds one, otherwise
     /// [`DatumRole::GpsFix`] exactly when its merge component is already placed
     /// (a new datum is appended, so it comes after that component's placement).
@@ -680,7 +678,7 @@ impl Project {
                 return role;
             }
         }
-        if self.section_has_zero_datum(station_ref.section_id) {
+        if self.line_has_zero_datum(station_ref.line_id) {
             DatumRole::GpsFix
         } else {
             DatumRole::Placement
@@ -763,7 +761,7 @@ impl Project {
     /// A PLACEMENT datum (a new one on an unplaced component, or a re-set of the
     /// existing placement datum) moves its group onto the GPS as follows:
     /// - For the FIRST datum (the survey had no resolvable one): the station ends
-    ///   at (0, 0), reached by translating EVERY section rigidly
+    ///   at (0, 0), reached by translating EVERY line rigidly
     ///   ([`Self::renormalize_frame`]) rather than only the datum's merge group.
     ///   Establishing the frame is what gives local (0, 0) a meaning, and nothing
     ///   was placed relative to that meaning yet, so the survey moves as one body
@@ -845,14 +843,14 @@ impl Project {
             "Setting zero datum"
         );
 
-        // Get all sections connected through merges (rigid group for offset propagation)
-        let connected_sections = self.get_merged_section_ids(station_ref.section_id);
+        // Get all lines connected through merges (rigid group for offset propagation)
+        let connected_lines = self.get_merged_line_ids(station_ref.line_id);
         debug!(
             station_ref = ?station_ref,
-            connected_section_count = connected_sections.len(),
-            connected_sections = ?connected_sections,
-            purpose = "reposition connected sections",
-            "Computed connected sections for zero datum"
+            connected_line_count = connected_lines.len(),
+            connected_lines = ?connected_lines,
+            purpose = "reposition connected lines",
+            "Computed connected lines for zero datum"
         );
 
         // Compute current raw coordinates of the datum station
@@ -862,7 +860,7 @@ impl Project {
         debug!(
             station_ref = ?station_ref,
             coords = ?current_coords,
-            purpose = "reposition connected sections",
+            purpose = "reposition connected lines",
             "Computed raw station coordinates for zero datum"
         );
 
@@ -921,16 +919,16 @@ impl Project {
                 station_ref = ?station_ref,
                 offset_delta_x,
                 offset_delta_y,
-                purpose = "reposition connected sections",
+                purpose = "reposition connected lines",
                 "Computed offset delta for zero datum"
             );
 
-            // Apply offset to all connected sections (rigid group)
-            self.adjust_rigid_group_offsets(station_ref.section_id, offset_delta_x, offset_delta_y);
+            // Apply offset to all connected lines (rigid group)
+            self.adjust_rigid_group_offsets(station_ref.line_id, offset_delta_x, offset_delta_y);
         }
 
         // Cascade through aligned closures that may have been affected
-        self.cascade_connection_offsets(&[station_ref.section_id]);
+        self.cascade_connection_offsets(&[station_ref.line_id]);
 
         // The old frame GPS when this is a new GPS on the frame datum's own
         // station: read before the store below moves the key.
@@ -952,7 +950,7 @@ impl Project {
         // The survey had no frame and now has one, so local (0, 0) has just
         // acquired a MEANING it did not have: this datum's GPS. Re-frame onto it
         // the same way every other frame change does
-        // ([`Self::renormalize_frame`]) - one rigid translation of EVERY section,
+        // ([`Self::renormalize_frame`]) - one rigid translation of EVERY line,
         // free-floating components included. Placing only the datum's own merge
         // group would move that group relative to the rest of the survey, which is
         // the one thing a georeference change must not do; before the frame
@@ -976,7 +974,7 @@ impl Project {
         info!(
             station_ref = ?station_ref,
             updated_existing,
-            connected_section_count = connected_sections.len(),
+            connected_line_count = connected_lines.len(),
             total_zero_datums = self.zero_datums.len(),
             purpose = "anchor survey to GPS",
             "Zero datum set successfully"
@@ -984,7 +982,7 @@ impl Project {
         Ok(true)
     }
 
-    /// Store a zero datum without triggering section repositioning.
+    /// Store a zero datum without triggering line repositioning.
     ///
     /// This is an internal helper for the copy shared by "Merge projects" and
     /// "Add .stalx" and for import paths that store a datum where the survey
@@ -1114,7 +1112,7 @@ impl Project {
     /// is the first RESOLVABLE datum BY POSITION IN THAT LIST, and anything that
     /// changes WHICH datum that is re-defines what every stored coordinate means. [`Self::remove_zero_datum`] is a bare `retain`: it promotes the next
     /// datum and moves nothing, and `resolve_offsets` cannot repair that (the
-    /// cascade marks datum sections authoritative and never re-derives their
+    /// cascade marks datum lines authoritative and never re-derives their
     /// offsets), so the survey stays laid out against the datum that is gone while
     /// the app now reads it against the one that is left. Nothing warns, no
     /// command asked for it, and the whole cave slides by the inter-datum vector
@@ -1123,7 +1121,7 @@ impl Project {
     ///
     /// The fix preserves the thing the user cares about - every station's
     /// REAL-WORLD position - and changes only the arbitrary part, the local
-    /// coordinates: one rigid translation of every section by minus the promoted
+    /// coordinates: one rigid translation of every line by minus the promoted
     /// datum station's current position.
     ///
     /// # Measure, do not re-derive
@@ -1149,9 +1147,9 @@ impl Project {
     /// move them RELATIVE to the anchored survey, which is the one thing a
     /// georeference change must not do.
     ///
-    /// Every write goes through [`Self::adjust_section_offset`] and therefore
-    /// [`Self::write_section_offset`], so the dust-zero invariant holds: the
-    /// promoted datum's own section normally ends with no key at all.
+    /// Every write goes through [`Self::adjust_line_offset`] and therefore
+    /// [`Self::write_line_offset`], so the dust-zero invariant holds: the
+    /// promoted datum's own line normally ends with no key at all.
     pub(crate) fn renormalize_frame(&mut self) -> bool {
         let Some(key) = self.frame_datum_key() else {
             return false;
@@ -1166,7 +1164,7 @@ impl Project {
         let (dx, dy) = (-current.x, -current.y);
         if !dx.is_finite() || !dy.is_finite() {
             warn!(
-                datum_section = key.section_id,
+                datum_line = key.line_id,
                 purpose = "renormalise georeference frame",
                 "The frame datum's position is not finite; leaving the survey where it is"
             );
@@ -1179,13 +1177,13 @@ impl Project {
             return false;
         }
 
-        let section_ids: Vec<SectionId> = self.sections.iter().map(|s| s.id).collect();
-        for id in section_ids {
-            self.adjust_section_offset(id, dx, dy);
+        let line_ids: Vec<LineId> = self.lines.iter().map(|s| s.id).collect();
+        for id in line_ids {
+            self.adjust_line_offset(id, dx, dy);
         }
 
         info!(
-            datum_section = key.section_id,
+            datum_line = key.line_id,
             delta_x = dx,
             delta_y = dy,
             purpose = "renormalise georeference frame",
@@ -1213,11 +1211,11 @@ impl Project {
     /// the translation cannot be undone (#413 finding 26).
     ///
     /// `None` when the group holds no resolvable datum - there is nothing
-    /// absolute to hold, and the realign anchors on the edited section.
-    pub fn datum_anchor_position(&self, section_id: SectionId) -> Option<(f64, f64)> {
-        let merge_group = self.get_merged_section_ids(section_id);
+    /// absolute to hold, and the realign anchors on the edited line.
+    pub fn datum_anchor_position(&self, line_id: LineId) -> Option<(f64, f64)> {
+        let merge_group = self.get_merged_line_ids(line_id);
         let datum = self.zero_datums.iter().find(|d| {
-            merge_group.contains(&d.station_ref.section_id)
+            merge_group.contains(&d.station_ref.line_id)
                 && self.resolve_key(&d.station_ref).is_some()
         })?;
         let coords = self
@@ -1226,33 +1224,33 @@ impl Project {
         Some((coords.x, coords.y))
     }
 
-    /// After a geometry-changing shot edit in `edited_section_id`, realign the
-    /// merge group's section offsets so that anchored stations (zero datums,
-    /// merge points to pinned sections) remain at their correct positions.
+    /// After a geometry-changing shot edit in `edited_line_id`, realign the
+    /// merge group's line offsets so that anchored stations (zero datums,
+    /// merge points to pinned lines) remain at their correct positions.
     ///
     /// Stations upstream of the edit absorb the length change; stations downstream
     /// (including merge points and closure endpoints) remain stationary.
     ///
     /// Algorithm:
     /// 1. Pick the group's anchor: its zero datum if it has one, else the edited
-    ///    section itself
-    /// 2. Reanchor the datum section (adjust offset to keep the datum where
+    ///    line itself
+    /// 2. Reanchor the datum line (adjust offset to keep the datum where
     ///    `hold_anchor_at` says the edit found it, or - with no held position -
     ///    at its GPS target). Skipped for an unanchored group: there is nothing
-    ///    absolute to hold, and the edited section keeps the offset it has
-    /// 3. BFS through merges from the anchor: adjust each partner section's
+    ///    absolute to hold, and the edited line keeps the offset it has
+    /// 3. BFS through merges from the anchor: adjust each partner line's
     ///    offset so merge points stay aligned
     ///
     /// A group with NO zero datum still has RELATIVE constraints - every merge in
     /// it must stay co-located - so it is realigned against one of its own
-    /// sections rather than skipped. The edited section is that anchor: it is the
+    /// lines rather than skipped. The edited line is that anchor: it is the
     /// one whose geometry the user just changed, so holding it still and moving
     /// its partners is the least surprising reading of the edit, and it makes the
     /// realign idempotent (a second call finds everything already aligned).
     /// Skipping it instead left the merge drifted by exactly the edit, under the
     /// app's own 5 cm reporting threshold and OVER the 1 cm its
     /// `debug_assert_merge_alignment` calls a violation - so the next command
-    /// that asserted, in any section, panicked on a merge this edit broke
+    /// that asserted, in any line, panicked on a merge this edit broke
     /// (#413 finding 20).
     ///
     /// Idempotent: calling multiple times produces the same result.
@@ -1265,29 +1263,29 @@ impl Project {
     /// finding 26).
     pub fn realign_after_shot_edit(
         &mut self,
-        edited_section_id: SectionId,
+        edited_line_id: LineId,
         hold_anchor_at: Option<(f64, f64)>,
     ) {
-        // Find the merge group containing the edited section
-        let merge_group = self.get_merged_section_ids(edited_section_id);
+        // Find the merge group containing the edited line
+        let merge_group = self.get_merged_line_ids(edited_line_id);
 
         // Find the zero datum for this merge group (if any). A dangling datum
         // (anchor key no longer resolves) is not a real anchor - skip it so the
         // realign does not pin the group to a phantom anchor (#174); the group is
-        // then treated as unanchored and realigned against the edited section.
+        // then treated as unanchored and realigned against the edited line.
         let datum = self
             .zero_datums
             .iter()
             .find(|d| {
-                merge_group.contains(&d.station_ref.section_id)
+                merge_group.contains(&d.station_ref.line_id)
                     && self.resolve_key(&d.station_ref).is_some()
             })
             .cloned();
 
-        // Step 1: reanchor the datum section's offset to keep the datum at its
+        // Step 1: reanchor the datum line's offset to keep the datum at its
         // target. Nothing to do for an unanchored group - it has no absolute
         // position to restore, only the relative merge constraints Step 2 solves.
-        let anchor_section_id = match &datum {
+        let anchor_line_id = match &datum {
             Some(datum) => {
                 // Determine the datum's target position. Against the FRAME datum
                 // ([`Self::frame_datum`], the first RESOLVABLE one), never against
@@ -1308,7 +1306,7 @@ impl Project {
                     return;
                 };
 
-                let datum_section_id = datum.station_ref.section_id;
+                let datum_line_id = datum.station_ref.line_id;
                 if let Some(current) = self
                     .resolve_key(&datum.station_ref)
                     .and_then(|sr| self.compute_station_raw_coords(sr))
@@ -1318,42 +1316,41 @@ impl Project {
                     // Dust is not a displacement - the shared bound, see
                     // `Project::OFFSET_DUST_M` and its twin in `cascade_bfs`.
                     if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
-                        self.adjust_section_offset(datum_section_id, delta_x, delta_y);
+                        self.adjust_line_offset(datum_line_id, delta_x, delta_y);
                     }
                 }
-                datum_section_id
+                datum_line_id
             }
-            None => edited_section_id,
+            None => edited_line_id,
         };
 
-        // Step 2: BFS through merges from the anchor section, adjusting each
-        // partner section's offset so its merge station matches the already-
+        // Step 2: BFS through merges from the anchor line, adjusting each
+        // partner line's offset so its merge station matches the already-
         // aligned station on the other side.
         let merges = self.station_merges.clone();
         let mut visited = HashSet::new();
-        visited.insert(anchor_section_id);
+        visited.insert(anchor_line_id);
         let mut queue = VecDeque::new();
-        queue.push_back(anchor_section_id);
+        queue.push_back(anchor_line_id);
 
-        while let Some(current_section) = queue.pop_front() {
+        while let Some(current_line) = queue.pop_front() {
             for merge in &merges {
-                let (this_station, partner_station) = if merge.station_a.section_id
-                    == current_section
-                    && !visited.contains(&merge.station_b.section_id)
+                let (this_station, partner_station) = if merge.station_a.line_id == current_line
+                    && !visited.contains(&merge.station_b.line_id)
                 {
                     (&merge.station_a, &merge.station_b)
-                } else if merge.station_b.section_id == current_section
-                    && !visited.contains(&merge.station_a.section_id)
+                } else if merge.station_b.line_id == current_line
+                    && !visited.contains(&merge.station_a.line_id)
                 {
                     (&merge.station_b, &merge.station_a)
                 } else {
                     continue;
                 };
 
-                let partner_section = partner_station.section_id;
-                visited.insert(partner_section);
+                let partner_line = partner_station.line_id;
+                visited.insert(partner_line);
 
-                // this_station's section is already aligned; partner needs adjustment
+                // this_station's line is already aligned; partner needs adjustment
                 if let (Some(this_pos), Some(partner_pos)) = (
                     self.resolve_key(this_station)
                         .and_then(|sr| self.compute_station_raw_coords(sr)),
@@ -1364,11 +1361,11 @@ impl Project {
                     let delta_y = this_pos.y - partner_pos.y;
                     // Same shared bound as the gate above and `cascade_bfs`.
                     if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
-                        self.adjust_section_offset(partner_section, delta_x, delta_y);
+                        self.adjust_line_offset(partner_line, delta_x, delta_y);
                     }
                 }
 
-                queue.push_back(partner_section);
+                queue.push_back(partner_line);
             }
         }
     }

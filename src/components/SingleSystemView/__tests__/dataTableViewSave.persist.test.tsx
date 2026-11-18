@@ -16,7 +16,7 @@
  * uiStore, mocked `invokeIpc`) even though the debounce state has since been
  * extracted into `useDataTableViewPersistence`: what these guards exercise is
  * the mount/unmount lifecycle and the store round trip around that hook, and
- * DataTable is what owns the view state the hook reads. `sections={[]}` keeps the grid itself
+ * DataTable is what owns the view state the hook reads. `lines={[]}` keeps the grid itself
  * (SpreadsheetGrid) out of the render - these guards only exercise the toolbar's
  * column-visibility checkbox, which is enough to change the view snapshot and
  * schedule a save. NOT covered at this tier: actual column-resize drag
@@ -86,7 +86,7 @@ function updateViewCalls() {
 
 describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
   it('flushes a pending view save on unmount instead of dropping it (item 4)', async () => {
-    const { unmount } = render(<DataTable sections={[]} />);
+    const { unmount } = render(<DataTable lines={[]} />);
 
     // Hide the comment column - a real, savable change to the view snapshot.
     fireEvent.click(commentCheckbox());
@@ -101,13 +101,13 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
 
     const calls = updateViewCalls();
     expect(calls).toHaveLength(1);
-    // Seeded default hidden columns (section_id, shot_id, the credit columns) plus the just-hidden
+    // Seeded default hidden columns (line_id, shot_id, the credit columns) plus the just-hidden
     // 'comment', sorted (see `stableWidths`'s sibling sort in the component).
-    expect(calls[0]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'] });
+    expect(calls[0]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'line_id', 'shot_id', 'survey_date', 'surveyors'] });
   });
 
   it('does NOT flush a stale value when a change is undone back to the last-saved state before unmount (item 4, the subtle half)', async () => {
-    const { unmount } = render(<DataTable sections={[]} />);
+    const { unmount } = render(<DataTable lines={[]} />);
 
     const checkbox = commentCheckbox();
     // Hide comment (schedules a save of the new state)...
@@ -125,7 +125,7 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
   });
 
   it('shows an error toast AND rolls back the snapshot so a later identical change retries, on IPC rejection (item 5)', async () => {
-    render(<DataTable sections={[]} />);
+    render(<DataTable lines={[]} />);
 
     invokeIpcMock.mockImplementation((command: string) => {
       if (command === 'update_data_table_view') return Promise.reject(new Error('disk full'));
@@ -168,6 +168,6 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     // exactly the regression #357 item 5 fixes.
     const callsAfterRetry = updateViewCalls();
     expect(callsAfterRetry).toHaveLength(2);
-    expect(callsAfterRetry[1]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'section_id', 'shot_id', 'survey_date', 'surveyors'] });
+    expect(callsAfterRetry[1]?.[1]).toMatchObject({ hiddenColumns: ['comment', 'explorers', 'line_id', 'shot_id', 'survey_date', 'surveyors'] });
   });
 });

@@ -451,7 +451,7 @@ impl AppState {
             ("showStations", display_settings.show_stations.to_string()),
             (
                 "showSectionNames",
-                display_settings.show_section_names.to_string(),
+                display_settings.show_line_names.to_string(),
             ),
             (
                 "showStationLabels",

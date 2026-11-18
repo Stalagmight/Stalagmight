@@ -21,14 +21,14 @@ export interface ShotData {
   depth_out: number;
 }
 
-export interface SectionData {
+export interface LineData {
   name: string;
   color: string;
   shots: ShotData[];
 }
 
 export interface StationRef {
-  section_id: number;
+  line_id: number;
   station_index: number;
 }
 
@@ -38,7 +38,7 @@ export interface MergeData {
 }
 
 export interface FractalResult {
-  sections: SectionData[];
+  lines: LineData[];
   merges: MergeData[];
 }
 
@@ -89,38 +89,38 @@ export function generateLSystem(iterations: number): string {
 // ============================================================================
 
 interface TurtleState {
-  sectionId: number;
+  lineId: number;
   stationIndex: number;
   azimuth: number;
 }
 
 /**
- * Execute L-system string and produce section/merge data.
+ * Execute L-system string and produce line/merge data.
  *
  * The turtle interprets the L-system:
- * - F: Draw forward (add a shot to current section)
+ * - F: Draw forward (add a shot to current line)
  * - +: Turn left 25 degrees
  * - -: Turn right 25 degrees
- * - [: Push state (save position, start new section/branch)
+ * - [: Push state (save position, start new line/branch)
  * - ]: Pop state (return to saved position)
  * - X: No drawing action (control variable)
  *
  * @param lSystem - The expanded L-system string
- * @returns Sections and merges to create in the backend
+ * @returns Lines and merges to create in the backend
  */
 export function executeLSystem(lSystem: string): FractalResult {
-  const sections: SectionData[] = [{ name: 'S0', color: COLORS[0], shots: [] }];
+  const lines: LineData[] = [{ name: 'S0', color: COLORS[0], shots: [] }];
   const merges: MergeData[] = [];
   const stack: TurtleState[] = [];
 
-  let currentSectionId = 0;
+  let currentLineId = 0;
   let currentAzimuth = 270; // Start pointing up (north in map coordinates)
 
   for (const char of lSystem) {
     switch (char) {
       case 'F': {
-        // Draw forward: add shot to current section
-        sections[currentSectionId].shots.push({
+        // Draw forward: add shot to current line
+        lines[currentLineId].shots.push({
           azimuth_in: currentAzimuth,
           azimuth_out: (currentAzimuth + 180) % 360,
           length: SHOT_LENGTH,
@@ -144,28 +144,28 @@ export function executeLSystem(lSystem: string): FractalResult {
 
       case '[': {
         // Push state: save current position and start a new branch
-        const stationIndex = sections[currentSectionId].shots.length;
+        const stationIndex = lines[currentLineId].shots.length;
         stack.push({
-          sectionId: currentSectionId,
+          lineId: currentLineId,
           stationIndex,
           azimuth: currentAzimuth,
         });
 
-        // Create new section for the branch
-        const newSectionId = sections.length;
-        sections.push({
-          name: `S${newSectionId}`,
-          color: COLORS[newSectionId % COLORS.length],
+        // Create new line for the branch
+        const newLineId = lines.length;
+        lines.push({
+          name: `S${newLineId}`,
+          color: COLORS[newLineId % COLORS.length],
           shots: [],
         });
 
-        // Record merge: new section's station 0 connects to current position
+        // Record merge: new line's station 0 connects to current position
         merges.push({
-          stationA: { section_id: newSectionId, station_index: 0 },
-          stationB: { section_id: currentSectionId, station_index: stationIndex },
+          stationA: { line_id: newLineId, station_index: 0 },
+          stationB: { line_id: currentLineId, station_index: stationIndex },
         });
 
-        currentSectionId = newSectionId;
+        currentLineId = newLineId;
         break;
       }
 
@@ -173,7 +173,7 @@ export function executeLSystem(lSystem: string): FractalResult {
         // Pop state: return to saved position
         const saved = stack.pop();
         if (saved) {
-          currentSectionId = saved.sectionId;
+          currentLineId = saved.lineId;
           currentAzimuth = saved.azimuth;
         }
         break;
@@ -183,22 +183,22 @@ export function executeLSystem(lSystem: string): FractalResult {
     }
   }
 
-  // Filter out empty sections and remap merge indices
-  return filterEmptySections(sections, merges);
+  // Filter out empty lines and remap merge indices
+  return filterEmptyLines(lines, merges);
 }
 
 /**
- * Filter out empty sections and remap all merge references.
+ * Filter out empty lines and remap all merge references.
  * This handles the case where `[[` is followed by `]` without any `F`.
  */
-function filterEmptySections(
-  sections: SectionData[],
+function filterEmptyLines(
+  lines: LineData[],
   merges: MergeData[]
 ): FractalResult {
-  // Build mapping from old indices to new indices (for non-empty sections)
+  // Build mapping from old indices to new indices (for non-empty lines)
   const nonEmptyIndices: number[] = [];
-  for (let i = 0; i < sections.length; i++) {
-    if (sections[i].shots.length > 0) {
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].shots.length > 0) {
       nonEmptyIndices.push(i);
     }
   }
@@ -208,31 +208,31 @@ function filterEmptySections(
     indexMap.set(oldIdx, newIdx);
   });
 
-  // Filter sections
-  const filteredSections = sections.filter((s) => s.shots.length > 0);
+  // Filter lines
+  const filteredLines = lines.filter((s) => s.shots.length > 0);
 
-  // Assert S0 (root section) has shots - the L-system guarantees this
-  if (filteredSections.length === 0 || !indexMap.has(0)) {
-    throw new Error('L-system error: root section S0 has no shots');
+  // Assert S0 (root line) has shots - the L-system guarantees this
+  if (filteredLines.length === 0 || !indexMap.has(0)) {
+    throw new Error('L-system error: root line S0 has no shots');
   }
 
   // Filter and remap merges
   const filteredMerges = merges
     .filter((m) =>
-      indexMap.has(m.stationA.section_id) && indexMap.has(m.stationB.section_id)
+      indexMap.has(m.stationA.line_id) && indexMap.has(m.stationB.line_id)
     )
     .map((m) => ({
       stationA: {
-        section_id: indexMap.get(m.stationA.section_id)!,
+        line_id: indexMap.get(m.stationA.line_id)!,
         station_index: m.stationA.station_index,
       },
       stationB: {
-        section_id: indexMap.get(m.stationB.section_id)!,
+        line_id: indexMap.get(m.stationB.line_id)!,
         station_index: m.stationB.station_index,
       },
     }));
 
-  return { sections: filteredSections, merges: filteredMerges };
+  return { lines: filteredLines, merges: filteredMerges };
 }
 
 // ============================================================================
@@ -240,41 +240,41 @@ function filterEmptySections(
 // ============================================================================
 
 /**
- * Normalize a merge tuple to have the lower section_id first.
+ * Normalize a merge tuple to have the lower line_id first.
  * This allows comparing merges regardless of order (A->B vs B->A).
  *
  * @returns Normalized string key for set comparison
  */
 export function normalizeMergeKey(
-  sectionA: number,
+  lineA: number,
   stationA: number,
-  sectionB: number,
+  lineB: number,
   stationB: number
 ): string {
-  // Put lower section_id first for consistent comparison
-  if (sectionA < sectionB || (sectionA === sectionB && stationA <= stationB)) {
-    return `${sectionA}-${stationA}-${sectionB}-${stationB}`;
+  // Put lower line_id first for consistent comparison
+  if (lineA < lineB || (lineA === lineB && stationA <= stationB)) {
+    return `${lineA}-${stationA}-${lineB}-${stationB}`;
   }
-  return `${sectionB}-${stationB}-${sectionA}-${stationA}`;
+  return `${lineB}-${stationB}-${lineA}-${stationA}`;
 }
 
 /**
  * Convert expected merges (using local indices) to a Set of normalized keys.
  * Used for comparing against actual backend merges.
  *
- * @param merges - Merges with local section indices
- * @param sectionIdMap - Mapping from local index to backend section ID
+ * @param merges - Merges with local line indices
+ * @param lineIdMap - Mapping from local index to backend line ID
  * @returns Set of normalized merge keys
  */
 export function buildExpectedMergeSet(
   merges: MergeData[],
-  sectionIdMap: Map<number, number>
+  lineIdMap: Map<number, number>
 ): Set<string> {
   const keys = new Set<string>();
 
   for (const merge of merges) {
-    const actualA = sectionIdMap.get(merge.stationA.section_id);
-    const actualB = sectionIdMap.get(merge.stationB.section_id);
+    const actualA = lineIdMap.get(merge.stationA.line_id);
+    const actualB = lineIdMap.get(merge.stationB.line_id);
 
     if (actualA !== undefined && actualB !== undefined) {
       const key = normalizeMergeKey(
@@ -298,17 +298,17 @@ export function buildExpectedMergeSet(
  */
 export function buildActualMergeSet(
   stationMerges: Array<{
-    station_a: { section_id: number; station_index: number };
-    station_b: { section_id: number; station_index: number };
+    station_a: { line_id: number; station_index: number };
+    station_b: { line_id: number; station_index: number };
   }>
 ): Set<string> {
   const keys = new Set<string>();
 
   for (const merge of stationMerges) {
     const key = normalizeMergeKey(
-      merge.station_a.section_id,
+      merge.station_a.line_id,
       merge.station_a.station_index,
-      merge.station_b.section_id,
+      merge.station_b.line_id,
       merge.station_b.station_index
     );
     keys.add(key);

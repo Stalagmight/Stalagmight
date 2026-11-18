@@ -1,18 +1,19 @@
 ---
-title: Import / Create Section dialog
-description: "The Import / Create Section dialog: enter a section's name, surveyors, explorers, survey date and color, then its shots with length, azimuth and depths."
+title: Import / Create Line dialog
+description: "The Import / Create Line dialog: enter a line's name, surveyors, explorers, survey date and color, then its shots with length, azimuth and depths."
 order: 4
 ---
 
-# Import / Create Section dialog
+# Import / Create Line dialog
 
-Creates a section from shots you type or paste in. Opened by **Add section** in
+Creates a line from shots you type or paste in. Opened by **Add line** in
 the [survey view](survey-view.md).
 
-![Import / Create Section dialog](../images/create-section-dialog.png)
+![Import / Create Line dialog](../images/create-section-dialog.png)
 
 1. **Close**: nothing created.
-2. **Section Name**
+2. **Line Name**: starts as the next free `Line 1`, `Line 2`, ... Required,
+   and no other line of the project may have it.
 6. **Shots**: one row per shot.
 7. **Choose visible columns**, including the extra columns hidden by default:
    LRUD, and azimuth and inclination per end of the shot.
@@ -23,7 +24,10 @@ name and the shots are now:
 
 - **Survey date**: when the line was surveyed. Empty by default (**No date**);
   the **Clear date** button beside a date empties it again.
-- **Color**: the section's color on the map.
+- **Color**: the line's color on the map.
+- **Section**: shown once the project has
+  [sections](../workflows/grouping-lines-into-sections.md). The line goes
+  straight into the section picked here; **No section** by default.
 - **Surveyors** and **Explorers**: lists of people. Type a name and press
   **Enter** (or `;`) to add it. Suggestions come from the project, from names
   you entered before and, for a SpeleoDB project, from its collaborators.
@@ -41,7 +45,7 @@ The surveyors, explorers and survey date go on every shot you enter here.
     [shot kinds](../concepts/sections-shots-stations.md).
 14. **Comment**
 15. **Cancel**: same as 1.
-16. **Create Section**: creates the section, then you place it on the map in
+16. **Create Line**: creates the line, then you place it on the map in
     [placement mode](placement-mode.md).
 
 ## Details
@@ -55,15 +59,21 @@ The surveyors, explorers and survey date go on every shot you enter here.
     `Az In` and `Az Out`, for surveyors who read the azimuth at both ends.
   - **Inclination**: same choices, `Off` by default. It can be typed in, but is
     mainly filled by MNemo imports.
-- **Create Section** needs at least one complete shot. A half-filled row has to
+- **Create Line** needs at least one complete shot. A half-filled row has to
   be completed or deleted first.
-- After **Create Section**, placing the section on an existing station merges
+- **Create Line** is also off while **Line Name** is empty or already the
+  name of another line. The reason shows under the field, and on the button
+  when you hover it.
+- The stations of the new line are named `0`, `1`, `2`, ... from its first
+  station. Rename them later in the
+  [Edit Station dialog](edit-station-dialog.md). See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
+- After **Create Line**, placing the line on an existing station merges
   the two.
 - Shift+click on a **J/R** cell steps backwards.
-- Name, people and date are optional. Color starts as the next unused section
-  color.
-- Surveyors and explorers start with the people of the last section you
+- People and date are optional. Color starts as the next unused line color.
+- Surveyors and explorers start with the people of the last line you
   created or imported with the MNemo import since the app started.
 - The length unit is shown in the column header.
 - You can paste rows copied from a spreadsheet into the table.
-- In a read-only view the dialog says a section cannot be created.
+- In a read-only view the dialog says a line cannot be created.

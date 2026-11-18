@@ -21,7 +21,7 @@
  *   `window.__E2E_TEST__.projectStore.getState()[action](...args)`, exactly as
  *   `callStoreAction` did. That boundary is deliberate: going straight to IPC
  *   would leave the frontend store stale, and it is the boundary that surfaced
- *   the `updateSection`-cannot-clear-null and undo-fails-outright bugs.
+ *   the `updateLine`-cannot-clear-null and undo-fails-outright bugs.
  * - Args are still handed to WebDriver as script arguments, so the same JSON
  *   serialization applies (an absent key stays absent - the `ShotUpdates`
  *   double-option distinction survives by construction).
@@ -70,17 +70,17 @@ import { ORACLE_GLOBAL, oracleInjectionSource, type TargetingDigest } from '../l
  */
 export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
   'createLoopClosure',
-  'createSection',
-  'createSectionAndMerge',
+  'createLine',
+  'createLineAndMerge',
   'createShot',
-  'deleteLastShotAndSection',
-  'deleteSection',
+  'deleteLastShotAndLine',
+  'deleteLine',
   'deleteShot',
   'deleteShotAndSplit',
   'deleteShotRangeShift',
   'deleteShotRangeSplit',
   'executeBatch',
-  'importSections',
+  'importLines',
   // ---- v3: the import group (undoRedoFuzzImportActions.ts) ----------------
   // The four file importers and the two file-taking probes DO take a path, so
   // the `saveProject` argument above would seem to exclude them. It does not,
@@ -96,7 +96,7 @@ export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
   // it only marks the frontend dirty.
   'calculateFileHash',
   'checkDuplicateImport',
-  'checkSectionHashes',
+  'checkLineHashes',
   'executeCompassImport',
   'executeGpxImport',
   'executeTmlImport',
@@ -107,17 +107,17 @@ export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
   // ------------------------------------------------------------------------
   'mergeStations',
   'moveComment',
-  'moveSection',
+  'moveLine',
   'moveSegment',
   'moveStation',
   'removeLoopClosure',
   'removeZeroDatum',
-  'reverseSection',
+  'reverseLine',
   'setShotKind',
   'setZeroDatum',
   'splitShotAtDistance',
   'unmergeStationPair',
-  'updateSection',
+  'updateLine',
   'updateShot',
   'updateStationComment',
 ]);

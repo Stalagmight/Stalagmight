@@ -1,27 +1,27 @@
-//! Combine Sections, the read-only half: can two sections be joined into one,
+//! Combine Lines, the read-only half: can two lines be joined into one,
 //! where, and what has to change for it. The context menu, the Sections panel
-//! and the dialog ask this, and `combine_sections` asks it again before it
+//! and the dialog ask this, and `combine_lines` asks it again before it
 //! changes anything.
 //!
-//! The rule: the two chosen sections meet end to end; other sections there
+//! The rule: the two chosen lines meet end to end; other lines there
 //! stay attached as branches. An end station of each is the same point when:
 //! - **merged**: the two end stations are in one merge group;
-//! - **co-located**: unmerged, their chain positions (section offset plus the
+//! - **co-located**: unmerged, their chain positions (line offset plus the
 //!   shot walk, without the stations' manual offsets) agree within
 //!   [`COMBINE_TOLERANCE_M`] horizontally;
 //! - **closure**: a loop closure ties the two (or their merge groups). The
 //!   survey says they are one point; one side moves by the misclosure.
 //!
-//! Two sections that meet are always combinable, whatever else ties them
+//! Two lines that meet are always combinable, whatever else ties them
 //! (`combine_plan.rs` turns the ties in the way into loop closures and moves a
 //! side), except when both carry a zero datum on one of their own stations,
-//! or the combined section would run out of shot numbers. Two sections that
+//! or the combined line would run out of shot numbers. Two lines that
 //! meet nowhere are refused: merge two of their ends, or close a loop between
 //! them, first.
 //!
-//! Every other section with an END merged at the point stays merged to the
-//! joined station, which becomes a mid-section station of the combined
-//! section (a branch); one merged there at a station in its MIDDLE passes
+//! Every other line with an END merged at the point stays merged to the
+//! joined station, which becomes a mid-line station of the combined
+//! line (a branch); one merged there at a station in its MIDDLE passes
 //! through, and stays merged too (a crossing); one with an end there that is
 //! not merged is left as it is (`CombineCandidate::loose_ends`). At a junction
 //! the station query lists every partner, and the user picks one. Depth is not
@@ -32,8 +32,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan, Section, SectionEnd,
-    SectionId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePlan, Line, LineEnd, LineId,
+    StationKey, StationRef, FEATURE_ID_STRIDE,
 };
 
 use super::combine_plan::{ClosureFacts, JoinPoint, Tie, TiePlan};
@@ -52,13 +52,13 @@ pub const COMBINE_TOLERANCE_M: f64 = 0.001;
 /// below what the survey can tell apart.
 pub const COMBINE_DEPTH_NOTICE_M: f64 = 0.05;
 
-/// One way two sections can meet: an end of each.
+/// One way two lines can meet: an end of each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Pairing {
-    pub a: SectionId,
-    pub end_a: SectionEnd,
-    pub b: SectionId,
-    pub end_b: SectionEnd,
+    pub a: LineId,
+    pub end_a: LineEnd,
+    pub b: LineId,
+    pub end_b: LineEnd,
 }
 
 /// What a touching pairing looks like.
@@ -69,15 +69,15 @@ pub(crate) struct Touch {
     /// The merge group of each join station (one group when merged).
     pub group_a: HashSet<StationRef>,
     pub group_b: HashSet<StationRef>,
-    /// Other sections merged at the join point with an end: they stay
-    /// attached to the joined station, a branch of the combined section.
-    pub branches: Vec<SectionId>,
-    /// Other sections merged at the join point at a station in their middle:
+    /// Other lines merged at the join point with an end: they stay
+    /// attached to the joined station, a branch of the combined line.
+    pub branches: Vec<LineId>,
+    /// Other lines merged at the join point at a station in their middle:
     /// they pass through, and stay merged to the joined station.
-    pub passing_through: Vec<SectionId>,
-    /// Other sections with an end at the join point that is NOT merged to
+    pub passing_through: Vec<LineId>,
+    /// Other lines with an end at the join point that is NOT merged to
     /// it: left untouched.
-    pub loose_ends: Vec<SectionId>,
+    pub loose_ends: Vec<LineId>,
 }
 
 impl Touch {
@@ -94,7 +94,7 @@ impl Touch {
         }
     }
 
-    /// Precedence when two sections meet at more than one place: a merge
+    /// Precedence when two lines meet at more than one place: a merge
     /// first, then co-located ends, then a closure.
     fn rank(&self) -> u8 {
         match self.kind {
@@ -105,49 +105,48 @@ impl Touch {
     }
 }
 
-/// The most other section ends the station query lists at one point. Past it
-/// the point is a pile (unplaced sections all start at the origin), not a
+/// The most other line ends the station query lists at one point. Past it
+/// the point is a pile (unplaced lines all start at the origin), not a
 /// junction to choose from in a menu, and every partner costs a pair query;
 /// the Sections panel still combines any two of them.
 pub const MAX_COMBINE_PARTNERS: usize = 16;
 
-fn end_index(section: &Section, end: SectionEnd) -> u32 {
+fn end_index(line: &Line, end: LineEnd) -> u32 {
     match end {
-        SectionEnd::Start => 0,
-        SectionEnd::End => section.shots.len() as u32,
+        LineEnd::Start => 0,
+        LineEnd::End => line.shots.len() as u32,
     }
 }
 
-/// A section as the user knows it: its name, or "Section N" when it has none
-/// (the label the Combine dialog and its refusals use).
-pub fn section_label(section: &Section) -> String {
-    section
-        .name
+/// A line as the user knows it: its name, or `unnamed line` when it has
+/// none (the label the Combine dialog and its refusals use) - never its id.
+pub fn line_label(line: &Line) -> String {
+    line.name
         .clone()
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| format!("Section {}", section.id))
+        .unwrap_or_else(|| super::UNNAMED_LINE.to_string())
 }
 
 fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
-/// Every section end's chain position (section offset plus the shot walk,
+/// Every line end's chain position (line offset plus the shot walk,
 /// without manual station offsets), computed ONCE per query: a candidate
 /// query looks for co-located ends across the whole project, and walking every
-/// section per pairing made a right-click O(sections x shots).
+/// line per pairing made a right-click O(lines x shots).
 ///
 /// The ends are also bucketed on a grid one tolerance wide, so the ends near a
 /// point are in its cell or the eight around it and a lookup reads only those,
-/// not every end in the project: a pile of sections at one point (unplaced
-/// sections all start at the origin) made each partner's third-end check a
-/// full scan, O(sections^2) per right-click.
+/// not every end in the project: a pile of lines at one point (unplaced
+/// lines all start at the origin) made each partner's third-end check a
+/// full scan, O(lines^2) per right-click.
 pub(crate) struct EndTable {
-    ends: Vec<(SectionId, SectionEnd, (f64, f64))>,
-    by_end: HashMap<(SectionId, SectionEnd), (f64, f64)>,
+    ends: Vec<(LineId, LineEnd, (f64, f64))>,
+    by_end: HashMap<(LineId, LineEnd), (f64, f64)>,
     cells: HashMap<(i64, i64), Vec<usize>>,
     /// The project's rigid ties, resolved once per query on first use: a
-    /// junction's station query plans two choices of kept section for every
+    /// junction's station query plans two choices of kept line for every
     /// partner, and each plan reads all of them.
     ties: std::cell::OnceCell<Vec<Tie>>,
     /// The loop-closure facts the plans read, once per query and only when a
@@ -174,7 +173,7 @@ fn cell_of(point: (f64, f64)) -> (i64, i64) {
 }
 
 impl EndTable {
-    fn new(ends: Vec<(SectionId, SectionEnd, (f64, f64))>) -> Self {
+    fn new(ends: Vec<(LineId, LineEnd, (f64, f64))>) -> Self {
         let by_end = ends.iter().map(|(id, end, p)| ((*id, *end), *p)).collect();
         let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
         for (i, (_, _, p)) in ends.iter().enumerate() {
@@ -189,13 +188,13 @@ impl EndTable {
         }
     }
 
-    fn at(&self, id: SectionId, end: SectionEnd) -> Option<(f64, f64)> {
+    fn at(&self, id: LineId, end: LineEnd) -> Option<(f64, f64)> {
         self.by_end.get(&(id, end)).copied()
     }
 
-    /// Every section end within the tolerance of `point`, lazily: a caller
+    /// Every line end within the tolerance of `point`, lazily: a caller
     /// that stops at the first match reads only the ends before it.
-    fn near(&self, point: (f64, f64)) -> impl Iterator<Item = (SectionId, SectionEnd)> + '_ {
+    fn near(&self, point: (f64, f64)) -> impl Iterator<Item = (LineId, LineEnd)> + '_ {
         let (cx, cy) = cell_of(point);
         (-1..=1)
             .flat_map(move |dx| {
@@ -219,19 +218,19 @@ impl Project {
     pub(crate) fn end_table(&self) -> EndTable {
         #[cfg(test)]
         END_TABLE_BUILDS.with(|builds| builds.set(builds.get() + 1));
-        let mut ends = Vec::with_capacity(self.sections.len() * 2);
-        for section in &self.sections {
-            let start = self.section_offset(section.id);
-            let reference = self.azimuth_reference_for(section);
+        let mut ends = Vec::with_capacity(self.lines.len() * 2);
+        for line in &self.lines {
+            let start = self.line_offset(line.id);
+            let reference = self.azimuth_reference_for(line);
             let (mut x, mut y) = start;
-            for shot in &section.shots {
+            for shot in &line.shots {
                 let azimuth = shot.average_azimuth_true_rad(reference);
                 let horizontal = shot.horizontal_length();
                 x += horizontal * azimuth.sin();
                 y += horizontal * azimuth.cos();
             }
-            ends.push((section.id, SectionEnd::Start, start));
-            ends.push((section.id, SectionEnd::End, (x, y)));
+            ends.push((line.id, LineEnd::Start, start));
+            ends.push((line.id, LineEnd::End, (x, y)));
         }
         EndTable::new(ends)
     }
@@ -258,12 +257,12 @@ impl Project {
 
     /// Whether `pairing`'s two end stations are the same point (`None` when
     /// they are not), how, what else is there, and why combining the two
-    /// sections is refused, if it is.
+    /// lines is refused, if it is.
     pub(crate) fn pairing_touch(&self, pairing: Pairing, ends: &EndTable) -> Option<Touch> {
-        let section_a = self.get_section(pairing.a)?;
-        let section_b = self.get_section(pairing.b)?;
-        let at_a = StationRef::new(pairing.a, end_index(section_a, pairing.end_a));
-        let at_b = StationRef::new(pairing.b, end_index(section_b, pairing.end_b));
+        let line_a = self.get_line(pairing.a)?;
+        let line_b = self.get_line(pairing.b)?;
+        let at_a = StationRef::new(pairing.a, end_index(line_a, pairing.end_a));
+        let at_b = StationRef::new(pairing.b, end_index(line_b, pairing.end_b));
         let (pa, pb) = (
             ends.at(pairing.a, pairing.end_a)?,
             ends.at(pairing.b, pairing.end_b)?,
@@ -289,21 +288,21 @@ impl Project {
         } else {
             return None;
         };
-        // Every other section at the join point: merged there with an end (a
+        // Every other line at the join point: merged there with an end (a
         // branch) or with a station in its middle (passing through).
-        let mut branches: Vec<SectionId> = Vec::new();
-        let mut passing_through: Vec<SectionId> = Vec::new();
+        let mut branches: Vec<LineId> = Vec::new();
+        let mut passing_through: Vec<LineId> = Vec::new();
         for at in group_a.iter().chain(group_b.iter()) {
-            if at.section_id == pairing.a || at.section_id == pairing.b {
+            if at.line_id == pairing.a || at.line_id == pairing.b {
                 continue;
             }
-            let Some(section) = self.get_section(at.section_id) else {
+            let Some(line) = self.get_line(at.line_id) else {
                 continue;
             };
-            if at.station_index == 0 || at.station_index as usize == section.shots.len() {
-                branches.push(at.section_id);
+            if at.station_index == 0 || at.station_index as usize == line.shots.len() {
+                branches.push(at.line_id);
             } else {
-                passing_through.push(at.section_id);
+                passing_through.push(at.line_id);
             }
         }
         branches.sort_unstable();
@@ -311,7 +310,7 @@ impl Project {
         passing_through.sort_unstable();
         passing_through.dedup();
         passing_through.retain(|id| !branches.contains(id));
-        let mut loose_ends: Vec<SectionId> = ends.near(pa).map(|(id, _)| id).collect();
+        let mut loose_ends: Vec<LineId> = ends.near(pa).map(|(id, _)| id).collect();
         if kind == CombineJoinKind::Closure {
             loose_ends.extend(ends.near(pb).map(|(id, _)| id));
         }
@@ -325,7 +324,7 @@ impl Project {
         loose_ends.dedup();
         Some(Touch {
             kind,
-            blocked: self.combine_blocked_reason(section_a, section_b, [at_a, at_b]),
+            blocked: self.combine_blocked_reason(line_a, line_b, [at_a, at_b]),
             group_a,
             group_b,
             branches,
@@ -337,13 +336,8 @@ impl Project {
     /// Why combining `a` and `b` at their join stations `join` (one of each)
     /// is refused, or `None`. Everything else that stands in the way is
     /// changed, and the plan says what (`combine_plan.rs`).
-    fn combine_blocked_reason(
-        &self,
-        a: &Section,
-        b: &Section,
-        join: [StationRef; 2],
-    ) -> Option<String> {
-        // The two join stations become ONE station of the combined section, and
+    fn combine_blocked_reason(&self, a: &Line, b: &Line, join: [StationRef; 2]) -> Option<String> {
+        // The two join stations become ONE station of the combined line, and
         // a station holds at most one datum (#741 D2): a placement datum and a
         // GPS fix folded onto one station key would lose the fix on the next
         // save, and Remove Zero Datum would clear both at once.
@@ -351,9 +345,9 @@ impl Project {
             return Some(format!(
                 "{} #{} and {} #{} each hold a zero datum, and combining makes them one \
                  station: remove one of the two datums first",
-                section_label(a),
+                line_label(a),
                 join[0].station_index,
-                section_label(b),
+                line_label(b),
                 join[1].station_index
             ));
         }
@@ -361,14 +355,14 @@ impl Project {
             return Some(format!(
                 "{} and {} are each placed by their own zero datum: merge them first, so the \
                  later datum becomes a GPS fix",
-                section_label(a),
-                section_label(b)
+                line_label(a),
+                line_label(b)
             ));
         }
         let budget = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
         if a.shots.len() + b.shots.len() > budget {
             return Some(format!(
-                "The combined section would have {} shots (at most {budget})",
+                "The combined line would have {} shots (at most {budget})",
                 a.shots.len() + b.shots.len()
             ));
         }
@@ -376,35 +370,50 @@ impl Project {
     }
 
     /// Why `kept` cannot take `other`'s shots: they get new ids from `kept`,
-    /// which has only [`Section::shot_ids_left`] of them. Not renumbered in
+    /// which has only [`Line::shot_ids_left`] of them. Not renumbered in
     /// place: position-
     /// keyed ignored warnings and the frontend's selection, hover and table
-    /// state address shots by id. A reload renumbers every section compactly.
-    pub(crate) fn shot_id_room_refusal(kept: &Section, other: &Section) -> Option<String> {
+    /// state address shots by id. A reload renumbers every line compactly.
+    pub(crate) fn shot_id_room_refusal(kept: &Line, other: &Line) -> Option<String> {
         (other.shots.len() as u64 > kept.shot_ids_left()).then(|| {
             format!(
                 "{} has used up its shot numbers for this session: keep {}, or save and \
                  reopen",
-                section_label(kept),
-                section_label(other)
+                line_label(kept),
+                line_label(other)
             )
         })
     }
 
+    /// `Lines "A" and "B" cannot be combined`, by the lines' names.
+    pub(super) fn cannot_combine_message(&self, kept: LineId, other: LineId) -> String {
+        let name = |id| {
+            self.get_line(id).map_or_else(
+                || "a missing line".to_string(),
+                |l| format!("\"{}\"", line_label(l)),
+            )
+        };
+        format!(
+            "Lines {} and {} cannot be combined",
+            name(kept),
+            name(other)
+        )
+    }
+
     /// Why combining `other` into `kept` at `join` is refused, if it is: the
-    /// pair's reason, else the one that depends on which section is kept. The
-    /// one check `combine_sections` and the command both run before changing
+    /// pair's reason, else the one that depends on which line is kept. The
+    /// one check `combine_lines` and the command both run before changing
     /// anything.
     pub fn combine_refusal(
         &self,
-        kept: SectionId,
-        other: SectionId,
+        kept: LineId,
+        other: LineId,
         join: Option<CombineJoinEnds>,
     ) -> Option<String> {
         let Some(candidate) = self.combine_candidate_joining(kept, other, join) else {
-            return Some(format!("Sections {kept} and {other} cannot be combined"));
+            return Some(self.cannot_combine_message(kept, other));
         };
-        candidate.blocked_reason.or(if candidate.section_a == kept {
+        candidate.blocked_reason.or(if candidate.line_a == kept {
             candidate.blocked_keeping_a
         } else {
             candidate.blocked_keeping_b
@@ -412,22 +421,22 @@ impl Project {
     }
 
     /// The candidate for combining `other` into `kept` at `join` (the kept and
-    /// the other section's ends), or at the join the two-section query
-    /// prefers when `join` is `None`. `None` when either section is missing or
-    /// they are the same section.
+    /// the other line's ends), or at the join the two-line query
+    /// prefers when `join` is `None`. `None` when either line is missing or
+    /// they are the same line.
     pub fn combine_candidate_joining(
         &self,
-        kept: SectionId,
-        other: SectionId,
+        kept: LineId,
+        other: LineId,
         join: Option<CombineJoinEnds>,
     ) -> Option<CombineCandidate> {
         let Some(join) = join else {
-            return self.combine_candidate_for_sections(kept, other);
+            return self.combine_candidate_for_lines(kept, other);
         };
         if kept == other {
             return None;
         }
-        let (k, o) = (self.get_section(kept)?, self.get_section(other)?);
+        let (k, o) = (self.get_line(kept)?, self.get_line(other)?);
         let pairing = Pairing {
             a: kept,
             end_a: join.kept,
@@ -438,8 +447,8 @@ impl Project {
         let touch = self.pairing_touch(pairing, &table).unwrap_or_else(|| {
             Touch::refused(format!(
                 "{} and {} do not meet at those ends",
-                section_label(k),
-                section_label(o)
+                line_label(k),
+                line_label(o)
             ))
         });
         self.candidate_for(pairing, touch, &table)
@@ -447,11 +456,11 @@ impl Project {
 
     /// Degrees to add to `other`'s stored bearings so they read against
     /// `kept`'s north reference, when the two STORED references differ. The
-    /// stored ones are compared, not the resolved ones: the combined section
-    /// keeps only `kept`'s, so a section that declares its own reference and
+    /// stored ones are compared, not the resolved ones: the combined line
+    /// keeps only `kept`'s, so a line that declares its own reference and
     /// one that follows the project default differ even while they resolve
     /// alike (`Some(0.0)`: the values stay, the reference they follow changes).
-    pub(crate) fn azimuth_rotation(&self, kept: &Section, other: &Section) -> Option<f64> {
+    pub(crate) fn azimuth_rotation(&self, kept: &Line, other: &Line) -> Option<f64> {
         let same = match (kept.azimuth_reference, other.azimuth_reference) {
             (None, None) => true,
             (Some(x), Some(y)) => x.north == y.north && (x.correction - y.correction).abs() <= 1e-9,
@@ -474,9 +483,9 @@ impl Project {
     }
 
     /// The uuids shots of both `a` and `b` carry. The combine gives the other
-    /// section's copies new ones: one uuid twice in a section would put the
+    /// line's copies new ones: one uuid twice in a line would put the
     /// same shot in it twice, and every `AfterShot` anchor names the first.
-    pub(crate) fn shared_shot_uuids(a: &Section, b: &Section) -> Vec<String> {
+    pub(crate) fn shared_shot_uuids(a: &Line, b: &Line) -> Vec<String> {
         let in_a: HashSet<&str> = a
             .shots
             .iter()
@@ -501,13 +510,13 @@ impl Project {
         &self,
         pairing: Pairing,
         touch: &Touch,
-        kept: SectionId,
+        kept: LineId,
         table: &EndTable,
     ) -> Option<(JoinPoint, (f64, f64))> {
-        let section_a = self.get_section(pairing.a)?;
-        let section_b = self.get_section(pairing.b)?;
-        let at_a = StationRef::new(pairing.a, end_index(section_a, pairing.end_a));
-        let at_b = StationRef::new(pairing.b, end_index(section_b, pairing.end_b));
+        let line_a = self.get_line(pairing.a)?;
+        let line_b = self.get_line(pairing.b)?;
+        let at_a = StationRef::new(pairing.a, end_index(line_a, pairing.end_a));
+        let at_b = StationRef::new(pairing.b, end_index(line_b, pairing.end_b));
         let (pa, pb) = (
             table.at(pairing.a, pairing.end_a)?,
             table.at(pairing.b, pairing.end_b)?,
@@ -543,19 +552,19 @@ impl Project {
     }
 
     /// The plan the dialog shows for keeping `kept`, and the full plan
-    /// `combine_sections` applies. An empty plan for a blocked pairing.
+    /// `combine_lines` applies. An empty plan for a blocked pairing.
     pub(crate) fn plan_keeping(
         &self,
         pairing: Pairing,
         touch: &Touch,
-        kept: SectionId,
+        kept: LineId,
         table: &EndTable,
     ) -> (CombinePlan, Option<(JoinPoint, TiePlan)>) {
         let empty = CombinePlan {
             kept,
-            moving_section: None,
+            moving_line: None,
             kept_moves_because: None,
-            moved_sections: Vec::new(),
+            moved_lines: Vec::new(),
             shift_m: 0.0,
             torn_ties: Vec::new(),
             azimuth_rotation_deg: None,
@@ -563,6 +572,7 @@ impl Project {
             closures_removed_across_one_shot: None,
             closures_replaced: None,
             moved_with_joined_station: None,
+            station_renames: None,
         };
         if touch.blocked.is_some() {
             return (empty, None);
@@ -588,7 +598,7 @@ impl Project {
         let Ok(ties) = self.plan_ties(&join, (gap, shown), rigid, &table.closure_facts) else {
             return (empty, None);
         };
-        let (Some(k), Some(o)) = (self.get_section(join.kept), self.get_section(join.other)) else {
+        let (Some(k), Some(o)) = (self.get_line(join.kept), self.get_line(join.other)) else {
             return (empty, None);
         };
         // A merged join's stations are already one point: offsets that
@@ -611,7 +621,7 @@ impl Project {
         })
     }
 
-    /// The answer for one touching pairing, `a` the lower section id.
+    /// The answer for one touching pairing, `a` the lower line id.
     fn candidate_for(
         &self,
         pairing: Pairing,
@@ -635,10 +645,10 @@ impl Project {
                 },
             )
         };
-        let a = self.get_section(pairing.a)?;
-        let b = self.get_section(pairing.b)?;
-        // A section with no shots has one station, both of its ends: name the
-        // end that joins without reversing the other section.
+        let a = self.get_line(pairing.a)?;
+        let b = self.get_line(pairing.b)?;
+        // A line with no shots has one station, both of its ends: name the
+        // end that joins without reversing the other line.
         if a.shots.is_empty() {
             pairing.end_a = opposite(pairing.end_b);
         } else if b.shots.is_empty() {
@@ -654,13 +664,21 @@ impl Project {
             _ => (None, None),
         };
         let (comment_a, comment_b) = differing(&self.station_comments);
-        let (station_name_a, station_name_b) = differing(&self.station_names);
+        // Never a choice any more: the joined station keeps the kept line's
+        // name (names are unique per line; see `combine_lines`).
+        let (station_name_a, station_name_b) = (None, None);
         let merged = touch.kind == CombineJoinKind::Merged;
-        let (plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
-        let (plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);
+        let (mut plan_keeping_a, _) = self.plan_keeping(pairing, &touch, a.id, table);
+        let (mut plan_keeping_b, _) = self.plan_keeping(pairing, &touch, b.id, table);
+        // What each choice renames, for the dialog to say (the combine
+        // prefixes before it joins; see `prefix_combined_station_names`).
+        plan_keeping_a.station_renames =
+            self.combine_station_renames(a.id, b.id, station_a, station_b);
+        plan_keeping_b.station_renames =
+            self.combine_station_renames(b.id, a.id, station_b, station_a);
         Some(CombineCandidate {
-            section_a: a.id,
-            section_b: b.id,
+            line_a: a.id,
+            line_b: b.id,
             end_a: pairing.end_a,
             end_b: pairing.end_b,
             station_a,
@@ -689,23 +707,18 @@ impl Project {
         })
     }
 
-    /// The ends of `section` a join can sit on: one for a section with no
+    /// The ends of `line` a join can sit on: one for a line with no
     /// shots, whose single station is both.
-    fn joinable_ends(section: &Section) -> &'static [SectionEnd] {
-        if section.shots.is_empty() {
-            &[SectionEnd::Start]
+    fn joinable_ends(line: &Line) -> &'static [LineEnd] {
+        if line.shots.is_empty() {
+            &[LineEnd::Start]
         } else {
-            &[SectionEnd::Start, SectionEnd::End]
+            &[LineEnd::Start, LineEnd::End]
         }
     }
 
     /// Every pairing of an end of `s1` with an end of `s2` that touches.
-    fn touching_pairings(
-        &self,
-        s1: &Section,
-        s2: &Section,
-        table: &EndTable,
-    ) -> Vec<(Pairing, Touch)> {
+    fn touching_pairings(&self, s1: &Line, s2: &Line, table: &EndTable) -> Vec<(Pairing, Touch)> {
         Self::joinable_ends(s1)
             .iter()
             .flat_map(|&end_a| {
@@ -726,36 +739,32 @@ impl Project {
             .collect()
     }
 
-    /// Can sections `s1` and `s2` be combined, and where? Tries all four end
+    /// Can lines `s1` and `s2` be combined, and where? Tries all four end
     /// pairings; when they meet at more than one, the join is a merge first,
     /// then co-located ends, then a closure, then the smaller gap, then one
     /// that needs no reverse. The ties at the other meeting points tear into
     /// loop closures (the plan lists them); the station menu joins at the end
-    /// that was clicked instead. `None` when either section is missing or
-    /// they are the same section.
-    pub fn combine_candidate_for_sections(
-        &self,
-        s1: SectionId,
-        s2: SectionId,
-    ) -> Option<CombineCandidate> {
-        self.candidate_for_sections_with(s1, s2, &self.end_table())
+    /// that was clicked instead. `None` when either line is missing or
+    /// they are the same line.
+    pub fn combine_candidate_for_lines(&self, s1: LineId, s2: LineId) -> Option<CombineCandidate> {
+        self.candidate_for_lines_with(s1, s2, &self.end_table())
     }
 
-    /// [`Self::combine_candidate_for_sections`] against an end table the
+    /// [`Self::combine_candidate_for_lines`] against an end table the
     /// caller already built.
-    fn candidate_for_sections_with(
+    fn candidate_for_lines_with(
         &self,
-        s1: SectionId,
-        s2: SectionId,
+        s1: LineId,
+        s2: LineId,
         table: &EndTable,
     ) -> Option<CombineCandidate> {
         if s1 == s2 {
             return None;
         }
         // Lower id first, so the answer (and every reason's wording) is the
-        // same whichever section the caller names first or keeps.
+        // same whichever line the caller names first or keeps.
         let (s1, s2) = (s1.min(s2), s1.max(s2));
-        let (a, b) = (self.get_section(s1)?, self.get_section(s2)?);
+        let (a, b) = (self.get_line(s1)?, self.get_line(s2)?);
         let gap = |p: &Pairing| match (table.at(p.a, p.end_a), table.at(p.b, p.end_b)) {
             (Some(x), Some(y)) => distance(x, y),
             _ => f64::INFINITY,
@@ -773,15 +782,15 @@ impl Project {
             (
                 Pairing {
                     a: s1,
-                    end_a: SectionEnd::End,
+                    end_a: LineEnd::End,
                     b: s2,
-                    end_b: SectionEnd::Start,
+                    end_b: LineEnd::Start,
                 },
                 Touch::refused(format!(
                     "{} and {} do not meet at an end station: merge or close a loop between \
                      two of their ends first",
-                    section_label(a),
-                    section_label(b)
+                    line_label(a),
+                    line_label(b)
                 )),
             )
         });
@@ -794,9 +803,9 @@ impl Project {
         self.combine_candidates(station).into_iter().next()
     }
 
-    /// Every other section end tied to `group` by a loop closure: the ends in
+    /// Every other line end tied to `group` by a loop closure: the ends in
     /// the merge group of each closure's far station.
-    fn closure_partner_ends(&self, group: &HashSet<StationRef>) -> Vec<(SectionId, SectionEnd)> {
+    fn closure_partner_ends(&self, group: &HashSet<StationRef>) -> Vec<(LineId, LineEnd)> {
         let mut out = Vec::new();
         for closure in &self.loop_closures {
             let (Some(x), Some(y)) = (
@@ -811,45 +820,45 @@ impl Project {
                 _ => continue,
             };
             for member in self.get_merge_group(far) {
-                if let Some(section) = self.get_section(member.section_id) {
-                    out.extend(Self::end_of(section, member.station_index));
+                if let Some(line) = self.get_line(member.line_id) {
+                    out.extend(Self::end_of(line, member.station_index));
                 }
             }
         }
         out
     }
 
-    /// The end `index` is of `section`, if it is one (`Start` for a section
+    /// The end `index` is of `line`, if it is one (`Start` for a line
     /// with no shots, whose one station is both).
-    fn end_of(section: &Section, index: u32) -> Option<(SectionId, SectionEnd)> {
+    fn end_of(line: &Line, index: u32) -> Option<(LineId, LineEnd)> {
         if index == 0 {
-            Some((section.id, SectionEnd::Start))
-        } else if index as usize == section.shots.len() {
-            Some((section.id, SectionEnd::End))
+            Some((line.id, LineEnd::Start))
+        } else if index as usize == line.shots.len() {
+            Some((line.id, LineEnd::End))
         } else {
             None
         }
     }
 
-    /// What the section that `station` ends can be combined with: one
-    /// candidate per other section with an end at the same point (merged to
-    /// it, co-located with it, or tied to it by a loop closure), in section
+    /// What the line that `station` ends can be combined with: one
+    /// candidate per other line with an end at the same point (merged to
+    /// it, co-located with it, or tied to it by a loop closure), in line
     /// order, each joined at `station` and with its own reason when it is
     /// blocked. At a junction the user picks one; the others stay attached
     /// to the joined station as branches (or, unmerged, untouched). Empty
-    /// when `station` is not an end of its section or nothing else ends there.
+    /// when `station` is not an end of its line or nothing else ends there.
     ///
-    /// A station merged only to the middle of other sections gets one blocked
+    /// A station merged only to the middle of other lines gets one blocked
     /// candidate saying so; a pile of more than [`MAX_COMBINE_PARTNERS`] other
     /// ends gets one blocked candidate pointing at the Sections panel.
     pub fn combine_candidates(&self, station: StationRef) -> Vec<CombineCandidate> {
         self.station_candidates(station, false)
     }
 
-    /// Every pair of sections that can be combined at the point `station`
+    /// Every pair of lines that can be combined at the point `station`
     /// ends at, for the station menu: first [`Self::combine_candidates`] (the
-    /// clicked section with each partner), then, at a junction, every pair of
-    /// the other sections ending there, each joined at this point. A pair
+    /// clicked line with each partner), then, at a junction, every pair of
+    /// the other lines ending there, each joined at this point. A pair
     /// that meets here only through the clicked station (two ends that are
     /// neither merged, nor side by side, nor tied by a closure) is left out.
     pub fn combine_candidates_at_point(&self, station: StationRef) -> Vec<CombineCandidate> {
@@ -857,27 +866,27 @@ impl Project {
     }
 
     fn station_candidates(&self, station: StationRef, all_pairs: bool) -> Vec<CombineCandidate> {
-        let Some(section) = self.get_section(station.section_id) else {
+        let Some(line) = self.get_line(station.line_id) else {
             return Vec::new();
         };
-        let Some((_, end)) = Self::end_of(section, station.station_index) else {
+        let Some((_, end)) = Self::end_of(line, station.station_index) else {
             return Vec::new();
         };
-        // Every other section with an end at this point: merged to it,
+        // Every other line with an end at this point: merged to it,
         // co-located with it, or across a loop closure from it.
         let table = self.end_table();
-        let Some(at) = table.at(section.id, end) else {
+        let Some(at) = table.at(line.id, end) else {
             return Vec::new();
         };
         let group = self.get_merge_group(station);
-        let mut other_ends: Vec<(SectionId, SectionEnd)> = table
+        let mut other_ends: Vec<(LineId, LineEnd)> = table
             .near(at)
             .filter_map(|(id, end)| {
-                let other = self.get_section(id)?;
+                let other = self.get_line(id)?;
                 Some((
                     id,
                     if other.shots.is_empty() {
-                        SectionEnd::Start
+                        LineEnd::Start
                     } else {
                         end
                     },
@@ -885,19 +894,19 @@ impl Project {
             })
             .collect();
         for member in &group {
-            if let Some(other) = self.get_section(member.section_id) {
+            if let Some(other) = self.get_line(member.line_id) {
                 other_ends.extend(Self::end_of(other, member.station_index));
             }
         }
         // The ends AT this point (merged or side by side), as opposed to the
         // ones across a loop closure from it.
-        let here: HashSet<(SectionId, SectionEnd)> = other_ends.iter().copied().collect();
+        let here: HashSet<(LineId, LineEnd)> = other_ends.iter().copied().collect();
         other_ends.extend(self.closure_partner_ends(&group));
-        other_ends.retain(|(id, _)| *id != section.id);
-        other_ends.sort_by_key(|(id, end)| (*id, *end == SectionEnd::End));
+        other_ends.retain(|(id, _)| *id != line.id);
+        other_ends.sort_by_key(|(id, end)| (*id, *end == LineEnd::End));
         other_ends.dedup();
-        let pairing_with = |(id, other_end): (SectionId, SectionEnd)| Pairing {
-            a: section.id,
+        let pairing_with = |(id, other_end): (LineId, LineEnd)| Pairing {
+            a: line.id,
             end_a: end,
             b: id,
             end_b: other_end,
@@ -912,7 +921,7 @@ impl Project {
                 return Vec::new();
             };
             touch.blocked = Some(format!(
-                "{count} section ends meet here: select the two to combine in the Sections \
+                "{count} line ends meet here: select the two to combine in the Sections \
                  panel"
             ));
             return self
@@ -924,25 +933,25 @@ impl Project {
             if group.len() <= 1 {
                 return Vec::new();
             }
-            // Merged only to stations that are not section ends: a section
+            // Merged only to stations that are not line ends: a line
             // passes through here, and there is no other end to join.
             let Some(other) = group.iter().find(|s| **s != station) else {
                 return Vec::new();
             };
             let pairing = Pairing {
-                a: section.id,
+                a: line.id,
                 end_a: end,
-                b: other.section_id,
-                end_b: SectionEnd::Start,
+                b: other.line_id,
+                end_b: LineEnd::Start,
             };
-            let mut touch = Touch::refused("Merged to the middle of another section".to_string());
+            let mut touch = Touch::refused("Merged to the middle of another line".to_string());
             touch.kind = CombineJoinKind::Merged;
             return self
                 .candidate_for(pairing, touch, &table)
                 .into_iter()
                 .collect();
         }
-        // Every touching pairing, the clicked section's first; then, for the
+        // Every touching pairing, the clicked line's first; then, for the
         // station menu, every pairing of two others ending here.
         let mut touching: Vec<(Pairing, Touch)> = other_ends
             .iter()
@@ -970,10 +979,10 @@ impl Project {
                 }
             }
         }
-        // One candidate per pair of sections: a section can end at this point
+        // One candidate per pair of lines: a line can end at this point
         // with both ends (one merged or side by side, the other across a
         // closure), and the menu offers the pair once, by its best join at
-        // this point, ranked as the two-section query ranks the joins it
+        // this point, ranked as the two-line query ranks the joins it
         // compares (merged, then side by side, then across a closure; then
         // the smaller gap; then no reverse).
         let gap = |p: &Pairing| match (table.at(p.a, p.end_a), table.at(p.b, p.end_b)) {
@@ -1010,9 +1019,9 @@ impl Project {
 }
 
 /// The other end.
-fn opposite(end: SectionEnd) -> SectionEnd {
+fn opposite(end: LineEnd) -> LineEnd {
     match end {
-        SectionEnd::Start => SectionEnd::End,
-        SectionEnd::End => SectionEnd::Start,
+        LineEnd::Start => LineEnd::End,
+        LineEnd::End => LineEnd::Start,
     }
 }

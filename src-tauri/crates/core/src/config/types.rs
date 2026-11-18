@@ -20,7 +20,9 @@ pub struct Config {
     pub general: GeneralConfig,
     pub units: UnitsConfig,
     pub display: DisplayConfig,
-    pub section_colors: SectionColorsConfig,
+    /// `section_colors` in `config.toml` (see `toml_names`).
+    #[serde(alias = "section_colors")]
+    pub line_colors: LineColorsConfig,
     pub map: MapConfig,
     pub validation: ValidationConfig,
     #[serde(default)]
@@ -894,7 +896,7 @@ fn default_measure_path_color() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SectionColorsConfig {
+pub struct LineColorsConfig {
     pub palette: Vec<String>,
 }
 
@@ -1087,8 +1089,12 @@ pub struct ShortcutsConfig {
     pub toggle_station_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub toggle_shot_labels: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub toggle_section_labels: Vec<String>,
+    /// `toggle_section_labels` in `config.toml` (see `toml_names`).
+    #[serde(
+        deserialize_with = "deserialize_shortcut_vec",
+        alias = "toggle_section_labels"
+    )]
+    pub toggle_line_labels: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub fit_to_bounds: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
@@ -1192,9 +1198,9 @@ impl ShortcutsConfig {
             "toggle_shot_labels",
         );
         normalize_shortcut_field(
-            &mut self.toggle_section_labels,
-            &defaults.toggle_section_labels,
-            "toggle_section_labels",
+            &mut self.toggle_line_labels,
+            &defaults.toggle_line_labels,
+            "toggle_line_labels",
         );
         normalize_shortcut_field(
             &mut self.fit_to_bounds,
@@ -1471,6 +1477,7 @@ impl Config {
             let legacy = document
                 .as_table_mut()
                 .and_then(|table| table.remove("speleodb"));
+            super::toml_names::from_disk(&mut document);
             let mut config: Config = document.try_into().context("Failed to parse config file")?;
             super::speleodb_file::load_legacy(&mut config.speleodb, path, legacy);
             super::speleodb_file::load_or_preserve(&mut config.speleodb, path);
@@ -1497,6 +1504,7 @@ impl Config {
         if let Some(table) = document.as_table_mut() {
             table.remove("speleodb");
         }
+        super::toml_names::to_disk(&mut document);
         let mut contents =
             toml::to_string_pretty(&document).context("Failed to serialize config")?;
         // `webkit_memory` is `#[serde(skip_serializing)]` (backend-only, kept out
@@ -1556,15 +1564,15 @@ impl Config {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
-    /// Get the next section color from the palette
-    pub fn next_section_color(&self, used_colors: &[String]) -> String {
-        for color in &self.section_colors.palette {
+    /// Get the next line color from the palette
+    pub fn next_line_color(&self, used_colors: &[String]) -> String {
+        for color in &self.line_colors.palette {
             if !used_colors.contains(color) {
                 return color.clone();
             }
         }
         // If all colors used, start from beginning
-        self.section_colors
+        self.line_colors
             .palette
             .first()
             .cloned()

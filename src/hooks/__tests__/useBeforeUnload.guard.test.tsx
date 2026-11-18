@@ -259,10 +259,10 @@ describe('useBeforeUnload - every cancellable prompt precedes the irreversible a
 
 /**
  * [#270] The tier-1 cleanup is destructive by contract ("e.g. delete placed
- * sections"), so it may only run once the close is actually going ahead. It used to
+ * lines"), so it may only run once the close is actually going ahead. It used to
  * run inside the tier-1 confirmation, ABOVE the tier-2 guard - so a close the guard
  * then aborted had already performed the deletions: the user gets their prompt,
- * cancels, keeps working, and the sections are gone anyway.
+ * cancels, keeps working, and the lines are gone anyway.
  */
 describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () => {
   it('does NOT run the cleanup when the guard aborts the close', async () => {

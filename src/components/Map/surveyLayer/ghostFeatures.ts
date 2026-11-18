@@ -3,12 +3,12 @@
  *
  * Extracted from the (deleted) stock `features.ts` so the custom ghost layer
  * keeps its geometry source without depending on a stock-pipeline module. Turns
- * a `GhostSectionData` snapshot into flat GeoJSON shot lines + station / merge
+ * a `GhostLineData` snapshot into flat GeoJSON shot lines + station / merge
  * points for the merge-preview visualization.
  */
 import type { GpsOrigin } from '../../../types/config';
 import { metersToMapCoords } from '../../../utils/coordinates';
-import type { GhostSectionData } from './displayColor';
+import type { GhostLineData } from './displayColor';
 
 export interface GhostFeatureSets {
   shotFeatures: GeoJSON.Feature[];
@@ -17,7 +17,7 @@ export interface GhostFeatureSets {
 }
 
 export function buildGhostFeatures(
-  data: GhostSectionData | null,
+  data: GhostLineData | null,
   gpsOrigin: GpsOrigin | null
 ): GhostFeatureSets {
   const shotFeatures: GeoJSON.Feature[] = [];

@@ -5,7 +5,7 @@ import {
   getMapCenter,
   getSelection,
   seedNavigationTools,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
@@ -14,7 +14,7 @@ import {
   readCanvasPixel,
   countCanvasInk,
   type MapCenter,
-  type SectionSeed,
+  type LineSeed,
   type ScreenPoint,
 } from './helpers/app';
 
@@ -31,7 +31,7 @@ import {
  */
 
 /** Geometry for the drawn-content check (a project is created empty by the mocks). */
-const SECTION_SEEDS: SectionSeed[] = [
+const LINE_SEEDS: LineSeed[] = [
   {
     name: 'Panner',
     direction: 'in',
@@ -45,7 +45,7 @@ const SECTION_SEEDS: SectionSeed[] = [
 /**
  * Helper to create a new project and get to SingleSystemView with map canvas.
  * The mocked project starts EMPTY, so a test that needs drawn survey geometry
- * seeds it (see SECTION_SEEDS); the camera-only tests do not.
+ * seeds it (see LINE_SEEDS); the camera-only tests do not.
  */
 async function createProjectWithMap(page: Page): Promise<void> {
   await createProject(page, 'Pan Movement Test');
@@ -285,7 +285,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       // `survey-stations` layer this used to query no longer exists. Reading the
       // drawn geometry also removes the tile-render timing that made the original
       // station-position checks too flaky to keep.
-      await seedProjectWithSections(page, SECTION_SEEDS);
+      await seedProjectWithLines(page, LINE_SEEDS);
       await page.keyboard.press('p');
       await waitForActiveTool(page, 'pan');
       await waitForMapIdle(page);
@@ -343,19 +343,19 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       const bg = await readCanvasPixel(page, 6, 6); // empty corner of the canvas
       expect(
         await countCanvasInk(page, probe!.x, probe!.y, bg),
-        `station ${probe!.sectionId}:${probe!.stationIndex} painted after the pan`
+        `station ${probe!.lineId}:${probe!.stationIndex} painted after the pan`
       ).toBeGreaterThan(0);
 
       for (const b of before) {
-        const a = after.find((s) => s.sectionId === b.sectionId && s.stationIndex === b.stationIndex);
-        expect(a, `station ${b.sectionId}:${b.stationIndex} still drawn`).toBeTruthy();
+        const a = after.find((s) => s.lineId === b.lineId && s.stationIndex === b.stationIndex);
+        expect(a, `station ${b.lineId}:${b.stationIndex} still drawn`).toBeTruthy();
         expect(
           Math.abs(a!.x - b.x - expectedDx),
-          `station ${b.sectionId}:${b.stationIndex} x follows the camera`
+          `station ${b.lineId}:${b.stationIndex} x follows the camera`
         ).toBeLessThanOrEqual(2);
         expect(
           Math.abs(a!.y - b.y - expectedDy),
-          `station ${b.sectionId}:${b.stationIndex} y follows the camera`
+          `station ${b.lineId}:${b.stationIndex} y follows the camera`
         ).toBeLessThanOrEqual(2);
       }
     });

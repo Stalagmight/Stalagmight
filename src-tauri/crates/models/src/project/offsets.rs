@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use tracing::error;
 
 use crate::{
-    ClosurePair, ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef,
+    ClosurePair, ClosureStrategy, LineId, LoopClosure, StationKey, StationMerge, StationRef,
 };
 
 use super::union_find::UnionFind;
@@ -19,20 +19,20 @@ use super::Project;
 /// extended as closures are promoted to merges (#597):
 ///
 /// - `connected`: stations joined through shots and RESOLVABLE merges, closures
-///   excluded - the orphan predicate. Every station of a section is joined to
-///   the next by its shots, so section-level components answer it exactly.
-/// - `merge_component`: sections joined by merges by their STORED section ids,
+///   excluded - the orphan predicate. Every station of a line is joined to
+///   the next by its shots, so line-level components answer it exactly.
+/// - `merge_component`: lines joined by merges by their STORED line ids,
 ///   resolvable or not - the same graph `MergeTopology::adjacency` gives
 ///   `merge_would_double_anchor`, with each component flagged when a resolvable
-///   zero datum sits in it. A stored id naming no live section still gets a
+///   zero datum sits in it. A stored id naming no live line still gets a
 ///   slot (`merge_slot`), since the adjacency walk passes through it.
 /// - `points`: the one STATION-level relation (#738) - stations joined by
 ///   resolvable merges, the merge groups [`Project::are_stations_merged`]
 ///   walks. Every resolved merge and closure endpoint gets a slot
 ///   (`point_slot`); nothing else is ever asked about.
 pub(crate) struct StationComponents {
-    section_slot: HashMap<SectionId, usize>,
-    merge_slot: HashMap<SectionId, usize>,
+    line_slot: HashMap<LineId, usize>,
+    merge_slot: HashMap<LineId, usize>,
     connected: UnionFind,
     merge_component: UnionFind,
     anchored: Vec<bool>,
@@ -42,15 +42,15 @@ pub(crate) struct StationComponents {
 
 impl StationComponents {
     fn new(project: &Project) -> Self {
-        let section_slot: HashMap<SectionId, usize> = project
-            .sections
+        let line_slot: HashMap<LineId, usize> = project
+            .lines
             .iter()
             .enumerate()
             .map(|(i, s)| (s.id, i))
             .collect();
-        let mut merge_slot = section_slot.clone();
+        let mut merge_slot = line_slot.clone();
         for merge in &project.station_merges {
-            for id in [merge.station_a.section_id, merge.station_b.section_id] {
+            for id in [merge.station_a.line_id, merge.station_b.line_id] {
                 let next = merge_slot.len();
                 merge_slot.entry(id).or_insert(next);
             }
@@ -76,26 +76,26 @@ impl StationComponents {
             }
         }
         let mut components = Self {
-            connected: UnionFind::new(section_slot.len()),
+            connected: UnionFind::new(line_slot.len()),
             merge_component: UnionFind::new(merge_slot.len()),
             anchored: vec![false; merge_slot.len()],
-            section_slot,
+            line_slot,
             merge_slot,
             points: UnionFind::new(point_slot.len()),
             point_slot,
         };
         for (merge, ends) in project.station_merges.iter().zip(&merge_ends) {
             if let Some((a, b)) = *ends {
-                components.union_connected(a.section_id, b.section_id);
+                components.union_connected(a.line_id, b.line_id);
                 components.union_points(a, b);
             }
-            components.union_merge(merge.station_a.section_id, merge.station_b.section_id);
+            components.union_merge(merge.station_a.line_id, merge.station_b.line_id);
         }
         // Any resolvable datum marks its merge component placed: the first one in
         // list order is that component's placement datum (#741).
         for datum in &project.zero_datums {
             if let Some(station) = project.resolve_key(&datum.station_ref) {
-                if let Some(&i) = components.merge_slot.get(&station.section_id) {
+                if let Some(&i) = components.merge_slot.get(&station.line_id) {
                     let root = components.merge_component.find(i);
                     components.anchored[root] = true;
                 }
@@ -108,8 +108,8 @@ impl StationComponents {
     /// merges.
     fn connected(&mut self, a: StationRef, b: StationRef) -> bool {
         match (
-            self.section_slot.get(&a.section_id),
-            self.section_slot.get(&b.section_id),
+            self.line_slot.get(&a.line_id),
+            self.line_slot.get(&b.line_id),
         ) {
             (Some(&a), Some(&b)) => self.connected.find(a) == self.connected.find(b),
             _ => false,
@@ -117,7 +117,7 @@ impl StationComponents {
     }
 
     /// `merge_would_double_anchor`, answered from the components.
-    fn would_double_anchor(&mut self, a: SectionId, b: SectionId) -> bool {
+    fn would_double_anchor(&mut self, a: LineId, b: LineId) -> bool {
         let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) else {
             return false;
         };
@@ -140,8 +140,8 @@ impl StationComponents {
 
     /// Record a merge just added between two resolved stations.
     fn join(&mut self, a: StationRef, b: StationRef) {
-        self.union_connected(a.section_id, b.section_id);
-        self.union_merge(a.section_id, b.section_id);
+        self.union_connected(a.line_id, b.line_id);
+        self.union_merge(a.line_id, b.line_id);
         self.union_points(a, b);
     }
 
@@ -151,13 +151,13 @@ impl StationComponents {
         }
     }
 
-    fn union_connected(&mut self, a: SectionId, b: SectionId) {
-        if let (Some(&a), Some(&b)) = (self.section_slot.get(&a), self.section_slot.get(&b)) {
+    fn union_connected(&mut self, a: LineId, b: LineId) {
+        if let (Some(&a), Some(&b)) = (self.line_slot.get(&a), self.line_slot.get(&b)) {
             self.connected.union(a, b);
         }
     }
 
-    fn union_merge(&mut self, a: SectionId, b: SectionId) {
+    fn union_merge(&mut self, a: LineId, b: LineId) {
         if let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) {
             let (ra, rb) = (self.merge_component.find(a), self.merge_component.find(b));
             if ra != rb {
@@ -186,8 +186,8 @@ impl StationComponents {
 /// Planned by [`Project::plan_merge_promotion`], applied by
 /// [`Project::settle_minted_merges`]. Two steps rather than one because the
 /// command that mints usually goes on changing geometry afterwards - a shot
-/// removal re-places its own section's stations, and the gap-close compensation
-/// slides the whole section - so a delta computed at mint time is stale before
+/// removal re-places its own line's stations, and the gap-close compensation
+/// slides the whole line - so a delta computed at mint time is stale before
 /// anything asserts on it. What must be captured AT MINT TIME is the SET: it is
 /// the moving side's merge group taken BEFORE the new edge fuses the two groups
 /// into one, which is not recoverable once the merge exists. The DELTA is
@@ -196,7 +196,7 @@ impl StationComponents {
 pub(crate) struct MintedMerge {
     /// The moving side's merge group, snapshotted before the merge existed.
     /// Empty when nothing may move (see [`Project::plan_merge_promotion`]).
-    movable: Vec<SectionId>,
+    movable: Vec<LineId>,
     /// The endpoint that stays put.
     anchor: StationKey,
     /// The endpoint that has to reach it.
@@ -240,14 +240,14 @@ pub struct OrphanClosureSweep {
     pub removed: Vec<LoopClosure>,
     /// Where each of `removed` sat in `loop_closures` when the sweep began,
     /// parallel to it: an edit that adds and drops no closure before its sweep
-    /// (Split Section Here) can match each one to its entry by position.
+    /// (Split Line Here) can match each one to its entry by position.
     pub removed_positions: Vec<usize>,
 }
 
 impl OrphanClosureSweep {
     /// Log what an APPLIED sweep removed: one line with the count, the ids at
     /// debug level only (a file can hold 50 000 of them). The sweep itself
-    /// logs nothing, because Split Section Here's preview runs it on a copy
+    /// logs nothing, because Split Line Here's preview runs it on a copy
     /// whose removals never happen; the callers that keep the result log it.
     pub fn log_removed(&self, context: &str) {
         log_removed_closures(&self.removed, context);
@@ -260,6 +260,8 @@ struct ClosureBefore {
     id: u64,
     keys: (StationKey, StationKey),
     ends: Option<(StationRef, StationRef)>,
+    /// `ends` as the user read them before the edit (`Main Line / 4`).
+    labels: Option<(String, String)>,
     one_point: bool,
 }
 
@@ -274,12 +276,15 @@ pub struct ClosuresBeforeSweep {
 }
 
 /// A closure the sweep removed, named for the user (#738).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovedClosure {
     /// By the stations it had before the edit, the ids the user created it
     /// with (its stations after the edit only if it cannot be matched to a
     /// closure the edit started with).
     pub pair: ClosurePair,
+    /// `pair`'s two stations as the user read them when `pair` was taken
+    /// (`Main Line / 4`): before the edit, which can rename or renumber them.
+    pub labels: (String, String),
     /// Its two stations were one point BEFORE the edit, so the edit did not
     /// cause the removal: the sweep only cleaned up a closure a file or an undo
     /// history from before #738 still held. Otherwise the edit's own promotion
@@ -311,7 +316,7 @@ pub fn log_removed_closures(removed: &[LoopClosure], context: &str) {
 /// The gap is kept as raw bits rather than as an `f64` so the fingerprint can be
 /// compared for equality without a float comparison, and so that a gap differing
 /// by a single ULP - the smallest change any edit can make to it - misses.
-type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
+type ResidualGap = ((LineId, u32), (LineId, u32), u64);
 
 /// A merge residual the offset solver has already run on and failed to reduce -
 /// see [`Project::realign_merges`], which is the only producer and consumer.
@@ -320,7 +325,7 @@ type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
 /// a reducible one:
 ///
 /// * `structure` hashes every input to solvability that is NOT geometry - the
-///   section set, the merge edges, the closure edges (id, endpoints, aligned
+///   line set, the merge edges, the closure edges (id, endpoints, aligned
 ///   flag, strategy) and the zero-datum list in order (the order decides which
 ///   datum places each group, #741). A structural edit can make a gap healable
 ///   without moving a single station, so a fingerprint blind to structure
@@ -344,41 +349,41 @@ pub struct RealignFixpoint {
 }
 
 impl Project {
-    /// Read a section's offset, defaulting to (0, 0).
-    pub fn section_offset(&self, id: SectionId) -> (f64, f64) {
-        self.section_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
+    /// Read a line's offset, defaulting to (0, 0).
+    pub fn line_offset(&self, id: LineId) -> (f64, f64) {
+        self.line_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
     }
 
-    /// # THE `section_offsets` INVARIANT
+    /// # THE `line_offsets` INVARIANT
     ///
-    /// **A dust-zero entry does not exist.** `section_offsets` holds a key only
-    /// for a section that is ACTUALLY DISPLACED, and "not displaced" has exactly
+    /// **A dust-zero entry does not exist.** `line_offsets` holds a key only
+    /// for a line that is ACTUALLY DISPLACED, and "not displaced" has exactly
     /// one spelling: the key is absent. A value within [`Project::OFFSET_DUST_M`]
     /// of the origin in both components is not a position, so it is not written -
     /// it is removed. That holds for every writer, computed or restored, in memory
     /// and on disk, with no exceptions:
     ///
     /// * this function is THE write point, and everything routes through it -
-    ///   [`Self::adjust_section_offset`], [`Self::set_section_offset`],
-    ///   [`Self::restore_section_offsets`], the offset solver, the closure solve,
+    ///   [`Self::adjust_line_offset`], [`Self::set_line_offset`],
+    ///   [`Self::restore_line_offsets`], the offset solver, the closure solve,
     ///   the move tools, the undo restore arms, and the two sites that cannot call
-    ///   a `&mut self` method because they hold a live borrow of `self.sections`
+    ///   a `&mut self` method because they hold a live borrow of `self.lines`
     ///   (`Project::apply_station_move_internal`, `AppState::move_station`);
-    /// * [`Self::normalize_section_offsets`] enforces it on a map this app did not
+    /// * [`Self::normalize_line_offsets`] enforces it on a map this app did not
     ///   write - a `.stalx` from a build that predates the invariant, and the
     ///   snapshot payload of an undo entry persisted by one.
     ///
     /// ## Why it has to be an invariant and not a per-writer rule
     ///
     /// Because no write-local rule can satisfy both of the identities the app
-    /// owes. `MoveSection(+d)` followed by `MoveSection(-d)` must leave the map it
+    /// owes. `MoveLine(+d)` followed by `MoveLine(-d)` must leave the map it
     /// found, and a writer that sees only its own arguments cannot tell the two
     /// starting points apart:
     ///
     /// * from an ABSENT key, `(0 + d) - d` lands off zero by a residue under
     ///   [`Project::OFFSET_DUST_M`] rather than on it, and the key must end
     ///   ABSENT - the route that did nothing has none either
-    ///   (#413 finding 2's dust half: a `ReverseSection` applied twice, an insert
+    ///   (#413 finding 2's dust half: a `ReverseLine` applied twice, an insert
     ///   plus the remove that undoes it, a cascade "correcting" its own noise);
     /// * from a PRESENT all-zero key, the same arithmetic must end PRESENT.
     ///
@@ -406,9 +411,9 @@ impl Project {
     ///
     /// Takes the map rather than `&mut self` so a caller holding a disjoint field
     /// borrow can still use it.
-    pub fn write_section_offset(
-        offsets: &mut HashMap<SectionId, (f64, f64)>,
-        id: SectionId,
+    pub fn write_line_offset(
+        offsets: &mut HashMap<LineId, (f64, f64)>,
+        id: LineId,
         value: (f64, f64),
     ) {
         if value.0.abs() <= Self::OFFSET_DUST_M && value.1.abs() <= Self::OFFSET_DUST_M {
@@ -418,54 +423,50 @@ impl Project {
         }
     }
 
-    /// Drop every `section_offsets` entry that violates the invariant on
-    /// [`Self::write_section_offset`], and report how many went.
+    /// Drop every `line_offsets` entry that violates the invariant on
+    /// [`Self::write_line_offset`], and report how many went.
     ///
     /// For a map this app did not write through that function: a `.stalx` from a
     /// build that predates the invariant (the load path inserts whatever rows the
     /// file holds), and the snapshot payload of an undo entry persisted by one.
-    /// Both are legacy debris - a key for a section that is not displaced - and
+    /// Both are legacy debris - a key for a line that is not displaced - and
     /// the app is free to drop it: every consumer reads the map through
-    /// [`Self::section_offset`] or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
-    /// dropping moves the section by the value it held, which is by definition
+    /// [`Self::line_offset`] or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+    /// dropping moves the line by the value it held, which is by definition
     /// under [`Project::OFFSET_DUST_M`] - a micrometre, four decades under the
     /// gap the app calls a misalignment and six under anything it displays. What
     /// it changes that IS observable is that the two spellings of "not displaced"
     /// stop coexisting.
-    pub fn normalize_section_offsets(&mut self) -> usize {
-        let before = self.section_offsets.len();
-        self.section_offsets.retain(|_, value| {
+    pub fn normalize_line_offsets(&mut self) -> usize {
+        let before = self.line_offsets.len();
+        self.line_offsets.retain(|_, value| {
             !(value.0.abs() <= Self::OFFSET_DUST_M && value.1.abs() <= Self::OFFSET_DUST_M)
         });
-        before - self.section_offsets.len()
+        before - self.line_offsets.len()
     }
 
-    /// Apply a delta to one section's offset. Low-level primitive -
+    /// Apply a delta to one line's offset. Low-level primitive -
     /// callers handle cascade and invariants.
-    pub fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
-        let current = self.section_offset(id);
-        Self::write_section_offset(
-            &mut self.section_offsets,
-            id,
-            (current.0 + dx, current.1 + dy),
-        );
+    pub fn adjust_line_offset(&mut self, id: LineId, dx: f64, dy: f64) {
+        let current = self.line_offset(id);
+        Self::write_line_offset(&mut self.line_offsets, id, (current.0 + dx, current.1 + dy));
     }
 
     /// Set an exact offset value (for undo restoration / initial placement).
-    pub fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
-        Self::write_section_offset(&mut self.section_offsets, id, offset);
+    pub fn set_line_offset(&mut self, id: LineId, offset: (f64, f64)) {
+        Self::write_line_offset(&mut self.line_offsets, id, offset);
     }
 
-    /// Remove a section's offset entry entirely.
-    pub fn remove_section_offset(&mut self, id: SectionId) {
-        self.section_offsets.remove(&id);
+    /// Remove a line's offset entry entirely.
+    pub fn remove_line_offset(&mut self, id: LineId) {
+        self.line_offsets.remove(&id);
     }
 
-    /// Apply the same delta to every section in a merge group.
-    pub fn adjust_rigid_group_offsets(&mut self, anchor: SectionId, dx: f64, dy: f64) {
-        let group = self.get_merged_section_ids(anchor);
+    /// Apply the same delta to every line in a merge group.
+    pub fn adjust_rigid_group_offsets(&mut self, anchor: LineId, dx: f64, dy: f64) {
+        let group = self.get_merged_line_ids(anchor);
         for sid in group {
-            self.adjust_section_offset(sid, dx, dy);
+            self.adjust_line_offset(sid, dx, dy);
         }
     }
 
@@ -506,17 +507,17 @@ impl Project {
             // to claim and nothing for a translation to aim at.
             return None;
         };
-        if self.merge_would_double_anchor(ref_a.section_id, ref_b.section_id) {
+        if self.merge_would_double_anchor(ref_a.line_id, ref_b.line_id) {
             return None;
         }
-        let (anchor, moving, anchor_section, moving_section) =
-            if self.section_has_zero_datum(ref_a.section_id) {
-                (a, b, ref_a.section_id, ref_b.section_id)
-            } else {
-                (b, a, ref_b.section_id, ref_a.section_id)
-            };
-        let group = self.get_merged_section_ids(moving_section);
-        let mut movable: Vec<SectionId> = if group.contains(&anchor_section) {
+        let (anchor, moving, anchor_line, moving_line) = if self.line_has_zero_datum(ref_a.line_id)
+        {
+            (a, b, ref_a.line_id, ref_b.line_id)
+        } else {
+            (b, a, ref_b.line_id, ref_a.line_id)
+        };
+        let group = self.get_merged_line_ids(moving_line);
+        let mut movable: Vec<LineId> = if group.contains(&anchor_line) {
             Vec::new()
         } else {
             group.into_iter().collect()
@@ -546,9 +547,9 @@ impl Project {
     ///
     /// The dust bound is `cascade_bfs`'s, for its reason: a gap of a few ULPs of
     /// the coordinates being summed is the residue of summing a survey chain, not
-    /// a displacement, and "correcting" it would write a `section_offsets` key for
-    /// a section that is not displaced (the invariant on
-    /// [`Self::write_section_offset`]).
+    /// a displacement, and "correcting" it would write a `line_offsets` key for
+    /// a line that is not displaced (the invariant on
+    /// [`Self::write_line_offset`]).
     pub(crate) fn settle_minted_merges(&mut self, minted: &[MintedMerge]) {
         for merge in minted {
             if merge.movable.is_empty() {
@@ -578,12 +579,12 @@ impl Project {
                 moving = ?merge.moving,
                 dx,
                 dy,
-                sections = merge.movable.len(),
+                lines = merge.movable.len(),
                 purpose = "pay for the coincidence a promoted merge declares",
                 "Co-locating the movable side of a minted merge"
             );
-            for section in &merge.movable {
-                self.adjust_section_offset(*section, dx, dy);
+            for line in &merge.movable {
+                self.adjust_line_offset(*line, dx, dy);
             }
         }
     }
@@ -608,7 +609,7 @@ impl Project {
     ///   coincident would fight the thing it exists for.
     /// * **GEOMETRY**, gated at [`Self::MERGE_ALIGNMENT_INVARIANT_M`] and not at
     ///   the 5 cm reporting tolerance. An aligned closure is treated exactly like
-    ///   a merge by [`Self::get_rigid_connected_section_ids`] and by the offset
+    ///   a merge by [`Self::get_rigid_connected_line_ids`] and by the offset
     ///   cascade, so it is held to the merge INVARIANT - the number that answers
     ///   "is this a state the code considers valid" rather than "is this worth
     ///   telling the user about". That also makes a fresh stamp unable to trip
@@ -617,7 +618,7 @@ impl Project {
     /// * **DOUBLE-ANCHORING**, asked with [`Self::merge_would_double_anchor`] -
     ///   the same refusal [`Self::plan_merge_promotion`] makes. Aligning a closure
     ///   between two independently placed merge components mints a rigid edge
-    ///   between two sections `cascade_bfs` pre-loads as authoritative (each holds
+    ///   between two lines `cascade_bfs` pre-loads as authoritative (each holds
     ///   a placement datum), so it never traverses it and nothing could ever
     ///   satisfy it. Refusing keeps the pair a SOFT closure, which is legitimate
     ///   between two placed groups and costs no geometry - unlike a promotion, an
@@ -628,7 +629,7 @@ impl Project {
     ///
     /// Deliberately, and it is what makes the re-measure safe on an INVERSE. The
     /// gap reads shots plus offsets, and the double-anchor question reads merges
-    /// plus datums, through [`Self::get_merged_section_ids`] - the MERGE-only
+    /// plus datums, through [`Self::get_merged_line_ids`] - the MERGE-only
     /// graph, never the rigid one. So the stamp is a pure function of the state
     /// MINUS the flags it computes: re-running it cannot depend on the order the
     /// closures are visited in, cannot iterate to a fixpoint, and reproduces
@@ -639,7 +640,7 @@ impl Project {
         strategy: ClosureStrategy,
         station_a: &StationKey,
         station_b: &StationKey,
-        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        local: &HashMap<LineId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
         components: Option<&mut StationComponents>,
     ) -> bool {
@@ -658,8 +659,8 @@ impl Project {
         // A batch caller answers from components built once: a walk per closure
         // is closures x merge-component size on every load (#597).
         !match components {
-            Some(components) => components.would_double_anchor(a.section_id, b.section_id),
-            None => self.merge_would_double_anchor(a.section_id, b.section_id),
+            Some(components) => components.would_double_anchor(a.line_id, b.line_id),
+            None => self.merge_would_double_anchor(a.line_id, b.line_id),
         }
     }
 
@@ -677,7 +678,7 @@ impl Project {
         if strategy != ClosureStrategy::Move {
             return false;
         }
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
         self.closure_alignment_stamp(
             strategy,
@@ -753,7 +754,7 @@ impl Project {
 
     /// [`Self::remeasure_closure_alignment`], returning the id of every
     /// closure whose claim it changed, in `loop_closures` order: Combine
-    /// Sections checks them against what its plan predicted (#736).
+    /// Lines checks them against what its plan predicted (#736).
     pub(crate) fn remeasure_closure_alignment_ids(&mut self) -> Vec<u64> {
         if !self
             .loop_closures
@@ -762,7 +763,7 @@ impl Project {
         {
             return Vec::new();
         }
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
         let mut components = StationComponents::new(self);
         // Decided in an immutable pass, applied after: the stamp reads merges and
@@ -808,14 +809,14 @@ impl Project {
         ids
     }
 
-    /// Does the merge group containing `section_id` hold a zero datum?
-    pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
+    /// Does the merge group containing `line_id` hold a zero datum?
+    pub(crate) fn rigid_group_has_datum(&self, id: LineId) -> bool {
         // Delegate to the resolve-aware check so a DANGLING datum (anchor key no
         // longer resolves) is not counted as an anchor - otherwise a move-drag is
         // wrongly blocked on a phantom-anchored, actually-unanchored group (#174).
         // Same merge-group scope as before: `component_datum_refs` (which backs
-        // `section_has_zero_datum`) uses the same `get_merged_section_ids`.
-        self.section_has_zero_datum(id)
+        // `line_has_zero_datum`) uses the same `get_merged_line_ids`.
+        self.line_has_zero_datum(id)
     }
 
     /// Assert that all merge points are colocated (within
@@ -830,7 +831,7 @@ impl Project {
     pub fn debug_assert_merge_alignment(&self, context: &str) {
         // Despite the name, this used to run in release too - and the cost
         // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
-        // per call, called from every mutating command. For a 1 200-section
+        // per call, called from every mutating command. For a 1 200-line
         // TML import this contributed ~1.5 billion operations to the hot
         // path. Gate the whole body behind `debug_assertions` so it
         // remains a sanity check during development without harming
@@ -855,8 +856,8 @@ impl Project {
             // fools the double-anchor guard.
             self.station_merges.debug_assert_memo_fresh(context);
             for merge in &self.station_merges {
-                // Skip same-section merges (physically meaningless, used only in tests)
-                if merge.station_a.section_id == merge.station_b.section_id {
+                // Skip same-line merges (physically meaningless, used only in tests)
+                if merge.station_a.line_id == merge.station_b.line_id {
                     continue;
                 }
                 let a = self
@@ -902,38 +903,38 @@ impl Project {
         let _ = context;
     }
 
-    /// One authoritative anchor section per connected merge group, preferring a
-    /// zero-datum section so the realign keeps the group pinned to GPS.
-    pub(super) fn realign_seeds(&self) -> Vec<SectionId> {
-        // Placement datums only: a GPS fix's section is not authoritative to the
+    /// One authoritative anchor line per connected merge group, preferring a
+    /// zero-datum line so the realign keeps the group pinned to GPS.
+    pub(super) fn realign_seeds(&self) -> Vec<LineId> {
+        // Placement datums only: a GPS fix's line is not authoritative to the
         // cascade (#741), so seeding from it would pin it against its own
         // placement datum and tear the merge between them.
-        let datum_sections: HashSet<SectionId> = self.placement_datum_sections();
-        // The graph `get_connected_section_ids` walks (every merge and every
-        // closure, by stored section id), built once: that walk rescans every
-        // edge per visited section, which made this O(sections x edges) (#602).
-        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        let datum_lines: HashSet<LineId> = self.placement_datum_lines();
+        // The graph `get_connected_line_ids` walks (every merge and every
+        // closure, by stored line id), built once: that walk rescans every
+        // edge per visited line, which made this O(lines x edges) (#602).
+        let mut adjacency: HashMap<LineId, Vec<LineId>> = HashMap::new();
         let edges = self
             .station_merges
             .iter()
-            .map(|m| (m.station_a.section_id, m.station_b.section_id))
+            .map(|m| (m.station_a.line_id, m.station_b.line_id))
             .chain(
                 self.loop_closures
                     .iter()
-                    .map(|c| (c.station_a.section_id, c.station_b.section_id)),
+                    .map(|c| (c.station_a.line_id, c.station_b.line_id)),
             );
         for (a, b) in edges {
             adjacency.entry(a).or_default().push(b);
             adjacency.entry(b).or_default().push(a);
         }
         let mut seeds = Vec::new();
-        let mut visited: HashSet<SectionId> = HashSet::new();
-        for section in &self.sections {
-            if visited.contains(&section.id) {
+        let mut visited: HashSet<LineId> = HashSet::new();
+        for line in &self.lines {
+            if visited.contains(&line.id) {
                 continue;
             }
-            let mut component: HashSet<SectionId> = HashSet::new();
-            let mut queue = vec![section.id];
+            let mut component: HashSet<LineId> = HashSet::new();
+            let mut queue = vec![line.id];
             while let Some(current) = queue.pop() {
                 if component.insert(current) {
                     if let Some(neighbours) = adjacency.get(&current) {
@@ -944,7 +945,7 @@ impl Project {
             let anchor = component
                 .iter()
                 .copied()
-                .filter(|s| datum_sections.contains(s))
+                .filter(|s| datum_lines.contains(s))
                 .min()
                 .or_else(|| component.iter().copied().min());
             if let Some(a) = anchor {
@@ -955,8 +956,8 @@ impl Project {
         seeds
     }
 
-    /// Re-derive section offsets from the merge/datum constraints right after
-    /// loading from disk. Section offsets are **derived** state that the file
+    /// Re-derive line offsets from the merge/datum constraints right after
+    /// loading from disk. Line offsets are **derived** state that the file
     /// merely caches; re-solving them on load heals any drift a previous session
     /// persisted (e.g. an older redo bug) so the project always opens
     /// geometrically correct, without the user having to repair anything. The
@@ -973,23 +974,23 @@ impl Project {
     /// to the persisted undo history, whose entries were recorded against the old
     /// ids.
     pub fn redrive_offsets_after_load_reporting(&mut self) -> (usize, super::ShotUuidRemap) {
-        self.rebuild_section_index();
+        self.rebuild_line_index();
         self.rebuild_shot_uuid_index();
         // Normalize any closure that is really a sole-bridge attachment into a
-        // merge before solving, so a file persisted in that state (e.g. a section
+        // merge before solving, so a file persisted in that state (e.g. a line
         // stranded by an older delete) opens correctly - and drop any closure
         // between two merged stations, which a split could leave before #738
         // (silently, as the promotion is: see `convert_orphan_closures_to_merges`).
-        // De-duplicate shot UUIDs BEFORE re-anchoring: if a section persisted two
+        // De-duplicate shot UUIDs BEFORE re-anchoring: if a line persisted two
         // shots sharing a UUID, canonicalizing a positional Index(i) ref to
         // AfterShot(uuid) would later resolve to the FIRST match, silently moving
         // a ref off the duplicate it was meant to target (and Repair couldn't
         // recover the intended endpoint). Re-minting the duplicate first gives the
         // second station its own UUID so the re-anchor stays faithful.
         self.ensure_unique_shot_uuids();
-        // Then ACROSS sections: a file saved before shot UUIDs were project-wide
-        // unique can hold one id in several sections (an Ariane file imported
-        // twice, a merge of two copies). The lowest section keeps it, the others
+        // Then ACROSS lines: a file saved before shot UUIDs were project-wide
+        // unique can hold one id in several lines (an Ariane file imported
+        // twice, a merge of two copies). The lowest line keeps it, the others
         // get a derived replacement - derived, so every read of the file agrees.
         // Still before the re-anchor, so positional refs canonicalize straight to
         // the new ids.
@@ -1000,6 +1001,11 @@ impl Project {
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
+        // Station identity, now that every key is canonical: a name for every
+        // station (seeded from its index), a Station ID for every station
+        // (allocated in line order, so a file an older build rewrote without
+        // the ids re-mints the same ones), a unique name for every line.
+        self.ensure_station_identities();
         self.sweep_orphan_closures().log_removed("open");
         // Before the re-solve, which would otherwise heal a merge an older build
         // tore between two datum-placed pieces by moving the later piece off its
@@ -1012,22 +1018,22 @@ impl Project {
         // derivable offset the re-solve rewrites - the cascade never seed-adjusts
         // an anchor or a free-floating component, so such a row survives it
         // untouched - and it is a state the app may not hold (see the invariant on
-        // `write_section_offset`). A `.stalx` from a build that predates the
+        // `write_line_offset`). A `.stalx` from a build that predates the
         // invariant therefore stops carrying one HERE, at the boundary, rather
         // than being carried into memory for every downstream rule to special-case.
         // Nothing observable changes: an absent key and an all-zero one are the
         // same geometry to every consumer. The file settles on the next save.
-        let dropped = self.normalize_section_offsets();
+        let dropped = self.normalize_line_offsets();
         if dropped > 0 {
             tracing::info!(
                 dropped,
-                purpose = "hold the section_offsets invariant at the load boundary",
-                "Dropped persisted section offsets that were within dust of the origin"
+                purpose = "hold the line_offsets invariant at the load boundary",
+                "Dropped persisted line offsets that were within dust of the origin"
             );
         }
         // LAST, so the claims are measured off the geometry the re-solve settled
         // on rather than the geometry the file happened to cache. `is_aligned` is
-        // derived state exactly as `section_offsets` is, and the same zero-trust
+        // derived state exactly as `line_offsets` is, and the same zero-trust
         // rule applies: a file written by a build that asserted the flag, or one
         // whose closure was torn by an edit that predates the re-measure, opens
         // holding the truth instead of the claim (#469 item 2).
@@ -1040,7 +1046,7 @@ impl Project {
     /// (shots + merges) independently of the closure itself? If not, the closure
     /// is their *sole* bridge - a merge, not a loop.
     ///
-    /// A same-section closure is never an orphan (the section itself connects the
+    /// A same-line closure is never an orphan (the line itself connects the
     /// endpoints), and neither is one whose endpoint no longer resolves (there is
     /// nothing to ask the connectivity walk about; a dangling ref is integrity's
     /// problem, not this one).
@@ -1054,7 +1060,7 @@ impl Project {
     /// resolvable merges built once per sweep, rather than a walk per closure
     /// (#597: the walk rescanned every merge per visited station).
     fn is_orphan_closure(&self, closure: &LoopClosure, components: &mut StationComponents) -> bool {
-        if closure.station_a.section_id == closure.station_b.section_id {
+        if closure.station_a.line_id == closure.station_b.line_id {
             return false;
         }
         let (Some(a), Some(b)) = (
@@ -1085,7 +1091,7 @@ impl Project {
     /// join (pinned by `merge_stations_never_leaves_a_closure_between_merged_
     /// stations`). What does produce one is a promotion that merges the two ends
     /// of a closure that tied the same two points as the promoted one - the same
-    /// loop recorded twice, which the Merge tool and Combine Sections allow -
+    /// loop recorded twice, which the Merge tool and Combine Lines allow -
     /// and a file or an undo history written before #738.
     ///
     /// A closure with an endpoint that no longer resolves is not one point: a
@@ -1133,10 +1139,10 @@ impl Project {
     ///
     /// Iterative: when two closures tie the same two points, the first becomes
     /// the merge and the second, whose two stations that merge has just made one
-    /// point, is removed. Two closures that tie the same two SECTIONS at
+    /// point, is removed. Two closures that tie the same two LINES at
     /// different stations leave the second a genuine loop, kept. Returns the
     /// number converted; [`Self::sweep_orphan_closures`] also says what it
-    /// removed. (Issue #8 - a shot deletion can strand a section so its only
+    /// removed. (Issue #8 - a shot deletion can strand a line so its only
     /// attachment is a closure.)
     ///
     /// Whole-project sweep: every orphan it finds is converted, and every closure
@@ -1156,7 +1162,7 @@ impl Project {
 
     /// [`Self::convert_orphan_closures_to_merges`], saying what it did: how many
     /// closures it turned into merges and which closures it removed because
-    /// their two stations are one point. Split Section Here's preview runs it on
+    /// their two stations are one point. Split Line Here's preview runs it on
     /// a copy to name the closures the split removes, and the split runs it for
     /// real, so the dialog and the edit cannot disagree. Logs nothing: a caller
     /// that keeps the result logs it ([`OrphanClosureSweep::log_removed`]).
@@ -1181,13 +1187,17 @@ impl Project {
             closures: self
                 .loop_closures
                 .iter()
-                .map(|c| ClosureBefore {
-                    id: c.id,
-                    keys: (c.station_a.clone(), c.station_b.clone()),
-                    ends: self
+                .map(|c| {
+                    let ends = self
                         .resolve_key(&c.station_a)
-                        .zip(self.resolve_key(&c.station_b)),
-                    one_point: self.closure_ends_are_one_point(c, &mut components),
+                        .zip(self.resolve_key(&c.station_b));
+                    ClosureBefore {
+                        id: c.id,
+                        keys: (c.station_a.clone(), c.station_b.clone()),
+                        ends,
+                        labels: ends.map(|(a, b)| (self.station_text(a), self.station_text(b))),
+                        one_point: self.closure_ends_are_one_point(c, &mut components),
+                    }
                 })
                 .collect(),
         }
@@ -1198,7 +1208,7 @@ impl Project {
     /// the project AFTER the sweep.
     ///
     /// A closure is matched, in this order: by position, when the edit added
-    /// and dropped no closure before its sweep (Split Section Here) and the
+    /// and dropped no closure before its sweep (Split Line Here) and the
     /// entry there has its id; else the one closure `before` held with its id;
     /// else the one with its id and the same stored ends. Ids are not trusted
     /// alone because a hostile or very old file can repeat one. A closure
@@ -1252,24 +1262,35 @@ impl Project {
                         .find(|e| e.keys == (closure.station_a.clone(), closure.station_b.clone()))
                         .copied(),
                 });
-                let (station_a, station_b) = entry
-                    .and_then(|e| e.ends)
-                    .or_else(|| {
-                        self.resolve_key(&closure.station_a)
-                            .zip(self.resolve_key(&closure.station_b))
-                    })
-                    .unwrap_or_else(|| {
-                        (
-                            StationRef::new(closure.station_a.section_id, 0),
-                            StationRef::new(closure.station_b.section_id, 0),
+                let before_ends = entry.and_then(|e| e.ends.zip(e.labels.clone()));
+                let ((station_a, station_b), labels) = before_ends.unwrap_or_else(|| {
+                    // Not matched to a closure the edit started with: named
+                    // by its stations now.
+                    if let Some((a, b)) = self
+                        .resolve_key(&closure.station_a)
+                        .zip(self.resolve_key(&closure.station_b))
+                    {
+                        return ((a, b), (self.station_text(a), self.station_text(b)));
+                    }
+                    let (a, b) = (closure.station_a.line_id, closure.station_b.line_id);
+                    let unknown = |line_id| {
+                        self.line_label(line_id).map_or_else(
+                            || "a station".to_string(),
+                            |l| format!("a station of {l}"),
                         )
-                    });
+                    };
+                    (
+                        (StationRef::new(a, 0), StationRef::new(b, 0)),
+                        (unknown(a), unknown(b)),
+                    )
+                });
                 RemovedClosure {
                     pair: ClosurePair {
                         closure_id: closure.id,
                         station_a,
                         station_b,
                     },
+                    labels,
                     already_one_point: entry.is_some_and(|e| e.one_point),
                 }
             })
@@ -1363,7 +1384,7 @@ impl Project {
             // The double-anchor refusal is answered from the components first, so a
             // refused closure costs a lookup instead of `plan_merge_promotion`'s two
             // merge-graph walks (#597); the plan still decides every promotion.
-            let plan = if components.would_double_anchor(a.section_id, b.section_id) {
+            let plan = if components.would_double_anchor(a.line_id, b.line_id) {
                 None
             } else {
                 self.plan_merge_promotion(&a, &b)
@@ -1415,7 +1436,7 @@ impl Project {
 
     /// Every merge whose endpoints are at least [`Self::MERGE_ALIGNMENT_INVARIANT_M`]
     /// apart, with the exact gap. The geometry is [`Self::merge_alignment_beyond`]'s
-    /// (same precompute, same skips: a same-section merge is meaningless, a
+    /// (same precompute, same skips: a same-line merge is meaningless, a
     /// dangling endpoint is a structural problem and not a gap) - what differs is
     /// what comes out. That one reports to a human and rounds to centimetres; this
     /// one is compared for identity, so it keeps the bits.
@@ -1423,11 +1444,11 @@ impl Project {
     /// Ordered by `station_merges`, whose order the structure hash pins, so two
     /// calls on one state produce identical vectors.
     fn residual_merge_gaps(&self) -> Vec<ResidualGap> {
-        let local = self.section_local_coords();
+        let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
         let mut residual = Vec::new();
         for merge in &self.station_merges {
-            if merge.station_a.section_id == merge.station_b.section_id {
+            if merge.station_a.line_id == merge.station_b.line_id {
                 continue;
             }
             let (Some(a), Some(b)) = (
@@ -1443,8 +1464,8 @@ impl Project {
                 let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
                 if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
                     residual.push((
-                        (a.section_id, a.station_index),
-                        (b.section_id, b.station_index),
+                        (a.line_id, a.station_index),
+                        (b.line_id, b.station_index),
                         gap.to_bits(),
                     ));
                 }
@@ -1454,11 +1475,11 @@ impl Project {
     }
 
     /// Hash of everything the offset solve depends on that is NOT geometry: which
-    /// sections exist and how many shots each holds, the merge edges, the closure
+    /// lines exist and how many shots each holds, the merge edges, the closure
     /// edges, and the datum anchors. The [`RealignFixpoint`] carries it so that a
     /// structural edit which changes what the solver CAN do - a merge or closure
     /// added or removed, a closure converted, a datum added, moved or dropped, a
-    /// section gone - invalidates a recorded fixpoint even though it moves nothing
+    /// line gone - invalidates a recorded fixpoint even though it moves nothing
     /// and leaves every gap bit-identical.
     ///
     /// This is a whole-project scan rather than a set of invalidation hooks on the
@@ -1466,16 +1487,16 @@ impl Project {
     /// (including the undo restore arms, which assign whole vectors), and a hook
     /// set that is one call site short does not degrade - it silently skips a heal
     /// that had become possible. Deriving the answer from the state cannot be one
-    /// call site short. The scan is `O(sections + merges + closures + datums)` and
+    /// call site short. The scan is `O(lines + merges + closures + datums)` and
     /// runs only when a beyond-invariant residual already exists, next to a
     /// `merge_alignment_beyond` pass that is `O(total shots)` and a re-solve that
     /// is more expensive still.
     fn realign_structure_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        self.sections.len().hash(&mut hasher);
-        for section in &self.sections {
-            section.id.hash(&mut hasher);
-            section.shots.len().hash(&mut hasher);
+        self.lines.len().hash(&mut hasher);
+        for line in &self.lines {
+            line.id.hash(&mut hasher);
+            line.shots.len().hash(&mut hasher);
         }
         self.station_merges.len().hash(&mut hasher);
         for merge in &self.station_merges {
@@ -1497,9 +1518,9 @@ impl Project {
         hasher.finish()
     }
 
-    /// Recompute section offsets so every merge's endpoints coincide again,
+    /// Recompute line offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
-    /// arbitrary section). Returns the number of merges that were misaligned
+    /// arbitrary line). Returns the number of merges that were misaligned
     /// beyond the REPORTING tolerance before the realign.
     ///
     /// This is the per-command self-heal (via `reconcile_geometry`): it keeps the
@@ -1546,7 +1567,7 @@ impl Project {
     ///   reached while the skip is armed;
     /// * any structural edit that could turn an irreducible residual into a
     ///   reducible one without moving anything (a merge, closure, datum or
-    ///   section added, removed or converted) changes the structure hash and
+    ///   line added, removed or converted) changes the structure hash and
     ///   misses too.
     ///
     /// What the skip does leave alone is a SUB-invariant offset change inside a
@@ -1559,8 +1580,8 @@ impl Project {
     ///
     /// A whole-rigid-group translation is NOT in that category, despite looking
     /// like it should be (it leaves every gap and the structure bit-identical).
-    /// The cascade derives each non-authoritative section from an authoritative
-    /// one's STORED offset and never re-derives an authoritative section from
+    /// The cascade derives each non-authoritative line from an authoritative
+    /// one's STORED offset and never re-derives an authoritative line from
     /// anything, so it is translation-invariant: after a group move the full
     /// solve provably changes nothing, and a skip that hides nothing hides
     /// nothing (`a_whole_rigid_group_translation_is_a_solver_no_op` below runs
@@ -1587,7 +1608,7 @@ impl Project {
             // residual it was fingerprinted from is stale. A later call re-derives.
             None
         } else {
-            // Nothing moved: `resolve_offsets` only ever writes `section_offsets`,
+            // Nothing moved: `resolve_offsets` only ever writes `line_offsets`,
             // so with those identical the residual and the structure are identical
             // too, and `fingerprint` IS the post-solve fingerprint.
             Some(fingerprint)
@@ -1595,13 +1616,13 @@ impl Project {
         healed
     }
 
-    /// Zero-trust re-solve of section offsets, used on LOAD and explicit REPAIR.
+    /// Zero-trust re-solve of line offsets, used on LOAD and explicit REPAIR.
     /// Unlike [`Self::realign_merges`] it ALWAYS re-runs the cascade, even when no
-    /// merge is drifted past the 5 cm reporting tolerance: section offsets are
+    /// merge is drifted past the 5 cm reporting tolerance: line offsets are
     /// derived state, so a *sub-tolerance* stale/wrong cached offset (which
     /// `check_merge_alignment` can't see) must never be trusted across a reload.
     /// The cascade re-derives every offset reachable from an anchor; only the
-    /// genuinely non-derivable anchors (datum sections and free-placed floating
+    /// genuinely non-derivable anchors (datum lines and free-placed floating
     /// components) keep their stored offset, because the cascade never
     /// seed-adjusts them. Returns the number of merges that were misaligned beyond
     /// the reporting tolerance before the re-solve.
@@ -1620,7 +1641,7 @@ impl Project {
         // moved anything - including SUB-tolerance changes the `before`/`after`
         // misalignment count can't see (that is the whole reason this re-cascades
         // unconditionally). Comparing the count alone would miss them.
-        let offsets_before = self.section_offsets.clone();
+        let offsets_before = self.line_offsets.clone();
         let seeds = self.realign_seeds();
         let was_deferred = self.cascade_deferred;
         self.cascade_deferred = false;
@@ -1631,7 +1652,7 @@ impl Project {
         // touch()ing there would bump `modified_at` for a project the user never
         // edited - a later no-edit save would then persist a bogus timestamp, and
         // it would make a no-op integrity Repair look like a real change.
-        let changed = self.section_offsets != offsets_before;
+        let changed = self.line_offsets != offsets_before;
         if changed {
             self.touch();
         }

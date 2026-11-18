@@ -7,7 +7,7 @@
  *
  * Differences from the Linux AppSession that are contracts, not choices
  * (validated by the #421 Phase 0 probes - see
- * docs/plans/2026-08-05_macos-agent-harness.md section 8):
+ * docs/plans/2026-08-05_macos-agent-harness.md line 8):
  *
  * - tauri-wd SPAWNS THE APP ITSELF (session -> tauri-wd -> wrapper -> app), so
  *   the isolated profile env is passed to the tauri-wd spawn and inherited down.

@@ -7,14 +7,14 @@
 //! what differs between the two states, in the shape of the same serialized
 //! project, so it restores exactly what the snapshot pair restored:
 //!
-//! * the top-level members other than `sections`, edited member by member
+//! * the top-level members other than `lines`, edited member by member
 //!   ([`Edit`]): a changed offset key, an added merge, a new datum;
-//! * the sections, as runs over the source's sections ([`SectionRun`]): a run
-//!   of untouched sections costs two numbers;
-//! * a touched section's shots, as runs over the source's SHOTS
-//!   ([`ShotRun`]), matched by uuid in ANY source section and in either
-//!   direction - so a Split Section Here, a Combine Sections or a Reverse
-//!   Section, which move or reorder shots without changing them, costs a few
+//! * the lines, as runs over the source's lines ([`LineRun`]): a run
+//!   of untouched lines costs two numbers;
+//! * a touched line's shots, as runs over the source's SHOTS
+//!   ([`ShotRun`]), matched by uuid in ANY source line and in either
+//!   direction - so a Split Line Here, a Combine Lines or a Reverse
+//!   Line, which move or reorder shots without changing them, costs a few
 //!   numbers per run instead of every shot twice.
 //!
 //! A delta is directional: it turns its SOURCE (the live project at the moment
@@ -25,7 +25,7 @@
 //!
 //! Equality is bitwise on floats (`-0.0` is not `0.0`): a snapshot restore puts
 //! back the recorded bits, and a delta has to as well.//!
-//! The engine works on serialized TEXT ([`Doc`]): an untouched section stays a
+//! The engine works on serialized TEXT ([`Doc`]): an untouched line stays a
 //! borrowed slice of the live project's JSON, and only what differs is ever
 //! parsed (`delta/doc.rs`). The value-level [`ProjectDelta::between`] and
 //! [`ProjectDelta::apply`] are the same engine behind a serialization.
@@ -35,25 +35,26 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::models::SectionId;
+use crate::models::LineId;
 
 mod doc;
 mod history;
 mod json;
 mod shape;
 mod shots;
+mod stations;
 
-pub use doc::{Applied, Doc, SectionIds, SectionOut};
-pub use history::HolderSection;
+pub use doc::{Applied, Doc, LineIds, LineOut};
+pub use history::HolderLine;
 #[cfg(test)]
 use json::same;
 
-const SECTIONS: &str = "sections";
+const LINES: &str = "lines";
 const SHOTS: &str = "shots";
 const UUID: &str = "uuid";
 const ID: &str = "id";
 const NEXT_SHOT_ID: &str = "next_shot_id";
-const NEXT_SECTION_ID: &str = "next_section_id";
+const NEXT_LINE_ID: &str = "next_line_id";
 const GAUGE_SHOT: &str = "gauge_shot_uuid";
 const GAUGE_NEIGHBOUR: &str = "gauge_neighbour_uuid";
 
@@ -70,10 +71,15 @@ const SMALL_LIST: usize = 64;
 /// deserializes into a `HashMap` or a `BTreeSet`, and serializes sorted. They
 /// are diffed as bags ([`Edit::Bag`]). `counter_parity_shots` is pruned on
 /// load, which a positional edit could not survive.
-const UNORDERED_MEMBERS: [&str; 4] = [
+///
+/// These are the in-memory serde names: a delta is encoded from and applied to
+/// the project as this build serializes it. Its on-disk form goes through
+/// `models::disk_names` with the rest of the undo row (`undo/persistence.rs`).
+const UNORDERED_MEMBERS: [&str; 5] = [
     "station_offsets",
     "station_comments",
     "station_names",
+    "station_ids",
     "counter_parity_shots",
 ];
 
@@ -106,12 +112,23 @@ pub enum Edit {
     /// with its index in the target. Unlike a positional edit it survives a
     /// load or a save that pruned an unrelated element out of the list: the
     /// index only orders the result, which the restore re-sorts anyway.
+    ///
+    /// For a station-keyed member (`delta/stations.rs`) a `[station key,
+    /// value]` pair whose key names a station of its state is written as a
+    /// position instead: `station_del` names stations of the SOURCE,
+    /// `station_add` stations of the TARGET (with the pair's index in the
+    /// target), as `(line id, station index, value)`. The apply rebuilds each
+    /// key from that state's shots before the bag is applied.
     #[serde(rename = "b")]
     Bag {
         #[serde(rename = "d", default, skip_serializing_if = "Vec::is_empty")]
         del: Vec<Value>,
         #[serde(rename = "a", default, skip_serializing_if = "Vec::is_empty")]
         add: Vec<(usize, Value)>,
+        #[serde(rename = "sd", default, skip_serializing_if = "Vec::is_empty")]
+        station_del: Vec<(LineId, u32, Value)>,
+        #[serde(rename = "sa", default, skip_serializing_if = "Vec::is_empty")]
+        station_add: Vec<(usize, LineId, u32, Value)>,
     },
 }
 
@@ -129,29 +146,29 @@ pub enum Run {
     Mod(usize, Box<Edit>),
 }
 
-/// One run of the target's sections, over the source's.
+/// One run of the target's lines, over the source's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum SectionRun {
-    /// `len` source sections from `at`, verbatim.
+pub enum LineRun {
+    /// `len` source lines from `at`, verbatim.
     #[serde(rename = "k")]
     Keep(usize, usize),
-    /// The source section at `at` (whose id is `id`, checked on apply), with
+    /// The source line at `at` (whose id is `id`, checked on apply), with
     /// its members other than `shots` edited, and its shots rebuilt when
     /// `shots` is set.
     #[serde(rename = "e")]
     Edit {
         at: usize,
-        id: SectionId,
+        id: LineId,
         #[serde(rename = "f", default, skip_serializing_if = "BTreeMap::is_empty")]
         fields: BTreeMap<String, Edit>,
         #[serde(rename = "s", default, skip_serializing_if = "Option::is_none")]
         shots: Option<Vec<ShotRun>>,
         /// The source side held no gauge pair here (see
-        /// [`ProjectDelta::ungauged_sections`]).
+        /// [`ProjectDelta::ungauged_lines`]).
         #[serde(rename = "u", default, skip_serializing_if = "is_false")]
         ungauged: bool,
     },
-    /// A section the source does not hold: its members other than `shots`,
+    /// A line the source does not hold: its members other than `shots`,
     /// and its shots (`None` when the members carry `shots` themselves,
     /// because it was not an array).
     #[serde(rename = "n")]
@@ -163,12 +180,12 @@ pub enum SectionRun {
     },
 }
 
-/// One run of a target section's shots, over the shots of ANY source section.
+/// One run of a target line's shots, over the shots of ANY source line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ShotRun {
-    /// `n` shots of the source section at position `sec`, from index `at`:
-    /// upwards, or downwards when `rev` (a reversed section). `flip` turns
-    /// each copy around first, as Reverse Section turns a shot around
+    /// `n` shots of the source line at position `sec`, from index `at`:
+    /// upwards, or downwards when `rev` (a reversed line). `flip` turns
+    /// each copy around first, as Reverse Line turns a shot around
     /// (`shots::flip_shot`; the flag is its swap-left-right option). `m` edits the
     /// copies, by offset into the run, ascending.
     #[serde(rename = "c")]
@@ -197,13 +214,13 @@ fn is_false(b: &bool) -> bool {
 /// SOURCE into the TARGET. See the module docs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDelta {
-    /// Edits to the top-level members other than `sections`.
+    /// Edits to the top-level members other than `lines`.
     #[serde(rename = "f", default, skip_serializing_if = "BTreeMap::is_empty")]
     fields: BTreeMap<String, Edit>,
-    /// The target's sections, when they differ from the source's: the
-    /// source's section count (checked on apply) and the runs.
+    /// The target's lines, when they differ from the source's: the
+    /// source's line count (checked on apply) and the runs.
     #[serde(rename = "s", default, skip_serializing_if = "Option::is_none")]
-    sections: Option<(usize, Vec<SectionRun>)>,
+    lines: Option<(usize, Vec<LineRun>)>,
 }
 
 /// Why a delta could not be encoded or applied. A message, because nothing
@@ -211,7 +228,7 @@ pub struct ProjectDelta {
 pub type DeltaError = String;
 
 /// Where in the target a shot that the delta carried literally landed:
-/// (section index, shot index).
+/// (line index, shot index).
 pub(crate) type LiteralShot = (usize, usize);
 
 /// One undo entry's compact payload ([`super::UndoData::Delta`]).
@@ -229,12 +246,21 @@ pub struct SnapshotDelta {
 }
 
 /// The facts a history preview reads from an entry's `before` state.
+///
+/// Persisted inside the entry, so its variant tags cross the disk boundary
+/// through `models::disk_names` like every other undo key: `Line` is written
+/// `Section`, the name it had before the Section -> Line rename.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BeforePreview {
-    /// The section a Delete Section removed: its name and shot count.
-    Section { name: Option<String>, shots: usize },
+    /// The line a Delete Line removed: its name and shot count.
+    Line { name: Option<String>, shots: usize },
     /// The GPS of the datum a Remove Zero Datum removed, when it had one.
     Datum(Option<crate::models::GpsCoordinates>),
+    /// The names of the named lines a Batch deleted (its first
+    /// `DeleteLine` sub-commands, as many as its preview lists): the label
+    /// and preview of a Delete Line inside the batch name the line from here
+    /// once it is gone, as they do from a snapshot pair's `before`.
+    DeletedLines(Vec<(LineId, String)>),
 }
 
 impl SnapshotDelta {
@@ -279,7 +305,7 @@ impl ProjectDelta {
 
     /// True when the two states were identical.
     pub fn is_empty(&self) -> bool {
-        self.fields.is_empty() && self.sections.is_none()
+        self.fields.is_empty() && self.lines.is_none()
     }
 
     /// The target this delta was encoded towards, rebuilt from `source`.
@@ -293,32 +319,32 @@ impl ProjectDelta {
     pub fn apply(&self, source: &Value) -> Result<Value, DeltaError> {
         let text = to_text(source)?;
         let doc = Doc::parse(&text)?;
-        let ids = SectionIds::of_doc(&doc)?;
+        let ids = LineIds::of_doc(&doc)?;
         let target = self.apply_doc(&doc, &ids)?.into_doc()?.text();
         serde_json::from_str(&target).map_err(|e| e.to_string())
     }
 
-    /// [`Self::apply`] to a split project whose sections' ids `ids` lists, in
-    /// order ([`SectionIds::of_project`] for the live project).
+    /// [`Self::apply`] to a split project whose lines' ids `ids` lists, in
+    /// order ([`LineIds::of_project`] for the live project).
     pub fn apply_doc<'a>(
         &self,
         source: &Doc<'a>,
-        ids: &[SectionIds],
+        ids: &[LineIds],
     ) -> Result<Applied<'a>, DeltaError> {
         doc::apply(self, source, ids)
     }
 }
 
-fn shots_array(section: &Value) -> Option<&Vec<Value>> {
-    section.get(SHOTS)?.as_array()
+fn shots_array(line: &Value) -> Option<&Vec<Value>> {
+    line.get(SHOTS)?.as_array()
 }
 
-fn section_id_of(section: &Value) -> Option<u64> {
-    section.get(ID)?.as_u64()
+fn line_id_of(line: &Value) -> Option<u64> {
+    line.get(ID)?.as_u64()
 }
 
-fn section_id_of_map(section: &Map<String, Value>) -> Option<SectionId> {
-    SectionId::try_from(section.get(ID)?.as_u64()?).ok()
+fn line_id_of_map(line: &Map<String, Value>) -> Option<LineId> {
+    LineId::try_from(line.get(ID)?.as_u64()?).ok()
 }
 
 #[cfg(test)]

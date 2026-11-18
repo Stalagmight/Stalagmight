@@ -12,8 +12,8 @@ use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
-    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, LoopClosure, Project, Section,
-    SectionData, SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
+    ClosureStrategy, Coordinates, DatumRole, GpsCoordinates, Line, LineData, LineUpdates,
+    LoopClosure, Project, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
 };
 use stalagmight_lib::persistence::Database;
 use std::collections::{HashMap, HashSet};
@@ -40,8 +40,8 @@ fn create_shot_data(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) ->
     }
 }
 
-fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {
-    SectionData {
+fn create_line_with_shots(name: &str, shots: Vec<ShotData>) -> LineData {
+    LineData {
         name: Some(name.to_string()),
         surveyor: Some("Test Surveyor".to_string()),
         date: None,
@@ -64,7 +64,7 @@ fn test_station_coordinates_computed_correctly() {
     // Create shots: North 10m, then East 10m
     let shot_a = create_shot_data(0.0, 10.0, 5.0, 5.0);
     let shot_b = create_shot_data(90.0, 10.0, 5.0, 6.0);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![
             shot_a,         // North 10m (horizontal)
@@ -95,7 +95,7 @@ fn test_station_coordinates_computed_correctly() {
 fn test_zero_datum_propagation() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -121,25 +121,25 @@ fn test_zero_datum_propagation() {
 fn test_station_id_stability() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
 
     let stations = project.compute_station_coordinates();
 
-    // Station refs should be section_id:station_index format
+    // Station refs should be line_id:station_index format
     let refs: Vec<_> = stations.iter().map(|s| s.station_ref).collect();
 
-    // Section 0 has 2 stations: 0:0, 0:1
+    // Line 0 has 2 stations: 0:0, 0:1
     assert!(refs.contains(&StationRef::new(0, 0)));
     assert!(refs.contains(&StationRef::new(0, 1)));
 
-    // Section 1 has 2 stations: 1:0, 1:1
+    // Line 1 has 2 stations: 1:0, 1:1
     assert!(refs.contains(&StationRef::new(1, 0)));
     assert!(refs.contains(&StationRef::new(1, 1)));
 }
@@ -185,18 +185,18 @@ fn test_shot_pitch_coordinates() {
 // Merge Operations Tests (6 tests)
 // ============================================================================
 
-/// Test 4: Station merge repositioning - verify section repositions correctly
+/// Test 4: Station merge repositioning - verify line repositions correctly
 #[test]
 fn test_station_merge_repositioning() {
     let mut project = create_test_project();
 
-    // Section A goes north (with zero datum to anchor it)
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Line A goes north (with zero datum to anchor it)
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
-    // Set zero datum on section A to anchor it
+    // Set zero datum on line A to anchor it
     project
         .set_zero_datum(
             StationRef::new(0, 0),
@@ -208,9 +208,9 @@ fn test_station_merge_repositioning() {
         )
         .unwrap();
 
-    // Section B goes east (starts at origin, will move)
-    project.add_section(create_section_with_shots(
-        "Section B",
+    // Line B goes east (starts at origin, will move)
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -221,18 +221,18 @@ fn test_station_merge_repositioning() {
 
     let stations = project.compute_station_coordinates();
 
-    // Find stations from section B
-    let section_b_start = stations
+    // Find stations from line B
+    let line_b_start = stations
         .iter()
-        .find(|s| s.station_ref.section_id == 1 && s.station_ref.station_index == 0)
+        .find(|s| s.station_ref.line_id == 1 && s.station_ref.station_index == 0)
         .unwrap();
 
-    // Section B's start should now be at end of section A (y=10 relative to zero datum at origin)
+    // Line B's start should now be at end of line A (y=10 relative to zero datum at origin)
     // After zero datum adjustment, A's end is at y=10, and B starts there
     assert!(
-        (section_b_start.coordinates.y - 10.0).abs() < 0.001,
-        "Section B start Y should be 10, got {}",
-        section_b_start.coordinates.y
+        (line_b_start.coordinates.y - 10.0).abs() < 0.001,
+        "Line B start Y should be 10, got {}",
+        line_b_start.coordinates.y
     );
 }
 
@@ -241,12 +241,12 @@ fn test_station_merge_repositioning() {
 fn test_unmerge_keeps_position() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -269,11 +269,11 @@ fn test_unmerge_keeps_position() {
 fn test_duplicate_merge_rejection() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
@@ -288,16 +288,16 @@ fn test_duplicate_merge_rejection() {
     assert!(result2.unwrap_err().contains("already merged"));
 }
 
-/// Test 43: Delete section with merges - verify merges cleaned up
+/// Test 43: Delete line with merges - verify merges cleaned up
 #[test]
-fn test_delete_section_cleanup() {
+fn test_delete_line_cleanup() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
@@ -308,29 +308,29 @@ fn test_delete_section_cleanup() {
 
     assert_eq!(project.station_merges.len(), 1);
 
-    // Remove section B
-    project.remove_section(1);
+    // Remove line B
+    project.remove_line(1);
 
-    // Note: Current implementation doesn't auto-clean merges on section delete
+    // Note: Current implementation doesn't auto-clean merges on line delete
     // This test documents the current behavior
-    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.lines.len(), 1);
 }
 
-/// Test 48: Multiple zero datums - two datums in disconnected sections
+/// Test 48: Multiple zero datums - two datums in disconnected lines
 #[test]
 fn test_multiple_zero_datums_disconnected() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
 
-    // Set zero datum on section A
+    // Set zero datum on line A
     let gps_a = GpsCoordinates {
         latitude: 45.0,
         longitude: -122.0,
@@ -340,7 +340,7 @@ fn test_multiple_zero_datums_disconnected() {
         .set_zero_datum(StationRef::new(0, 0), gps_a)
         .unwrap();
 
-    // Set zero datum on section B (disconnected, should succeed)
+    // Set zero datum on line B (disconnected, should succeed)
     let gps_b = GpsCoordinates {
         latitude: 46.0,
         longitude: -123.0,
@@ -356,7 +356,7 @@ fn test_multiple_zero_datums_disconnected() {
 fn test_merge_nonexistent_station_fails() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -373,21 +373,21 @@ fn test_merge_nonexistent_station_fails() {
 // Loop Closure Tests (2 tests)
 // ============================================================================
 
-/// Test 25: Loop detection simple - two sections merged at ends form loop
+/// Test 25: Loop detection simple - two lines merged at ends form loop
 #[test]
 fn test_loop_detection_simple() {
     let mut project = create_test_project();
 
-    // Create a loop: Section A (north), Section B (east), merge to form loop
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create a loop: Line A (north), Line B (east), merge to form loop
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(0.0, 10.0, 5.0, 5.0),
         ],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![
             create_shot_data(90.0, 10.0, 5.0, 5.0),
             create_shot_data(90.0, 10.0, 5.0, 5.0),
@@ -416,13 +416,13 @@ fn test_loop_detection_simple() {
 fn test_loop_closure_error_calculation() {
     let mut project = create_test_project();
 
-    // Create sections that form almost-closed loop
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create lines that form almost-closed loop
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)], // North 10m
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)], // East 10m
     ));
 
@@ -459,17 +459,18 @@ fn test_loop_closure_error_calculation() {
 fn test_undo_redo_chain() {
     let mut stack = UndoStack::new();
 
-    // Simulate: create section, add shot, delete
-    stack.push(Command::CreateSection {
+    // Simulate: create line, add shot, delete
+    stack.push(Command::CreateLine {
         name: Some("Test".to_string()),
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     stack.push(Command::CreateShot {
-        section_id: 0,
+        line_id: 0,
         shot: create_shot_data(0.0, 10.0, 5.0, 5.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -500,13 +501,14 @@ fn test_undo_stack_limit() {
 
     // Push 110 commands
     for i in 0..110 {
-        stack.push(Command::CreateSection {
-            name: Some(format!("Section {i}")),
+        stack.push(Command::CreateLine {
+            name: Some(format!("Line {i}")),
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         });
     }
 
@@ -519,13 +521,14 @@ fn test_undo_stack_limit() {
 fn test_undo_clears_redo_stack() {
     let mut stack = UndoStack::new();
 
-    stack.push(Command::CreateSection {
+    stack.push(Command::CreateLine {
         name: Some("Test".to_string()),
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Undo
@@ -534,13 +537,14 @@ fn test_undo_clears_redo_stack() {
     assert!(stack.can_redo());
 
     // New action should clear redo
-    stack.push(Command::CreateSection {
+    stack.push(Command::CreateLine {
         name: Some("New".to_string()),
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     assert!(!stack.can_redo());
 }
@@ -550,13 +554,14 @@ fn test_undo_clears_redo_stack() {
 fn test_batch_command_structure() {
     let entry = UndoEntry {
         command_bytes: None,
-        command: Command::CreateSection {
+        command: Command::CreateLine {
             name: Some("Test".to_string()),
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -572,7 +577,7 @@ fn test_batch_command_structure() {
 
     // And deserialized
     let restored = UndoStack::deserialize_entry(&cmd_json, &data_json).unwrap();
-    assert!(matches!(restored.command, Command::CreateSection { .. }));
+    assert!(matches!(restored.command, Command::CreateLine { .. }));
 }
 
 /// Test 41: Undo persistence - serialize and deserialize entries
@@ -581,15 +586,16 @@ fn test_undo_persistence() {
     let mut stack = UndoStack::new();
 
     stack.push_with_data(
-        Command::CreateSection {
+        Command::CreateLine {
             name: Some("Test".to_string()),
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
-        UndoData::InverseCommand(Command::DeleteSection { section_id: 0 }),
+        UndoData::InverseCommand(Command::DeleteLine { line_id: 0 }),
     );
 
     // Get the serialized rows to persist
@@ -652,9 +658,9 @@ fn test_comprehensive_undo_types() {
     // Test all UndoData variants can be serialized
     let variants = vec![
         UndoData::None,
-        UndoData::InverseCommand(Command::DeleteSection { section_id: 0 }),
+        UndoData::InverseCommand(Command::DeleteLine { line_id: 0 }),
         UndoData::PreviousValues {
-            section_id: 0,
+            line_id: 0,
             shot_id: Some(0),
             shot_uuid: None,
             values_json: "{}".to_string(),
@@ -685,7 +691,7 @@ fn test_comprehensive_undo_types() {
 }
 
 // ============================================================================
-// Section Operations Tests (4 tests)
+// Line Operations Tests (4 tests)
 // ============================================================================
 
 /// Test 7: Shot deletion (unit test for shot removal)
@@ -693,7 +699,7 @@ fn test_comprehensive_undo_types() {
 fn test_shot_deletion() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
@@ -702,28 +708,28 @@ fn test_shot_deletion() {
         ],
     ));
 
-    let section = project.get_section(0).unwrap();
-    assert_eq!(section.shots.len(), 3);
+    let line = project.get_line(0).unwrap();
+    assert_eq!(line.shots.len(), 3);
 
     // Remove middle shot
-    let shot_id = section.shots[1].id;
+    let shot_id = line.shots[1].id;
     project.remove_shot(0, shot_id);
 
-    let section = project.get_section(0).unwrap();
-    assert_eq!(section.shots.len(), 2);
+    let line = project.get_line(0).unwrap();
+    assert_eq!(line.shots.len(), 2);
 }
 
-/// Test 19: Section metadata update - verify all fields persist
+/// Test 19: Line metadata update - verify all fields persist
 #[test]
-fn test_section_metadata_update() {
+fn test_line_metadata_update() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Original",
         vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
     ));
 
-    let updates = SectionUpdates {
+    let updates = LineUpdates {
         name: Some(Some("Updated Name".to_string())),
         // Legacy text: set on every shot.
         surveyor: Some(Some("New Surveyor".to_string())),
@@ -733,25 +739,25 @@ fn test_section_metadata_update() {
         quality: Some(1.2),
     };
 
-    project.update_section(0, &updates);
+    project.update_line(0, &updates);
 
-    let section = project.get_section(0).unwrap();
-    assert_eq!(section.name, Some("Updated Name".to_string()));
-    assert_eq!(section.surveyor_names(), Some("New Surveyor".to_string()));
-    assert_eq!(section.color, "#ff0000");
-    assert_eq!(section.quality, 1.2);
+    let line = project.get_line(0).unwrap();
+    assert_eq!(line.name, Some("Updated Name".to_string()));
+    assert_eq!(line.surveyor_names(), Some("New Surveyor".to_string()));
+    assert_eq!(line.color, "#ff0000");
+    assert_eq!(line.quality, 1.2);
 }
 
-/// Test 20: Section color auto-assign (verify unique colors)
+/// Test 20: Line color auto-assign (verify unique colors)
 #[test]
-fn test_section_colors_unique() {
+fn test_line_colors_unique() {
     let mut project = create_test_project();
 
     let colors = ["#4ecdc4", "#ff6b6b", "#ffd93d", "#6bcb77"];
 
     for (i, color) in colors.iter().enumerate() {
-        project.add_section(SectionData {
-            name: Some(format!("Section {i}")),
+        project.add_line(LineData {
+            name: Some(format!("Line {i}")),
             surveyor: None,
             date: None,
             color: (*color).to_string(),
@@ -761,21 +767,21 @@ fn test_section_colors_unique() {
         });
     }
 
-    let section_colors: HashSet<_> = project.sections.iter().map(|s| &s.color).collect();
-    assert_eq!(section_colors.len(), 4); // All unique
+    let line_colors: HashSet<_> = project.lines.iter().map(|s| &s.color).collect();
+    assert_eq!(line_colors.len(), 4); // All unique
 }
 
-/// Test 47: Section date parsing (verify date storage)
+/// Test 47: Line date parsing (verify date storage)
 #[test]
-fn test_section_date_storage() {
+fn test_line_date_storage() {
     use chrono::NaiveDate;
 
     let mut project = create_test_project();
 
     let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
 
-    project.add_section(SectionData {
-        name: Some("Dated Section".to_string()),
+    project.add_line(LineData {
+        name: Some("Dated Line".to_string()),
         surveyor: None,
         date: Some(date),
         color: "#4ecdc4".to_string(),
@@ -785,9 +791,9 @@ fn test_section_date_storage() {
         shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
     });
 
-    let section = project.get_section(0).unwrap();
-    assert_eq!(section.first_survey_date(), Some(date));
-    assert_eq!(section.shots[0].credit().date, Some(date));
+    let line = project.get_line(0).unwrap();
+    assert_eq!(line.first_survey_date(), Some(date));
+    assert_eq!(line.shots[0].credit().date, Some(date));
 }
 
 // ============================================================================
@@ -799,27 +805,27 @@ fn test_section_date_storage() {
 fn test_project_stats() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 6.0),
             create_shot_data(0.0, 15.0, 6.0, 8.0),
         ],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 20.0, 10.0, 12.0)],
     ));
 
     let stats = project.stats();
 
-    assert_eq!(stats.section_count, 2);
+    assert_eq!(stats.line_count, 2);
     assert_eq!(stats.shot_count, 3);
     assert!((stats.total_length - 45.0).abs() < 0.001); // 10 + 15 + 20
     assert_eq!(stats.station_count, 5); // 3 + 2 stations
 
     // Depth is the absolute station range the caller fills in (#481):
-    // Section A stations 5, 6, 8; Section B stations 10, 12.
+    // Line A stations 5, 6, 8; Line B stations 10, 12.
     let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
     assert!((min_depth - 5.0).abs() < 0.001);
     assert!((max_depth - 12.0).abs() < 0.001);
@@ -831,7 +837,7 @@ fn test_penetration_distance() {
     let mut project = create_test_project();
 
     // Create a straight line north: 10m + 10m + 10m = 30m
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
@@ -863,18 +869,18 @@ fn test_penetration_distance() {
 // Move Operations Tests (2 tests)
 // ============================================================================
 
-/// Test 33: Move section offset - verify offsets updated
+/// Test 33: Move line offset - verify offsets updated
 #[test]
-fn test_move_section_offset() {
+fn test_move_line_offset() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
-    // Manually set section offset
-    project.section_offsets.insert(0, (10.0, 20.0));
+    // Manually set line offset
+    project.line_offsets.insert(0, (10.0, 20.0));
 
     let stations = project.compute_station_coordinates();
 
@@ -888,18 +894,18 @@ fn test_move_section_offset() {
 fn test_move_preserves_shot_data() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
-    let original_length = project.get_section(0).unwrap().shots[0].length;
+    let original_length = project.get_line(0).unwrap().shots[0].length;
 
     // Apply offset
-    project.section_offsets.insert(0, (100.0, 100.0));
+    project.line_offsets.insert(0, (100.0, 100.0));
 
     // Shot data should be unchanged
-    let new_length = project.get_section(0).unwrap().shots[0].length;
+    let new_length = project.get_line(0).unwrap().shots[0].length;
     assert!((original_length - new_length).abs() < 0.001);
 }
 
@@ -988,7 +994,7 @@ fn test_config_backwards_compat_ignores_removed_fields() {
     // Old config format with deprecated fields that were removed:
     // - display.station_size, display.line_thickness
     // - map.snap_threshold_pixels
-    // - top-level [snap] section
+    // - top-level [snap] line
     // Serde should ignore unknown fields (default behavior)
     let old_config_toml = r##"
 [general]
@@ -1017,7 +1023,7 @@ deep_color = "#ff0000"
 shallow_depth = 0.0
 deep_depth = 100.0
 
-[section_colors]
+[line_colors]
 palette = ["#ff0000", "#00ff00", "#0000ff"]
 
 [map]
@@ -1058,7 +1064,7 @@ draw = "K"
 delete = "L"
 merge = "G"
 measure = "F"
-move_section = "W"
+move_line = "W"
 move_station = "E"
 undo = "Ctrl+U"
 redo = "Ctrl+R"
@@ -1224,9 +1230,9 @@ fn test_reference_shot_flag() {
     let mut shot_data = create_shot_data(0.0, 10.0, 5.0, 5.0);
     shot_data.kind = ShotKind::Jump;
 
-    project.add_section(create_section_with_shots("Main", vec![shot_data]));
+    project.add_line(create_line_with_shots("Main", vec![shot_data]));
 
-    let shot = &project.get_section(0).unwrap().shots[0];
+    let shot = &project.get_line(0).unwrap().shots[0];
     assert_eq!(shot.kind, ShotKind::Jump);
 }
 
@@ -1306,14 +1312,14 @@ fn test_empty_project_save_load() {
     let path = file.path().with_extension("stalx");
 
     let project = Project::new("Empty".to_string(), None);
-    assert!(project.sections.is_empty());
+    assert!(project.lines.is_empty());
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
 
     let loaded = db.load_project().unwrap();
     assert_eq!(loaded.name, "Empty");
-    assert!(loaded.sections.is_empty());
+    assert!(loaded.lines.is_empty());
 
     std::fs::remove_file(&path).ok();
 }
@@ -1323,12 +1329,12 @@ fn test_empty_project_save_load() {
 fn test_large_survey_data_structure() {
     let mut project = create_test_project();
 
-    // Create section with 1000 shots
+    // Create line with 1000 shots
     let shots: Vec<_> = (0..1000)
         .map(|i| create_shot_data(f64::from(i) % 360.0, 1.0, 5.0, 5.0 + (f64::from(i) * 0.01)))
         .collect();
 
-    project.add_section(create_section_with_shots("Large", shots));
+    project.add_line(create_line_with_shots("Large", shots));
 
     let stats = project.stats();
     assert_eq!(stats.shot_count, 1000);
@@ -1347,21 +1353,21 @@ fn test_shot_order_preserved() {
         create_shot_data(270.0, 4.0, 5.0, 5.0),
     ];
 
-    project.add_section(create_section_with_shots("Ordered", shots));
+    project.add_line(create_line_with_shots("Ordered", shots));
 
-    let section = project.get_section(0).unwrap();
-    assert_eq!(section.shots.len(), 4);
-    assert!((section.shots[0].length - 1.0).abs() < 0.001);
-    assert!((section.shots[1].length - 2.0).abs() < 0.001);
-    assert!((section.shots[2].length - 3.0).abs() < 0.001);
-    assert!((section.shots[3].length - 4.0).abs() < 0.001);
+    let line = project.get_line(0).unwrap();
+    assert_eq!(line.shots.len(), 4);
+    assert!((line.shots[0].length - 1.0).abs() < 0.001);
+    assert!((line.shots[1].length - 2.0).abs() < 0.001);
+    assert!((line.shots[2].length - 3.0).abs() < 0.001);
+    assert!((line.shots[3].length - 4.0).abs() < 0.001);
 }
 
 /// Test: Project JSON serialization round-trip
 #[test]
 fn test_project_json_roundtrip() {
     let mut project = create_test_project();
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -1370,7 +1376,7 @@ fn test_project_json_roundtrip() {
     let restored: Project = serde_json::from_str(&json).unwrap();
 
     assert_eq!(restored.name, project.name);
-    assert_eq!(restored.sections.len(), 1);
+    assert_eq!(restored.lines.len(), 1);
 }
 
 // ============================================================================
@@ -1382,7 +1388,7 @@ fn test_project_json_roundtrip() {
 fn test_zero_datum_removal() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -1410,7 +1416,7 @@ fn test_zero_datum_removal() {
 fn test_connected_zero_datum_becomes_gps_fix() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -1468,12 +1474,12 @@ fn test_shot_id_generation() {
         .map(|_| create_shot_data(0.0, 1.0, 5.0, 5.0))
         .collect();
 
-    project.add_section(create_section_with_shots("Large", shots));
+    project.add_line(create_line_with_shots("Large", shots));
 
-    let section = project.get_section(0).unwrap();
+    let line = project.get_line(0).unwrap();
 
     // Verify all shots have unique IDs
-    let ids: HashSet<_> = section.shots.iter().map(|s| s.id).collect();
+    let ids: HashSet<_> = line.shots.iter().map(|s| s.id).collect();
     assert_eq!(ids.len(), 1000);
 }
 
@@ -1549,12 +1555,12 @@ fn test_average_azimuth() {
 }
 
 // ============================================================================
-// Section Stats Tests
+// Line Stats Tests
 // ============================================================================
 
-/// Test: Section statistics calculation
+/// Test: Line statistics calculation
 #[test]
-fn test_section_stats() {
+fn test_line_stats() {
     let mut project = create_test_project();
 
     let mut shots = vec![
@@ -1563,10 +1569,10 @@ fn test_section_stats() {
     ];
     shots[1].kind = ShotKind::Reference;
 
-    project.add_section(create_section_with_shots("Test", shots));
+    project.add_line(create_line_with_shots("Test", shots));
 
-    let section = project.get_section(0).unwrap();
-    let stats = section.stats();
+    let line = project.get_line(0).unwrap();
+    let stats = line.stats();
 
     assert_eq!(stats.shot_count, 2);
     // A Reference repeats passage already surveyed, so its length is left out
@@ -1579,7 +1585,7 @@ fn test_section_stats() {
 /// A jump counts separately from a reference, and unlike a reference its length
 /// counts toward the total: it is surveyed passage (#27 q7, #689).
 #[test]
-fn test_section_stats_splits_jumps_from_references() {
+fn test_line_stats_splits_jumps_from_references() {
     let mut project = create_test_project();
 
     let mut shots = vec![
@@ -1588,9 +1594,9 @@ fn test_section_stats_splits_jumps_from_references() {
     ];
     shots[1].kind = ShotKind::Jump;
 
-    project.add_section(create_section_with_shots("Test", shots));
+    project.add_line(create_line_with_shots("Test", shots));
 
-    let stats = project.get_section(0).unwrap().stats();
+    let stats = project.get_line(0).unwrap().stats();
 
     assert_eq!(stats.total_length, 25.0, "a jump's length counts");
     assert_eq!(stats.jump_shot_count, 1);
@@ -1604,19 +1610,19 @@ fn test_section_stats_splits_jumps_from_references() {
 /// Test 1: DMP round-trip (structure test)
 #[test]
 fn test_dmp_section_data_roundtrip() {
-    // Test that SectionData can round-trip through JSON
-    let section_data = create_section_with_shots(
-        "Test Section",
+    // Test that LineData can round-trip through JSON
+    let line_data = create_line_with_shots(
+        "Test Line",
         vec![
             create_shot_data(45.0, 10.0, 5.0, 6.0),
             create_shot_data(90.0, 15.0, 6.0, 8.0),
         ],
     );
 
-    let json = serde_json::to_string(&section_data).unwrap();
-    let restored: SectionData = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&line_data).unwrap();
+    let restored: LineData = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(restored.name, Some("Test Section".to_string()));
+    assert_eq!(restored.name, Some("Test Line".to_string()));
     assert_eq!(restored.shots.len(), 2);
 }
 
@@ -1640,7 +1646,7 @@ fn test_project_metadata() {
     let mut project = Project::new("Test Cave".to_string(), Some("Location".to_string()));
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 50.0, 5.0, 10.0)],
     ));
@@ -1649,7 +1655,7 @@ fn test_project_metadata() {
 
     assert_eq!(metadata.name, "Test Cave");
     assert_eq!(metadata.location, Some("Location".to_string()));
-    assert_eq!(metadata.section_count, 1);
+    assert_eq!(metadata.line_count, 1);
     assert!((metadata.total_length - 50.0).abs() < 0.001);
 }
 
@@ -1686,7 +1692,7 @@ fn test_negative_length_shot() {
         ..Default::default()
     };
     let config = default_validation_config();
-    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+    let warnings = Validator::validate_shot(&shot, &config, String::new);
 
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
     assert!(Validator::has_errors(&warnings));
@@ -1707,7 +1713,7 @@ fn test_short_shot_warning() {
         warn_shot_length_min: 0.1,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+    let warnings = Validator::validate_shot(&shot, &config, String::new);
 
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
     // SHORT_SHOT is a warning, not error
@@ -1733,7 +1739,7 @@ fn test_long_shot_warning() {
         warn_shot_length_max: 50.0,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+    let warnings = Validator::validate_shot(&shot, &config, String::new);
 
     assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
 }
@@ -1753,7 +1759,7 @@ fn test_large_depth_change_warning() {
         warn_depth_change_per_shot_max: 10.0,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+    let warnings = Validator::validate_shot(&shot, &config, String::new);
 
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }
@@ -1773,7 +1779,7 @@ fn test_negative_lrud_errors() {
         down: Some(-4.0),
         ..Default::default()
     };
-    let warnings = Validator::validate_shot(&shot, &default_validation_config(), 0, 0);
+    let warnings = Validator::validate_shot(&shot, &default_validation_config(), String::new);
 
     let lrud_errors: Vec<_> = warnings
         .iter()
@@ -1791,11 +1797,11 @@ fn test_negative_lrud_errors() {
 #[test]
 fn test_save_load_with_station_merges() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "B",
         vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
     ));
@@ -1820,7 +1826,7 @@ fn test_save_load_with_station_merges() {
 #[test]
 fn test_save_load_with_zero_datums() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -1846,21 +1852,21 @@ fn test_save_load_with_zero_datums() {
     assert!((loaded.zero_datums[0].gps.depth_reference - 5.0).abs() < 0.0001);
 }
 
-/// Coverage Test 8: Save/load with section offsets
+/// Coverage Test 8: Save/load with line offsets
 #[test]
-fn test_save_load_with_section_offsets() {
+fn test_save_load_with_line_offsets() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.section_offsets.insert(0, (15.5, -20.3));
+    project.line_offsets.insert(0, (15.5, -20.3));
 
     let mut db = Database::in_memory().unwrap();
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
 
-    let offset = loaded.section_offsets.get(&0).unwrap();
+    let offset = loaded.line_offsets.get(&0).unwrap();
     assert!((offset.0 - 15.5).abs() < 0.0001);
     assert!((offset.1 - (-20.3)).abs() < 0.0001);
 }
@@ -1869,7 +1875,7 @@ fn test_save_load_with_section_offsets() {
 #[test]
 fn test_save_load_with_loop_closures() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -1943,12 +1949,12 @@ fn test_shot_depth_change_method() {
     assert!((shot2.depth_change() - (-8.0)).abs() < 0.001);
 }
 
-/// Coverage Test 12: Section insert_shot_after
+/// Coverage Test 12: Line insert_shot_after
 #[test]
-fn test_section_insert_shot_after() {
-    let mut section = Section::new(
+fn test_line_insert_shot_after() {
+    let mut line = Line::new(
         0,
-        SectionData {
+        LineData {
             name: Some("Test".to_string()),
             surveyor: None,
             date: None,
@@ -1962,8 +1968,8 @@ fn test_section_insert_shot_after() {
         },
     );
 
-    let first_shot_id = section.shots[0].id;
-    let new_shot = section.insert_shot_after_with_id(
+    let first_shot_id = line.shots[0].id;
+    let new_shot = line.insert_shot_after_with_id(
         first_shot_id,
         create_shot_data(45.0, 5.0, 5.0, 5.0),
         None,
@@ -1971,18 +1977,18 @@ fn test_section_insert_shot_after() {
     );
 
     assert!(new_shot.is_some());
-    assert_eq!(section.shots.len(), 3);
+    assert_eq!(line.shots.len(), 3);
     // New shot should be in position 1 (after first shot)
-    assert!((section.shots[1].azimuth_in - 45.0).abs() < 0.001);
-    assert!((section.shots[1].length - 5.0).abs() < 0.001);
+    assert!((line.shots[1].azimuth_in - 45.0).abs() < 0.001);
+    assert!((line.shots[1].length - 5.0).abs() < 0.001);
 }
 
-/// Coverage Test 13: Section to_section_data
+/// Coverage Test 13: Line to_line_data
 #[test]
-fn test_section_to_section_data() {
-    let section = Section::new(
+fn test_line_to_line_data() {
+    let line = Line::new(
         0,
-        SectionData {
+        LineData {
             name: Some("Original".to_string()),
             surveyor: Some("John".to_string()),
             date: None,
@@ -1993,7 +1999,7 @@ fn test_section_to_section_data() {
         },
     );
 
-    let data = section.to_section_data();
+    let data = line.to_line_data();
 
     assert_eq!(data.name, Some("Original".to_string()));
     // The template went onto the shot; the data carries it there.
@@ -2011,7 +2017,7 @@ fn test_section_to_section_data() {
 #[test]
 fn test_project_insert_shot_after() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
@@ -2019,7 +2025,7 @@ fn test_project_insert_shot_after() {
         ],
     ));
 
-    let first_shot_id = project.sections[0].shots[0].id;
+    let first_shot_id = project.lines[0].shots[0].id;
     let result = project.insert_shot_after(
         0,
         first_shot_id,
@@ -2029,21 +2035,21 @@ fn test_project_insert_shot_after() {
     );
 
     assert!(result.is_some());
-    assert_eq!(project.sections[0].shots.len(), 3);
+    assert_eq!(project.lines[0].shots.len(), 3);
     // Verify the new shot is in the middle
-    assert!((project.sections[0].shots[1].azimuth_in - 45.0).abs() < 0.001);
+    assert!((project.lines[0].shots[1].azimuth_in - 45.0).abs() < 0.001);
 }
 
 /// Coverage Test 15: Project update_shot
 #[test]
 fn test_project_update_shot() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
-    let shot_id = project.sections[0].shots[0].id;
+    let shot_id = project.lines[0].shots[0].id;
     let updates = ShotUpdates {
         length: Some(20.0),
         comment: Some(Some("Updated comment".to_string())),
@@ -2054,7 +2060,7 @@ fn test_project_update_shot() {
     let result = project.update_shot(0, shot_id, &updates);
     assert!(result.is_some());
 
-    let shot = project.get_section(0).unwrap().get_shot(shot_id).unwrap();
+    let shot = project.get_line(0).unwrap().get_shot(shot_id).unwrap();
     assert!((shot.length - 20.0).abs() < 0.001);
     assert_eq!(shot.comment, Some("Updated comment".to_string()));
     assert_eq!(shot.kind, ShotKind::Jump);
@@ -2069,7 +2075,7 @@ fn test_project_update_shot() {
 fn test_gps_metadata_no_datums() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -2085,7 +2091,7 @@ fn test_gps_metadata_no_datums() {
 fn test_gps_metadata_single_datum() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_section(create_section_with_shots(
+    project.add_line(create_line_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -2118,17 +2124,17 @@ fn test_gps_metadata_multiple_datums() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create two disconnected lines
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
-    // Set zero datums on different sections (allowed because disconnected)
+    // Set zero datums on different lines (allowed because disconnected)
     let gps_a = GpsCoordinates {
         latitude: 45.0,
         longitude: -122.0,
@@ -2168,17 +2174,17 @@ fn test_gps_metadata_dateline_crossing() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    // Create three disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create three disconnected lines
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section C",
+    project.add_line(create_line_with_shots(
+        "Line C",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -2225,13 +2231,13 @@ fn test_gps_metadata_center_stability() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create two disconnected lines
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -2272,13 +2278,13 @@ fn test_gps_metadata_update_preserves_order() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
+    // Create two disconnected lines
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.add_section(create_section_with_shots(
-        "Section B",
+    project.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -2332,8 +2338,8 @@ fn test_gps_metadata_update_preserves_order() {
 #[test]
 fn test_gps_invalid_coordinates_rejected() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "Section A",
+    project.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
 
@@ -2399,17 +2405,17 @@ fn test_merge_projects_basic() {
 
     let dir = tempdir().unwrap();
 
-    // Create first project with 2 sections
+    // Create first project with 2 lines
     let path1 = dir.path().join("project1.stalx");
     let mut project1 = Project::new("Cave A".to_string(), Some("Location A".to_string()));
-    project1.add_section(create_section_with_shots(
+    project1.add_line(create_line_with_shots(
         "A-Main",
         vec![
             create_shot_data(0.0, 10.0, 5.0, 5.0),
             create_shot_data(45.0, 8.0, 5.0, 6.0),
         ],
     ));
-    project1.add_section(create_section_with_shots(
+    project1.add_line(create_line_with_shots(
         "A-Side",
         vec![create_shot_data(90.0, 5.0, 6.0, 7.0)],
     ));
@@ -2418,10 +2424,10 @@ fn test_merge_projects_basic() {
     db1.save_project(&project1).unwrap();
     drop(db1);
 
-    // Create second project with 1 section
+    // Create second project with 1 line
     let path2 = dir.path().join("project2.stalx");
     let mut project2 = Project::new("Cave B".to_string(), Some("Location B".to_string()));
-    project2.add_section(create_section_with_shots(
+    project2.add_line(create_line_with_shots(
         "B-Main",
         vec![
             create_shot_data(180.0, 12.0, 4.0, 4.0),
@@ -2448,14 +2454,14 @@ fn test_merge_projects_basic() {
         Some("Location A, Location B".to_string()),
     );
 
-    // Add sections from project 1
-    for section in &loaded1.sections {
-        merged.add_section(section.to_section_data());
+    // Add lines from project 1
+    for line in &loaded1.lines {
+        merged.add_line(line.to_line_data());
     }
 
-    // Add sections from project 2
-    for section in &loaded2.sections {
-        merged.add_section(section.to_section_data());
+    // Add lines from project 2
+    for line in &loaded2.lines {
+        merged.add_line(line.to_line_data());
     }
 
     // Save merged project
@@ -2467,24 +2473,24 @@ fn test_merge_projects_basic() {
     let loaded_merged = db_verify.load_project().unwrap();
 
     assert_eq!(loaded_merged.name, "Merged Cave");
-    assert_eq!(loaded_merged.sections.len(), 3); // 2 from project1 + 1 from project2
-    assert_eq!(loaded_merged.sections[0].name, Some("A-Main".to_string()));
-    assert_eq!(loaded_merged.sections[1].name, Some("A-Side".to_string()));
-    assert_eq!(loaded_merged.sections[2].name, Some("B-Main".to_string()));
+    assert_eq!(loaded_merged.lines.len(), 3); // 2 from project1 + 1 from project2
+    assert_eq!(loaded_merged.lines[0].name, Some("A-Main".to_string()));
+    assert_eq!(loaded_merged.lines[1].name, Some("A-Side".to_string()));
+    assert_eq!(loaded_merged.lines[2].name, Some("B-Main".to_string()));
 
-    // Verify section IDs are renumbered correctly (0, 1, 2)
-    assert_eq!(loaded_merged.sections[0].id, 0);
-    assert_eq!(loaded_merged.sections[1].id, 1);
-    assert_eq!(loaded_merged.sections[2].id, 2);
+    // Verify line IDs are renumbered correctly (0, 1, 2)
+    assert_eq!(loaded_merged.lines[0].id, 0);
+    assert_eq!(loaded_merged.lines[1].id, 1);
+    assert_eq!(loaded_merged.lines[2].id, 2);
 
     // Verify shots are preserved
-    assert_eq!(loaded_merged.sections[0].shots.len(), 2);
-    assert_eq!(loaded_merged.sections[1].shots.len(), 1);
-    assert_eq!(loaded_merged.sections[2].shots.len(), 2);
+    assert_eq!(loaded_merged.lines[0].shots.len(), 2);
+    assert_eq!(loaded_merged.lines[1].shots.len(), 1);
+    assert_eq!(loaded_merged.lines[2].shots.len(), 2);
 
     // Verify total stats
     let stats = loaded_merged.stats();
-    assert_eq!(stats.section_count, 3);
+    assert_eq!(stats.line_count, 3);
     assert_eq!(stats.shot_count, 5);
 }
 
@@ -2498,7 +2504,7 @@ fn test_merge_projects_preserves_zero_datums() {
     // Create first project with zero datum
     let path1 = dir.path().join("project_zd1.stalx");
     let mut project1 = Project::new("Cave ZD1".to_string(), None);
-    project1.add_section(create_section_with_shots(
+    project1.add_line(create_line_with_shots(
         "ZD1-Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
@@ -2520,13 +2526,13 @@ fn test_merge_projects_preserves_zero_datums() {
     // Create second project with zero datum
     let path2 = dir.path().join("project_zd2.stalx");
     let mut project2 = Project::new("Cave ZD2".to_string(), None);
-    project2.add_section(create_section_with_shots(
+    project2.add_line(create_line_with_shots(
         "ZD2-Main",
         vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
     ));
     project2
         .set_zero_datum(
-            StationRef::new(0, 1), // End of section
+            StationRef::new(0, 1), // End of line
             GpsCoordinates {
                 latitude: 46.0,
                 longitude: -123.0,
@@ -2547,52 +2553,52 @@ fn test_merge_projects_preserves_zero_datums() {
 
     let mut merged = Project::new("Merged ZD".to_string(), None);
 
-    // Add sections and zero datums from project 1
-    for section in &loaded1.sections {
-        let old_id = section.id;
-        let new_section = merged.add_section(section.to_section_data());
-        let new_id = new_section.id;
+    // Add lines and zero datums from project 1
+    for line in &loaded1.lines {
+        let old_id = line.id;
+        let new_line = merged.add_line(line.to_line_data());
+        let new_id = new_line.id;
 
         // Remap zero datums
         for zd in &loaded1.zero_datums {
-            if zd.station_ref.section_id == old_id {
+            if zd.station_ref.line_id == old_id {
                 let idx = loaded1.resolve_key(&zd.station_ref).unwrap().station_index;
                 let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
             }
         }
     }
 
-    // Add sections and zero datums from project 2
-    for section in &loaded2.sections {
-        let old_id = section.id;
-        let new_section = merged.add_section(section.to_section_data());
-        let new_id = new_section.id;
+    // Add lines and zero datums from project 2
+    for line in &loaded2.lines {
+        let old_id = line.id;
+        let new_line = merged.add_line(line.to_line_data());
+        let new_id = new_line.id;
 
         // Remap zero datums
         for zd in &loaded2.zero_datums {
-            if zd.station_ref.section_id == old_id {
+            if zd.station_ref.line_id == old_id {
                 let idx = loaded2.resolve_key(&zd.station_ref).unwrap().station_index;
                 let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
             }
         }
     }
 
-    // Verify zero datums were preserved with remapped section IDs
+    // Verify zero datums were preserved with remapped line IDs
     assert_eq!(merged.zero_datums.len(), 2);
 
-    // First zero datum from project 1 (section 0, station 0)
+    // First zero datum from project 1 (line 0, station 0)
     let mzd0 = merged
         .resolve_key(&merged.zero_datums[0].station_ref)
         .unwrap();
-    assert_eq!(mzd0.section_id, 0);
+    assert_eq!(mzd0.line_id, 0);
     assert_eq!(mzd0.station_index, 0);
     assert!((merged.zero_datums[0].gps.latitude - 45.0).abs() < 0.001);
 
-    // Second zero datum from project 2 (section 1, station 1)
+    // Second zero datum from project 2 (line 1, station 1)
     let mzd1 = merged
         .resolve_key(&merged.zero_datums[1].station_ref)
         .unwrap();
-    assert_eq!(mzd1.section_id, 1);
+    assert_eq!(mzd1.line_id, 1);
     assert_eq!(mzd1.station_index, 1);
     assert!((merged.zero_datums[1].gps.latitude - 46.0).abs() < 0.001);
 }
@@ -2604,24 +2610,24 @@ fn test_merge_projects_preserves_station_merges() {
 
     let dir = tempdir().unwrap();
 
-    // Create project with 2 sections and a station merge
+    // Create project with 2 lines and a station merge
     let path1 = dir.path().join("project_merge1.stalx");
     let mut project1 = Project::new("Cave Merge".to_string(), None);
 
-    project1.add_section(create_section_with_shots(
-        "Section A",
+    project1.add_line(create_line_with_shots(
+        "Line A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project1.add_section(create_section_with_shots(
-        "Section B",
+    project1.add_line(create_line_with_shots(
+        "Line B",
         vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
     ));
 
-    // Merge last station of section 0 with first station of section 1
+    // Merge last station of line 0 with first station of line 1
     project1
         .merge_stations(
-            StationRef::new(0, 1), // End of section 0
-            StationRef::new(1, 0), // Start of section 1
+            StationRef::new(0, 1), // End of line 0
+            StationRef::new(1, 0), // Start of line 1
         )
         .unwrap();
 
@@ -2632,8 +2638,8 @@ fn test_merge_projects_preserves_station_merges() {
     // Create second project (empty)
     let path2 = dir.path().join("project_merge2.stalx");
     let mut project2 = Project::new("Empty Cave".to_string(), None);
-    project2.add_section(create_section_with_shots(
-        "Section C",
+    project2.add_line(create_line_with_shots(
+        "Line C",
         vec![create_shot_data(180.0, 6.0, 3.0, 3.0)],
     ));
 
@@ -2648,20 +2654,20 @@ fn test_merge_projects_preserves_station_merges() {
     let loaded2 = db2.load_project().unwrap();
 
     let mut merged = Project::new("Merged Stations".to_string(), None);
-    let mut section_id_map: HashMap<u32, u32> = HashMap::new();
+    let mut line_id_map: HashMap<u32, u32> = HashMap::new();
 
-    // Add sections from project 1
-    for section in &loaded1.sections {
-        let old_id = section.id;
-        let new_section = merged.add_section(section.to_section_data());
-        section_id_map.insert(old_id, new_section.id);
+    // Add lines from project 1
+    for line in &loaded1.lines {
+        let old_id = line.id;
+        let new_line = merged.add_line(line.to_line_data());
+        line_id_map.insert(old_id, new_line.id);
     }
 
     // Copy station merges from project 1
     for sm in &loaded1.station_merges {
         if let (Some(&new_a), Some(&new_b)) = (
-            section_id_map.get(&sm.station_a.section_id),
-            section_id_map.get(&sm.station_b.section_id),
+            line_id_map.get(&sm.station_a.line_id),
+            line_id_map.get(&sm.station_b.line_id),
         ) {
             let a_idx = loaded1.resolve_key(&sm.station_a).unwrap().station_index;
             let b_idx = loaded1.resolve_key(&sm.station_b).unwrap().station_index;
@@ -2673,9 +2679,9 @@ fn test_merge_projects_preserves_station_merges() {
         }
     }
 
-    // Add sections from project 2
-    for section in &loaded2.sections {
-        merged.add_section(section.to_section_data());
+    // Add lines from project 2
+    for line in &loaded2.lines {
+        merged.add_line(line.to_line_data());
     }
 
     // Verify station merge was preserved with remapped IDs
@@ -2686,11 +2692,11 @@ fn test_merge_projects_preserves_station_merges() {
     let msb = merged
         .resolve_key(&merged.station_merges[0].station_b)
         .unwrap();
-    assert_eq!(msa.section_id, 0);
+    assert_eq!(msa.line_id, 0);
     assert_eq!(msa.station_index, 1);
-    assert_eq!(msb.section_id, 1);
+    assert_eq!(msb.line_id, 1);
     assert_eq!(msb.station_index, 0);
 
-    // Verify 3 sections total
-    assert_eq!(merged.sections.len(), 3);
+    // Verify 3 lines total
+    assert_eq!(merged.lines.len(), 3);
 }

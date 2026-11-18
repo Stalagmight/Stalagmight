@@ -3,18 +3,18 @@ use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
 use crate::models::{
-    datum_gap_ignore_code, severity_for_code, station_id_label, DatumGap, Project, ProjectWarning,
-    SectionId, ShotData, ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
-    DATUM_GPS_GAP, DATUM_GPS_GAP_START,
+    datum_gap_ignore_code, severity_for_code, DatumGap, LineId, Project, ProjectWarning, ShotData,
+    ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED, DATUM_GPS_GAP,
+    DATUM_GPS_GAP_START,
 };
 use crate::persistence::Database;
 
 use super::AppState;
 
-/// Which section each live shot uuid is in now, for an ignored-warning row
-/// (keyed by `(section_id, shot_uuid)`) whose stored section no longer holds
-/// its shot. Split Section Here, delete-and-split and Combine Sections all move
-/// shots to another section with their uuid, and the ignore has to follow the
+/// Which line each live shot uuid is in now, for an ignored-warning row
+/// (keyed by `(line_id, shot_uuid)`) whose stored line no longer holds
+/// its shot. Split Line Here, delete-and-split and Combine Lines all move
+/// shots to another line with their uuid, and the ignore has to follow the
 /// shot instead of silently lapsing.
 ///
 /// Only a uuid exactly one live shot holds has a home: shot uuids are unique
@@ -23,29 +23,29 @@ use super::AppState;
 /// (`project_io`), so an ignore that follows its shot in the session is also
 /// re-keyed by the next save.
 pub(super) struct ShotHomes<'p> {
-    homes: std::collections::HashMap<&'p str, Option<SectionId>>,
+    homes: std::collections::HashMap<&'p str, Option<LineId>>,
 }
 
 impl<'p> ShotHomes<'p> {
     pub(super) fn of(project: &'p Project) -> Self {
-        let mut homes: std::collections::HashMap<&'p str, Option<SectionId>> =
+        let mut homes: std::collections::HashMap<&'p str, Option<LineId>> =
             std::collections::HashMap::new();
-        for section in &project.sections {
-            for shot in &section.shots {
+        for line in &project.lines {
+            for shot in &line.shots {
                 if let Some(uuid) = shot.uuid.as_deref() {
                     homes
                         .entry(uuid)
                         .and_modify(|home| *home = None)
-                        .or_insert(Some(section.id));
+                        .or_insert(Some(line.id));
                 }
             }
         }
         Self { homes }
     }
 
-    /// The section `uuid` moved to, when `stored` (the row's section) no longer
-    /// holds it and exactly one other section does.
-    pub(super) fn moved_to(&self, stored: SectionId, uuid: &str) -> Option<SectionId> {
+    /// The line `uuid` moved to, when `stored` (the row's line) no longer
+    /// holds it and exactly one other line does.
+    pub(super) fn moved_to(&self, stored: LineId, uuid: &str) -> Option<LineId> {
         match self.homes.get(uuid) {
             Some(Some(home)) if *home != stored => Some(*home),
             _ => None,
@@ -70,7 +70,7 @@ impl AppState {
         // Load resolved (ignored) warnings. Suppression is keyed by the shot's
         // stable UUID (issue #57): an ignore stays bound to the same shot even
         // after inserts/deletes/reorders renumber `shot_id`. Pre-v8 rows that
-        // carry no UUID fall back to the legacy (section_id, shot_id) position.
+        // carry no UUID fall back to the legacy (line_id, shot_id) position.
         //
         // [#517] Read side and save side use the SAME verbatim loader. The
         // strict one names every current column, so on a file whose schema was
@@ -93,10 +93,10 @@ impl AppState {
         // Key the lookup sets by borrowed slices into `resolved` so the
         // per-warning probe below allocates nothing. `resolved` outlives this
         // closure, so the &str borrows stay valid.
-        // Key UUID-suppression by (section_id, uuid). Shot UUIDs are unique across
-        // the live project, but a STORED row can name an id that two sections held
-        // before the load renamed one copy: only its section says which shot it
-        // meant (issue #57 / Codex). section_id is stable per shot (it doesn't
+        // Key UUID-suppression by (line_id, uuid). Shot UUIDs are unique across
+        // the live project, but a STORED row can name an id that two lines held
+        // before the load renamed one copy: only its line says which shot it
+        // meant (issue #57 / Codex). line_id is stable per shot (it doesn't
         // change when shot_id renumbers), so this keeps the position-independence
         // the UUID keying was added for.
         let mut resolved_by_uuid: std::collections::HashMap<(u32, &str), HashSet<&str>> =
@@ -105,12 +105,12 @@ impl AppState {
         // A row stored against an id the load renamed (`reminted_shot_uuid`)
         // still suppresses its shot until the next save re-keys it. Only when
         // this load renamed anything, and only for a row whose id no live shot
-        // of its section holds, is the derivation paid for; owned keys, since
+        // of its line holds, is the derivation paid for; owned keys, since
         // the derived id exists nowhere else to borrow from.
         let derive_aliases = self.load_renamed_shots();
         let live_ids: HashSet<(u32, &str)> = if derive_aliases {
             project
-                .sections
+                .lines
                 .iter()
                 .flat_map(|s| {
                     s.shots
@@ -123,28 +123,28 @@ impl AppState {
         };
         let mut resolved_by_renamed: std::collections::HashMap<(u32, String), HashSet<&str>> =
             std::collections::HashMap::new();
-        // A shot that a split or a combine moved into another section keeps its
+        // A shot that a split or a combine moved into another line keeps its
         // uuid, so its ignore follows it there (see `ShotHomes`).
         let homes = ShotHomes::of(project);
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
                     resolved_by_uuid
-                        .entry((r.section_id, uuid.as_str()))
+                        .entry((r.line_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
                     let renamed =
-                        derive_aliases && !live_ids.contains(&(r.section_id, uuid.as_str())) && {
-                            let alias = crate::models::reminted_shot_uuid(r.section_id, uuid);
-                            let held = live_ids.contains(&(r.section_id, alias.as_str()));
+                        derive_aliases && !live_ids.contains(&(r.line_id, uuid.as_str())) && {
+                            let alias = crate::models::reminted_shot_uuid(r.line_id, uuid);
+                            let held = live_ids.contains(&(r.line_id, alias.as_str()));
                             resolved_by_renamed
-                                .entry((r.section_id, alias))
+                                .entry((r.line_id, alias))
                                 .or_default()
                                 .insert(r.warning_code.as_str());
                             held
                         };
                     if !renamed {
-                        if let Some(home) = homes.moved_to(r.section_id, uuid) {
+                        if let Some(home) = homes.moved_to(r.line_id, uuid) {
                             resolved_by_uuid
                                 .entry((home, uuid.as_str()))
                                 .or_default()
@@ -153,12 +153,12 @@ impl AppState {
                     }
                 }
                 None => {
-                    resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.as_str()));
+                    resolved_by_position.insert((r.line_id, r.shot_id, r.warning_code.as_str()));
                 }
             }
         }
         // A warning is suppressed if its shot's UUID was ignored, or (legacy
-        // only) if its (section_id, shot_id) position was ignored. The resolve
+        // only) if its (line_id, shot_id) position was ignored. The resolve
         // command now REFUSES a no-UUID ignore (commands/validation.rs), and
         // load-time backfill upgrades legacy NULL-uuid rows to UUID keying when
         // the shot still maps to a live position (issue #57). The position
@@ -172,31 +172,34 @@ impl AppState {
         // position is upgraded. We keep the fallback because dropping it would
         // silently lose every legacy ignore for the still-live shots it protects.
         let is_resolved_for =
-            |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
+            |shot_uuid: &Option<String>, line_id: u32, shot_id: u32, code: &str| -> bool {
                 if let Some(uuid) = shot_uuid {
                     if resolved_by_uuid
-                        .get(&(section_id, uuid.as_str()))
+                        .get(&(line_id, uuid.as_str()))
                         .is_some_and(|codes| codes.contains(code))
                     {
                         return true;
                     }
                     if !resolved_by_renamed.is_empty()
                         && resolved_by_renamed
-                            .get(&(section_id, uuid.clone()))
+                            .get(&(line_id, uuid.clone()))
                             .is_some_and(|codes| codes.contains(code))
                     {
                         return true;
                     }
                 }
-                resolved_by_position.contains(&(section_id, shot_id, code))
+                resolved_by_position.contains(&(line_id, shot_id, code))
             };
 
         // Per-project validation thresholds (#57): stored in the .stalx, seeded
         // from the global config at project creation, authoritative thereafter.
         let mut all_warnings = Vec::new();
 
-        for section in &project.sections {
-            for (shot_index, shot) in section.shots.iter().enumerate() {
+        for line in &project.lines {
+            // The line's shot names (`Main Line: 4 → 5`), read once, and only
+            // when one of its shots has a warning to name.
+            let mut shot_labels: Option<Vec<String>> = None;
+            for (shot_index, shot) in line.shots.iter().enumerate() {
                 // Convert Shot to ShotData for validation
                 let shot_data = ShotData {
                     // Validation reads geometry only; identity is irrelevant and
@@ -220,20 +223,21 @@ impl AppState {
                     credit: None,
                 };
 
-                let warnings = Validator::validate_shot(
-                    &shot_data,
-                    &project.validation,
-                    section.id,
-                    shot_index,
-                );
+                let warnings = Validator::validate_shot(&shot_data, &project.validation, || {
+                    shot_labels
+                        .get_or_insert_with(|| project.line_shot_labels(line.id))
+                        .get(shot_index)
+                        .cloned()
+                        .unwrap_or_default()
+                });
                 for warning in warnings {
                     // Errors are never ignorable (issue #57): force is_resolved
                     // false so a stray resolved row (legacy/bulk) can't hide a
                     // blocking problem. Only advisory warnings honor a suppression.
                     let is_resolved = warning.severity != WarningSeverity::Error
-                        && is_resolved_for(&shot.uuid, section.id, shot.id, &warning.code);
+                        && is_resolved_for(&shot.uuid, line.id, shot.id, &warning.code);
                     all_warnings.push(ProjectWarning {
-                        section_id: section.id,
+                        line_id: line.id,
                         shot_id: shot.id,
                         shot_index,
                         code: warning.code,
@@ -260,7 +264,7 @@ impl AppState {
         // gap is the backend's (`Project::gps_fix_gaps`), so every readout of it
         // agrees.
         //
-        // A fix on a section with no shots has no shot to hang a row on, and the
+        // A fix on a line with no shots has no shot to hang a row on, and the
         // warnings list, Ignore and navigation are all shot-keyed, so it gets no
         // row; it is logged instead of dropped silently.
         let mut gaps: Vec<_> = project
@@ -268,31 +272,31 @@ impl AppState {
             .into_iter()
             .filter(|(_, gap)| gap.exceeds_threshold)
             .collect();
-        gaps.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        gaps.sort_by_key(|(sr, _)| (sr.line_id, sr.station_index));
         for (datum, gap) in gaps {
-            let Some(section) = project.get_section(datum.section_id) else {
+            let Some(line) = project.get_line(datum.line_id) else {
                 continue;
             };
             let (shot_index, code) = match datum.station_index {
                 0 => (0, DATUM_GPS_GAP_START),
                 i => (i as usize - 1, DATUM_GPS_GAP),
             };
-            let Some(shot) = section.shots.get(shot_index) else {
+            let Some(shot) = line.shots.get(shot_index) else {
                 tracing::warn!(
-                    section_id = section.id,
+                    line_id = line.id,
                     station_index = datum.station_index,
                     gap_m = gap.gap_m,
                     purpose = "report a GPS fix far from its survey",
-                    "GPS fix exceeds the gap threshold but its section has no shot to carry the warning"
+                    "GPS fix exceeds the gap threshold but its line has no shot to carry the warning"
                 );
                 continue;
             };
             // The Ignore is keyed on the datum's GPS too, so a new GPS reading
             // brings the warning back (#741 U2, `datum_gap_ignore_code`).
-            let ignore_code = ignore_code_in(project, section.id, shot.id, code);
-            let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &ignore_code);
+            let ignore_code = ignore_code_in(project, line.id, shot.id, code);
+            let is_resolved = is_resolved_for(&shot.uuid, line.id, shot.id, &ignore_code);
             all_warnings.push(ProjectWarning {
-                section_id: section.id,
+                line_id: line.id,
                 shot_id: shot.id,
                 shot_index,
                 message: datum_gps_gap_message(&gap),
@@ -312,12 +316,12 @@ impl AppState {
             self.adjustment_failure_warnings(project, adjusted_config_hash)
                 .into_iter()
                 .map(|mut w| {
-                    w.is_resolved = is_resolved_for(&w.shot_uuid, w.section_id, w.shot_id, &w.code);
+                    w.is_resolved = is_resolved_for(&w.shot_uuid, w.line_id, w.shot_id, &w.code);
                     w
                 }),
         );
 
-        // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
+        // Sort by resolved (unresolved first), then severity (errors first), then by line and shot
         all_warnings.sort_by(|a, b| {
             let resolved_order = |r: bool| i32::from(r);
             let severity_order = |s: &WarningSeverity| match s {
@@ -327,7 +331,7 @@ impl AppState {
             resolved_order(a.is_resolved)
                 .cmp(&resolved_order(b.is_resolved))
                 .then_with(|| severity_order(&a.severity).cmp(&severity_order(&b.severity)))
-                .then_with(|| a.section_id.cmp(&b.section_id))
+                .then_with(|| a.line_id.cmp(&b.line_id))
                 .then_with(|| a.shot_index.cmp(&b.shot_index))
         });
 
@@ -344,18 +348,18 @@ impl AppState {
             .closures_across_one_shot()
             .into_iter()
             .filter_map(|skipped| {
-                let (section_id, shot_index) = skipped.collapsed_shot;
-                let shot = project.get_section(section_id)?.shots.get(shot_index)?;
+                let (line_id, shot_index) = skipped.collapsed_shot;
+                let shot = project.get_line(line_id)?.shots.get(shot_index)?;
                 Some(ProjectWarning {
-                    section_id,
+                    line_id,
                     shot_id: shot.id,
                     shot_index,
                     code: CLOSURE_ACROSS_ONE_SHOT.to_string(),
                     message: format!(
-                        "Shot {section_id}:{} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
-                        shot_index + 1,
-                        station_id_label(skipped.station_a),
-                        station_id_label(skipped.station_b),
+                        "Shot {} has both ends joined by loop closure {} to {}, which would squeeze the shot to zero length, so the Closures Computed View skips that closure. Remove the closure, or close the loop at two stations that are not the ends of a single shot.",
+                        project.shot_label_at(line_id, shot_index).unwrap_or_default(),
+                        project.station_text(skipped.station_a),
+                        project.station_text(skipped.station_b),
                     ),
                     severity: severity_for_code(CLOSURE_ACROSS_ONE_SHOT),
                     is_resolved: false,
@@ -389,26 +393,26 @@ impl AppState {
         self.cached_adjustment_failures(project, config_hash)
             .iter()
             .filter_map(|failure| {
-                let anchor_shot = project.get_section(failure.anchor.section_id).and_then(|s| {
+                let anchor_shot = project.get_line(failure.anchor.line_id).and_then(|s| {
                     let index = (failure.anchor.station_index as usize).saturating_sub(1);
                     s.shots.get(index).map(|shot| (s.id, index, shot))
                 });
-                let (section_id, shot_index, shot) = anchor_shot.or_else(|| {
-                    failure.section_ids.iter().find_map(|id| {
-                        let section = project.get_section(*id)?;
-                        section.shots.first().map(|shot| (section.id, 0, shot))
+                let (line_id, shot_index, shot) = anchor_shot.or_else(|| {
+                    failure.line_ids.iter().find_map(|id| {
+                        let line = project.get_line(*id)?;
+                        line.shots.first().map(|shot| (line.id, 0, shot))
                     })
                 })?;
-                let sections = failure.section_ids.len();
+                let lines = failure.line_ids.len();
                 Some(ProjectWarning {
-                    section_id,
+                    line_id,
                     shot_id: shot.id,
                     shot_index,
                     code: CLOSURE_ADJUSTMENT_FAILED.to_string(),
                     message: format!(
-                        "Shot {section_id}:{} is in a part of the survey ({sections} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
-                        shot_index + 1,
-                        if sections == 1 { "section" } else { "sections" },
+                        "Shot {} is in a part of the survey ({lines} {}) the Closures Computed View could not adjust, so that part is shown as measured: {}",
+                        project.shot_label_at(line_id, shot_index).unwrap_or_default(),
+                        if lines == 1 { "line" } else { "lines" },
                         failure.user_reason(),
                     ),
                     severity: severity_for_code(CLOSURE_ADJUSTMENT_FAILED),
@@ -422,14 +426,14 @@ impl AppState {
             .collect()
     }
 
-    /// Pin the position-keyed ignores of JUST-reversed sections to the physical shot
+    /// Pin the position-keyed ignores of JUST-reversed lines to the physical shot
     /// they were taken on.
     ///
-    /// A resolved-warning row with a NULL `shot_uuid` is keyed by `(section_id, shot_id)`,
+    /// A resolved-warning row with a NULL `shot_uuid` is keyed by `(line_id, shot_id)`,
     /// and the reverse deliberately keeps shot IDs attached to POSITIONS rather than to
     /// records - so after it, `shot_id` names a different physical shot. Left alone, the
     /// save-time carry-over in `project_io` upgrades such a row via
-    /// `live_by_id.get(&(section_id, shot_id))` and pins it, by UUID, to that OTHER shot,
+    /// `live_by_id.get(&(line_id, shot_id))` and pins it, by UUID, to that OTHER shot,
     /// permanently suppressing an unrelated warning.
     ///
     /// NULL-uuid rows are still minted today: `commands::validation` deliberately stores
@@ -444,11 +448,11 @@ impl AppState {
     /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
     /// the INTERVENING re-reverse, which is what changes the map. Run it twice against ONE
     /// project state and the second pass re-pins the row a second time, onto a shot that
-    /// was never reversed onto it. `section_ids` must therefore name each section at most
-    /// once - `Command::reversed_section_ids` parity-reduces its `Batch` arm to guarantee it.
+    /// was never reversed onto it. `line_ids` must therefore name each line at most
+    /// once - `Command::reversed_line_ids` parity-reduces its `Batch` arm to guarantee it.
     ///
     /// Best-effort: no database (an unsaved project) means no rows exist to fix.
-    pub(super) fn pin_position_keyed_warnings_after_reverse(&self, section_ids: &[SectionId]) {
+    pub(super) fn pin_position_keyed_warnings_after_reverse(&self, line_ids: &[LineId]) {
         let live: std::collections::HashMap<(u32, u32), String> = {
             let guard = match self.project.lock() {
                 Ok(g) => g,
@@ -457,14 +461,14 @@ impl AppState {
             let Some(project) = guard.as_ref() else {
                 return;
             };
-            section_ids
+            line_ids
                 .iter()
-                .filter_map(|sid| project.get_section(*sid))
-                .flat_map(|section| {
-                    let last = section.shots.len().saturating_sub(1);
-                    section.shots.iter().enumerate().filter_map(move |(p, s)| {
-                        let mirrored = section.shots.get(last - p)?;
-                        Some(((section.id, s.id), mirrored.uuid.clone()?))
+                .filter_map(|sid| project.get_line(*sid))
+                .flat_map(|line| {
+                    let last = line.shots.len().saturating_sub(1);
+                    line.shots.iter().enumerate().filter_map(move |(p, s)| {
+                        let mirrored = line.shots.get(last - p)?;
+                        Some(((line.id, s.id), mirrored.uuid.clone()?))
                     })
                 })
                 .collect()
@@ -489,9 +493,8 @@ impl AppState {
         // migrating to the mirrored shot, writing a bad one costs it outright.
         let live: std::collections::HashMap<(u32, u32), String> = live
             .into_iter()
-            .filter(|((section_id, _), uuid)| {
-                db.shot_uuid_is_persisted(*section_id, uuid)
-                    .unwrap_or(false)
+            .filter(|((line_id, _), uuid)| {
+                db.shot_uuid_is_persisted(*line_id, uuid).unwrap_or(false)
             })
             .collect();
         if live.is_empty() {
@@ -501,25 +504,25 @@ impl AppState {
             Ok(0) => {}
             Ok(n) => tracing::info!(
                 pinned = n,
-                "Pinned position-keyed warning ignores to their shot's UUID after a section reverse"
+                "Pinned position-keyed warning ignores to their shot's UUID after a line reverse"
             ),
             Err(e) => tracing::warn!(
                 reason = %e,
-                purpose = "pin ignores across a section reverse",
+                purpose = "pin ignores across a line reverse",
                 "Could not pin position-keyed warning ignores; one may migrate to the mirrored shot"
             ),
         }
     }
 
-    /// Pin the position-keyed ignores of `section_ids`' shots to the shots'
-    /// uuids BEFORE a structural edit moves those shots to another section or
-    /// index (Split Section Here, Combine Sections, and the reverse inside a
-    /// combine). A NULL-uuid row is keyed by `(section_id, shot_id)`, and the
+    /// Pin the position-keyed ignores of `line_ids`' shots to the shots'
+    /// uuids BEFORE a structural edit moves those shots to another line or
+    /// index (Split Line Here, Combine Lines, and the reverse inside a
+    /// combine). A NULL-uuid row is keyed by `(line_id, shot_id)`, and the
     /// move changes both, so the ignore would lapse - or, once a later
     /// renumber lands another shot on that id, suppress the wrong warning. A
     /// uuid-keyed row then follows its shot through [`ShotHomes`], in the
     /// session and through the save, and an undo before the save puts the shot
-    /// back where the row's section says.
+    /// back where the row's line says.
     ///
     /// Pinned onto the shot's LIVE uuid, whether or not the file holds it yet:
     /// a shot added since the last save (the common case, since the resolve
@@ -533,7 +536,7 @@ impl AppState {
     /// disk, so every load mints new ones): there only a uuid the file holds
     /// is pinned, as [`Self::pin_position_keyed_warnings_after_reverse`] does,
     /// and the rest keep their position-keyed rows (the residual it documents).
-    pub(super) fn pin_position_keyed_ignores_before_move(&self, section_ids: &[SectionId]) {
+    pub(super) fn pin_position_keyed_ignores_before_move(&self, line_ids: &[LineId]) {
         let live: std::collections::HashMap<(u32, u32), String> = {
             let guard = match self.project.lock() {
                 Ok(g) => g,
@@ -542,14 +545,13 @@ impl AppState {
             let Some(project) = guard.as_ref() else {
                 return;
             };
-            section_ids
+            line_ids
                 .iter()
-                .filter_map(|sid| project.get_section(*sid))
-                .flat_map(|section| {
-                    section
-                        .shots
+                .filter_map(|sid| project.get_line(*sid))
+                .flat_map(|line| {
+                    line.shots
                         .iter()
-                        .filter_map(move |shot| Some(((section.id, shot.id), shot.uuid.clone()?)))
+                        .filter_map(move |shot| Some(((line.id, shot.id), shot.uuid.clone()?)))
                 })
                 .collect()
         };
@@ -568,11 +570,8 @@ impl AppState {
         let file_stores_uuids = !db.holds_shots_without_uuid().unwrap_or(true);
         let live: std::collections::HashMap<(u32, u32), String> = live
             .into_iter()
-            .filter(|((section_id, _), uuid)| {
-                file_stores_uuids
-                    || db
-                        .shot_uuid_is_persisted(*section_id, uuid)
-                        .unwrap_or(false)
+            .filter(|((line_id, _), uuid)| {
+                file_stores_uuids || db.shot_uuid_is_persisted(*line_id, uuid).unwrap_or(false)
             })
             .collect();
         if live.is_empty() {
@@ -582,12 +581,12 @@ impl AppState {
             Ok(0) => {}
             Ok(n) => tracing::info!(
                 pinned = n,
-                "Pinned position-keyed warning ignores to their shot's UUID before a section \
+                "Pinned position-keyed warning ignores to their shot's UUID before a line \
                  split or combine"
             ),
             Err(e) => tracing::warn!(
                 reason = %e,
-                purpose = "pin ignores across a section split or combine",
+                purpose = "pin ignores across a line split or combine",
                 "Could not pin position-keyed warning ignores; one may lapse with its moved shot"
             ),
         }
@@ -636,17 +635,17 @@ impl AppState {
     /// `Database::shot_uuid_is_persisted`). Returns false when no database is open
     /// or the lookup fails - the safe default, which keeps a new ignore
     /// position-keyed rather than binding it to an unpersisted UUID (issue #57).
-    pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> bool {
+    pub fn shot_uuid_is_persisted(&self, line_id: u32, uuid: &str) -> bool {
         let Ok(db_guard) = self.database.lock() else {
             return false;
         };
         let Some(db) = db_guard.as_ref() else {
             return false;
         };
-        if db.shot_uuid_is_persisted(section_id, uuid).unwrap_or(false) {
+        if db.shot_uuid_is_persisted(line_id, uuid).unwrap_or(false) {
             return true;
         }
-        // A shot the load renamed (a cross-section repeat in a file saved before
+        // A shot the load renamed (a cross-line repeat in a file saved before
         // shot UUIDs were project-wide unique) holds an id the file does not, but
         // every open derives the SAME id from the one on disk, so an ignore keyed
         // by it survives a close without saving just as well. Only a load that
@@ -654,10 +653,10 @@ impl AppState {
         if !self.load_renamed_shots() {
             return false;
         }
-        db.section_shot_uuids(section_id)
+        db.line_shot_uuids(line_id)
             .unwrap_or_default()
             .iter()
-            .any(|stored| crate::models::reminted_shot_uuid(section_id, stored) == uuid)
+            .any(|stored| crate::models::reminted_shot_uuid(line_id, stored) == uuid)
     }
 
     /// Delete a resolved warning from database (un-ignore). `shot_uuid` keys the
@@ -665,15 +664,14 @@ impl AppState {
     /// cleared so a pre-v8 row is removed regardless.
     pub fn delete_resolved_warning(
         &self,
-        section_id: u32,
+        line_id: u32,
         shot_id: u32,
         warning_code: &str,
         shot_uuid: Option<&str>,
     ) -> Result<()> {
         // An ignore an "Add .stalx" carried in and no save has written yet
         // (#674) lives only in memory; un-ignoring it is forgetting it there.
-        let forgot_pending =
-            self.forget_pending_ignore(section_id, shot_id, warning_code, shot_uuid);
+        let forgot_pending = self.forget_pending_ignore(line_id, shot_id, warning_code, shot_uuid);
         let db_guard = self
             .database
             .lock()
@@ -689,29 +687,23 @@ impl AppState {
         // that row as well. Only a shot whose live id the file does not hold
         // can have been renamed, so the scan is skipped for every other one.
         let maybe_renamed = shot_uuid.filter(|live| {
-            self.load_renamed_shots()
-                && !db.shot_uuid_is_persisted(section_id, live).unwrap_or(false)
+            self.load_renamed_shots() && !db.shot_uuid_is_persisted(line_id, live).unwrap_or(false)
         });
         if let Some(live) = maybe_renamed {
             for row in db.load_resolved_warnings_verbatim().unwrap_or_default() {
                 let Some(stored) = row.shot_uuid.as_deref() else {
                     continue;
                 };
-                if row.section_id == section_id
+                if row.line_id == line_id
                     && row.warning_code == warning_code
                     && stored != live
-                    && crate::models::stored_shot_uuid_matches(section_id, stored, live)
+                    && crate::models::stored_shot_uuid_matches(line_id, stored, live)
                 {
-                    db.delete_resolved_warning(
-                        section_id,
-                        row.shot_id,
-                        warning_code,
-                        Some(stored),
-                    )?;
+                    db.delete_resolved_warning(line_id, row.shot_id, warning_code, Some(stored))?;
                 }
             }
         }
-        db.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
+        db.delete_resolved_warning(line_id, shot_id, warning_code, shot_uuid)
     }
 
     /// User-facing **resolve** (the `resolve_warning` command's persistence step):
@@ -734,7 +726,7 @@ impl AppState {
             .map_err(|f| f.error.unwrap_or_default())?;
         let warning = crate::persistence::ResolvedWarning {
             warning_code: self.ignore_code_for(
-                warning.section_id,
+                warning.line_id,
                 warning.shot_id,
                 &warning.warning_code,
             ),
@@ -752,71 +744,66 @@ impl AppState {
     /// same reason as [`Self::save_resolved_warning_gated`].
     pub fn delete_resolved_warning_gated(
         &self,
-        section_id: u32,
+        line_id: u32,
         shot_id: u32,
         warning_code: &str,
         shot_uuid: Option<&str>,
     ) -> Result<(), String> {
         self.guard_mutation("Unresolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
-        let warning_code = self.ignore_code_for(section_id, shot_id, warning_code);
-        self.delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid)
+        let warning_code = self.ignore_code_for(line_id, shot_id, warning_code);
+        self.delete_resolved_warning(line_id, shot_id, &warning_code, shot_uuid)
             .map_err(|e| e.to_string())?;
         self.mark_remote_forward_edit();
         Ok(())
     }
 
-    /// The code an Ignore of `warning_code` on `(section_id, shot_id)` is
+    /// The code an Ignore of `warning_code` on `(line_id, shot_id)` is
     /// stored and matched under in the open project ([`ignore_code_in`]).
     /// Takes the project lock, so never call it holding one.
-    pub fn ignore_code_for(
-        &self,
-        section_id: SectionId,
-        shot_id: ShotId,
-        warning_code: &str,
-    ) -> String {
+    pub fn ignore_code_for(&self, line_id: LineId, shot_id: ShotId, warning_code: &str) -> String {
         let guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         match guard.as_ref() {
-            Some(project) => ignore_code_in(project, section_id, shot_id, warning_code),
+            Some(project) => ignore_code_in(project, line_id, shot_id, warning_code),
             None => warning_code.to_string(),
         }
     }
 
-    /// Look up a shot's stable UUID by its `(section_id, shot_id)` identity in
+    /// Look up a shot's stable UUID by its `(line_id, shot_id)` identity in
     /// the open project. Used by the resolve/unresolve commands to key an
     /// "Ignore" by UUID (issue #57). After `do_load_project_full` every shot
     /// has a UUID, so this is `Some` for any shot the user can act on; returns
     /// `None` only if no project is open or the shot is gone.
-    pub fn shot_uuid_for(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+    pub fn shot_uuid_for(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
         let guard = self.project.lock().ok()?;
         let project = guard.as_ref()?;
-        let section = project.sections.iter().find(|s| s.id == section_id)?;
-        let shot = section.shots.iter().find(|s| s.id == shot_id)?;
+        let line = project.lines.iter().find(|s| s.id == line_id)?;
+        let shot = line.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()
     }
 }
 
-/// The code an Ignore of `code` on `(section_id, shot_id)` is stored and
+/// The code an Ignore of `code` on `(line_id, shot_id)` is stored and
 /// matched under: for a datum gap warning, [`datum_gap_ignore_code`] with the
 /// GPS of the datum on the station the shot carries the warning for (station
 /// 0 for [`DATUM_GPS_GAP_START`], the station the shot arrives at for
 /// [`DATUM_GPS_GAP`]); every other code, or a station that holds no datum,
 /// as it is.
-fn ignore_code_in(project: &Project, section_id: SectionId, shot_id: ShotId, code: &str) -> String {
+fn ignore_code_in(project: &Project, line_id: LineId, shot_id: ShotId, code: &str) -> String {
     let datum_gps = || {
-        let section = project.get_section(section_id)?;
+        let line = project.get_line(line_id)?;
         let station_index = match code {
             DATUM_GPS_GAP_START => 0,
             DATUM_GPS_GAP => {
-                let shot = section.shots.iter().position(|s| s.id == shot_id)?;
+                let shot = line.shots.iter().position(|s| s.id == shot_id)?;
                 u32::try_from(shot + 1).ok()?
             }
             _ => return None,
         };
-        let at = StationRef::new(section_id, station_index);
+        let at = StationRef::new(line_id, station_index);
         project
             .zero_datums
             .iter()

@@ -11,7 +11,7 @@ What each screen shows and what its controls do.
 - [Start screen](start-screen.md)
 - [New Project dialog](new-project-dialog.md)
 - [Survey view](survey-view.md)
-- [Import / Create Section dialog](create-section-dialog.md)
+- [Import / Create Line dialog](create-section-dialog.md)
 - [Placement mode](placement-mode.md)
 - [Station context menu](station-context-menu.md)
 - [Edit Station dialog](edit-station-dialog.md)

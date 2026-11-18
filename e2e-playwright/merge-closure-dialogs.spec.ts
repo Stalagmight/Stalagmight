@@ -2,9 +2,9 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
 } from './helpers/app';
-import type { SectionSeed } from './helpers/app';
+import type { LineSeed } from './helpers/app';
 
 /**
  * E2E tests for merge and closure dialog rendering and interaction flows.
@@ -15,7 +15,7 @@ import type { SectionSeed } from './helpers/app';
  * visibility, content, and button presence.
  */
 
-const sectionA: SectionSeed = {
+const lineA: LineSeed = {
   name: 'Main Line',
   shots: [
     { azimuth_in: 0, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 1 },
@@ -23,7 +23,7 @@ const sectionA: SectionSeed = {
   ],
 };
 
-const sectionB: SectionSeed = {
+const lineB: LineSeed = {
   name: 'Side Passage',
   shots: [
     { azimuth_in: 90, azimuth_out: 90, length: 5, depth_in: 0, depth_out: 0.5 },
@@ -34,32 +34,32 @@ test.describe('Merge and Closure Dialogs', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Merge Test');
-    await seedProjectWithSections(page, [sectionA, sectionB]);
+    await seedProjectWithLines(page, [lineA, lineB]);
   });
 
   test('MergeDialog renders with station info when opened for unconnected stations @smoke', async ({ page }) => {
-    // Get section IDs from project store
-    const sectionIds = await page.evaluate(() => {
+    // Get line IDs from project store
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Open merge dialog via uiStore with station data
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().openDialog('merge', {
-          stationA: { section_id: sectionA, station_index: 1 },
-          stationB: { section_id: sectionB, station_index: 0 },
+          stationA: { line_id: lineA, station_index: 1 },
+          stationB: { line_id: lineB, station_index: 0 },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     // Verify MergeDialog is visible
@@ -82,24 +82,24 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('ClosureDialog renders with preview data and action buttons @smoke', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Open closure dialog with preview data
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().openDialog('closure', {
-          stationA: { section_id: sectionA, station_index: 0 },
-          stationB: { section_id: sectionB, station_index: 1 },
+          stationA: { line_id: lineA, station_index: 0 },
+          stationB: { line_id: lineB, station_index: 1 },
           preview: {
             path_length: 23.0,
             misclosure_distance: 0.5,
@@ -109,7 +109,7 @@ test.describe('Merge and Closure Dialogs', () => {
           },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     // Verify ClosureDialog is visible
@@ -140,27 +140,27 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('MergeDialog Merge button triggers merge action and dialog closes', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Open merge dialog
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().openDialog('merge', {
-          stationA: { section_id: sectionA, station_index: 1 },
-          stationB: { section_id: sectionB, station_index: 0 },
+          stationA: { line_id: lineA, station_index: 1 },
+          stationB: { line_id: lineB, station_index: 0 },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     const mergeDialog = page.getByTestId('merge-dialog');
@@ -175,24 +175,24 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('ClosureDialog create button triggers closure and dialog closes', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Open closure dialog
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().openDialog('closure', {
-          stationA: { section_id: sectionA, station_index: 0 },
-          stationB: { section_id: sectionB, station_index: 1 },
+          stationA: { line_id: lineA, station_index: 0 },
+          stationB: { line_id: lineB, station_index: 1 },
           preview: {
             path_length: 23.0,
             misclosure_distance: 0.5,
@@ -202,7 +202,7 @@ test.describe('Merge and Closure Dialogs', () => {
           },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     const closureDialog = page.getByTestId('closure-dialog');
@@ -214,14 +214,14 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('Merge Tool opens MergeDialog when checkMergeConnectivity returns not connected', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Set connectivity result to NOT connected (merge path)
     await page.evaluate(() => {
@@ -230,34 +230,34 @@ test.describe('Merge and Closure Dialogs', () => {
 
     // Simulate merge tool flow: call checkAndOpenMergeDialog via project store
     await page.evaluate(
-      async ({ sectionA, sectionB }) => {
+      async ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         // Set merge tool active and set station A
         e2e.uiStore.getState().setActiveTool('merge');
-        e2e.uiStore.getState().setMergeStationA({ section_id: sectionA, station_index: 1 });
+        e2e.uiStore.getState().setMergeStationA({ line_id: lineA, station_index: 1 });
 
         // Call connectivity check directly (simulates second station click)
         const result = await e2e.projectStore.getState().checkMergeConnectivity(
-          { section_id: sectionA, station_index: 1 },
-          { section_id: sectionB, station_index: 0 },
+          { line_id: lineA, station_index: 1 },
+          { line_id: lineB, station_index: 0 },
         );
 
         // Open dialog based on result (replicate merge tool logic)
         if (result.connected) {
           e2e.uiStore.getState().openDialog('closure', {
-            stationA: { section_id: sectionA, station_index: 1 },
-            stationB: { section_id: sectionB, station_index: 0 },
+            stationA: { line_id: lineA, station_index: 1 },
+            stationB: { line_id: lineB, station_index: 0 },
             preview: result.preview,
           });
         } else {
           e2e.uiStore.getState().openDialog('merge', {
-            stationA: { section_id: sectionA, station_index: 1 },
-            stationB: { section_id: sectionB, station_index: 0 },
+            stationA: { line_id: lineA, station_index: 1 },
+            stationB: { line_id: lineB, station_index: 0 },
           });
         }
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     // Should open MergeDialog (not ClosureDialog)
@@ -268,14 +268,14 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('Merge Tool opens ClosureDialog when checkMergeConnectivity returns connected', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Set connectivity result to CONNECTED (closure path)
     await page.evaluate(() => {
@@ -293,31 +293,31 @@ test.describe('Merge and Closure Dialogs', () => {
 
     // Simulate merge tool flow
     await page.evaluate(
-      async ({ sectionA, sectionB }) => {
+      async ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().setActiveTool('merge');
-        e2e.uiStore.getState().setMergeStationA({ section_id: sectionA, station_index: 1 });
+        e2e.uiStore.getState().setMergeStationA({ line_id: lineA, station_index: 1 });
 
         const result = await e2e.projectStore.getState().checkMergeConnectivity(
-          { section_id: sectionA, station_index: 1 },
-          { section_id: sectionB, station_index: 0 },
+          { line_id: lineA, station_index: 1 },
+          { line_id: lineB, station_index: 0 },
         );
 
         if (result.connected) {
           e2e.uiStore.getState().openDialog('closure', {
-            stationA: { section_id: sectionA, station_index: 1 },
-            stationB: { section_id: sectionB, station_index: 0 },
+            stationA: { line_id: lineA, station_index: 1 },
+            stationB: { line_id: lineB, station_index: 0 },
             preview: result.preview,
           });
         } else {
           e2e.uiStore.getState().openDialog('merge', {
-            stationA: { section_id: sectionA, station_index: 1 },
-            stationB: { section_id: sectionB, station_index: 0 },
+            stationA: { line_id: lineA, station_index: 1 },
+            stationB: { line_id: lineB, station_index: 0 },
           });
         }
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     // Should open ClosureDialog (not MergeDialog)
@@ -332,24 +332,24 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('ClosureDialog shows reason subtitle when merge redirects to closure', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     // Open closure dialog with a reason (simulating merge-to-closure redirect)
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         e2e.uiStore.getState().openDialog('closure', {
-          stationA: { section_id: sectionA, station_index: 0 },
-          stationB: { section_id: sectionB, station_index: 1 },
+          stationA: { line_id: lineA, station_index: 0 },
+          stationB: { line_id: lineB, station_index: 1 },
           preview: {
             path_length: 23.0,
             misclosure_distance: 0.5,
@@ -360,7 +360,7 @@ test.describe('Merge and Closure Dialogs', () => {
           reason: 'These stations are already connected. Creating a loop closure instead.',
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     const closureDialog = page.getByTestId('closure-dialog');
@@ -373,15 +373,15 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('MergeDialog batches preCommands and calls onBeforeConfirm', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     await page.evaluate(() => {
       (window as any).__MOCK_EXECUTE_BATCH_CALLS__ = [];
@@ -389,22 +389,22 @@ test.describe('Merge and Closure Dialogs', () => {
     });
 
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         const callbacks = (window as any).__E2E_CALLBACKS__;
         e2e.uiStore.getState().openDialog('merge', {
-          stationA: { section_id: sectionA, station_index: 1 },
-          stationB: { section_id: sectionB, station_index: 0 },
+          stationA: { line_id: lineA, station_index: 1 },
+          stationB: { line_id: lineB, station_index: 0 },
           preCommands: [
-            { type: 'move_section', section_id: sectionA, offset: { x: 1, y: 0, z: 0 } },
+            { type: 'move_line', line_id: lineA, offset: { x: 1, y: 0, z: 0 } },
           ],
           onBeforeConfirm: async () => {
             callbacks.beforeConfirm += 1;
           },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     const mergeDialog = page.getByTestId('merge-dialog');
@@ -423,15 +423,15 @@ test.describe('Merge and Closure Dialogs', () => {
   });
 
   test('ClosureDialog batches preCommands with Move strategy', async ({ page }) => {
-    const sectionIds = await page.evaluate(() => {
+    const lineIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
       const project = e2e.projectStore.getState().project;
       if (!project) return [];
-      return project.sections.map((s: any) => s.id);
+      return project.lines.map((s: any) => s.id);
     });
 
-    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+    expect(lineIds.length).toBeGreaterThanOrEqual(2);
 
     await page.evaluate(() => {
       (window as any).__MOCK_EXECUTE_BATCH_CALLS__ = [];
@@ -439,13 +439,13 @@ test.describe('Merge and Closure Dialogs', () => {
     });
 
     await page.evaluate(
-      ({ sectionA, sectionB }) => {
+      ({ lineA, lineB }) => {
         const e2e = (window as any).__E2E_TEST__;
         if (!e2e) return;
         const callbacks = (window as any).__E2E_CALLBACKS__;
         e2e.uiStore.getState().openDialog('closure', {
-          stationA: { section_id: sectionA, station_index: 0 },
-          stationB: { section_id: sectionB, station_index: 1 },
+          stationA: { line_id: lineA, station_index: 0 },
+          stationB: { line_id: lineB, station_index: 1 },
           preview: {
             path_length: 12.0,
             misclosure_distance: 0.4,
@@ -454,14 +454,14 @@ test.describe('Merge and Closure Dialogs', () => {
             vertical_misclosure: 0.2,
           },
           preCommands: [
-            { type: 'move_section', section_id: sectionA, offset: { x: 0.5, y: 0.5, z: 0 } },
+            { type: 'move_line', line_id: lineA, offset: { x: 0.5, y: 0.5, z: 0 } },
           ],
           onBeforeConfirm: async () => {
             callbacks.beforeConfirm += 1;
           },
         });
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { lineA: lineIds[0], lineB: lineIds[1] },
     );
 
     const closureDialog = page.getByTestId('closure-dialog');

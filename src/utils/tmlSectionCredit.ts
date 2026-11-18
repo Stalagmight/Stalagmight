@@ -1,5 +1,5 @@
 /**
- * Who surveyed and explored an Ariane section, for the import preview: the
+ * Who surveyed and explored an Ariane line, for the import preview: the
  * union of the credit of the shots that will be imported, each person with
  * how many of them carry them, and the date or date range.
  *
@@ -10,7 +10,7 @@
  */
 import type { TmlSection } from '../types/commands';
 import { aggregateCredits, type AggregatedPerson } from './creditEdit';
-import { EMPTY_CREDIT, legacyPeople } from './sectionCredit';
+import { EMPTY_CREDIT, legacyPeople } from './lineCredit';
 import { importableShots } from './tmlImportStats';
 
 export interface TmlSectionCredit {
@@ -20,8 +20,8 @@ export interface TmlSectionCredit {
   date: string | null;
 }
 
-export function tmlSectionCredit(section: TmlSection, includeExcluded: boolean): TmlSectionCredit {
-  const shots = importableShots(section, includeExcluded);
+export function tmlSectionCredit(line: TmlSection, includeExcluded: boolean): TmlSectionCredit {
+  const shots = importableShots(line, includeExcluded);
   const total = shots.length;
   if (shots.some((shot) => shot.credit)) {
     const aggregate = aggregateCredits(shots.map((shot) => shot.credit ?? EMPTY_CREDIT));
@@ -37,11 +37,11 @@ export function tmlSectionCredit(section: TmlSection, includeExcluded: boolean):
             : `${date.min ?? ''} - ${date.max ?? ''}`,
     };
   }
-  const legacy = legacyPeople(section.surveyor ?? '');
+  const legacy = legacyPeople(line.surveyor ?? '');
   const everyShot = (person: AggregatedPerson['person']): AggregatedPerson => ({ person, count: total, total });
   return {
     surveyors: legacy.surveyors.map(everyShot),
     explorers: legacy.explorers.map(everyShot),
-    date: section.date,
+    date: line.date,
   };
 }

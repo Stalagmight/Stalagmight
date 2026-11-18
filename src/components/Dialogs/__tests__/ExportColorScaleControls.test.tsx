@@ -23,7 +23,7 @@ describe('ExportColorScaleControls', () => {
   beforeEach(() => {
     invokeIpcMock.mockReset();
     useProjectStore.setState({
-      project: { name: 'Synthetic', sections: [] } as never,
+      project: { name: 'Synthetic', lines: [] } as never,
       config: structuredClone(defaultConfig) as Config,
     });
     useColorScaleStore.getState().resetSession();

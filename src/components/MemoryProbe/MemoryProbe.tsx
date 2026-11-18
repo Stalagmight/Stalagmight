@@ -53,7 +53,7 @@ interface Snapshot {
   geometryDataTotalShots: number;
   projectShots: number;
   projectStations: number;
-  projectSections: number;
+  projectLines: number;
 }
 
 function takeSnapshot(memory: MemoryStats | null): Snapshot {
@@ -69,14 +69,14 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
   }
 
   // Read shot count from the SoA store (typed-array length) so the probe
-  // itself doesn't force-materialize every section's lazy `.shots` getter
+  // itself doesn't force-materialize every line's lazy `.shots` getter
   // on every tick. The legacy fallback only fires when no project is loaded
   // through the binary IPC path.
   let projectShots = 0;
   if (surveyData) {
     projectShots = surveyData.shotCount;
   } else if (project) {
-    for (const s of project.sections) projectShots += s.shots.length;
+    for (const s of project.lines) projectShots += s.shots.length;
   }
 
   return {
@@ -87,7 +87,7 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
     geometryDataTotalShots: geometryTotalShots,
     projectShots,
     projectStations: stations.length,
-    projectSections: project?.sections.length ?? 0,
+    projectLines: project?.lines.length ?? 0,
   };
 }
 
@@ -212,7 +212,7 @@ export function MemoryProbe(): JSX.Element | null {
 
       {!collapsed && (
         <>
-          <Section title="processes (RSS from /proc)">
+          <ProbeGroup title="processes (RSS from /proc)">
             <Row label="backend" value={fmtKb(memory?.backend.rss_kb ?? 0)} />
             <Row
               label="WebKitWebProcess"
@@ -223,9 +223,9 @@ export function MemoryProbe(): JSX.Element | null {
             <Row label="WebKitNetworkProcess" value={fmtKb(net?.rss_kb ?? 0)} />
             {gpu && <Row label="WebKitGPUProcess" value={fmtKb(gpu.rss_kb)} />}
             <Row label="total" value={fmtKb(memory?.total_rss_kb ?? 0)} bold />
-          </Section>
+          </ProbeGroup>
 
-          <Section title="JS heap retention (est.)">
+          <ProbeGroup title="JS heap retention (est.)">
             <Row label="GlobalView geometryData" value={fmtBytes(geometryBytes)} suffix={`${snapshot.geometryDataSize} sys · ${snapshot.geometryDataTotalShots} shots`} />
             <Row
               label="MapLibre feature copies"
@@ -233,9 +233,9 @@ export function MemoryProbe(): JSX.Element | null {
               suffix="main+worker"
               tone={featureBytes > 200 * MB ? 'warn' : 'normal'}
             />
-          </Section>
+          </ProbeGroup>
 
-          <Section title="MapLibre source counts">
+          <ProbeGroup title="MapLibre source counts">
             {(Object.keys(snapshot.featureCounts.perSource) as FeatureSourceKind[])
               .filter((k) => snapshot.featureCounts.perSource[k] > 0)
               .map((k) => {
@@ -255,16 +255,16 @@ export function MemoryProbe(): JSX.Element | null {
             {Object.values(snapshot.featureCounts.perSource).every((v) => v === 0) && (
               <div style={{ color: '#888' }}>(no map sources active)</div>
             )}
-          </Section>
+          </ProbeGroup>
 
-          <Section title="projectStore">
-            <Row label="sections" value={snapshot.projectSections.toLocaleString()} />
+          <ProbeGroup title="projectStore">
+            <Row label="lines" value={snapshot.projectLines.toLocaleString()} />
             <Row label="shots" value={snapshot.projectShots.toLocaleString()} />
             <Row label="stations" value={snapshot.projectStations.toLocaleString()} />
-          </Section>
+          </ProbeGroup>
 
           {Object.keys(getPerfTimings()).length > 0 && (
-            <Section title="recent perf">
+            <ProbeGroup title="recent perf">
               {Object.entries(getPerfTimings()).map(([label, t]) => (
                 <Row
                   key={label}
@@ -274,7 +274,7 @@ export function MemoryProbe(): JSX.Element | null {
                   suffix={`${Math.max(0, Math.round((Date.now() - t.ts) / 1000))}s ago`}
                 />
               ))}
-            </Section>
+            </ProbeGroup>
           )}
 
           <div style={{ fontSize: 10, color: '#888', marginTop: 6 }}>
@@ -296,7 +296,7 @@ const btnStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function ProbeGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginTop: 6 }}>
       <div style={{ fontSize: 10, color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.3 }}>{title}</div>
@@ -363,7 +363,7 @@ async function dumpSnapshot(
     },
     feature_counts: snap.featureCounts,
     project: {
-      sections: snap.projectSections,
+      lines: snap.projectLines,
       shots: snap.projectShots,
       stations: snap.projectStations,
     },

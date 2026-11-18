@@ -43,6 +43,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.arm_forced_exit",
     "command.attempt_repair",
     "command.calculate_file_hash",
+    // Sections, named groupings of lines (#327).
+    "command.create_cave_section",
+    "command.update_cave_section",
+    "command.delete_cave_section",
+    "command.move_lines_to_cave_section",
+    "command.apply_cave_section_color",
     "command.can_redo",
     "command.can_undo",
     "command.cancel_loading",
@@ -50,29 +56,29 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.check_duplicate_import",
     "command.check_for_app_update",
     "command.check_merge_connectivity",
-    "command.check_section_hashes",
+    "command.check_line_hashes",
     "command.clear_tile_cache",
     "command.close_project",
     "command.take_unrecognised_shot_kinds",
     "command.take_pending_launch_files",
     "command.compute_gas_reach_field",
-    "command.count_unanchored_sections",
+    "command.count_unanchored_lines",
     "command.create_loop_closure",
     "command.create_project_full",
-    "command.create_section",
-    "command.create_section_and_merge",
+    "command.create_line",
+    "command.create_line_and_merge",
     "command.create_shot",
     "command.debug_trigger_panic",
     "command.delete_dive_plan",
-    "command.delete_last_shot_and_section",
-    "command.delete_section",
+    "command.delete_last_shot_and_line",
+    "command.delete_line",
     "command.delete_shot",
     "command.delete_shot_and_split",
-    "command.split_section",
-    "command.split_section_preview",
+    "command.split_line",
+    "command.split_line_preview",
     "command.combine_candidate",
-    "command.combine_candidate_for_sections",
-    "command.combine_sections",
+    "command.combine_candidate_for_lines",
+    "command.combine_lines",
     "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
@@ -87,7 +93,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.export_salvageable_data",
     "command.export_tml",
     "command.fetch_tile",
-    "command.get_anchored_section_ids",
+    "command.get_anchored_line_ids",
     "command.get_cache_stats",
     "command.get_config",
     "command.get_network_status",
@@ -96,8 +102,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_recent_logs",
     "command.get_recent_logs_since",
     "command.get_redo_stack",
-    "command.get_rigid_connected_section_ids",
-    "command.get_section_relationships",
+    "command.get_rigid_connected_line_ids",
+    "command.get_line_relationships",
     "command.get_segment_geometry",
     "command.get_survey_geometry_for_file",
     "command.get_tile_attribution",
@@ -107,7 +113,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.history_discarded",
     "command.history_discarded_from_earlier_version",
     "command.import_dmp",
-    "command.import_sections",
+    "command.import_lines",
     "command.add_project_file",
     "command.install_app_update_and_restart",
     "command.list_backups",
@@ -120,7 +126,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.merge_projects",
     "command.merge_stations",
     "command.move_comment",
-    "command.move_section",
+    "command.move_line",
     "command.move_segment",
     "command.move_station",
     "command.parse_gpx",
@@ -142,7 +148,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.resolve_all_warnings",
     "command.resolve_warning",
     "command.restore_from_backup",
-    "command.reverse_section",
+    "command.reverse_line",
     "command.save_display_setting",
     "command.save_dive_plan",
     "command.save_project",
@@ -151,6 +157,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
+    "command.set_station_name",
     "command.set_zero_datum",
     "command.speleodb_done",
     // Retained for telemetry-ID stability; the command was removed (#670). See REMOVED_COMMANDS.
@@ -201,7 +208,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.update_config",
     "command.update_panel_layout",
     "command.update_panel_sizes",
-    "command.update_section",
+    "command.update_line",
     "command.update_shot",
     // ── Action: tools (93-104) ──
     "action.tool.comment",
@@ -225,7 +232,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.nav.zoom",
     "action.nav.zoom-in",
     "action.nav.zoom-out",
-    "action.nav.zoom-to-section",
+    "action.nav.zoom-to-line",
     // ── Action: display toggles (114-131) ──
     "action.toggle.gridSpacing",
     "action.toggle.showDepthGradient",
@@ -237,7 +244,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.toggle.showReferenceShots",
     "action.toggle.showJumps",
     "action.toggle.showSatellite",
-    "action.toggle.showSectionNames",
+    "action.toggle.showLineNames",
     "action.toggle.showShotComments",
     "action.toggle.showShotData",
     "action.toggle.showShotErrors",
@@ -248,7 +255,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.toggle.showStations",
     "action.toggle.showZeroDatum",
     // ── Action: selection (132-136) ──
-    "action.select.section",
+    "action.select.line",
     "action.select.shot",
     "action.select.station",
     "action.select-add.shot",
@@ -264,7 +271,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.dmp-import-new",
     "action.dialog.dmp-selection",
     "action.dialog.draw-shot",
-    "action.dialog.edit-section",
+    "action.dialog.edit-line",
     "action.dialog.edit-shot",
     "action.dialog.edit-station",
     "action.dialog.error",
@@ -284,8 +291,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.new-project-for-import",
     "action.dialog.orphan-placement",
     "action.dialog.remove-closure",
-    "action.dialog.reverse-section",
-    "action.dialog.section-adjust",
+    "action.dialog.reverse-line",
+    "action.dialog.line-adjust",
     "action.dialog.settings",
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
@@ -302,9 +309,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-discard-changes",
     "action.dialog.speleodb-revert",
     "action.dialog.publish-to-speleodb",
-    "action.dialog.split-section",
-    "action.dialog.split-section-here",
-    "action.dialog.combine-sections",
+    "action.dialog.split-line",
+    "action.dialog.split-line-here",
+    "action.dialog.combine-lines",
     "action.dialog.swap-comments",
     "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
@@ -341,7 +348,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.dmp-import-new",
     "dialog-cancel.dmp-selection",
     "dialog-cancel.draw-shot",
-    "dialog-cancel.edit-section",
+    "dialog-cancel.edit-line",
     "dialog-cancel.edit-shot",
     "dialog-cancel.edit-station",
     "dialog-cancel.error",
@@ -361,8 +368,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.new-project-for-import",
     "dialog-cancel.orphan-placement",
     "dialog-cancel.remove-closure",
-    "dialog-cancel.reverse-section",
-    "dialog-cancel.section-adjust",
+    "dialog-cancel.reverse-line",
+    "dialog-cancel.line-adjust",
     "dialog-cancel.settings",
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
@@ -378,9 +385,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-discard-changes",
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.publish-to-speleodb",
-    "dialog-cancel.split-section",
-    "dialog-cancel.split-section-here",
-    "dialog-cancel.combine-sections",
+    "dialog-cancel.split-line",
+    "dialog-cancel.split-line-here",
+    "dialog-cancel.combine-lines",
     "dialog-cancel.swap-comments",
     "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
@@ -391,39 +398,45 @@ pub const EVENT_NAMES: &[&str] = &[
     // ── Undo regret (214-240) ──
     "undo-after.adjust_loop_closures",
     "undo-after.create_loop_closure",
-    "undo-after.create_section",
-    "undo-after.create_section_and_merge",
+    "undo-after.create_line",
+    "undo-after.create_line_and_merge",
     "undo-after.create_shot",
-    "undo-after.delete_last_shot_and_section",
-    "undo-after.delete_section",
+    "undo-after.delete_last_shot_and_line",
+    "undo-after.delete_line",
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
     "undo-after.edit_shot_credit",
-    "undo-after.split_section",
-    "undo-after.combine_sections",
+    "undo-after.split_line",
+    "undo-after.combine_lines",
     "undo-after.execute_batch",
     "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
     "undo-after.execute_tml_import",
     "undo-after.execute_walls_import",
-    "undo-after.import_sections",
+    "undo-after.import_lines",
     "undo-after.add_project_file",
     "undo-after.merge_stations",
     "undo-after.move_comment",
-    "undo-after.move_section",
+    "undo-after.move_line",
     "undo-after.move_segment",
     "undo-after.move_station",
     "undo-after.remove_loop_closure",
     "undo-after.remove_zero_datum",
-    "undo-after.reverse_section",
+    "undo-after.reverse_line",
     "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
+    "undo-after.set_station_name",
     "undo-after.set_zero_datum",
     "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",
     "undo-after.unmerge_stations",
-    "undo-after.update_section",
+    "undo-after.update_line",
     "undo-after.update_shot",
+    "undo-after.create_cave_section",
+    "undo-after.update_cave_section",
+    "undo-after.delete_cave_section",
+    "undo-after.move_lines_to_cave_section",
+    "undo-after.apply_cave_section_color",
     // ── Dwell: tools (241-252) ──
     "dwell.tool.comment",
     "dwell.tool.delete",
@@ -448,7 +461,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.dmp-import-new",
     "dwell.dialog.dmp-selection",
     "dwell.dialog.draw-shot",
-    "dwell.dialog.edit-section",
+    "dwell.dialog.edit-line",
     "dwell.dialog.edit-shot",
     "dwell.dialog.edit-station",
     "dwell.dialog.error",
@@ -468,8 +481,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.new-project-for-import",
     "dwell.dialog.orphan-placement",
     "dwell.dialog.remove-closure",
-    "dwell.dialog.reverse-section",
-    "dwell.dialog.section-adjust",
+    "dwell.dialog.reverse-line",
+    "dwell.dialog.line-adjust",
     "dwell.dialog.settings",
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
@@ -485,9 +498,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-discard-changes",
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.publish-to-speleodb",
-    "dwell.dialog.split-section",
-    "dwell.dialog.split-section-here",
-    "dwell.dialog.combine-sections",
+    "dwell.dialog.split-line",
+    "dwell.dialog.split-line-here",
+    "dwell.dialog.combine-lines",
     "dwell.dialog.swap-comments",
     "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
@@ -502,7 +515,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.delete-shot-choice",
     "dialog-cancel.delete-shot-choice",
     "dwell.dialog.delete-shot-choice",
-    "action.select-add.section",
+    "action.select-add.line",
     "command.load_project_full_binary",
     "command.get_memory_stats",
     "command.parse_compass",
@@ -534,10 +547,10 @@ pub const EVENT_NAMES: &[&str] = &[
     // Data-table spreadsheet editing: persisted view config + raw-table browsing
     // (fullscreen data table).
     "command.update_data_table_view",
-    // Same, for the new-section dialog's grid (its own column layout).
-    "command.update_new_section_view",
-    // Same again for the edit-section dialog's shot grid.
-    "command.update_edit_section_view",
+    // Same, for the new-line dialog's grid (its own column layout).
+    "command.update_new_line_view",
+    // Same again for the edit-line dialog's shot grid.
+    "command.update_edit_line_view",
     "command.update_import_shots_view",
     "command.update_gas_config",
     // Depth / distance colour palette + pins, written from the map legend cog
@@ -616,7 +629,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.dmp-import-new",
     "active-dwell.dialog.dmp-selection",
     "active-dwell.dialog.draw-shot",
-    "active-dwell.dialog.edit-section",
+    "active-dwell.dialog.edit-line",
     "active-dwell.dialog.edit-shot",
     "active-dwell.dialog.edit-station",
     "active-dwell.dialog.error",
@@ -636,8 +649,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.new-project-for-import",
     "active-dwell.dialog.orphan-placement",
     "active-dwell.dialog.remove-closure",
-    "active-dwell.dialog.reverse-section",
-    "active-dwell.dialog.section-adjust",
+    "active-dwell.dialog.reverse-line",
+    "active-dwell.dialog.line-adjust",
     "active-dwell.dialog.settings",
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
@@ -653,9 +666,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-discard-changes",
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.publish-to-speleodb",
-    "active-dwell.dialog.split-section",
-    "active-dwell.dialog.split-section-here",
-    "active-dwell.dialog.combine-sections",
+    "active-dwell.dialog.split-line",
+    "active-dwell.dialog.split-line-here",
+    "active-dwell.dialog.combine-lines",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
@@ -836,7 +849,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.user-autocomplete.latency.le-15000",
     "speleodb-api.user-autocomplete.latency.gt-15000",
     // Post-import receipt dialog (#391): summarises a foreign-format import
-    // (source, sections/shots/loops, unit conversion, warnings) so the user
+    // (source, lines/shots/loops, unit conversion, warnings) so the user
     // sees what landed without having to open the data table.
     "action.dialog.import-receipt",
     "dialog-cancel.import-receipt",
@@ -951,8 +964,8 @@ mod tests {
         //   - 1 retired DepthPreset command (#275, no caller on either side):
         //       command.get_depth_preset_colors removed = 654.
         //   - 5 retired dead commands (#275, no frontend caller): command.
-        //       {create_project, get_connected_section_ids, get_display_setting,
-        //       get_section, get_survey_geometry} removed = 649.
+        //       {create_project, get_connected_line_ids, get_display_setting,
+        //       get_line, get_survey_geometry} removed = 649.
         //   - 1 retired dead command (#275, superseded by load_project_full,
         //       zero frontend invokers left after the #275 batch removed the
         //       last caller): command.open_project removed = 648.
@@ -990,10 +1003,10 @@ mod tests {
         //       .speleodb-revert = 679.
         //   + 2 dive-profile export commands (#299):
         //       command.{export_dive_profile,render_dive_profile_text} = 683.
-        //   + 6 section-reverse events (#24):
-        //       command.reverse_section, undo-after.reverse_section,
+        //   + 6 line-reverse events (#24):
+        //       command.reverse_line, undo-after.reverse_line,
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
-        //       .reverse-section = 689.
+        //       .reverse-line = 689.
         //   + 2 plan-anchor round-trip commands (#310, the live-pin half of what the
         //       `.plnx` already did on save):
         //       command.plan_{anchors_for_refs,refs_for_anchors} = 691.
@@ -1080,20 +1093,20 @@ mod tests {
         //       they would report near-total provider consumption for a session
         //       that downloaded nothing, which is the one thing #31 measures:
         //       tile.revalidate.esri = 719.
-        //   + 1 new-section grid view write. Its own command rather than more
+        //   + 1 new-line grid view write. Its own command rather than more
         //       arguments on update_data_table_view, so the rate answers a question
         //       the data table's cannot: whether anyone reshapes the columns while
         //       ENTERING a survey, as opposed to while reviewing one already typed:
-        //       command.update_new_section_view = 720.
-        //   + 1 the same write for the EDIT-section dialog's shot grid. Kept
+        //       command.update_new_line_view = 720.
+        //   + 1 the same write for the EDIT-line dialog's shot grid. Kept
         //       apart from the one above on purpose: comparing the two rates is
         //       how we learn whether column shaping is something people do while
         //       entering a survey, while correcting one, or both:
-        //       command.update_edit_section_view = 721.
+        //       command.update_edit_line_view = 721.
         //   + 1 the same write for the import-time shot grids (the MNemo wizard
-        //       and zero-datum config), kept apart from the edit-section one so
+        //       and zero-datum config), kept apart from the edit-line one so
         //       reshaping columns mid-import cannot overwrite the layout used to
-        //       review a saved section:
+        //       review a saved line:
         //       command.update_import_shots_view = 722.
         //   + 4 the import-blocked prompt (#407 follow-up): the Plan/Export
         //       mode-only DMP rejection is a choice ("Switch to Survey" vs
@@ -1111,7 +1124,7 @@ mod tests {
         //       action.toggle.{showMemoryStats,showMapStats,showZoomStats} = 734.
         //   + 1 entrance elevation became editable in Project Settings (#465):
         //       command.set_surface_elevation = 735.
-        //   + 1 command.count_unanchored_sections (#446) = 736.
+        //   + 1 command.count_unanchored_lines (#446) = 736.
         //   + 1 the discarded-history banner (#473) asks the backend whether the
         //       project it just opened could read its edit history at all:
         //       command.history_discarded = 737.
@@ -1171,15 +1184,15 @@ mod tests {
         //   + 1 the recent-people list behind the surveyor / explorer
         //       suggestions (partial `[people]` write, every project):
         //       command.remember_people = 707.
-        //   + 6 "Split Section Here" (#335): command.split_section,
-        //       undo-after.split_section, and the full per-dialog set for
-        //       split-section-here = 713.
-        //   + 8 "Combine Sections": command.combine_candidate,
-        //       command.combine_candidate_for_sections, command.combine_sections,
-        //       undo-after.combine_sections, and the full per-dialog set for
-        //       combine-sections = 721.
+        //   + 6 "Split Line Here" (#335): command.split_line,
+        //       undo-after.split_line, and the full per-dialog set for
+        //       split-line-here = 713.
+        //   + 8 "Combine Lines": command.combine_candidate,
+        //       command.combine_candidate_for_lines, command.combine_lines,
+        //       undo-after.combine_lines, and the full per-dialog set for
+        //       combine-lines = 721.
         //   + 1 the Split dialog's read-only preview of a loop closure the
-        //       split would turn into a merge: command.split_section_preview
+        //       split would turn into a merge: command.split_line_preview
         //       = 722.
         //   + 3 Import from MNemo over USB (#725): command.list_mnemo_ports,
         //       command.pull_mnemo, command.cancel_mnemo_pull = 725.
@@ -1188,10 +1201,15 @@ mod tests {
         //       command.get_adjustment_report = 730.
         //   + 1 the Edit Station dialog's read-only preview of what a new zero
         //       datum would do (#741): command.preview_zero_datum = 731.
+        //   + 2 renaming a station (line identity): command.set_station_name,
+        //       undo-after.set_station_name = 733.
+        //   + 10 Sections, named groupings of lines (#327): command.* and
+        //       undo-after.* of {create,update,delete}_cave_section,
+        //       move_lines_to_cave_section, apply_cave_section_color = 743.
         //   + 1 the discarded-history banner asks whether the history it reports
         //       was an earlier version's (compact undo entries):
-        //       command.history_discarded_from_earlier_version = 732.
-        assert_eq!(EVENT_NAMES.len(), 732);
+        //       command.history_discarded_from_earlier_version = 744.
+        assert_eq!(EVENT_NAMES.len(), 744);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -5,7 +5,7 @@
 //! through a plain SQLite connection, as another tool or a hand edit could:
 //! non-finite, huge, negative and out-of-range coordinates and accuracies
 //! (`1e999` is infinity to SQLite), text and blobs where numbers belong,
-//! rows on missing sections and stations, stale shot uuids, flipped
+//! rows on missing lines and stations, stale shot uuids, flipped
 //! `in_zero_datums` flags, rows reordered so a fix comes before its
 //! placement, duplicated and extra rows, a table of another shape. Then the
 //! file is opened as the app opens it (`Database::open_existing`,
@@ -31,7 +31,7 @@
 //!   such a fix out).
 //! - `integrity`: `check_structural_integrity` reports nothing, except a
 //!   dangling datum when a `zero_datums` row was pointed at a station its
-//!   section does not have (the legacy table is trusted as the newer truth).
+//!   line does not have (the legacy table is trusted as the newer truth).
 //! - `resave-drift`: saving the loaded project and loading that file again
 //!   gives the same datums. `invalid-gps-resave` is the same failure for a
 //!   datum whose GPS no write path accepts (known open, muted by default).
@@ -50,7 +50,7 @@ use super::datum_extras::CREATE_DATUM_EXTRAS;
 use super::*;
 use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::{
-    local_to_gps, SectionId, ShotData, StationAnchor, StationRef, MAX_GPS_ACCURACY_M,
+    local_to_gps, LineId, ShotData, StationAnchor, StationRef, MAX_GPS_ACCURACY_M,
 };
 
 /// Failure classes that are open bugs, muted unless the mute variable is set.
@@ -118,7 +118,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// A random project: sections merged into trees, a placement datum on most
+/// A random project: lines merged into trees, a placement datum on most
 /// pieces, GPS fixes on placed ones, accuracies here and there.
 fn random_project(rng: &mut Rng) -> Project {
     let mut project = Project::new("DatumFileFuzz".to_string(), None);
@@ -141,15 +141,15 @@ fn random_project(rng: &mut Rng) -> Project {
                 shot
             })
             .collect();
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots,
             ..Default::default()
         });
     }
     project.ensure_shot_uuids();
-    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
-    let station = |project: &Project, rng: &mut Rng, id: SectionId| {
-        let n = project.get_section(id).map_or(0, |s| s.shots.len());
+    let ids: Vec<LineId> = project.lines.iter().map(|s| s.id).collect();
+    let station = |project: &Project, rng: &mut Rng, id: LineId| {
+        let n = project.get_line(id).map_or(0, |s| s.shots.len());
         StationRef::new(id, rng.below(n + 1) as u32)
     };
     for (i, &id) in ids.iter().enumerate().skip(1) {
@@ -213,10 +213,10 @@ fn rows_of(project: &Project) -> Vec<Row> {
         .map(|zd| {
             let at = project
                 .resolve_key(&zd.station_ref)
-                .map(|sr| (sr.section_id, sr.station_index))
+                .map(|sr| (sr.line_id, sr.station_index))
                 .or(match zd.station_ref.anchor {
-                    StationAnchor::SectionStart => Some((zd.station_ref.section_id, 0)),
-                    StationAnchor::Index(i) => Some((zd.station_ref.section_id, i)),
+                    StationAnchor::LineStart => Some((zd.station_ref.line_id, 0)),
+                    StationAnchor::Index(i) => Some((zd.station_ref.line_id, i)),
                     StationAnchor::AfterShot(_) => None,
                 });
             (at, bits(&zd.gps), zd.accuracy_m.map(f64::to_bits))
@@ -282,7 +282,7 @@ struct Edits {
     sql: Vec<String>,
     zero_datums: bool,
     extras: bool,
-    /// A `zero_datums` row was pointed at a station its section lacks.
+    /// A `zero_datums` row was pointed at a station its line lacks.
     dangling: bool,
 }
 
@@ -309,7 +309,7 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
         "'12.5'", "x'00ff'", "NULL", "3",
     ];
     let stations: Vec<StationRef> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .collect();
@@ -318,7 +318,7 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
             None => "NULL".to_string(),
             Some(seq) => format!(
                 "(SELECT uuid FROM shots WHERE section_id = {} AND sequence_order = {seq})",
-                sr.section_id
+                sr.line_id
             ),
         }
     };
@@ -343,9 +343,9 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
                 Some(id) => {
                     let (sec, idx) = match rng.below(4) {
                         0 => ("999".to_string(), "0".to_string()),
-                        1 => (at.section_id.to_string(), "1000".to_string()),
-                        2 => (at.section_id.to_string(), "-1".to_string()),
-                        _ => (at.section_id.to_string(), at.station_index.to_string()),
+                        1 => (at.line_id.to_string(), "1000".to_string()),
+                        2 => (at.line_id.to_string(), "-1".to_string()),
+                        _ => (at.line_id.to_string(), at.station_index.to_string()),
                     };
                     dangles = idx == "1000";
                     (
@@ -366,7 +366,7 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
                 format!(
                     "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, \
                      depth_reference) VALUES ({}, {}, {}, {}, 0.0)",
-                    at.section_id,
+                    at.line_id,
                     at.station_index,
                     rng.range(-60.0, 60.0),
                     rng.range(-179.0, 179.0)
@@ -446,7 +446,7 @@ fn corrupt(conn: &Connection, rng: &mut Rng, project: &Project) -> Edits {
                 format!(
                     "INSERT INTO zero_datum_extras VALUES ({}, {}, {}, {}, {}, {}, {}, 0.0, {})",
                     500 + rng.below(1000),
-                    at.section_id,
+                    at.line_id,
                     at.station_index,
                     uuid_of(at),
                     rng.pick(&["0", "1"]),

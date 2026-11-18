@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::models::section::{ImportClosure, ImportSectionConfig};
+use crate::models::line::{ImportClosure, ImportLineConfig};
 
 use super::{
     convert_walls_to_import_configs, parse_srv_contents, ParsedSurvey, ParsedWalls,
@@ -35,7 +35,7 @@ pub fn parse_srv(content: &str) -> ParsedSurvey {
 
 pub fn convert_one(
     survey: ParsedSurvey,
-) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
+) -> (Vec<ImportLineConfig>, Vec<ImportClosure>, Vec<String>) {
     let parsed = ParsedWalls {
         project_name: "Test".to_string(),
         book_count: 0,

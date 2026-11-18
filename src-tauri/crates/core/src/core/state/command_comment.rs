@@ -10,20 +10,17 @@ impl AppState {
     ) -> CommandResult {
         self.with_project_mut(|project| {
             // Validate station exists
-            let section = match project.get_section(station_ref.section_id) {
+            let line = match project.get_line(station_ref.line_id) {
                 Some(s) => s,
                 None => {
-                    return CommandResult::failure(format!(
-                        "Section {} not found",
-                        station_ref.section_id
-                    ));
+                    return CommandResult::failure(crate::models::LINE_GONE.to_string());
                 }
             };
 
-            let max_station_index = section.shots.len() as u32;
+            let max_station_index = line.shots.len() as u32;
             if station_ref.station_index > max_station_index {
                 return CommandResult::failure(format!(
-                    "Station index {} out of range (section has {} stations)",
+                    "Station index {} out of range (line has {} stations)",
                     station_ref.station_index,
                     max_station_index + 1
                 ));
@@ -143,10 +140,10 @@ impl AppState {
         match holder {
             CommentHolder::Station { station_ref } => {
                 // Validate station exists
-                let section = project
-                    .get_section(station_ref.section_id)
-                    .ok_or_else(|| format!("Section {} not found", station_ref.section_id))?;
-                let max_station_index = section.shots.len() as u32;
+                let line = project
+                    .get_line(station_ref.line_id)
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
+                let max_station_index = line.shots.len() as u32;
                 if station_ref.station_index > max_station_index {
                     return Err(format!(
                         "Station index {} out of range",
@@ -157,16 +154,13 @@ impl AppState {
                     .key_for_ref(*station_ref)
                     .and_then(|key| project.station_comments.get(&key).cloned()))
             }
-            CommentHolder::Shot {
-                section_id,
-                shot_id,
-            } => {
-                let section = project
-                    .get_section(*section_id)
-                    .ok_or_else(|| format!("Section {section_id} not found"))?;
-                let shot = section
+            CommentHolder::Shot { line_id, shot_id } => {
+                let line = project
+                    .get_line(*line_id)
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
+                let shot = line
                     .get_shot(*shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
                 Ok(shot.comment.clone())
             }
         }
@@ -194,18 +188,15 @@ impl AppState {
                 }
                 Ok(())
             }
-            CommentHolder::Shot {
-                section_id,
-                shot_id,
-            } => {
-                let section = project
-                    .get_section_mut(*section_id)
-                    .ok_or_else(|| format!("Section {section_id} not found"))?;
-                let shot = section
+            CommentHolder::Shot { line_id, shot_id } => {
+                let line = project
+                    .get_line_mut(*line_id)
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
+                let shot = line
                     .shots
                     .iter_mut()
                     .find(|s| s.id == *shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
                 match comment {
                     Some(text) if !text.is_empty() => {
                         shot.comment = Some(text);

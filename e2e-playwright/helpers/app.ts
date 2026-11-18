@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { setupTauriMocks } from '../mocks/tauri-ipc';
 
-export interface SectionSeed {
+export interface LineSeed {
   name: string;
   direction?: 'in' | 'out';
   color?: string;
@@ -171,11 +171,11 @@ export async function waitForNoPendingQuit(page: Page): Promise<void> {
   })).toBe(false);
 }
 
-export async function createSectionViaStore(page: Page, section: SectionSeed): Promise<void> {
+export async function createLineViaStore(page: Page, line: LineSeed): Promise<void> {
   await page.evaluate(async (data) => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
-        projectStore: { getState: () => { createSection: (payload: unknown) => Promise<unknown> } };
+        projectStore: { getState: () => { createLine: (payload: unknown) => Promise<unknown> } };
       };
     }).__E2E_TEST__;
 
@@ -183,7 +183,7 @@ export async function createSectionViaStore(page: Page, section: SectionSeed): P
       throw new Error('E2E stores not available on window');
     }
 
-    await e2e.projectStore.getState().createSection({
+    await e2e.projectStore.getState().createLine({
       name: data.name,
       surveyor: data.surveyor ?? 'Test Surveyor',
       date: data.date ?? new Date().toISOString().split('T')[0],
@@ -191,11 +191,11 @@ export async function createSectionViaStore(page: Page, section: SectionSeed): P
       direction: data.direction ?? 'in',
       shots: data.shots,
     });
-  }, section);
+  }, line);
 }
 
 /**
- * Delete shot `shotIndex` of section 1 directly via the store (#310) - the same
+ * Delete shot `shotIndex` of line 1 directly via the store (#310) - the same
  * `delete_shot` command the UI's confirm/shift-geometry paths issue, without the
  * dialog chrome a repro doesn't need. Renumbers every later station down by one in
  * the mock, so it can drive a live anchor (e.g. a way-point pin) out from under it.
@@ -207,32 +207,32 @@ export async function deleteShotAt(page: Page, shotIndex: number): Promise<void>
         __E2E_TEST__: {
           projectStore: {
             getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
-              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
+              project: { lines: Array<{ id: number; shots: Array<{ id: number }> }> };
+              deleteShot: (lineId: number, shotId: number) => Promise<unknown>;
             };
           };
         };
       }
     ).__E2E_TEST__;
     const state = e2e.projectStore.getState();
-    const sec = state.project.sections[0];
+    const sec = state.project.lines[0];
     const shot = sec.shots[idx];
     if (!shot) throw new Error(`no shot at index ${idx}`);
     await state.deleteShot(sec.id, shot.id);
   }, shotIndex);
 }
 
-export async function seedProjectWithSections(page: Page, sections: SectionSeed[]): Promise<void> {
-  for (const section of sections) {
-    await createSectionViaStore(page, section);
+export async function seedProjectWithLines(page: Page, lines: LineSeed[]): Promise<void> {
+  for (const line of lines) {
+    await createLineViaStore(page, line);
   }
 
   await page.waitForFunction((expectedCount) => {
     const e2e = (window as unknown as {
-      __E2E_TEST__?: { projectStore: { getState: () => { project: { sections: unknown[] } | null } } };
+      __E2E_TEST__?: { projectStore: { getState: () => { project: { lines: unknown[] } | null } } };
     }).__E2E_TEST__;
-    return (e2e?.projectStore.getState().project?.sections?.length ?? 0) >= expectedCount;
-  }, sections.length);
+    return (e2e?.projectStore.getState().project?.lines?.length ?? 0) >= expectedCount;
+  }, lines.length);
 }
 
 export async function clickFirstVisible(locators: Locator[]): Promise<void> {
@@ -391,7 +391,7 @@ export async function proceedToDmpSectionConfig(page: Page): Promise<void> {
   await proceedToDmpImportWizard(page);
 }
 
-export async function placeAllSections(page: Page): Promise<void> {
+export async function placeAllLines(page: Page): Promise<void> {
   await ensureDmpNewImportDialogVisible(page);
 
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -500,13 +500,13 @@ export interface ScreenPoint {
 
 /** A station's identity plus its current screen position. */
 export interface StationScreenPos extends ScreenPoint {
-  sectionId: number;
+  lineId: number;
   stationIndex: number;
 }
 
 /** A shot's identity plus both endpoints' screen positions and its midpoint. */
 export interface ShotScreenPos {
-  sectionId: number;
+  lineId: number;
   shotId: number;
   from: ScreenPoint;
   to: ScreenPoint;
@@ -529,9 +529,9 @@ export async function getDrawnGeometry(page: Page): Promise<GeometrySnapshot> {
     const w = window as unknown as {
       __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
       __stalagmight_geometry__?: () => {
-        stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+        stations: Array<{ lineId: number; stationIndex: number; lngLat: [number, number] }>;
         shots: Array<{
-          sectionId: number;
+          lineId: number;
           shotId: number;
           from: [number, number];
           to: [number, number];
@@ -543,13 +543,13 @@ export async function getDrawnGeometry(page: Page): Promise<GeometrySnapshot> {
     if (!map || !geometry) return { stations: [], shots: [] };
     const stations = geometry.stations.map((s) => {
       const p = map.project(s.lngLat);
-      return { sectionId: s.sectionId, stationIndex: s.stationIndex, x: p.x, y: p.y };
+      return { lineId: s.lineId, stationIndex: s.stationIndex, x: p.x, y: p.y };
     });
     const shots = geometry.shots.map((sh) => {
       const from = map.project(sh.from);
       const to = map.project(sh.to);
       return {
-        sectionId: sh.sectionId,
+        lineId: sh.lineId,
         shotId: sh.shotId,
         from: { x: from.x, y: from.y },
         to: { x: to.x, y: to.y },

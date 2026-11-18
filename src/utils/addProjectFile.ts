@@ -1,7 +1,7 @@
 /**
  * Add a `.stalx` into the open project (#674) and finish the way every other
  * import into an existing project does: mark dirty via `saveAfterImport`, offer
- * orphan placement for sections the add left unanchored, and surface the
+ * orphan placement for lines the add left unanchored, and surface the
  * receipt.
  *
  * The `add-or-open-project` dialog stays open (busy) for the whole call, so it
@@ -55,13 +55,13 @@ export async function runAddProjectFile(path: string): Promise<CommandResult> {
     dropContext();
     return result;
   }
-  const newSectionIds = result.section_ids;
-  if (newSectionIds.length > 0) {
+  const newLineIds = result.line_ids;
+  if (newLineIds.length > 0) {
     let suggestions: OrphanPlacementSuggestion[] = [];
     try {
       suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
         'suggest_orphan_placements',
-        { newlyImportedSectionIds: newSectionIds },
+        { newlyImportedLineIds: newLineIds },
         { purpose: 'suggest orphan placements after adding a project file' },
       );
     } catch {
@@ -77,7 +77,7 @@ export async function runAddProjectFile(path: string): Promise<CommandResult> {
     }
   }
   // Re-checked inside the helper after its count IPC, right before completing.
-  await finishImportWithoutOrphanSuggestions(DIALOG, importUi, newSectionIds, result.import_receipt, () => {
+  await finishImportWithoutOrphanSuggestions(DIALOG, importUi, newLineIds, result.import_receipt, () => {
     const current = stillOpen();
     if (!current) dropContext();
     return current;

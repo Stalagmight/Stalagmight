@@ -4,7 +4,7 @@
 //! # The hole this fills
 //!
 //! Every generator in this programme is valid-by-construction. The roundtrip
-//! fuzzer picks a shot that exists, in a section that exists, and gives it a
+//! fuzzer picks a shot that exists, in a line that exists, and gives it a
 //! length in `[0.5, 20.0]`; the metamorphic engine and the format properties
 //! inherit that. So the whole of `AppState`'s VALIDATION - which is most of
 //! what the command layer is - has never been fuzzed by any of them. The
@@ -40,7 +40,7 @@
 //! admits rather than what the IPC deserializer would accept - which is the
 //! right boundary for it, and a wider one: `f64` fields admit NaN and infinity
 //! that a JSON payload could also carry, `u32` station indices admit values far
-//! past any section's length, and `String` fields admit 64 kB of NULs. The IPC
+//! past any line's length, and `String` fields admit 64 kB of NULs. The IPC
 //! layer's own validation is the harness's job.
 //!
 //! # Data
@@ -65,8 +65,8 @@ use super::fuzz_undo_tests::{
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotKind, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, LineId, LineUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationRef,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
@@ -82,12 +82,12 @@ use crate::test_helpers::isolated_config;
 // Hostile values
 // ===========================================================================
 
-/// A section id that is not a section: past the allocator, negative-shaped,
+/// A line id that is not a line: past the allocator, negative-shaped,
 /// and the two extremes the type admits.
-fn hostile_section_id(rng: &mut Rng, live: &[SectionId]) -> SectionId {
+fn hostile_line_id(rng: &mut Rng, live: &[LineId]) -> LineId {
     match rng.below(6) {
-        0 => SectionId::MAX,
-        1 => SectionId::MIN,
+        0 => LineId::MAX,
+        1 => LineId::MIN,
         2 => 999_999,
         3 => live.last().map_or(0, |id| id.wrapping_add(1)),
         4 => 0,
@@ -95,7 +95,7 @@ fn hostile_section_id(rng: &mut Rng, live: &[SectionId]) -> SectionId {
     }
 }
 
-/// A shot id that is not a shot in the section it is handed to.
+/// A shot id that is not a shot in the line it is handed to.
 fn hostile_shot_id(rng: &mut Rng, live: &[ShotId]) -> ShotId {
     match rng.below(6) {
         0 => ShotId::MAX,
@@ -104,8 +104,8 @@ fn hostile_shot_id(rng: &mut Rng, live: &[ShotId]) -> ShotId {
         3 => live.last().map_or(0, |id| id.wrapping_add(1)),
         4 => live.first().map_or(0, |id| id.wrapping_sub(1)),
         // The stride is what makes a shot id look plausible: the loader
-        // renumbers to `section_id * FEATURE_ID_STRIDE + position`, so an id one
-        // stride away addresses "the same position in the next section" and is
+        // renumbers to `line_id * FEATURE_ID_STRIDE + position`, so an id one
+        // stride away addresses "the same position in the next line" and is
         // the shape findings 8/12/13 are about.
         _ => live
             .first()
@@ -202,16 +202,13 @@ struct Observed {
 fn observe(state: &AppState) -> Observed {
     let mut allocators = BTreeMap::new();
     if let Some(project) = state.get_project_state() {
-        allocators.insert("next_section_id".to_string(), project.next_section_id);
+        allocators.insert("next_line_id".to_string(), project.next_line_id);
         allocators.insert(
             "next_closure_id".to_string(),
             u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
         );
-        for section in &project.sections {
-            allocators.insert(
-                format!("section {}.next_shot_id", section.id),
-                section.next_shot_id,
-            );
+        for line in &project.lines {
+            allocators.insert(format!("line {}.next_shot_id", line.id), line.next_shot_id);
         }
     }
     Observed {
@@ -281,23 +278,23 @@ struct Move {
 /// already happened by the time the caller is told no.
 fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
     let targets = read_targets(state);
-    let sections: Vec<SectionId> = targets.sections.iter().map(|(id, _)| *id).collect();
-    if sections.is_empty() {
+    let lines: Vec<LineId> = targets.lines.iter().map(|(id, _)| *id).collect();
+    if lines.is_empty() {
         return None;
     }
-    let live_section = sections[rng.below(sections.len())];
+    let live_line = lines[rng.below(lines.len())];
     let live_shots = targets
-        .sections
+        .lines
         .iter()
-        .find(|(id, _)| *id == live_section)
+        .find(|(id, _)| *id == live_line)
         .map(|(_, shots)| shots.clone())
         .unwrap_or_default();
-    // Half the draws aim a hostile id at a real section, half aim any id at a
-    // hostile section: the two reach different guards.
-    let section_id = if rng.chance(50) {
-        live_section
+    // Half the draws aim a hostile id at a real line, half aim any id at a
+    // hostile line: the two reach different guards.
+    let line_id = if rng.chance(50) {
+        live_line
     } else {
-        hostile_section_id(rng, &sections)
+        hostile_line_id(rng, &lines)
     };
     let shot_id = if rng.chance(35) && !live_shots.is_empty() {
         live_shots[rng.below(live_shots.len())]
@@ -309,26 +306,22 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
     let call = match rng.below(16) {
         // ---- the hand-written entry points, which is where the risk is ----
         0 => Move {
-            label: format!("execute_delete_shot_range_shift(s={section_id}, {shot_id}..{shot_id})"),
-            result: state.execute_delete_shot_range_shift(section_id, shot_id, shot_id),
+            label: format!("execute_delete_shot_range_shift(s={line_id}, {shot_id}..{shot_id})"),
+            result: state.execute_delete_shot_range_shift(line_id, shot_id, shot_id),
         },
         1 => {
             let other = hostile_shot_id(rng, &live_shots);
             Move {
-                label: format!(
-                    "execute_delete_shot_range_shift(s={section_id}, {shot_id}..{other})"
-                ),
-                result: state.execute_delete_shot_range_shift(section_id, shot_id, other),
+                label: format!("execute_delete_shot_range_shift(s={line_id}, {shot_id}..{other})"),
+                result: state.execute_delete_shot_range_shift(line_id, shot_id, other),
             }
         }
         2 => {
             let other = hostile_shot_id(rng, &live_shots);
             Move {
-                label: format!(
-                    "execute_delete_shot_range_split(s={section_id}, {shot_id}..{other})"
-                ),
+                label: format!("execute_delete_shot_range_split(s={line_id}, {shot_id}..{other})"),
                 result: state.execute_delete_shot_range_split(
-                    section_id,
+                    line_id,
                     shot_id,
                     other,
                     hostile_string(rng),
@@ -337,41 +330,41 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             }
         }
         3 => Move {
-            label: format!("execute_delete_shot_and_split(s={section_id}, shot={shot_id})"),
+            label: format!("execute_delete_shot_and_split(s={line_id}, shot={shot_id})"),
             result: state.execute_delete_shot_and_split(
-                section_id,
+                line_id,
                 shot_id,
                 hostile_string(rng),
                 hostile_string(rng),
             ),
         },
         4 => Move {
-            label: format!("execute_delete_last_shot_and_section(s={section_id}, shot={shot_id})"),
-            result: state.execute_delete_last_shot_and_section(section_id, shot_id),
+            label: format!("execute_delete_last_shot_and_line(s={line_id}, shot={shot_id})"),
+            result: state.execute_delete_last_shot_and_line(line_id, shot_id),
         },
         5 => {
             let distance = hostile_float(rng);
             Move {
                 label: format!(
-                    "execute_split_shot_at_distance(s={section_id}, shot={shot_id}, d={distance})"
+                    "execute_split_shot_at_distance(s={line_id}, shot={shot_id}, d={distance})"
                 ),
-                result: state.execute_split_shot_at_distance(section_id, shot_id, distance),
+                result: state.execute_split_shot_at_distance(line_id, shot_id, distance),
             }
         }
         // ---- the ordinary command surface ----
         6 => Move {
-            label: format!("CreateShot(s={section_id}, hostile shot)"),
+            label: format!("CreateShot(s={line_id}, hostile shot)"),
             result: state.execute(Command::CreateShot {
-                section_id,
+                line_id,
                 shot: hostile_shot(rng),
                 after_shot_id: rng.chance(50).then_some(shot_id),
                 before_shot_id: rng.chance(25).then_some(shot_id),
             }),
         },
         7 => Move {
-            label: format!("UpdateShot(s={section_id}, shot={shot_id}, hostile updates)"),
+            label: format!("UpdateShot(s={line_id}, shot={shot_id}, hostile updates)"),
             result: state.execute(Command::UpdateShot {
-                section_id,
+                line_id,
                 shot_id,
                 updates: ShotUpdates {
                     length: rng.chance(60).then(|| hostile_float(rng)),
@@ -391,8 +384,8 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             }),
         },
         8 => Move {
-            label: format!("CreateSection(hostile metadata, {} hostile shot(s))", 1),
-            result: state.execute(Command::CreateSection {
+            label: format!("CreateLine(hostile metadata, {} hostile shot(s))", 1),
+            result: state.execute(Command::CreateLine {
                 name: rng.chance(60).then(|| hostile_string(rng)),
                 surveyor: rng.chance(50).then(|| hostile_string(rng)),
                 // `date` is a `NaiveDate`, not a string - so the hostile
@@ -412,13 +405,14 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
                 direction: None,
                 shots: (0..rng.below(3)).map(|_| hostile_shot(rng)).collect(),
+                cave_section_id: None,
             }),
         },
         9 => Move {
-            label: format!("UpdateSectionMetadata(s={section_id}, hostile)"),
-            result: state.execute(Command::UpdateSectionMetadata {
-                section_id,
-                updates: SectionUpdates {
+            label: format!("UpdateLineMetadata(s={line_id}, hostile)"),
+            result: state.execute(Command::UpdateLineMetadata {
+                line_id,
+                updates: LineUpdates {
                     name: rng
                         .chance(50)
                         .then(|| rng.chance(70).then(|| hostile_string(rng))),
@@ -427,14 +421,14 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                         .then(|| rng.chance(70).then(|| hostile_string(rng))),
                     color: rng.chance(40).then(|| hostile_string(rng)),
                     quality: rng.chance(40).then(|| hostile_float(rng)),
-                    ..SectionUpdates::default()
+                    ..LineUpdates::default()
                 },
             }),
         },
         10 => Move {
-            label: format!("MoveSection(s={section_id}, hostile offset)"),
-            result: state.execute(Command::MoveSection {
-                section_id,
+            label: format!("MoveLine(s={line_id}, hostile offset)"),
+            result: state.execute(Command::MoveLine {
+                line_id,
                 offset: Coordinates::new(
                     hostile_float(rng),
                     hostile_float(rng),
@@ -443,9 +437,9 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             }),
         },
         11 => Move {
-            label: format!("MoveStation({section_id}/{index}, hostile offset)"),
+            label: format!("MoveStation({line_id}/{index}, hostile offset)"),
             result: state.execute(Command::MoveStation {
-                station_ref: StationRef::new(section_id, index),
+                station_ref: StationRef::new(line_id, index),
                 offset: Coordinates::new(
                     hostile_float(rng),
                     hostile_float(rng),
@@ -454,21 +448,21 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
             }),
         },
         12 => {
-            let other = hostile_section_id(rng, &sections);
+            let other = hostile_line_id(rng, &lines);
             Move {
-                label: format!("MergeStations({section_id}/{index}, {other}/{index})"),
+                label: format!("MergeStations({line_id}/{index}, {other}/{index})"),
                 result: state.execute(Command::MergeStations {
-                    station_a: StationRef::new(section_id, index),
+                    station_a: StationRef::new(line_id, index),
                     station_b: StationRef::new(other, index),
                 }),
             }
         }
         13 => {
-            let other = hostile_section_id(rng, &sections);
+            let other = hostile_line_id(rng, &lines);
             Move {
-                label: format!("CreateLoopClosure({section_id}/{index}, {other}/{index})"),
+                label: format!("CreateLoopClosure({line_id}/{index}, {other}/{index})"),
                 result: state.execute(Command::CreateLoopClosure {
-                    station_a: StationRef::new(section_id, index),
+                    station_a: StationRef::new(line_id, index),
                     station_b: StationRef::new(other, index),
                     closure_strategy: *rng.pick(&[
                         ClosureStrategy::Move,
@@ -486,27 +480,27 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 GpsCoordinates::new(hostile_float(rng), hostile_float(rng), hostile_float(rng));
             match gps {
                 Ok(coordinates) => Move {
-                    label: format!("SetZeroDatum({section_id}/{index}, hostile gps)"),
+                    label: format!("SetZeroDatum({line_id}/{index}, hostile gps)"),
                     result: state.execute(Command::SetZeroDatum {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         coordinates,
                         accuracy_m: None,
                         entrance: None,
                     }),
                 },
                 Err(_) => Move {
-                    label: format!("SetStationComment({section_id}/{index}, hostile)"),
+                    label: format!("SetStationComment({line_id}/{index}, hostile)"),
                     result: state.execute(Command::SetStationComment {
-                        station_ref: StationRef::new(section_id, index),
+                        station_ref: StationRef::new(line_id, index),
                         comment: rng.chance(70).then(|| hostile_string(rng)),
                     }),
                 },
             }
         }
         _ => Move {
-            label: format!("SetShotKind(s={section_id}, shot={shot_id})"),
+            label: format!("SetShotKind(s={line_id}, shot={shot_id})"),
             result: state.execute(Command::SetShotKind {
-                section_id,
+                line_id,
                 shot_id,
                 kind: *rng.pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]),
             }),
@@ -600,9 +594,9 @@ fn run_adversarial(seed: u32, moves: usize, closures: bool) -> Outcome {
     // fail to disturb - and so the stacks are not trivially empty.
     for _ in 0..4 {
         let targets = read_targets(&state);
-        if let Some((section_id, _)) = targets.sections.first() {
+        if let Some((line_id, _)) = targets.lines.first() {
             state.execute(Command::CreateShot {
-                section_id: *section_id,
+                line_id: *line_id,
                 shot: random_shot(&mut rng),
                 after_shot_id: None,
                 before_shot_id: None,

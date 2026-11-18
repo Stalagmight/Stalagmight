@@ -16,9 +16,9 @@ import '../../../i18n';
 import { WarningResolution } from '../WarningResolution';
 import { useUIStore } from '../../../store/uiStore';
 import type { ProjectWarning } from '../../../types/commands';
-import type { Section, Shot } from '../../../types/project';
+import type { Line, Shot } from '../../../types/project';
 
-const section = { id: 4, name: 'B', shots: [] } as unknown as Section;
+const line = { id: 4, name: 'B', shots: [] } as unknown as Line;
 const shot = {
   id: 41,
   length: 10,
@@ -39,7 +39,7 @@ const warning: ProjectWarning = {
   code: 'datum_gps_gap',
   message: 'The GPS of zero datum 4:3 is 60 m from where the survey puts it.',
   severity: 'warning',
-  sectionId: 4,
+  lineId: 4,
   shotId: 41,
   shotIndex: 2,
   isResolved: false,
@@ -51,7 +51,7 @@ const onExit = vi.fn();
 
 function renderIt(w: ProjectWarning = warning) {
   return render(
-    <WarningResolution warning={w} section={section} shot={shot} onExit={onExit} onResolved={vi.fn()} onSkip={vi.fn()} />
+    <WarningResolution warning={w} line={line} shot={shot} onExit={onExit} onResolved={vi.fn()} onSkip={vi.fn()} />
   );
 }
 
@@ -83,7 +83,7 @@ describe('WarningResolution datum_gps_gap (#741)', () => {
     fireEvent.click(screen.getByTestId('warning-resolution-apply'));
     await waitFor(() => expect(onExit).toHaveBeenCalled());
     expect(openDialog).toHaveBeenCalledWith('edit-station', {
-      stationRef: { section_id: 4, station_index: 3 },
+      stationRef: { line_id: 4, station_index: 3 },
       focusGpsInput: true,
     });
   });
@@ -93,7 +93,7 @@ describe('WarningResolution datum_gps_gap (#741)', () => {
     fireEvent.click(screen.getByTestId('warning-resolution-apply'));
     await waitFor(() => expect(onExit).toHaveBeenCalled());
     expect(openDialog).not.toHaveBeenCalled();
-    expect(useUIStore.getState().selection).toEqual({ type: 'station', stationRef: { section_id: 4, station_index: 3 } });
+    expect(useUIStore.getState().selection).toEqual({ type: 'station', stationRef: { line_id: 4, station_index: 3 } });
   });
 
   it('disables editing the datum while editing is blocked', () => {

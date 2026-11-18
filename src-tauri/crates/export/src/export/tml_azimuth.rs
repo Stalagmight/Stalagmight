@@ -4,12 +4,12 @@
 //! decision, and the export's only choice that can change a NUMBER rather than
 //! a label.
 
-use crate::models::{AzimuthReference, CorrectionSource, NorthReference, Project, Section};
+use crate::models::{AzimuthReference, CorrectionSource, Line, NorthReference, Project};
 
 /// How this document declares its azimuths (#438).
 ///
 /// The flag `useMagneticAzimuth` is file-level and the project's references are
-/// per section, so the three answers are: the sections agree on magnetic (write
+/// per line, so the three answers are: the lines agree on magnetic (write
 /// the readings, flag true), they agree on true north (write them, flag false),
 /// or they disagree - and then the only honest single-flag document is one where
 /// every bearing has been rotated into true north on the way out.
@@ -19,35 +19,35 @@ use crate::models::{AzimuthReference, CorrectionSource, NorthReference, Project,
 /// [`CorrectionSource::Unknown`] means "no correction is on record", not "a
 /// correction of exactly zero" - it is what a `.dmp` and a georeference-less
 /// `.tml` get, because the device is a compass and nothing in the file says how
-/// far off north it read. A section like that is raw magnetic, which is exactly
+/// far off north it read. A line like that is raw magnetic, which is exactly
 /// what `useMagneticAzimuth=true` says, so it constrains the document to be
 /// magnetic and otherwise votes on nothing.
 ///
 /// Counting it as "correction 0" instead made the common case mixed: import an
 /// IGRF-corrected `.tml` alongside `.dmp` files from the same cave and every
 /// bearing in the export would be rewritten and the file declared true north -
-/// baking OUR zero into the `.dmp` sections permanently, and asserting about
+/// baking OUR zero into the `.dmp` lines permanently, and asserting about
 /// them the one thing we know is false. Handing Ariane the readings and letting
 /// it apply its own declination is both the honest document and the stable one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AzimuthExport {
-    /// Every DECLARED section is magnetic with one correction, and any
-    /// undeclared section is raw magnetic too: emit the readings untouched and
+    /// Every DECLARED line is magnetic with one correction, and any
+    /// undeclared line is raw magnetic too: emit the readings untouched and
     /// let Ariane apply its own declination.
     Magnetic,
-    /// Every section is already true north: emit untouched, flag false.
+    /// Every line is already true north: emit untouched, flag false.
     TrueAsStored,
-    /// The sections disagree and EVERY one of them has a correction on record,
+    /// The lines disagree and EVERY one of them has a correction on record,
     /// so each can be rotated into true north. Apply them and flag false.
     MixedToTrue,
-    /// The sections disagree and at least one has NO correction on record, so
-    /// the rewrite is impossible: a section whose offset from true north is
+    /// The lines disagree and at least one has NO correction on record, so
+    /// the rewrite is impossible: a line whose offset from true north is
     /// unknown cannot be put into true north. Emit the readings untouched and
-    /// flag magnetic - the only claim that is true of the unknown sections -
+    /// flag magnetic - the only claim that is true of the unknown lines -
     /// and say in the export note that the declared ones are misdescribed by it.
     ///
     /// This exists because the alternative was silently wrong: the branch used
-    /// to fall into [`Self::MixedToTrue`], where an undeclared section's
+    /// to fall into [`Self::MixedToTrue`], where an undeclared line's
     /// reference resolves to identity, so its bearings went out UNROTATED under
     /// `useMagneticAzimuth=false` - the exact false claim the branch is for.
     MagneticUnresolved,
@@ -56,13 +56,13 @@ pub(super) enum AzimuthExport {
 impl AzimuthExport {
     pub(super) fn decide(project: &Project) -> Self {
         let references: Vec<AzimuthReference> = project
-            .sections
+            .lines
             .iter()
-            .filter(|section| !section.shots.is_empty())
-            .map(|section| project.azimuth_reference_for(section))
+            .filter(|line| !line.shots.is_empty())
+            .map(|line| project.azimuth_reference_for(line))
             .collect();
 
-        // A section with no correction on record cannot be rotated anywhere.
+        // A line with no correction on record cannot be rotated anywhere.
         let any_unknown = references
             .iter()
             .any(|r| r.source == CorrectionSource::Unknown);
@@ -84,7 +84,7 @@ impl AzimuthExport {
                 && (r.applied_correction() - first.applied_correction()).abs() < 1e-12
         });
 
-        // Every rewrite below needs EVERY section's correction, not just the
+        // Every rewrite below needs EVERY line's correction, not just the
         // declared ones - the document is rotated as a whole or not at all.
         let can_rewrite = !any_unknown;
         if !uniform {
@@ -96,14 +96,14 @@ impl AzimuthExport {
         }
         match first.north {
             NorthReference::Magnetic => AzimuthExport::Magnetic,
-            // A true-north declaration and a raw magnetic section cannot share
+            // A true-north declaration and a raw magnetic line cannot share
             // one flag: whichever it names is a false claim about the other.
             NorthReference::True if any_unknown => AzimuthExport::MagneticUnresolved,
             NorthReference::True => AzimuthExport::TrueAsStored,
             // Grid bearings are neither: declaring them magnetic would have
             // Ariane add a declination to a grid azimuth, and declaring them
             // true would keep the meridian convergence in. Rotate them out -
-            // when every section can be.
+            // when every line can be.
             NorthReference::Grid if can_rewrite => AzimuthExport::MixedToTrue,
             NorthReference::Grid => AzimuthExport::MagneticUnresolved,
         }
@@ -139,34 +139,34 @@ impl AzimuthExport {
     pub(super) fn log_message(self) -> &'static str {
         match self {
             AzimuthExport::Magnetic => {
-                "Sections agree on magnetic; wrote the readings as stored under \
+                "Lines agree on magnetic; wrote the readings as stored under \
                  useMagneticAzimuth=true."
             }
             AzimuthExport::TrueAsStored => {
-                "Sections agree on true north; wrote the readings as stored under \
+                "Lines agree on true north; wrote the readings as stored under \
                  useMagneticAzimuth=false."
             }
             AzimuthExport::MixedToTrue => {
-                "Sections declare different north references, which one Ariane file cannot \
+                "Lines declare different north references, which one Ariane file cannot \
                  express: every bearing was rotated to true north on the way out and the file is \
                  marked useMagneticAzimuth=false. The project's own readings are untouched."
             }
             AzimuthExport::MagneticUnresolved => {
-                "Sections declare different north references AND at least one has no declination \
+                "Lines declare different north references AND at least one has no declination \
                  on record, so the document could not be rotated into one frame: the readings \
                  were written as stored under useMagneticAzimuth=true, which misdescribes the \
-                 sections that ARE corrected. Ariane will apply its own declination to all of \
+                 lines that ARE corrected. Ariane will apply its own declination to all of \
                  them."
             }
         }
     }
 
-    /// The reference to push each of `section`'s azimuths through on the way
+    /// The reference to push each of `line`'s azimuths through on the way
     /// out. Identity except on the mixed path, so an ordinary export is
     /// byte-for-byte what it always was.
-    pub(super) fn emit_reference(self, project: &Project, section: &Section) -> AzimuthReference {
+    pub(super) fn emit_reference(self, project: &Project, line: &Line) -> AzimuthReference {
         match self {
-            AzimuthExport::MixedToTrue => project.azimuth_reference_for(section),
+            AzimuthExport::MixedToTrue => project.azimuth_reference_for(line),
             _ => AzimuthReference::default(),
         }
     }

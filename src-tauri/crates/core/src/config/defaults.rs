@@ -1,11 +1,11 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DisplayConfig, ExportConfig, GasConfig, GeneralConfig, GlobalViewConfig,
-    GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
-    MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PeopleConfig,
-    PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack,
-    ValidationConfig, WebkitMemoryConfig,
+    GpsOrigin, ImportConfig, LengthUnit, LineColorsConfig, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapPaletteConfig, MapSnapConfig, PanelsConfig, PeopleConfig,
+    PlacementSuggestionConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, UpdateTrack, ValidationConfig,
+    WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -15,7 +15,7 @@ impl Default for Config {
             general: GeneralConfig::default(),
             units: UnitsConfig::default(),
             display: DisplayConfig::default(),
-            section_colors: SectionColorsConfig::default(),
+            line_colors: LineColorsConfig::default(),
             map: MapConfig::default(),
             validation: ValidationConfig::default(),
             closure_adjustment: ClosureAdjustmentConfig::default(),
@@ -101,7 +101,7 @@ impl Default for DisplayConfig {
     }
 }
 
-impl Default for SectionColorsConfig {
+impl Default for LineColorsConfig {
     fn default() -> Self {
         Self {
             palette: vec![
@@ -201,7 +201,7 @@ impl Default for ShortcutsConfig {
             toggle_satellite: vec!["B".to_string()],
             toggle_station_labels: vec!["L".to_string()],
             toggle_shot_labels: vec!["Shift+L".to_string()],
-            toggle_section_labels: vec!["Ctrl+L".to_string()],
+            toggle_line_labels: vec!["Ctrl+L".to_string()],
             fit_to_bounds: vec!["F".to_string()],
             zoom_in: vec!["Equal".to_string(), "Plus".to_string()],
             zoom_out: vec!["Minus".to_string()],
@@ -240,8 +240,8 @@ impl Default for PanelsConfig {
             data_table_station_hidden_columns: super::panels::default_station_hidden_columns(),
             data_table_station_columns_seen: super::panels::default_station_columns_seen(),
             data_table_station_column_widths: std::collections::BTreeMap::new(),
-            new_section_column_order: Vec::new(),
-            new_section_hidden_columns: vec![
+            new_line_column_order: Vec::new(),
+            new_line_hidden_columns: vec![
                 "azimuth_in".to_string(),
                 "azimuth_out".to_string(),
                 "_pitch_avg".to_string(),
@@ -252,18 +252,18 @@ impl Default for PanelsConfig {
                 "up".to_string(),
                 "down".to_string(),
             ],
-            new_section_column_widths: std::collections::BTreeMap::new(),
-            edit_section_column_order: Vec::new(),
-            edit_section_hidden_columns: vec![
+            new_line_column_widths: std::collections::BTreeMap::new(),
+            edit_line_column_order: Vec::new(),
+            edit_line_hidden_columns: vec![
                 "azimuth_in".to_string(),
                 "azimuth_out".to_string(),
                 "_pitch_avg".to_string(),
                 "pitch_in".to_string(),
                 "pitch_out".to_string(),
             ],
-            edit_section_column_widths: std::collections::BTreeMap::new(),
+            edit_line_column_widths: std::collections::BTreeMap::new(),
             import_shots_column_order: Vec::new(),
-            import_shots_hidden_columns: super::panels::default_edit_section_hidden_columns(),
+            import_shots_hidden_columns: super::panels::default_edit_line_hidden_columns(),
             import_shots_column_widths: std::collections::BTreeMap::new(),
             sections_panel_open: true,
             sections_panel_mode: "pin".to_string(),

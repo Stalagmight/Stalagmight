@@ -52,7 +52,7 @@ export function isVirtualShotKind(kind: ShotKind): boolean {
  * True when a shot's length counts toward survey length. A Reference shot is a
  * survey tie repeating passage already surveyed, so counting it would
  * double-count (#689); a Jump is surveyed passage and counts. Mirrors Rust's
- * `Section::stats`, whose `total_length` is the figure of record.
+ * `Line::stats`, whose `total_length` is the figure of record.
  */
 export function countsTowardLength(kind: ShotKind): boolean {
   return kind !== 'Reference';

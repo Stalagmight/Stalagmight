@@ -5,10 +5,10 @@ use rusqlite::types::ValueRef;
 use tempfile::TempDir;
 
 use super::*;
-use crate::models::{SectionData, SectionId, ShotData, StationAnchor, StationKey, StationRef};
+use crate::models::{LineData, LineId, ShotData, StationAnchor, StationKey, StationRef};
 
-/// A two-section project, every station of the first section named after its
-/// index; the second section has a comment but no names.
+/// A two-line project, every station of the first line named after its
+/// index; the second line has a comment but no names.
 fn project_with_names() -> Project {
     let mut project = Project::new("Names".to_string(), None);
     let shot = |length: f64| ShotData {
@@ -18,13 +18,13 @@ fn project_with_names() -> Project {
         ..Default::default()
     };
     let a = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(5.0), shot(6.0), shot(7.0)],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots: vec![shot(3.0)],
             ..Default::default()
         })
@@ -39,11 +39,11 @@ fn project_with_names() -> Project {
     project
 }
 
-fn first_section(project: &Project) -> SectionId {
-    project.sections[0].id
+fn first_line(project: &Project) -> LineId {
+    project.lines[0].id
 }
 
-fn names_of(project: &Project, id: SectionId) -> Vec<Option<String>> {
+fn names_of(project: &Project, id: LineId) -> Vec<Option<String>> {
     (0..=3)
         .map(|i| {
             project
@@ -75,7 +75,7 @@ fn names_round_trip_through_a_saved_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("names.stalx");
     let project = project_with_names();
-    let a = first_section(&project);
+    let a = first_line(&project);
     Database::open(&path)
         .unwrap()
         .save_project(&project)
@@ -95,7 +95,7 @@ fn names_round_trip_through_a_saved_file() {
 fn a_dangling_name_is_skipped_on_save() {
     let mut db = Database::in_memory().unwrap();
     let mut project = project_with_names();
-    let a = first_section(&project);
+    let a = first_line(&project);
     project.station_names.insert(
         StationKey::new(a, StationAnchor::AfterShot("ghost".into())),
         "ghost".to_string(),
@@ -118,7 +118,7 @@ fn a_file_without_the_table_opens_reads_and_saves() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("before-names.stalx");
     let project = project_with_names();
-    let a = first_section(&project);
+    let a = first_line(&project);
     {
         // A file as a pre-names build left it: a saved project, no table.
         let mut db = Database::open(&path).unwrap();
@@ -239,7 +239,7 @@ fn names_leave_every_table_an_outside_reader_reads_unchanged() {
         assert_eq!((user_version, stored), (18, 18));
     }
     for table in READ_BY_STALAGMIGHT_LIB {
-        // `sections.created_at` is the save time, not project content.
+        // `lines.created_at` is the save time, not project content.
         let skip: &[&str] = if table == "sections" {
             &["created_at"]
         } else {

@@ -31,14 +31,14 @@ const RIG: DpvRig = {
 /** A station a zero datum's `station_ref` can resolve against (#480: the entrance-no-warning
  *  guard checks a zero datum's `station_ref` for a matching entry in `stations`, not
  *  `zero_datums.length` - a dangling datum can leave a stale entry in the latter). */
-const RESOLVABLE_STATION_REF = { section_id: 1, station_index: 0 };
+const RESOLVABLE_STATION_REF = { line_id: 1, station_index: 0 };
 /** A ref that never appears in `stations` - simulates a zero datum whose station was deleted. */
-const DANGLING_STATION_REF = { section_id: 99, station_index: 99 };
+const DANGLING_STATION_REF = { line_id: 99, station_index: 99 };
 
 /** A full GasReachField with a real turnaround (satisfies `hasRoute`), overridable per test. */
 function makeReachField(overrides: Partial<GasReachField> = {}): GasReachField {
-  const origin = { section_id: 1, station_index: 0 };
-  const turn = { section_id: 1, station_index: 1 };
+  const origin = { line_id: 1, station_index: 0 };
+  const turn = { line_id: 1, station_index: 1 };
   return {
     station_refs: [origin, turn],
     gas_to_reach: [0, 100],
@@ -100,7 +100,7 @@ beforeEach(async () => {
     // (#480) get their own describe block below with their own project + stations state.
     project: { zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }] } as never,
     stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
-    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], line_ids: [] })),
   });
 });
 
@@ -459,12 +459,61 @@ describe('GasPlanPanel entrance requires a zero datum (#480)', () => {
   it('does not warn on the origin readout once a real station origin is picked', () => {
     useGasPlanStore.setState({
       originChosen: true,
-      origin: { section_id: 1, station_index: 0 },
+      origin: { line_id: 1, station_index: 0 },
     });
     useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
 
     render(<GasPlanPanel />);
 
     expect(screen.queryByTestId('gas-origin-no-zero-datum-warning')).toBeNull();
+  });
+});
+
+/**
+ * Stations in the panel (origin, endpoint, way points, marked points and the turn station the
+ * engine falls back to) read by name with their line (`Main Line / 5`, SPEC 4.1): station names
+ * are only line-unique. Never the positional `line:index` handle the store addresses them by.
+ */
+describe('GasPlanPanel station labels', () => {
+  const at = (station_index: number) => ({ line_id: 1, station_index });
+
+  beforeEach(() => {
+    useProjectStore.setState({
+      surveyData: null,
+      project: {
+        zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }],
+        lines: [{ id: 1, name: 'Main Line' }],
+      } as never,
+      // Names that differ from the positions, so a positional label would show.
+      stations: [0, 1, 2, 3, 4].map((i) => ({ station_ref: at(i), name: `A${i + 10}`, id: 100 + i })) as never,
+    });
+  });
+
+  it('names the origin, endpoint, way points and marked points by line and name', () => {
+    const plan = useGasPlanStore.getState();
+    plan.setOrigin(at(0));
+    plan.setEndpoint(at(4));
+    plan.addWaypoint(at(2));
+    plan.addMarkedPoint(at(3));
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-origin-readout')).toHaveTextContent('Main Line / A10');
+    expect(screen.getByTestId('gas-endpoint-readout')).toHaveTextContent('Main Line / A14');
+    expect(screen.getByTestId('gas-waypoint-row-0')).toHaveTextContent('Main Line / A12');
+    expect(screen.getByTestId('gas-marked-row-0')).toHaveTextContent('Main Line / A13');
+    for (const id of ['gas-origin-readout', 'gas-endpoint-readout', 'gas-waypoint-row-0', 'gas-marked-row-0']) {
+      expect(screen.getByTestId(id).textContent).not.toMatch(/\d+:\d+/);
+    }
+  });
+
+  it('names the station the plan turns at when the endpoint is out of reach', () => {
+    const plan = useGasPlanStore.getState();
+    plan.setEndpoint(at(4));
+    plan.setReachField(makeReachField({ final_turn_ref: at(1), turn_toward_endpoint: true }));
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-endpoint-out-of-reach')).toHaveTextContent(
+      'Out of reach on this gas. Turning at Main Line / A11, on the way there.'
+    );
   });
 });

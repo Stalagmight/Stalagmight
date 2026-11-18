@@ -1,5 +1,5 @@
 /**
- * Section-level pill fields keep the order they are showing: a person just
+ * Line-level pill fields keep the order they are showing: a person just
  * added goes at the end (beside the input), not wherever the shots' aggregate
  * sorts them.
  */

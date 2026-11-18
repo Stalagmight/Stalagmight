@@ -8,17 +8,17 @@
 //! re-measures every flag after each command, and since #736 a snap's flag
 //! decides what the Closures Computed solve ties, and so which closures are
 //! across one shot. A combine changes both terms: it moves a side, drops one
-//! join station's hand move, tears merges and makes two sections one. So the
+//! join station's hand move, tears merges and makes two lines one. So the
 //! plan asks the stamp's own two questions of the combined project, for every
 //! `Move` closure it leaves as one:
 //!
 //! - **A torn snap the combine re-closes** (apart before, within 1 cm after)
-//!   where a snap would tie the combined section to itself (across the two
-//!   sides, or with both ends on the combined section) is torn, as such a snap
+//!   where a snap would tie the combined line to itself (across the two
+//!   sides, or with both ends on the combined line) is torn, as such a snap
 //!   is: it becomes an ordinary closure and the dialog lists it, as the loop
 //!   closure left from a snap it is now (`TornTieKind::FormerSnappedClosure`,
 //!   and `CombineRemovedKind::FormerSnappedClosure` where it names one). Left
-//!   as it was, it would snap again inside the combined section. Re-closed
+//!   as it was, it would snap again inside the combined line. Re-closed
 //!   anywhere else it is a snap again, and the plan's model of the joined
 //!   survey (`Project::joined_sweep`) ties it as one.
 //! - **A snap the combine pulls apart** (past 1 cm after: a dropped hand move
@@ -33,7 +33,7 @@
 //!   one: a snap has both ends in one merge component (a closure between two
 //!   is made a merge unless both are placed, and then it is never aligned),
 //!   and the only merges a combine tears that leave a component split (the
-//!   moving section's merges to its datum sides) take every snap between the
+//!   moving line's merges to its datum sides) take every snap between the
 //!   parts with them. It is kept so the plan asks exactly what the stamp
 //!   asks.
 //!
@@ -49,7 +49,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{ClosureStrategy, SectionId, StationRef};
+use crate::{ClosureStrategy, LineId, StationRef};
 
 use super::combine_plan::{ClosureFacts, JoinPoint, TieId};
 use super::union_find::UnionFind;
@@ -58,37 +58,37 @@ use super::Project;
 /// The project's geometry as shown, and where its zero datums sit, read once
 /// per candidate query ([`ClosureFacts`]).
 pub(crate) struct Shown {
-    local: HashMap<SectionId, Vec<(f64, f64)>>,
+    local: HashMap<LineId, Vec<(f64, f64)>>,
     hands: HashMap<StationRef, (f64, f64, f64)>,
-    /// The section each resolvable zero datum (placement or GPS fix) sits
+    /// The line each resolvable zero datum (placement or GPS fix) sits
     /// on: what makes a merge component placed for the stamp.
-    datum_sections: Vec<SectionId>,
+    datum_lines: Vec<LineId>,
 }
 
 impl Shown {
     pub(super) fn of(project: &Project) -> Self {
         Self {
-            local: project.section_local_coords(),
+            local: project.line_local_coords(),
             hands: project.resolved_station_offsets(),
-            datum_sections: project
+            datum_lines: project
                 .zero_datums
                 .iter()
                 .filter_map(|datum| project.resolve_key(&datum.station_ref))
-                .map(|at| at.section_id)
+                .map(|at| at.line_id)
                 .collect(),
         }
     }
 
-    /// Where `at` is on its section's chain: shots and section offset, no
+    /// Where `at` is on its line's chain: shots and line offset, no
     /// hand move.
     fn chain(&self, project: &Project, at: StationRef) -> Option<(f64, f64)> {
         let &(x, y) = self
             .local
-            .get(&at.section_id)?
+            .get(&at.line_id)?
             .get(at.station_index as usize)?;
         let (ox, oy) = project
-            .section_offsets
-            .get(&at.section_id)
+            .line_offsets
+            .get(&at.line_id)
             .copied()
             .unwrap_or((0.0, 0.0));
         Some((x + ox, y + oy))
@@ -106,9 +106,9 @@ pub(crate) struct Landing<'a> {
     /// The chain gap: the kept join station's chain position minus the other
     /// one's.
     pub gap: (f64, f64),
-    /// How far each section that moves goes: the moving side by the shift,
+    /// How far each line that moves goes: the moving side by the shift,
     /// what moves with the joined station by that station's move (#755).
-    pub moves: HashMap<SectionId, (f64, f64)>,
+    pub moves: HashMap<LineId, (f64, f64)>,
     /// Whether the joined station keeps the kept join station's hand move
     /// (else the other one's).
     pub kept_offset_wins: bool,
@@ -118,10 +118,10 @@ impl Landing<'_> {
     /// Where `at` (a station before the combine) is shown after it. The two
     /// join stations are the joined station: the kept join station's chain
     /// where the kept side puts it, with the hand move it keeps. The other
-    /// section's stations hang off that chain, so they move by the chain gap
+    /// line's stations hang off that chain, so they move by the chain gap
     /// plus the kept side's move (the shift when the other side moves, nothing
     /// when the kept side does, float dust when nothing moves). Every other
-    /// station moves with its section.
+    /// station moves with its line.
     fn lands(&self, project: &Project, shown: &Shown, at: StationRef) -> Option<(f64, f64)> {
         let join = self.join;
         let kept_move = self.moves.get(&join.kept).copied().unwrap_or((0.0, 0.0));
@@ -136,32 +136,29 @@ impl Landing<'_> {
         }
         let (x, y) = shown.chain(project, at)?;
         let hand = shown.hand(at);
-        let (dx, dy) = if at.section_id == join.other {
+        let (dx, dy) = if at.line_id == join.other {
             (self.gap.0 + kept_move.0, self.gap.1 + kept_move.1)
         } else {
-            self.moves
-                .get(&at.section_id)
-                .copied()
-                .unwrap_or((0.0, 0.0))
+            self.moves.get(&at.line_id).copied().unwrap_or((0.0, 0.0))
         };
         Some((x + hand.0 + dx, y + hand.1 + dy))
     }
 }
 
-/// The merge components of the combined project, by section: every merge
-/// the plan does not tear, and the two sections as one; and which hold a
+/// The merge components of the combined project, by line: every merge
+/// the plan does not tear, and the two lines as one; and which hold a
 /// zero datum. What the stamp's double-anchor term reads there
 /// (`StationComponents`, `Project::merge_would_double_anchor`).
 struct ComponentsAfter {
-    slot: HashMap<SectionId, usize>,
+    slot: HashMap<LineId, usize>,
     sets: UnionFind,
     anchored: Vec<bool>,
 }
 
 impl ComponentsAfter {
     fn new(project: &Project, join: &JoinPoint, torn: &HashSet<TieId>, shown: &Shown) -> Self {
-        let mut slot: HashMap<SectionId, usize> = HashMap::new();
-        let mut slot_of = |id: SectionId| {
+        let mut slot: HashMap<LineId, usize> = HashMap::new();
+        let mut slot_of = |id: LineId| {
             let next = slot.len();
             *slot.entry(id).or_insert(next)
         };
@@ -170,15 +167,10 @@ impl ComponentsAfter {
             .iter()
             .enumerate()
             .filter(|(i, _)| !torn.contains(&TieId::Merge(*i)))
-            .map(|(_, m)| {
-                (
-                    slot_of(m.station_a.section_id),
-                    slot_of(m.station_b.section_id),
-                )
-            })
+            .map(|(_, m)| (slot_of(m.station_a.line_id), slot_of(m.station_b.line_id)))
             .collect();
         let joined = (slot_of(join.kept), slot_of(join.other));
-        let datums: Vec<usize> = shown.datum_sections.iter().map(|s| slot_of(*s)).collect();
+        let datums: Vec<usize> = shown.datum_lines.iter().map(|s| slot_of(*s)).collect();
         let mut sets = UnionFind::new(slot.len());
         for (a, b) in pairs.into_iter().chain([joined]) {
             sets.union(a, b);
@@ -196,9 +188,9 @@ impl ComponentsAfter {
     }
 
     /// Would a rigid tie between `a` and `b` hold two placed components
-    /// together? A section in no merge and holding no datum is a component
+    /// together? A line in no merge and holding no datum is a component
     /// of its own, unplaced.
-    fn would_double_anchor(&mut self, a: SectionId, b: SectionId) -> bool {
+    fn would_double_anchor(&mut self, a: LineId, b: LineId) -> bool {
         let (Some(&a), Some(&b)) = (self.slot.get(&a), self.slot.get(&b)) else {
             return false;
         };
@@ -212,7 +204,7 @@ impl ComponentsAfter {
 #[derive(Debug, Default)]
 pub(crate) struct Realignment {
     /// The ones it tears into ordinary closures, by id: a torn snap it
-    /// re-closes where it would tie the combined section to itself, and a
+    /// re-closes where it would tie the combined line to itself, and a
     /// snap it pulls apart.
     pub torn: Vec<u64>,
     /// Of `torn`, the torn snaps it re-closes: the dialog names each as the
@@ -231,17 +223,17 @@ pub(crate) struct Realignment {
 
 impl Project {
     /// The [`Realignment`] of a plan that puts the stations where `landing`
-    /// says and tears `torn` (merges and closures), with `side` the sections
-    /// that move with the moving section and `fixed_side` the ones that stay
+    /// says and tears `torn` (merges and closures), with `side` the lines
+    /// that move with the moving line and `fixed_side` the ones that stay
     /// with the fixed one: a tie between the two would tie the combined
-    /// section to itself. `O(closures + merges)` once the query has read the
+    /// line to itself. `O(closures + merges)` once the query has read the
     /// geometry; nothing at all when the plan leaves no `Move` closure.
     pub(crate) fn plan_realignment(
         &self,
         landing: &Landing,
         torn: &HashSet<TieId>,
-        side: &HashSet<SectionId>,
-        fixed_side: &HashSet<SectionId>,
+        side: &HashSet<LineId>,
+        fixed_side: &HashSet<LineId>,
         facts: &ClosureFacts,
     ) -> Realignment {
         let join = landing.join;
@@ -260,7 +252,7 @@ impl Project {
         }
         let shown = facts.shown(self);
         let mut components = ComponentsAfter::new(self, join, torn, shown);
-        let combined = |s: SectionId| s == join.kept || s == join.other;
+        let combined = |s: LineId| s == join.kept || s == join.other;
         let joined_station = |at: StationRef| at == join.join_k || at == join.join_o;
         for closure in left {
             let gap = match (
@@ -271,7 +263,7 @@ impl Project {
                 _ => None,
             };
             let close = gap.is_some_and(|gap| gap < Self::MERGE_ALIGNMENT_INVARIANT_M);
-            let (a, b) = (closure.a.section_id, closure.b.section_id);
+            let (a, b) = (closure.a.line_id, closure.b.line_id);
             let aligned = close && !components.would_double_anchor(a, b);
             match (closure.aligned, aligned) {
                 (false, true) => {

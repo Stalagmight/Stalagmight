@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ShotColumnsMenu } from '../ShotColumnsMenu';
 
 /**
- * The eye menu is shared by the data table, the new-section dialog and the shot
+ * The eye menu is shared by the data table, the new-line dialog and the shot
  * editor, and the whole point of sharing it is that a row cannot exist in one and
  * not another by accident. These pin the parts a host is allowed to vary - which
  * optional rows appear, which angle families get a mode switch, which rows go red
@@ -39,15 +39,15 @@ describe('ShotColumnsMenu', () => {
     renderMenu();
     open();
     expect(screen.queryByTestId('col-vis-_warnings')).toBeNull();
-    expect(screen.queryByTestId('col-vis-section_id')).toBeNull();
+    expect(screen.queryByTestId('col-vis-line_id')).toBeNull();
     expect(screen.queryByTestId('col-vis-shot_id')).toBeNull();
   });
 
   it('renders each optional row the host does declare', () => {
-    renderMenu({ extraRows: { warnings: true, sectionId: true, shotId: true } });
+    renderMenu({ extraRows: { warnings: true, lineId: true, shotId: true } });
     open();
     expect(screen.getByTestId('col-vis-_warnings')).toBeInTheDocument();
-    expect(screen.getByTestId('col-vis-section_id')).toBeInTheDocument();
+    expect(screen.getByTestId('col-vis-line_id')).toBeInTheDocument();
     expect(screen.getByTestId('col-vis-shot_id')).toBeInTheDocument();
   });
 

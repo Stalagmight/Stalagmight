@@ -29,9 +29,9 @@ name: Leak Scan
 # unprotected (no required-check deadlock, per #122).
 on:
   push:
-    branches: [master]
+    branches: [master, 'release/**']
   pull_request:
-    branches: [master]
+    branches: [master, 'release/**']
 
 # Least privilege: the job only reads the checked-out tree (no API, no token use).
 permissions:

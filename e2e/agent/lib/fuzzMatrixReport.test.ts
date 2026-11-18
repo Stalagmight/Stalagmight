@@ -8,8 +8,8 @@ const ORACLE_FAILURE = [
   '   . scenario import-dialog-fuzz start (seed=8, iterations=8)',
   'FAIL: import-dialog-fuzz threw:',
   'F3 ACCOUNTING: the receipt does not describe what landed in the project',
-  '  receipt:  1 section(s), 7 shot(s)',
-  '  project:  0 section(s), 0 shot(s)',
+  '  receipt:  1 line(s), 7 shot(s)',
+  '  project:  0 line(s), 0 shot(s)',
   '  reproduce: pnpm agent:scenario import-dialog-fuzz --seed 8 --iterations 8',
   '  last 2 move(s):',
   '    walls import [receipt]',
@@ -26,7 +26,7 @@ describe('failureDetail', () => {
     // exactly the failures that had them.
     const detail = failureDetail({ outLines: ORACLE_FAILURE, allLines: ORACLE_FAILURE });
     expect(detail.split('\n')[0]).toBe('FAIL: import-dialog-fuzz threw:');
-    expect(detail).toContain('receipt:  1 section(s), 7 shot(s)');
+    expect(detail).toContain('receipt:  1 line(s), 7 shot(s)');
     expect(detail).toContain('INTERJECT: undo mid-flow [receipt]');
     expect(detail).toContain('trace: /tmp/sessions/x/traces/import-dialog-fuzz-seed8.json');
   });

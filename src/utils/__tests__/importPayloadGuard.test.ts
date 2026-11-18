@@ -1,5 +1,5 @@
 /**
- * The two questions asked before a section leaves for the backend: is any row
+ * The two questions asked before a line leaves for the backend: is any row
  * still half-filled (ask the user to finish it), and can the payload be
  * serialized at all (refuse, naming the row).
  */
@@ -7,10 +7,10 @@ import { describe, it, expect } from 'vitest';
 import {
   NonFiniteShotError,
   assertSendableShots,
-  findIncompleteSections,
+  findIncompleteLines,
   findNonFiniteShot,
 } from '../importPayloadGuard';
-import type { SectionEditState } from '../batchImportHelpers';
+import type { LineEditState } from '../batchImportHelpers';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
 import type { ShotData } from '../../types/project';
 
@@ -52,7 +52,7 @@ const editable = (overrides: Partial<EditableShot> = {}): EditableShot =>
     ...overrides,
   }) as EditableShot;
 
-const edits = (name: string, shots: EditableShot[]): SectionEditState => ({
+const edits = (name: string, shots: EditableShot[]): LineEditState => ({
   name,
   date: '',
   color: '',
@@ -90,7 +90,7 @@ describe('assertSendableShots', () => {
     expect(() => assertSendableShots([shot()], 3, 'Tunnel')).not.toThrow();
   });
 
-  it('throws a typed error naming the section and the row', () => {
+  it('throws a typed error naming the line and the row', () => {
     let caught: unknown;
     try {
       assertSendableShots([shot(), shot({ depth_out: NaN })], 3, 'Tunnel');
@@ -99,14 +99,14 @@ describe('assertSendableShots', () => {
     }
     expect(caught).toBeInstanceOf(NonFiniteShotError);
     const err = caught as NonFiniteShotError;
-    expect(err.sectionIndex).toBe(3);
+    expect(err.lineIndex).toBe(3);
     expect(err.location).toEqual({ row: 2, field: 'depth_out' });
     expect(err.message).toContain('Tunnel');
     expect(err.message).toContain('row 2');
   });
 });
 
-describe('findIncompleteSections', () => {
+describe('findIncompleteLines', () => {
   const complete = editable();
   const half = editable({ id: 2, azimuth_in: NaN, azimuth_out: NaN });
   const blank = editable({
@@ -119,37 +119,37 @@ describe('findIncompleteSections', () => {
     depth_out: NaN,
   });
 
-  it('reports a section the user is no longer looking at', () => {
+  it('reports a line the user is no longer looking at', () => {
     const map = new Map([
       [0, edits('A', [complete])],
       [1, edits('B', [complete, half])],
     ]);
-    expect(findIncompleteSections([0, 1], map)).toEqual([
-      { sectionIndex: 1, name: 'B', count: 1 },
+    expect(findIncompleteLines([0, 1], map)).toEqual([
+      { lineIndex: 1, name: 'B', count: 1 },
     ]);
   });
 
-  it('ignores sections that are not selected', () => {
+  it('ignores lines that are not selected', () => {
     const map = new Map([[1, edits('B', [half])]]);
-    expect(findIncompleteSections([0], map)).toEqual([]);
+    expect(findIncompleteLines([0], map)).toEqual([]);
   });
 
   it('does not count a wholly blank added row - it is an invitation', () => {
     const map = new Map([[0, edits('A', [complete, blank])]]);
-    expect(findIncompleteSections([0], map)).toEqual([]);
+    expect(findIncompleteLines([0], map)).toEqual([]);
   });
 
   it('does not count a deleted half-filled row', () => {
     const map = new Map([[0, edits('A', [complete, { ...half, isDeleted: true }])]]);
-    expect(findIncompleteSections([0], map)).toEqual([]);
+    expect(findIncompleteLines([0], map)).toEqual([]);
   });
 
-  it('returns every blocking section in section order', () => {
+  it('returns every blocking line in line order', () => {
     const map = new Map([
       [2, edits('C', [half])],
       [0, edits('A', [half, half])],
     ]);
-    expect(findIncompleteSections([2, 0], map).map((s) => s.sectionIndex)).toEqual([0, 2]);
-    expect(findIncompleteSections([2, 0], map)[0]?.count).toBe(2);
+    expect(findIncompleteLines([2, 0], map).map((s) => s.lineIndex)).toEqual([0, 2]);
+    expect(findIncompleteLines([2, 0], map)[0]?.count).toBe(2);
   });
 });

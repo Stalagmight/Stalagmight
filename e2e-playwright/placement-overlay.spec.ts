@@ -18,7 +18,7 @@ test.describe('Placement Overlay Coverage', () => {
       const ui = (window as any).__E2E_TEST__.uiStore.getState();
       ui.startPlacementMode(
         {
-          name: 'Placement Section',
+          name: 'Placement Line',
           surveyor: null,
           date: null,
           color: '#ff6b6b',

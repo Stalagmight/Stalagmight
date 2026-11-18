@@ -1,10 +1,10 @@
 /**
  * Per-shot decisions for repeated survey in the orphan-placement dialog (#681).
  *
- * When a placed section repeats shots the project already has, each repeated
- * shot gets one of three choices. Whatever the choice, the new section's copy
+ * When a placed line repeats shots the project already has, each repeated
+ * shot gets one of three choices. Whatever the choice, the new line's copy
  * becomes a Reference shot: kept, never deleted, drawn de-emphasised, and not
- * counted as swimmable length in Plan mode (it still counts in the section's
+ * counted as swimmable length in Plan mode (it still counts in the line's
  * total length). The choice only decides which reading the EXISTING shot ends
  * up with, so its stations, connections, closures and comments stay where they
  * are.
@@ -24,7 +24,7 @@ export type OverlapChoice = 'keep_existing' | 'use_new' | 'average';
 
 export const OVERLAP_CHOICES: readonly OverlapChoice[] = ['keep_existing', 'use_new', 'average'];
 
-/** One repeated shot: the new section's copy and the existing shot it repeats. */
+/** One repeated shot: the new line's copy and the existing shot it repeats. */
 export interface RepeatedShot<S extends TargetShotLike> {
   orphanShotIndex: number;
   targetShotIndex: number;

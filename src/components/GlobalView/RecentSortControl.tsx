@@ -29,7 +29,7 @@ export function RecentSortControl({
     { value: 'last_opened', label: t('globalView.recent.sort.lastOpened') },
     { value: 'last_edited', label: t('globalView.recent.sort.lastEdited') },
     { value: 'name', label: t('globalView.recent.sort.name') },
-    { value: 'sections', label: t('globalView.recent.sort.sections') },
+    { value: 'lines', label: t('globalView.recent.sort.sections') },
     { value: 'length', label: t('globalView.recent.sort.length') },
   ];
 

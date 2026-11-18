@@ -39,9 +39,9 @@ impl Rng {
 
 const STRIDE: u64 = crate::models::FEATURE_ID_STRIDE as u64;
 
-fn shot(rng: &mut Rng, section: u64, seq: u64, uuid: u64) -> Value {
+fn shot(rng: &mut Rng, line: u64, seq: u64, uuid: u64) -> Value {
     json!({
-        "id": section * STRIDE + seq,
+        "id": line * STRIDE + seq,
         "uuid": format!("u-{uuid}"),
         "azimuth_in": rng.float(),
         "azimuth_out": rng.float(),
@@ -57,7 +57,7 @@ fn shot(rng: &mut Rng, section: u64, seq: u64, uuid: u64) -> Value {
 struct World {
     rng: Rng,
     next_uuid: u64,
-    next_section: u64,
+    next_line: u64,
 }
 
 impl World {
@@ -65,13 +65,13 @@ impl World {
         Self {
             rng: Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1),
             next_uuid: 1,
-            next_section: 1,
+            next_line: 1,
         }
     }
 
-    fn section(&mut self, shots: usize) -> Value {
-        let id = self.next_section;
-        self.next_section += 1;
+    fn line(&mut self, shots: usize) -> Value {
+        let id = self.next_line;
+        self.next_line += 1;
         let mut list = Vec::new();
         for seq in 0..shots as u64 {
             let uuid = self.next_uuid;
@@ -89,41 +89,41 @@ impl World {
         })
     }
 
-    fn project(&mut self, sections: usize) -> Value {
-        let list: Vec<Value> = (0..sections)
+    fn project(&mut self, lines: usize) -> Value {
+        let list: Vec<Value> = (0..lines)
             .map(|_| {
                 let n = 1 + self.rng.below(12);
-                self.section(n)
+                self.line(n)
             })
             .collect();
         let merges: Vec<Value> = (0..80).map(|i| json!({"a": i, "b": i + 1})).collect();
         let offsets: Vec<Value> = (0..70)
-            .map(|i| json!([{"section_id": i, "anchor": "SectionStart"}, [i, 0.5, -0.0]]))
+            .map(|i| json!([{"line_id": i, "anchor": "LineStart"}, [i, 0.5, -0.0]]))
             .collect();
         json!({
             "name": "p",
-            "sections": list,
+            "lines": list,
             "station_merges": merges,
             "station_offsets": offsets,
-            "section_offsets": {"1": [0.0, 1.0], "2": [3.0, -0.0]},
+            "line_offsets": {"1": [0.0, 1.0], "2": [3.0, -0.0]},
             "zero_datums": [],
-            "next_section_id": self.next_section,
+            "next_line_id": self.next_line,
             "counter_parity_shots": (0..90).map(|i| format!("c{i}")).collect::<Vec<_>>(),
         })
     }
 
-    fn sections(p: &mut Value) -> &mut Vec<Value> {
-        p["sections"].as_array_mut().unwrap()
+    fn lines(p: &mut Value) -> &mut Vec<Value> {
+        p["lines"].as_array_mut().unwrap()
     }
 
     /// One random edit of the kind a real command makes.
     fn mutate(&mut self, p: &mut Value) {
-        let n_sections = Self::sections(p).len();
+        let n_lines = Self::lines(p).len();
         match self.rng.below(12) {
             // Edit one shot field (sometimes only the sign of a zero).
-            0 | 1 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
-                let shots = Self::sections(p)[s]["shots"].as_array_mut().unwrap();
+            0 | 1 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
+                let shots = Self::lines(p)[s]["shots"].as_array_mut().unwrap();
                 if !shots.is_empty() {
                     let i = self.rng.below(shots.len());
                     let v = self.rng.float();
@@ -134,9 +134,9 @@ impl World {
                 }
             }
             // Delete a run of shots.
-            2 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
-                let shots = Self::sections(p)[s]["shots"].as_array_mut().unwrap();
+            2 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
+                let shots = Self::lines(p)[s]["shots"].as_array_mut().unwrap();
                 if !shots.is_empty() {
                     let i = self.rng.below(shots.len());
                     let k = 1 + self.rng.below(shots.len() - i);
@@ -144,9 +144,9 @@ impl World {
                 }
             }
             // Insert a new shot.
-            3 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
-                let sec = &mut Self::sections(p)[s];
+            3 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
+                let sec = &mut Self::lines(p)[s];
                 let id = sec["id"].as_u64().unwrap();
                 let next = sec["next_shot_id"].as_u64().unwrap();
                 let uuid = self.next_uuid;
@@ -157,40 +157,40 @@ impl World {
                 let at = self.rng.below(shots.len() + 1);
                 shots.insert(at, new);
             }
-            // Split a section: move its tail into a new section.
-            4 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
+            // Split a line: move its tail into a new line.
+            4 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
                 let tail: Vec<Value> = {
-                    let shots = Self::sections(p)[s]["shots"].as_array_mut().unwrap();
+                    let shots = Self::lines(p)[s]["shots"].as_array_mut().unwrap();
                     if shots.len() < 2 {
                         return;
                     }
                     let at = 1 + self.rng.below(shots.len() - 1);
                     shots.drain(at..).collect()
                 };
-                let mut fresh = self.section(0);
+                let mut fresh = self.line(0);
                 fresh["shots"] = Value::Array(tail);
-                Self::sections(p).push(fresh);
-                p["next_section_id"] = json!(self.next_section);
+                Self::lines(p).push(fresh);
+                p["next_line_id"] = json!(self.next_line);
             }
-            // Combine: append one section's shots to another, delete it.
-            5 if n_sections > 1 => {
-                let a = self.rng.below(n_sections);
-                let mut b = self.rng.below(n_sections);
+            // Combine: append one line's shots to another, delete it.
+            5 if n_lines > 1 => {
+                let a = self.rng.below(n_lines);
+                let mut b = self.rng.below(n_lines);
                 if a == b {
-                    b = (b + 1) % n_sections;
+                    b = (b + 1) % n_lines;
                 }
-                let moved = Self::sections(p)[b]["shots"].as_array().unwrap().clone();
-                Self::sections(p)[a]["shots"]
+                let moved = Self::lines(p)[b]["shots"].as_array().unwrap().clone();
+                Self::lines(p)[a]["shots"]
                     .as_array_mut()
                     .unwrap()
                     .extend(moved);
-                Self::sections(p).remove(b);
+                Self::lines(p).remove(b);
             }
-            // Reverse a section (order and a field per shot).
-            6 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
-                let sec = &mut Self::sections(p)[s];
+            // Reverse a line (order and a field per shot).
+            6 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
+                let sec = &mut Self::lines(p)[s];
                 let shots = sec["shots"].as_array_mut().unwrap();
                 shots.reverse();
                 for shot in shots.iter_mut() {
@@ -200,17 +200,17 @@ impl World {
                 let parity = sec["reverse_parity"].as_bool().unwrap();
                 sec["reverse_parity"] = json!(!parity);
             }
-            // Delete a section.
-            7 if n_sections > 0 => {
-                let s = self.rng.below(n_sections);
-                Self::sections(p).remove(s);
+            // Delete a line.
+            7 if n_lines > 0 => {
+                let s = self.rng.below(n_lines);
+                Self::lines(p).remove(s);
             }
-            // Add a section.
+            // Add a line.
             8 => {
                 let n = 1 + self.rng.below(5);
-                let fresh = self.section(n);
-                Self::sections(p).push(fresh);
-                p["next_section_id"] = json!(self.next_section);
+                let fresh = self.line(n);
+                Self::lines(p).push(fresh);
+                p["next_line_id"] = json!(self.next_line);
             }
             // Edit the ordered and the unordered lists.
             9 => {
@@ -232,17 +232,17 @@ impl World {
             }
             // A gauge pair and an offset key.
             _ => {
-                if n_sections > 0 {
-                    let s = self.rng.below(n_sections);
-                    let sec = &mut Self::sections(p)[s];
+                if n_lines > 0 {
+                    let s = self.rng.below(n_lines);
+                    let sec = &mut Self::lines(p)[s];
                     if let Some(first) = sec["shots"].get(0).and_then(|s| s.get("uuid")).cloned() {
                         sec["gauge_shot_uuid"] = first;
                     }
                 }
                 let key = format!("{}", self.rng.below(5));
                 if self.rng.below(2) == 0 {
-                    p["section_offsets"][key] = json!([self.rng.float(), 1.0]);
-                } else if let Some(map) = p["section_offsets"].as_object_mut() {
+                    p["line_offsets"][key] = json!([self.rng.float(), 1.0]);
+                } else if let Some(map) = p["line_offsets"].as_object_mut() {
                     map.remove(&key);
                 }
             }
@@ -292,8 +292,8 @@ fn a_signed_zero_flip_is_an_edit() {
     let mut world = World::new(3);
     let before = world.project(2);
     let mut after = before.clone();
-    after["sections"][0]["shots"][0]["length"] = json!(-0.0);
-    after["sections"][0]["shots"][0]["depth_out"] = json!(0.0);
+    after["lines"][0]["shots"][0]["length"] = json!(-0.0);
+    after["lines"][0]["shots"][0]["depth_out"] = json!(0.0);
     let delta = round_trip(&before, &after);
     assert!(!delta.is_empty());
 }
@@ -306,25 +306,25 @@ fn encoded_len(delta: &ProjectDelta) -> usize {
 fn moving_and_reversing_shots_costs_runs_not_shots() {
     let mut world = World::new(11);
     let before = world.project(3);
-    let shot_bytes = serde_json::to_string(&before["sections"][0]["shots"][0])
+    let shot_bytes = serde_json::to_string(&before["lines"][0]["shots"][0])
         .unwrap()
         .len();
     let mut big = before;
-    // One section with 400 shots.
-    let long = world.section(400);
-    World::sections(&mut big).push(long);
-    big["next_section_id"] = json!(world.next_section);
+    // One line with 400 shots.
+    let long = world.line(400);
+    World::lines(&mut big).push(long);
+    big["next_line_id"] = json!(world.next_line);
     // Split it in the middle.
     let mut split = big.clone();
-    let tail: Vec<Value> = World::sections(&mut split)[3]["shots"]
+    let tail: Vec<Value> = World::lines(&mut split)[3]["shots"]
         .as_array_mut()
         .unwrap()
         .drain(200..)
         .collect();
-    let mut fresh = world.section(0);
+    let mut fresh = world.line(0);
     fresh["shots"] = Value::Array(tail);
-    World::sections(&mut split).push(fresh);
-    split["next_section_id"] = json!(world.next_section);
+    World::lines(&mut split).push(fresh);
+    split["next_line_id"] = json!(world.next_line);
     for (from, to) in [(&big, &split), (&split, &big)] {
         let delta = round_trip(from, to);
         assert!(
@@ -335,7 +335,7 @@ fn moving_and_reversing_shots_costs_runs_not_shots() {
     }
     // Reverse it: order flips, values stay.
     let mut reversed = big.clone();
-    World::sections(&mut reversed)[3]["shots"]
+    World::lines(&mut reversed)[3]["shots"]
         .as_array_mut()
         .unwrap()
         .reverse();
@@ -353,11 +353,11 @@ fn moving_and_reversing_shots_costs_runs_not_shots() {
 fn deleting_one_shot_records_that_shot_only() {
     let mut world = World::new(5);
     let mut before = world.project(2);
-    let long = world.section(1000);
-    World::sections(&mut before).push(long);
-    before["next_section_id"] = json!(world.next_section);
+    let long = world.line(1000);
+    World::lines(&mut before).push(long);
+    before["next_line_id"] = json!(world.next_line);
     let mut after = before.clone();
-    let removed = World::sections(&mut after)[2]["shots"]
+    let removed = World::lines(&mut after)[2]["shots"]
         .as_array_mut()
         .unwrap()
         .remove(500);
@@ -410,20 +410,20 @@ fn a_positional_edit_refuses_a_source_of_another_length() {
 fn a_literal_shot_whose_id_a_reload_reused_takes_a_fresh_one() {
     let mut world = World::new(17);
     let mut before = world.project(0);
-    let sec = world.section(5);
-    World::sections(&mut before).push(sec);
-    before["next_section_id"] = json!(world.next_section);
+    let sec = world.line(5);
+    World::lines(&mut before).push(sec);
+    before["next_line_id"] = json!(world.next_line);
     let mut after = before.clone();
     // Delete the middle shot.
-    World::sections(&mut after)[0]["shots"]
+    World::lines(&mut after)[0]["shots"]
         .as_array_mut()
         .unwrap()
         .remove(2);
     let undo = ProjectDelta::between(&after, &before).unwrap();
     // A reload renumbers the four survivors 0..4 and the allocator to 4.
     let mut reloaded = after.clone();
-    let base = World::sections(&mut reloaded)[0]["id"].as_u64().unwrap() * STRIDE;
-    for (i, shot) in World::sections(&mut reloaded)[0]["shots"]
+    let base = World::lines(&mut reloaded)[0]["id"].as_u64().unwrap() * STRIDE;
+    for (i, shot) in World::lines(&mut reloaded)[0]["shots"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -431,42 +431,42 @@ fn a_literal_shot_whose_id_a_reload_reused_takes_a_fresh_one() {
     {
         shot["id"] = json!(base + i as u64);
     }
-    World::sections(&mut reloaded)[0]["next_shot_id"] = json!(base + 4);
+    World::lines(&mut reloaded)[0]["next_shot_id"] = json!(base + 4);
     let rebuilt = undo.apply(&reloaded).unwrap();
-    let shots = rebuilt["sections"][0]["shots"].as_array().unwrap();
+    let shots = rebuilt["lines"][0]["shots"].as_array().unwrap();
     let ids: std::collections::HashSet<u64> =
         shots.iter().map(|s| s["id"].as_u64().unwrap()).collect();
     assert_eq!(ids.len(), 5, "ids must stay unique: {shots:?}");
-    let next = rebuilt["sections"][0]["next_shot_id"].as_u64().unwrap();
+    let next = rebuilt["lines"][0]["next_shot_id"].as_u64().unwrap();
     assert!(ids.iter().all(|id| *id < next));
-    assert_eq!(shots[2]["uuid"], before["sections"][0]["shots"][2]["uuid"]);
+    assert_eq!(shots[2]["uuid"], before["lines"][0]["shots"][2]["uuid"]);
 }
 
 #[test]
-fn a_section_counter_rewound_by_a_reload_is_raised_past_a_restored_section() {
+fn a_line_counter_rewound_by_a_reload_is_raised_past_a_restored_line() {
     let mut world = World::new(19);
     let before = world.project(3);
     let mut after = before.clone();
-    // Delete the highest section; the counter stays.
-    World::sections(&mut after).pop();
+    // Delete the highest line; the counter stays.
+    World::lines(&mut after).pop();
     let undo = ProjectDelta::between(&after, &before).unwrap();
-    // A reload recomputes the counter as max + 1, the deleted section's id.
+    // A reload recomputes the counter as max + 1, the deleted line's id.
     let mut reloaded = after.clone();
-    let max = World::sections(&mut reloaded)
+    let max = World::lines(&mut reloaded)
         .iter()
         .map(|s| s["id"].as_u64().unwrap())
         .max()
         .unwrap();
-    reloaded["next_section_id"] = json!(max + 1);
+    reloaded["next_line_id"] = json!(max + 1);
     let rebuilt = undo.apply(&reloaded).unwrap();
-    let restored_max = rebuilt["sections"]
+    let restored_max = rebuilt["lines"]
         .as_array()
         .unwrap()
         .iter()
         .map(|s| s["id"].as_u64().unwrap())
         .max()
         .unwrap();
-    assert!(rebuilt["next_section_id"].as_u64().unwrap() > restored_max);
+    assert!(rebuilt["next_line_id"].as_u64().unwrap() > restored_max);
 }
 
 // === Hostile deltas: a delta is read back from the file ===
@@ -477,36 +477,40 @@ fn hostile(text: &str) -> ProjectDelta {
 
 /// `delta` breaks a rule, and the one `why` names.
 fn refused_for(delta: &ProjectDelta, why: &str) {
-    match delta.check_shape() {
-        Ok(()) => panic!("a delta that breaks a rule passed: {delta:?}"),
-        Err(reason) => assert!(reason.contains(why), "refused for another rule: {reason}"),
+    let checked = delta.check_shape();
+    assert!(
+        checked.is_err(),
+        "a delta that breaks a rule passed: {delta:?}"
+    );
+    if let Err(reason) = checked {
+        assert!(reason.contains(why), "refused for another rule: {reason}");
     }
 }
 
-fn section_count(p: &Value) -> usize {
-    p["sections"].as_array().unwrap().len()
+fn line_count(p: &Value) -> usize {
+    p["lines"].as_array().unwrap().len()
 }
 
 /// A delta must not build more than its source holds plus what it carries,
 /// or a small row grows the project it is applied to without bound.
 #[test]
-fn a_delta_that_keeps_a_section_twice_is_refused() {
+fn a_delta_that_keeps_a_line_twice_is_refused() {
     let mut world = World::new(23);
     let p = world.project(2);
-    let n = section_count(&p);
+    let n = line_count(&p);
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"k":[0,{n}]}}]]}}"#
     ));
-    refused_for(&delta, "reads a source section twice");
-    assert!(delta.apply(&p).is_err(), "applied: the sections doubled");
+    refused_for(&delta, "reads a source line twice");
+    assert!(delta.apply(&p).is_err(), "applied: the lines doubled");
 }
 
 #[test]
 fn a_delta_that_copies_a_shot_twice_is_refused() {
     let mut world = World::new(29);
     let p = world.project(2);
-    let n = section_count(&p);
-    let id = p["sections"][0]["id"].as_u64().unwrap();
+    let n = line_count(&p);
+    let id = p["lines"][0]["id"].as_u64().unwrap();
     let copy = r#"{"c":{"sec":0,"at":0,"n":1}}"#;
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"e":{{"at":0,"id":{id},"s":[{copy},{copy}]}}}},{{"k":[1,{}]}}]]}}"#,
@@ -517,10 +521,10 @@ fn a_delta_that_copies_a_shot_twice_is_refused() {
 }
 
 #[test]
-fn a_delta_that_copies_out_of_a_kept_section_is_refused() {
+fn a_delta_that_copies_out_of_a_kept_line_is_refused() {
     let mut world = World::new(31);
     let p = world.project(2);
-    let n = section_count(&p);
+    let n = line_count(&p);
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":900}},"s":[{{"c":{{"sec":0,"at":0,"n":1}}}}]}}}}]]}}"#
     ));
@@ -541,10 +545,10 @@ fn a_delta_that_keeps_an_array_element_twice_is_refused() {
 }
 
 #[test]
-fn a_new_section_with_an_id_past_the_bound_is_refused_not_overflowed() {
+fn a_new_line_with_an_id_past_the_bound_is_refused_not_overflowed() {
     let mut world = World::new(41);
     let p = world.project(1);
-    let n = section_count(&p);
+    let n = line_count(&p);
     let delta = hostile(&format!(
         r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":18446744073709551615,"next_shot_id":0}},"s":[]}}}}]]}}"#
     ));
@@ -555,7 +559,7 @@ fn a_new_section_with_an_id_past_the_bound_is_refused_not_overflowed() {
 #[test]
 fn the_holder_walk_refuses_a_delta_that_breaks_the_rules() {
     use std::rc::Rc;
-    let view: Vec<super::history::HolderSection> = vec![(1, Rc::new(vec![Some(Rc::from("u-1"))]))];
+    let view: Vec<super::history::HolderLine> = vec![(1, Rc::new(vec![Some(Rc::from("u-1"))]))];
     let doubled = hostile(r#"{"s":[1,[{"k":[0,1]},{"k":[0,1]}]]}"#);
     assert!(doubled.step_holders(&view).is_none());
     let kept = hostile(r#"{"s":[1,[{"k":[0,1]}]]}"#);
@@ -569,21 +573,19 @@ fn the_holder_walk_refuses_a_delta_that_breaks_the_rules() {
 fn a_repeated_uuid_is_copied_once_and_written_literally_after() {
     let mut world = World::new(43);
     let mut before = world.project(0);
-    let mut section = world.section(4);
-    let twin = section["shots"][0]["uuid"].clone();
-    section["shots"][2]["uuid"] = twin;
-    World::sections(&mut before).push(section);
-    before["next_section_id"] = json!(world.next_section);
+    let mut line = world.line(4);
+    let twin = line["shots"][0]["uuid"].clone();
+    line["shots"][2]["uuid"] = twin;
+    World::lines(&mut before).push(line);
+    before["next_line_id"] = json!(world.next_line);
     let mut after = before.clone();
-    let mut tail = World::sections(&mut after)[0].clone();
-    let shots = World::sections(&mut after)[0]["shots"]
-        .as_array_mut()
-        .unwrap();
+    let mut tail = World::lines(&mut after)[0].clone();
+    let shots = World::lines(&mut after)[0]["shots"].as_array_mut().unwrap();
     let moved: Vec<Value> = shots.drain(2..).collect();
-    tail["id"] = json!(world.next_section);
+    tail["id"] = json!(world.next_line);
     tail["shots"] = json!(moved);
-    World::sections(&mut after).push(tail);
-    after["next_section_id"] = json!(world.next_section + 1);
+    World::lines(&mut after).push(tail);
+    after["next_line_id"] = json!(world.next_line + 1);
     for (source, target) in [(&before, &after), (&after, &before)] {
         let delta = round_trip(source, target);
         delta.check_shape().unwrap();
@@ -591,34 +593,34 @@ fn a_repeated_uuid_is_copied_once_and_written_literally_after() {
 }
 
 /// A copy carries no uuid of its own, so a rename the load's heal makes in
-/// the section a shot is copied into is pinned onto the copy as an edit.
+/// the line a shot is copied into is pinned onto the copy as an edit.
 #[test]
 fn a_renamed_id_is_pinned_onto_the_shot_a_delta_copies() {
     use std::rc::Rc;
     let mut world = World::new(47);
     let mut source = world.project(0);
-    let first = world.section(3);
-    let second = world.section(1);
-    World::sections(&mut source).push(first);
-    World::sections(&mut source).push(second);
-    source["next_section_id"] = json!(world.next_section + 1);
-    // Move the first section's last shot into a new section.
+    let first = world.line(3);
+    let second = world.line(1);
+    World::lines(&mut source).push(first);
+    World::lines(&mut source).push(second);
+    source["next_line_id"] = json!(world.next_line + 1);
+    // Move the first line's last shot into a new line.
     let mut target = source.clone();
-    let moved = World::sections(&mut target)[0]["shots"]
+    let moved = World::lines(&mut target)[0]["shots"]
         .as_array_mut()
         .unwrap()
         .pop()
         .unwrap();
     let uuid = moved["uuid"].as_str().unwrap().to_string();
-    let new_section = world.next_section;
-    let mut fresh = World::sections(&mut target)[1].clone();
-    fresh["id"] = json!(new_section);
+    let new_line = world.next_line;
+    let mut fresh = World::lines(&mut target)[1].clone();
+    fresh["id"] = json!(new_line);
     fresh["shots"] = json!([moved]);
-    World::sections(&mut target).push(fresh);
+    World::lines(&mut target).push(fresh);
     let mut delta = ProjectDelta::between(&source, &target).unwrap();
 
     let renamed = format!("{uuid}-renamed");
-    let view: Vec<super::history::HolderSection> = source["sections"]
+    let view: Vec<super::history::HolderLine> = source["lines"]
         .as_array()
         .unwrap()
         .iter()
@@ -633,29 +635,28 @@ fn a_renamed_id_is_pinned_onto_the_shot_a_delta_copies() {
             (id, Rc::new(shots))
         })
         .collect();
-    let target_section = u32::try_from(new_section).unwrap();
-    let rename = |section: u32, old: &str| {
-        (section == target_section && old == uuid).then(|| renamed.clone())
-    };
+    let target_line = u32::try_from(new_line).unwrap();
+    let rename =
+        |line: u32, old: &str| (line == target_line && old == uuid).then(|| renamed.clone());
     assert!(
         delta.rename_copies(&view, &rename),
         "the moved shot is a copy, so the rename has to be pinned onto it"
     );
     let rebuilt = delta.apply(&source).unwrap();
     let mut expected = target.clone();
-    World::sections(&mut expected)[2]["shots"][0]["uuid"] = json!(renamed);
+    World::lines(&mut expected)[2]["shots"][0]["uuid"] = json!(renamed);
     assert!(same(&rebuilt, &expected), "rebuilt: {rebuilt}");
 }
 
-/// A section whose text differs but whose value is the same stays where it
-/// is, so its shots are not copied anywhere else: a new section holding a
+/// A line whose text differs but whose value is the same stays where it
+/// is, so its shots are not copied anywhere else: a new line holding a
 /// shot under one of its uuids carries that shot literally.
 #[test]
-fn a_section_kept_by_value_lends_no_shot_to_another() {
-    let source = r#"{"name":"p","next_section_id":3,"sections":[{"id":1,"name":"A","next_shot_id":100002,"shots":[{"id":100000,"uuid":"u-1","length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]}]}"#;
-    // Section 1 again, with its keys in another order; and a new section 2
-    // whose shot shares a uuid with one of section 1's.
-    let target = r#"{"name":"p","next_section_id":3,"sections":[{"name":"A","id":1,"next_shot_id":100002,"shots":[{"uuid":"u-1","id":100000,"length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]},{"id":2,"name":"B","next_shot_id":200001,"shots":[{"id":200000,"uuid":"u-2","length":3.0}]}]}"#;
+fn a_line_kept_by_value_lends_no_shot_to_another() {
+    let source = r#"{"name":"p","next_line_id":3,"lines":[{"id":1,"name":"A","next_shot_id":100002,"shots":[{"id":100000,"uuid":"u-1","length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]}]}"#;
+    // Line 1 again, with its keys in another order; and a new line 2
+    // whose shot shares a uuid with one of line 1's.
+    let target = r#"{"name":"p","next_line_id":3,"lines":[{"name":"A","id":1,"next_shot_id":100002,"shots":[{"uuid":"u-1","id":100000,"length":2.0},{"id":100001,"uuid":"u-2","length":3.0}]},{"id":2,"name":"B","next_shot_id":200001,"shots":[{"id":200000,"uuid":"u-2","length":3.0}]}]}"#;
     let delta = ProjectDelta::between_texts(source, target).unwrap();
     delta.check_shape().unwrap();
     let rebuilt = delta.apply(&serde_json::from_str(source).unwrap()).unwrap();
@@ -665,25 +666,25 @@ fn a_section_kept_by_value_lends_no_shot_to_another() {
     );
 }
 
-/// Two target sections under one id (no live project holds such a pair, but
-/// a delta must still encode it): the second is written as a new section, so
-/// no source section is read twice.
+/// Two target lines under one id (no live project holds such a pair, but
+/// a delta must still encode it): the second is written as a new line, so
+/// no source line is read twice.
 #[test]
-fn a_repeated_section_id_reads_its_source_once() {
+fn a_repeated_line_id_reads_its_source_once() {
     let mut world = World::new(53);
     let source = world.project(2);
     let mut target = source.clone();
-    let mut twin = World::sections(&mut target)[0].clone();
+    let mut twin = World::lines(&mut target)[0].clone();
     twin["name"] = json!("twin");
-    World::sections(&mut target)[0]["name"] = json!("renamed");
-    World::sections(&mut target).push(twin);
+    World::lines(&mut target)[0]["name"] = json!("renamed");
+    World::lines(&mut target).push(twin);
     let delta = ProjectDelta::between(&source, &target).unwrap();
     delta.check_shape().unwrap();
-    // The twin's shots repeat the first section's ids, so the apply settles
-    // them to fresh ones; the sections themselves are all there, in order.
+    // The twin's shots repeat the first line's ids, so the apply settles
+    // them to fresh ones; the lines themselves are all there, in order.
     let rebuilt = delta.apply(&source).unwrap();
     let names = |p: &Value| -> Vec<String> {
-        p["sections"]
+        p["lines"]
             .as_array()
             .unwrap()
             .iter()
@@ -691,4 +692,145 @@ fn a_repeated_section_id_reads_its_source_once() {
             .collect()
     };
     assert_eq!(names(&rebuilt), names(&target));
+}
+
+/// A line of shots with the given uuids, its ids in its id window.
+fn uuid_line(id: u64, uuids: &[&str]) -> Value {
+    let shots: Vec<Value> = uuids
+        .iter()
+        .enumerate()
+        .map(|(i, uuid)| json!({"id": id * STRIDE + i as u64, "uuid": uuid, "length": 1.5 + i as f64}))
+        .collect();
+    json!({"id": id, "name": format!("L{id}"), "next_shot_id": id * STRIDE + uuids.len() as u64, "shots": shots})
+}
+
+/// The station key of the station after `after` (the line start for `None`).
+fn station_key(line: u64, after: Option<&str>) -> Value {
+    match after {
+        None => json!({"line_id": line, "anchor": "LineStart"}),
+        Some(uuid) => json!({"line_id": line, "anchor": {"AfterShot": uuid}}),
+    }
+}
+
+/// One `[key, value(i)]` pair per station of `line`, as `station_names` and
+/// `station_ids` hold one for every station.
+fn per_station(line: u64, uuids: &[&str], value: impl Fn(usize) -> Value) -> Vec<Value> {
+    (0..=uuids.len())
+        .map(|i| {
+            let after = i.checked_sub(1).map(|k| uuids[k]);
+            json!([station_key(line, after), value(i)])
+        })
+        .collect()
+}
+
+/// Every station of every line named and numbered, as #804's dense
+/// `station_names` / `station_ids` are.
+fn identified(lines: &[(u64, Vec<&str>)], comments: Vec<Value>) -> Value {
+    let mut names = Vec::new();
+    let mut ids = Vec::new();
+    for (line, uuids) in lines {
+        names.extend(per_station(*line, uuids, |i| json!(format!("{line}.{i}"))));
+        ids.extend(per_station(*line, uuids, |i| json!(line * 100 + i as u64)));
+    }
+    json!({
+        "name": "p",
+        "next_line_id": 3,
+        "lines": lines.iter().map(|(id, uuids)| uuid_line(*id, uuids)).collect::<Vec<_>>(),
+        "station_names": names,
+        "station_ids": ids,
+        "station_comments": comments,
+    })
+}
+
+/// A Reverse and a Delete Line re-key or drop a pair per station in every
+/// station-keyed member. Each pair whose key names a station of its state is
+/// written as a position and rebuilt from that state's shots, exactly, in
+/// both directions; a key that names no station stays literal.
+#[test]
+fn station_keyed_pairs_travel_as_positions_and_rebuild_exactly() {
+    let forward = vec!["u-a", "u-b", "u-c", "u-d"];
+    let mut reversed = forward.clone();
+    reversed.reverse();
+    let dangling = json!([station_key(1, Some("u-gone")), "a note on no station"]);
+    let source = identified(
+        &[(1, forward.clone()), (2, vec!["u-e", "u-f"])],
+        vec![dangling],
+    );
+    // Line 1 reversed (every station keeps its name and id, under a new
+    // key), line 2 deleted with its pairs, the dangling comment dropped.
+    let mut target = identified(&[(1, reversed.clone())], Vec::new());
+    for member in ["station_names", "station_ids"] {
+        let pairs = target[member].as_array_mut().unwrap();
+        let values: Vec<Value> = pairs.iter().map(|p| p[1].clone()).rev().collect();
+        for (pair, value) in pairs.iter_mut().zip(values) {
+            pair[1] = value;
+        }
+    }
+    for (from, to) in [(&source, &target), (&target, &source)] {
+        let delta = ProjectDelta::between(from, to).unwrap();
+        delta.check_shape().unwrap();
+        let rebuilt = delta.apply(from).unwrap();
+        for member in ["station_names", "station_ids", "station_comments"] {
+            let sorted = |p: &Value| {
+                let mut pairs = p[member].as_array().cloned().unwrap_or_default();
+                pairs.sort_by_key(ToString::to_string);
+                pairs
+            };
+            assert!(
+                same(&Value::Array(sorted(&rebuilt)), &Value::Array(sorted(to))),
+                "{member}: {} vs {}",
+                rebuilt[member],
+                to[member]
+            );
+        }
+        let text = serde_json::to_string(&delta).unwrap();
+        let back: ProjectDelta = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, delta);
+        let positional = |member: &str| match delta.fields.get(member) {
+            Some(super::Edit::Bag {
+                del,
+                add,
+                station_del,
+                station_add,
+            }) => (del.len() + add.len(), station_del.len() + station_add.len()),
+            _ => (0, 0),
+        };
+        // Line 1: 5 stations re-keyed (5 out, 5 in); line 2: 3 stations.
+        assert_eq!(positional("station_names"), (0, 13), "{text}");
+        assert_eq!(positional("station_ids"), (0, 13), "{text}");
+        // The dangling key names no station of the state it is in.
+        assert_eq!(positional("station_comments"), (1, 0), "{text}");
+        assert_eq!(
+            text.matches("AfterShot").count(),
+            1,
+            "only the dangling key spells out a uuid: {text}"
+        );
+    }
+}
+
+/// A positional pair is rebuilt from the state the step meets: an addition
+/// whose station the target does not hold refuses the step rather than
+/// writing a key for a station that is not there.
+#[test]
+fn a_positional_pair_past_its_line_refuses_the_step() {
+    let source = identified(&[(1, vec!["u-a"])], Vec::new());
+    let mut delta = ProjectDelta::default();
+    delta.fields.insert(
+        "station_names".to_string(),
+        super::Edit::Bag {
+            del: Vec::new(),
+            add: Vec::new(),
+            station_del: vec![(1, 7, json!("x"))],
+            station_add: vec![(0, 1, 9, json!("y"))],
+        },
+    );
+    let error = delta.apply(&source).unwrap_err();
+    assert!(error.contains("station 9 of line 1"), "{error}");
+    // A removal of a station the source does not hold is skipped, as a
+    // literal removal of an absent element is.
+    if let Some(super::Edit::Bag { station_add, .. }) = delta.fields.get_mut("station_names") {
+        station_add.clear();
+    }
+    let rebuilt = delta.apply(&source).unwrap();
+    assert!(same(&rebuilt["station_names"], &source["station_names"]));
 }

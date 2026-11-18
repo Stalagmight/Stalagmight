@@ -1,9 +1,9 @@
 //! The loaded history follows the load's shot UUID heal (`uuid_remap.rs`).
 //!
-//! Every project and entry here is synthetic: sections 0 and 1 hold the same
-//! three ids, the live heal renames section 1's, and each test checks that an
+//! Every project and entry here is synthetic: lines 0 and 1 hold the same
+//! three ids, the live heal renames line 1's, and each test checks that an
 //! entry recorded against the OLD ids now addresses the renamed shots - in every
-//! place the variant keeps an id - while anything about section 0 is untouched.
+//! place the variant keeps an id - while anything about line 0 is untouched.
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ use chrono::Utc;
 use super::*;
 use crate::core::undo::AddedContent;
 use crate::core::Command;
-use crate::models::{ClosureStrategy, Section, SectionIdentity, ShotData, StationMerge, ZeroDatum};
+use crate::models::{ClosureStrategy, Line, LineIdentity, ShotData, StationMerge, ZeroDatum};
 
 const X: [&str; 3] = [
     "aaaaaaaa-0000-4000-8000-000000000001",
@@ -30,18 +30,18 @@ fn shot(uuid: &str) -> ShotData {
     }
 }
 
-fn copy_data() -> SectionData {
-    SectionData {
+fn copy_data() -> LineData {
+    LineData {
         shots: X.iter().map(|u| shot(u)).collect(),
         ..Default::default()
     }
 }
 
-/// Sections 0 and 1 holding the same ids, as a pre-uniqueness file loads.
+/// Lines 0 and 1 holding the same ids, as a pre-uniqueness file loads.
 fn two_copies() -> Project {
     let mut project = Project::new("Copies".to_string(), None);
-    project.add_section(copy_data());
-    project.add_section(copy_data());
+    project.add_line(copy_data());
+    project.add_line(copy_data());
     project
 }
 
@@ -56,8 +56,8 @@ fn new_id(old: &str) -> String {
     reminted_shot_uuid(1, old)
 }
 
-fn key(section: SectionId, uuid: &str) -> StationKey {
-    StationKey::new(section, StationAnchor::AfterShot(uuid.to_string()))
+fn key(line: LineId, uuid: &str) -> StationKey {
+    StationKey::new(line, StationAnchor::AfterShot(uuid.to_string()))
 }
 
 fn closure(a: StationKey, b: StationKey) -> LoopClosure {
@@ -83,7 +83,7 @@ fn after_shot(key: &StationKey) -> &str {
 }
 
 fn command() -> Command {
-    Command::DeleteSection { section_id: 1 }
+    Command::DeleteLine { line_id: 1 }
 }
 
 /// A stack holding `entries` exactly as given - as a loaded history holds
@@ -116,12 +116,12 @@ fn redo_stack_of(entries: Vec<UndoData>) -> UndoStack {
     stack
 }
 
-/// A redo entry that re-creates section `section_id` holding the ids `X`.
-fn recreate(section_id: SectionId) -> UndoData {
-    UndoData::CreatedSectionSnapshot {
-        section_id,
-        section_data: copy_data(),
-        identity: SectionIdentity::default(),
+/// A redo entry that re-creates line `line_id` holding the ids `X`.
+fn recreate(line_id: LineId) -> UndoData {
+    UndoData::CreatedLineSnapshot {
+        line_id,
+        line_data: copy_data(),
+        identity: LineIdentity::default(),
     }
 }
 
@@ -137,14 +137,14 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
     let (project, renamed) = healed();
     let mut stack = stack_of(vec![
         UndoData::PreviousValues {
-            section_id: 1,
+            line_id: 1,
             shot_id: Some(100_000),
             shot_uuid: Some(X[0].to_string()),
             values_json: "{}".to_string(),
             previous_offsets: HashMap::new(),
         },
         UndoData::CreatedShotSnapshot {
-            section_id: 1,
+            line_id: 1,
             shot_id: 100_001,
             shot_data: shot(X[1]),
             position: 1,
@@ -156,10 +156,11 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
             uuid: Some(X[1].to_string()),
             previous_offsets: HashMap::new(),
             consumed_legacy: None,
+            created_station: None,
         },
-        // Section 0 kept its ids: an entry about it must not move.
+        // Line 0 kept its ids: an entry about it must not move.
         UndoData::PreviousValues {
-            section_id: 0,
+            line_id: 0,
             shot_id: Some(0),
             shot_uuid: Some(X[0].to_string()),
             values_json: "{}".to_string(),
@@ -172,7 +173,7 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
     let entries: Vec<&UndoData> = stack.undo_entries().map(|e| &e.undo_data).collect();
     // `undo_entries` is newest first.
     let UndoData::PreviousValues { shot_uuid, .. } = entries[0] else {
-        panic!("section 0 entry");
+        panic!("line 0 entry");
     };
     assert_eq!(shot_uuid.as_deref(), Some(X[0]));
     let UndoData::CreatedShotSnapshot {
@@ -190,18 +191,18 @@ fn shot_field_entries_follow_both_copies_of_a_renamed_id() {
     assert_eq!(after_shot_uuid.as_deref(), Some(new_id(X[0]).as_str()));
     assert_eq!(before_shot_uuid.as_deref(), Some(new_id(X[2]).as_str()));
     let UndoData::PreviousValues { shot_uuid, .. } = entries[2] else {
-        panic!("section 1 entry");
+        panic!("line 1 entry");
     };
     assert_eq!(shot_uuid.as_deref(), Some(new_id(X[0]).as_str()));
 }
 
 #[test]
-fn a_created_section_entry_follows_in_its_data_and_its_identity() {
+fn a_created_line_entry_follows_in_its_data_and_its_identity() {
     let (project, renamed) = healed();
-    let mut stack = stack_of(vec![UndoData::CreatedSectionSnapshot {
-        section_id: 1,
-        section_data: copy_data(),
-        identity: SectionIdentity {
+    let mut stack = stack_of(vec![UndoData::CreatedLineSnapshot {
+        line_id: 1,
+        line_data: copy_data(),
+        identity: LineIdentity {
             shot_uuids: X.iter().map(|u| Some((*u).to_string())).collect(),
             gauge_shot_uuid: Some(X[0].to_string()),
             gauge_neighbour_uuid: Some(X[1].to_string()),
@@ -211,15 +212,15 @@ fn a_created_section_entry_follows_in_its_data_and_its_identity() {
     assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
 
     let expected: Vec<Option<String>> = X.iter().map(|u| Some(new_id(u))).collect();
-    let UndoData::CreatedSectionSnapshot {
-        section_data,
+    let UndoData::CreatedLineSnapshot {
+        line_data,
         identity,
         ..
     } = only_entry(&stack)
     else {
-        panic!("created section entry");
+        panic!("created line entry");
     };
-    let ids: Vec<_> = section_data.shots.iter().map(|s| s.uuid.clone()).collect();
+    let ids: Vec<_> = line_data.shots.iter().map(|s| s.uuid.clone()).collect();
     assert_eq!(ids, expected);
     assert_eq!(identity.shot_uuids, expected);
     assert_eq!(identity.gauge_shot_uuid, expected[0]);
@@ -243,13 +244,13 @@ fn a_closure_entry_follows_only_its_renamed_endpoint() {
 }
 
 #[test]
-fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
+fn an_add_entry_follows_in_its_lines_refs_and_ignores() {
     let unhealed = two_copies();
     let (project, renamed) = healed();
-    let mut copied: Section = unhealed.get_section(1).unwrap().clone();
+    let mut copied: Line = unhealed.get_line(1).unwrap().clone();
     copied.gauge_shot_uuid = Some(X[0].to_string());
     let content = AddedContent {
-        sections: vec![copied],
+        lines: vec![copied],
         station_comments: vec![(key(1, X[2]), "comment".to_string())],
         station_names: vec![(key(1, X[1]), "7".to_string())],
         station_offsets: vec![(key(1, X[0]), (1.0, 0.0, 0.0))],
@@ -266,7 +267,7 @@ fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
         }],
         loop_closures: vec![closure(key(1, X[2]), key(0, X[0]))],
         ignores: vec![crate::core::undo::CarriedIgnore {
-            section_id: 1,
+            line_id: 1,
             shot_uuid: X[1].to_string(),
             warning_code: "W1".to_string(),
             resolved_at: Utc::now(),
@@ -280,13 +281,13 @@ fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
     let UndoData::AddedProjectContent(content) = only_entry(&stack) else {
         panic!("add entry");
     };
-    let ids: Vec<_> = content.sections[0]
+    let ids: Vec<_> = content.lines[0]
         .shots
         .iter()
         .map(|s| s.uuid.clone().unwrap())
         .collect();
     assert_eq!(ids, X.iter().map(|u| new_id(u)).collect::<Vec<_>>());
-    assert_eq!(content.sections[0].gauge_shot_uuid, Some(new_id(X[0])));
+    assert_eq!(content.lines[0].gauge_shot_uuid, Some(new_id(X[0])));
     assert_eq!(after_shot(&content.station_comments[0].0), new_id(X[2]));
     assert_eq!(after_shot(&content.station_names[0].0), new_id(X[1]));
     assert_eq!(after_shot(&content.station_offsets[0].0), new_id(X[0]));
@@ -307,7 +308,7 @@ fn an_add_entry_follows_in_its_sections_refs_and_ignores() {
     assert_eq!(content.ignores[0].shot_uuid, new_id(X[1]));
 }
 
-/// The pre-heal project as an undo snapshot, with a comment on section 1's
+/// The pre-heal project as an undo snapshot, with a comment on line 1's
 /// station 3 and WITHOUT the `validation` key, as a legacy snapshot is.
 fn legacy_snapshot() -> String {
     let mut project = two_copies();
@@ -341,7 +342,7 @@ fn a_snapshot_pair_is_rewritten_without_gaining_the_keys_the_restore_probes() {
         );
         let restored: Project = serde_json::from_str(half).unwrap();
         assert_eq!(
-            restored.sections[1]
+            restored.lines[1]
                 .shots
                 .iter()
                 .map(|s| s.uuid.clone().unwrap())
@@ -349,7 +350,7 @@ fn a_snapshot_pair_is_rewritten_without_gaining_the_keys_the_restore_probes() {
             X.iter().map(|u| new_id(u)).collect::<Vec<_>>()
         );
         assert_eq!(
-            restored.sections[0]
+            restored.lines[0]
                 .shots
                 .iter()
                 .map(|s| s.uuid.clone().unwrap())
@@ -384,12 +385,12 @@ fn a_snapshot_pair_is_rewritten_without_gaining_the_keys_the_restore_probes() {
 
 #[test]
 fn a_copy_only_the_history_still_holds_is_renamed_so_undo_cannot_repeat_an_id() {
-    // Live: only section 0 holds the ids (the copy was deleted). The history
+    // Live: only line 0 holds the ids (the copy was deleted). The history
     // holds the delete's before-snapshot with BOTH copies, and the live heal
     // renamed nothing.
     let mut project = two_copies();
-    project.sections.retain(|s| s.id == 0);
-    project.rebuild_section_index();
+    project.lines.retain(|s| s.id == 0);
+    project.rebuild_line_index();
     project.rebuild_shot_uuid_index();
     let renamed = project.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
@@ -409,24 +410,24 @@ fn a_copy_only_the_history_still_holds_is_renamed_so_undo_cannot_repeat_an_id() 
         "undoing the delete must not bring a repeated id back"
     );
     assert_eq!(
-        restored.sections[1].shots[0].uuid.as_deref(),
+        restored.lines[1].shots[0].uuid.as_deref(),
         Some(new_id(X[0]).as_str())
     );
     let kept: Project = serde_json::from_str(after).unwrap();
-    assert_eq!(kept.sections[0].shots[0].uuid.as_deref(), Some(X[0]));
+    assert_eq!(kept.lines[0].shots[0].uuid.as_deref(), Some(X[0]));
 }
 
 /// The compact form of the test above: the delete's entry is a delta whose
-/// re-created section carries its shots LITERALLY - section 0 keeps the same
-/// ids in place, and a delta never copies a shot out of a section that stays
+/// re-created line carries its shots LITERALLY - line 0 keeps the same
+/// ids in place, and a delta never copies a shot out of a line that stays
 /// where it is (`ProjectDelta::check_shape`) - and the remap renames the ids
 /// in those literals. (A rename landing on a COPY is pinned onto it instead:
 /// `a_renamed_id_is_pinned_onto_the_shot_a_delta_copies` in `delta_tests.rs`.)
 #[test]
 fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
     let mut project = two_copies();
-    project.sections.retain(|s| s.id == 0);
-    project.rebuild_section_index();
+    project.lines.retain(|s| s.id == 0);
+    project.rebuild_line_index();
     project.rebuild_shot_uuid_index();
     let renamed = project.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
@@ -457,16 +458,16 @@ fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
         "undoing the delete must not bring a repeated id back"
     );
     assert_eq!(
-        restored.sections[1].shots[0].uuid.as_deref(),
+        restored.lines[1].shots[0].uuid.as_deref(),
         Some(new_id(X[0]).as_str())
     );
-    assert_eq!(restored.sections[0].shots[0].uuid.as_deref(), Some(X[0]));
+    assert_eq!(restored.lines[0].shots[0].uuid.as_deref(), Some(X[0]));
 }
 
 #[test]
 fn a_history_without_repeats_is_left_byte_for_byte() {
     let mut project = Project::new("Plain".to_string(), None);
-    project.add_section(copy_data());
+    project.add_line(copy_data());
     let renamed = project.make_shot_uuids_project_unique();
     let snapshot = serde_json::to_string(&project).unwrap();
     let mut stack = stack_of(vec![
@@ -475,7 +476,7 @@ fn a_history_without_repeats_is_left_byte_for_byte() {
             after: snapshot,
         },
         UndoData::PreviousValues {
-            section_id: 0,
+            line_id: 0,
             shot_id: Some(0),
             shot_uuid: Some(X[0].to_string()),
             values_json: "{}".to_string(),
@@ -492,7 +493,7 @@ fn a_history_without_repeats_is_left_byte_for_byte() {
 fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
     let (project, renamed) = healed();
     let entry = || UndoData::CreatedShotSnapshot {
-        section_id: 1,
+        line_id: 1,
         shot_id: 100_000,
         shot_data: shot(X[0]),
         position: 0,
@@ -504,10 +505,11 @@ fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
         uuid: Some(X[0].to_string()),
         previous_offsets: HashMap::new(),
         consumed_legacy: None,
+        created_station: None,
     };
 
     // Without the translation the entry names (1, old id), which the healed
-    // section no longer holds, so the load would drop it.
+    // line no longer holds, so the load would drop it.
     let mut untranslated = stack_of(vec![entry()]);
     assert_eq!(
         untranslated.drop_entries_addressing_a_missing_shot(&project),
@@ -525,17 +527,17 @@ fn reconciling_keeps_an_entry_the_drop_pass_would_otherwise_remove() {
 #[test]
 fn the_map_reuses_the_live_renames_verbatim() {
     let mut project = two_copies();
-    // Section 1 also holds, on its last shot, the id the heal would derive for
+    // Line 1 also holds, on its last shot, the id the heal would derive for
     // its first one - so the heal steps past it.
     let planted = new_id(X[0]);
-    project.get_section_mut(1).unwrap().shots[2].uuid = Some(planted.clone());
+    project.get_line_mut(1).unwrap().shots[2].uuid = Some(planted.clone());
     project.rebuild_shot_uuid_index();
     let renamed = project.make_shot_uuids_project_unique();
     let stepped = renamed.get(1, X[0]).unwrap().to_string();
     assert_ne!(stepped, planted, "the heal stepped past the planted id");
 
     let mut stack = stack_of(vec![UndoData::PreviousValues {
-        section_id: 1,
+        line_id: 1,
         shot_id: Some(100_000),
         shot_uuid: Some(X[0].to_string()),
         values_json: "{}".to_string(),
@@ -550,22 +552,22 @@ fn the_map_reuses_the_live_renames_verbatim() {
     assert_eq!(map.get(0, X[0]), None);
 }
 
-/// A split moves shots - and their ids - from one section to a new one. The
-/// history then holds each moved id in BOTH sections, but never at the same
+/// A split moves shots - and their ids - from one line to a new one. The
+/// history then holds each moved id in BOTH lines, but never at the same
 /// time, so nothing is renamed: an undo of the split after a reload must give
 /// the shots back the ids they had.
 #[test]
-fn an_id_that_moved_between_sections_is_not_renamed() {
+fn an_id_that_moved_between_lines_is_not_renamed() {
     let mut before = Project::new("Split".to_string(), None);
-    before.add_section(copy_data());
+    before.add_line(copy_data());
     let mut after = before.clone();
-    let mut tail = after.get_section(0).unwrap().clone();
+    let mut tail = after.get_line(0).unwrap().clone();
     tail.id = 1;
     tail.shots.drain(..1);
-    after.get_section_mut(0).unwrap().shots.truncate(1);
-    after.sections.push(tail);
-    after.next_section_id = 2;
-    after.rebuild_section_index();
+    after.get_line_mut(0).unwrap().shots.truncate(1);
+    after.lines.push(tail);
+    after.next_line_id = 2;
+    after.rebuild_line_index();
     after.rebuild_shot_uuid_index();
 
     let mut live = after.clone();
@@ -584,17 +586,17 @@ fn an_id_that_moved_between_sections_is_not_renamed() {
     );
 }
 
-/// History saved after an earlier heal: section 1 is gone live, and the
+/// History saved after an earlier heal: line 1 is gone live, and the
 /// history holds its shot under BOTH the old id (an entry from before that
 /// heal) and the derived one (an entry from after). Both must name one shot.
 #[test]
 fn an_old_id_follows_the_derived_one_the_history_already_holds() {
     let mut live = Project::new("Gone".to_string(), None);
-    live.add_section(copy_data());
+    live.add_line(copy_data());
     let renamed = live.make_shot_uuids_project_unique();
     let derived = new_id(X[0]);
     let entry = |uuid: &str| UndoData::PreviousValues {
-        section_id: 1,
+        line_id: 1,
         shot_id: Some(100_000),
         shot_uuid: Some(uuid.to_string()),
         values_json: "{}".to_string(),
@@ -612,14 +614,14 @@ fn an_old_id_follows_the_derived_one_the_history_already_holds() {
     }
 }
 
-/// Ids no test section shares with `X`.
+/// Ids no test line shares with `X`.
 const Y: [&str; 1] = ["bbbbbbbb-0000-4000-8000-000000000001"];
 
-/// A project whose section `i` holds the ids `held[i]`.
-fn sections_holding(held: &[&[&str]]) -> Project {
+/// A project whose line `i` holds the ids `held[i]`.
+fn lines_holding(held: &[&[&str]]) -> Project {
     let mut project = Project::new("Held".to_string(), None);
     for ids in held {
-        project.add_section(SectionData {
+        project.add_line(LineData {
             shots: ids.iter().map(|u| shot(u)).collect(),
             ..Default::default()
         });
@@ -635,31 +637,31 @@ fn recreated_ids(stack: &UndoStack) -> Vec<Option<String>> {
     stack
         .redo_entries()
         .find_map(|entry| match &entry.undo_data {
-            UndoData::CreatedSectionSnapshot { section_data, .. } => {
-                Some(section_data.shots.iter().map(|s| s.uuid.clone()).collect())
+            UndoData::CreatedLineSnapshot { line_data, .. } => {
+                Some(line_data.shots.iter().map(|s| s.uuid.clone()).collect())
             }
             _ => None,
         })
         .unwrap()
 }
 
-/// #732: section 0 was created, then a later combine or split (one snapshot
-/// pair) moved its shots into section 1. The create entry replays into the
-/// pair's `before`, where section 0 alone holds them: a move, not a repeat, so
-/// nothing is renamed even though section 1 holds the ids live.
+/// #732: line 0 was created, then a later combine or split (one snapshot
+/// pair) moved its shots into line 1. The create entry replays into the
+/// pair's `before`, where line 0 alone holds them: a move, not a repeat, so
+/// nothing is renamed even though line 1 holds the ids live.
 #[test]
-fn shots_moved_out_of_a_created_section_keep_their_ids() {
-    let mut live = sections_holding(&[&Y, &X]);
+fn shots_moved_out_of_a_created_line_keep_their_ids() {
+    let mut live = lines_holding(&[&Y, &X]);
     let renamed = live.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
     let mut stack = stack_of(vec![
-        UndoData::CreatedSectionSnapshot {
-            section_id: 0,
-            section_data: copy_data(),
-            identity: SectionIdentity::default(),
+        UndoData::CreatedLineSnapshot {
+            line_id: 0,
+            line_data: copy_data(),
+            identity: LineIdentity::default(),
         },
         UndoData::ProjectSnapshotPair {
-            before: json(&sections_holding(&[&X])),
+            before: json(&lines_holding(&[&X])),
             after: json(&live),
         },
     ]);
@@ -667,21 +669,21 @@ fn shots_moved_out_of_a_created_section_keep_their_ids() {
 }
 
 /// The other side of #732: a whole-project snapshot FURTHER from the live
-/// project than the entry that reinstalls a section says nothing about what
-/// that entry replays into. Here a snapshot holds the ids in section 0 alone,
-/// but the redo nearest the live project re-creates section 0 holding them
-/// while the live section 1 holds them too (a pre-uniqueness history). The
-/// redo lands beside the live section 1, so section 0's copy must still be
+/// project than the entry that reinstalls a line says nothing about what
+/// that entry replays into. Here a snapshot holds the ids in line 0 alone,
+/// but the redo nearest the live project re-creates line 0 holding them
+/// while the live line 1 holds them too (a pre-uniqueness history). The
+/// redo lands beside the live line 1, so line 0's copy must still be
 /// renamed.
 #[test]
 fn a_farther_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
-    let mut live = sections_holding(&[&Y, &X]);
-    live.sections.retain(|s| s.id == 1);
-    live.rebuild_section_index();
+    let mut live = lines_holding(&[&Y, &X]);
+    live.lines.retain(|s| s.id == 1);
+    live.rebuild_line_index();
     live.rebuild_shot_uuid_index();
     let renamed = live.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
-    let farther = json(&sections_holding(&[&X]));
+    let farther = json(&lines_holding(&[&X]));
     let mut stack = redo_stack_of(vec![
         UndoData::ProjectSnapshotPair {
             before: farther.clone(),
@@ -701,15 +703,15 @@ fn a_farther_snapshot_does_not_excuse_a_reinstall_beside_a_live_holder() {
 }
 
 /// A reinstall is judged against the project it replays into, not the live
-/// one: the nearer snapshot pair's redo puts section 0 holding the ids back
-/// first, so redoing the re-creation of section 1 after it would repeat them -
-/// even though no live section holds them.
+/// one: the nearer snapshot pair's redo puts line 0 holding the ids back
+/// first, so redoing the re-creation of line 1 after it would repeat them -
+/// even though no live line holds them.
 #[test]
 fn a_reinstall_into_a_nearer_snapshot_that_holds_the_ids_is_renamed() {
-    let mut live = sections_holding(&[&Y]);
+    let mut live = lines_holding(&[&Y]);
     let renamed = live.make_shot_uuids_project_unique();
     assert!(renamed.is_empty());
-    let holding = json(&sections_holding(&[&X]));
+    let holding = json(&lines_holding(&[&X]));
     let mut stack = redo_stack_of(vec![
         recreate(1),
         UndoData::ProjectSnapshotPair {
@@ -723,7 +725,7 @@ fn a_reinstall_into_a_nearer_snapshot_that_holds_the_ids_is_renamed() {
 }
 
 /// A compact entry that is well-formed but does not fit the project it would
-/// be applied to - recorded over more sections than the project holds - would
+/// be applied to - recorded over more lines than the project holds - would
 /// refuse every undo for good, and the entries under it with it. The load
 /// drops the history whole instead, as it does a damaged one.
 #[test]

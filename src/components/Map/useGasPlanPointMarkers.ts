@@ -37,7 +37,7 @@ interface GasPlanPointMarkersOptions {
 }
 
 /**
- * A `section:index` -> screen-position lookup over the active stations.
+ * A `line:index` -> screen-position lookup over the active stations.
  *
  * Built ONCE per effect run rather than scanning per point: `activeStations` is the whole station
  * graph (tens of thousands on a real survey), and the marked-point effect re-runs on every
@@ -50,11 +50,11 @@ function lngLatIndex(
   const byKey = new Map<string, [number, number]>();
   for (const s of stations) {
     byKey.set(
-      `${s.station_ref.section_id}:${s.station_ref.station_index}`,
+      `${s.station_ref.line_id}:${s.station_ref.station_index}`,
       metersToMapCoords(s.coordinates.x, s.coordinates.y, gpsOrigin) as [number, number],
     );
   }
-  return (ref) => byKey.get(`${ref.section_id}:${ref.station_index}`) ?? null;
+  return (ref) => byKey.get(`${ref.line_id}:${ref.station_index}`) ?? null;
 }
 
 /**

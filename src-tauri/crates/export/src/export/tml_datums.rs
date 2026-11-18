@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{local_to_gps, GpsCoordinates, Project, SectionId, StationRef, ZeroDatum};
+use crate::models::{local_to_gps, GpsCoordinates, LineId, Project, StationRef, ZeroDatum};
 
 use super::{speleodb_anchor, ExportShot, TmlProfile};
 
@@ -27,7 +27,7 @@ use super::{speleodb_anchor, ExportShot, TmlProfile};
 /// The GPS pass stamps its lat/lon.
 pub(super) fn start_shot(
     id: i64,
-    section: String,
+    line: String,
     depth: f64,
     explorer: Option<String>,
     date: Option<String>,
@@ -38,7 +38,7 @@ pub(super) fn start_shot(
         uuid: None,
         from_id: -1,
         shot_type: "START",
-        section,
+        line,
         azimuth: 0.0,
         length: 0.0,
         depth,
@@ -65,16 +65,16 @@ pub(super) fn start_shot(
 /// closure pass in `build_export_shots_with_report`).
 ///
 /// `from` is the row of node `from_id`. The CLOSURE takes its depth and its
-/// date and people. A CLOSURE off a mid-section row re-imports as a branch
-/// section of its own, and the importer evaluates the declination at the
-/// earliest section date in the file. A CLOSURE written with no date would get
+/// date and people. A CLOSURE off a mid-line row re-imports as a branch
+/// line of its own, and the importer evaluates the declination at the
+/// earliest line date in the file. A CLOSURE written with no date would get
 /// the `2000-01-01` stand-in and drag that epoch back, turning the whole
 /// re-imported survey.
 pub(super) fn closure_shot(
     id: i64,
     from_id: i64,
     to_id: i64,
-    section: String,
+    line: String,
     color: String,
     from: Option<&ExportShot>,
     depth_b: f64,
@@ -85,7 +85,7 @@ pub(super) fn closure_shot(
         uuid: None,
         from_id,
         shot_type: "CLOSURE",
-        section,
+        line,
         azimuth: 0.0,
         length: (depth_b - depth_a).abs(),
         depth: depth_b,
@@ -125,7 +125,7 @@ pub(super) struct DatumGps {
 pub(super) fn stamp_starts(
     project: &Project,
     frame: Option<&ZeroDatum>,
-    station_to_ariane: &HashMap<(SectionId, u32), i64>,
+    station_to_ariane: &HashMap<(LineId, u32), i64>,
     shots: &mut [ExportShot],
     profile: TmlProfile,
 ) -> DatumGps {
@@ -153,7 +153,7 @@ pub(super) fn stamp_starts(
         }
         let node = project
             .resolve_key(&datum.station_ref)
-            .and_then(|sr| station_to_ariane.get(&(sr.section_id, sr.station_index)));
+            .and_then(|sr| station_to_ariane.get(&(sr.line_id, sr.station_index)));
         // Unwritten when it does not resolve, its station has no node, or an
         // earlier datum holds the node: two GPS positions for one point is a
         // conflict the file cannot carry.
@@ -170,7 +170,7 @@ pub(super) fn stamp_starts(
     // The station each START stands on. A merged station aliases onto the
     // START's id too; the lowest key keeps the choice deterministic, and merged
     // stations share one raw position anyway.
-    let mut start_station: HashMap<i64, (SectionId, u32)> = HashMap::new();
+    let mut start_station: HashMap<i64, (LineId, u32)> = HashMap::new();
     for (&key, &id) in station_to_ariane {
         if start_ids.contains(&id) {
             let held = start_station.entry(id).or_insert(key);
@@ -197,8 +197,8 @@ pub(super) fn stamp_starts(
             let own = &project.zero_datums[index].gps;
             (own.latitude, own.longitude)
         } else if let Some(surveyed) = frame_gps.zip(frame_xy).and_then(|(origin, from)| {
-            let &(section_id, station) = start_station.get(&shot.id)?;
-            surveyed_gps(project, origin, from, StationRef::new(section_id, station))
+            let &(line_id, station) = start_station.get(&shot.id)?;
+            surveyed_gps(project, origin, from, StationRef::new(line_id, station))
         }) {
             surveyed
         } else if let Some(origin) = frame_gps {
@@ -296,7 +296,7 @@ impl DatumGps {
             };
             let mut start = start_shot(
                 next_id,
-                row.section.clone(),
+                row.line.clone(),
                 row.depth,
                 row.explorer.clone(),
                 row.date.clone(),
@@ -307,7 +307,7 @@ impl DatumGps {
                 next_id + 1,
                 node,
                 next_id,
-                row.section.clone(),
+                row.line.clone(),
                 row.color.clone(),
                 Some(row),
                 row.depth,

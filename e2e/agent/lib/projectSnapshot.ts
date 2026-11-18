@@ -26,7 +26,7 @@
  *
  * ## Why there is a tolerance at all
  *
- * Station coordinates and section offsets are RE-DERIVED after an undo/redo
+ * Station coordinates and line offsets are RE-DERIVED after an undo/redo
  * (`reconcile_geometry()` -> `compute_station_coordinates`), not copied, so a
  * value whose true result is 0 can land on different floating-point dust
  * depending on the order the survey chain was summed in. Observed in practice:
@@ -55,7 +55,7 @@
  */
 export interface KnownAsymmetry {
   id: string;
-  /** Matched against a diff path such as `project.sections[3].shots[1].uuid`. */
+  /** Matched against a diff path such as `project.lines[3].shots[1].uuid`. */
   pathPattern: RegExp;
   /**
    * Optional extra narrowing on the VALUES, and the reason a rule here can be
@@ -335,28 +335,28 @@ export function describeDiffs(diffs: readonly SnapshotDiff[]): string {
 export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
   {
     id: 'save-captures-missing-gauge-anchors',
-    pathPattern: /^project\.sections\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
+    pathPattern: /^project\.lines\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
     accepts: (diff) => diff.expected === 'null' && diff.actual !== 'null',
     description:
       'save_project calls capture_missing_gauge_anchors(), which records the least-squares ' +
-      'gauge pair for any section that lacks one (project_io.rs). Null -> value only; it never ' +
+      'gauge pair for any line that lacks one (project_io.rs). Null -> value only; it never ' +
       'moves coordinates.',
   },
   {
     id: 'save-backfills-shot-uuids',
-    pathPattern: /^project\.sections\[\d+\]\.shots\[\d+\]\.uuid$/,
+    pathPattern: /^project\.lines\[\d+\]\.shots\[\d+\]\.uuid$/,
     accepts: (diff) => (diff.expected === ABSENT || diff.expected === 'null') && diff.actual !== ABSENT,
     description:
       'save_project calls ensure_shot_uuids(), minting a uuid for any shot still missing one ' +
       '(pre-v6 files). Absent -> value only.',
   },
   {
-    id: 'save-drops-orphan-section-offsets',
-    pathPattern: /^project\.section_offsets\.\d+$/,
+    id: 'save-drops-orphan-line-offsets',
+    pathPattern: /^project\.line_offsets\.\d+$/,
     accepts: (diff) => diff.actual === ABSENT,
     description:
-      'save_project retains only section_offsets whose section still exists - the SQLite row ' +
-      'carries a FOREIGN KEY to sections(id), so an orphan would abort the whole save. ' +
+      'save_project retains only line_offsets whose line still exists - the SQLite row ' +
+      'carries a FOREIGN KEY to lines(id), so an orphan would abort the whole save. ' +
       'Disappearance only.',
   },
 ];
@@ -367,7 +367,7 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  * `Project::redrive_offsets_after_load` (src-tauri/src/models/project/offsets.rs:186-188)
  * ends with an unconditional `resolve_offsets()` under the comment "Zero-trust:
  * never honor a persisted derivable offset - re-solve unconditionally so a
- * sub-tolerance stale offset can't survive the load." So `section_offsets` and
+ * sub-tolerance stale offset can't survive the load." So `line_offsets` and
  * the station coordinates derived from them are NOT restored from the file -
  * they are recomputed - and a snapshot recorded in-session before the save can
  * legitimately hold a drifted value the reload then corrects. (In this fuzzer's
@@ -375,7 +375,7 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  * corruption a reload is designed to heal.)
  *
  * Deliberately scoped to those two derived families and applied ONLY to
- * comparisons that cross a reload. Everything else - section and shot fields,
+ * comparisons that cross a reload. Everything else - line and shot fields,
  * uuids, merges, closures, datums, comments, stats - must still match exactly,
  * so this cannot hide a structural divergence.
  *
@@ -384,7 +384,7 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  * coordinate turning into null, is structural and is not this - `isNumericMove`
  * rejects those. What is NOT bounded is how far the number moved, because the
  * heal this family exists to absorb is measured in metres: bug 3 displaced a
- * whole section by a shot's horizontal vector (1.13 m in its repro) and
+ * whole line by a shot's horizontal vector (1.13 m in its repro) and
  * RATCHETED on every cycle, and the reload correcting that was the documented
  * case above. Any sub-metre threshold would fail on the heal; any threshold
  * loose enough to pass it would not catch what a threshold is for. So the
@@ -394,11 +394,11 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  */
 export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
   {
-    id: 'reload-resolves-section-offsets',
-    pathPattern: /^project\.section_offsets\.\d+(\[\d+\])?$/,
+    id: 'reload-resolves-line-offsets',
+    pathPattern: /^project\.line_offsets\.\d+(\[\d+\])?$/,
     accepts: isNumericMove,
     description:
-      'A reload re-solves section_offsets unconditionally rather than trusting the persisted ' +
+      'A reload re-solves line_offsets unconditionally rather than trusting the persisted ' +
       'value (offsets.rs redrive_offsets_after_load). A numeric MOVE only: an entry appearing ' +
       'or disappearing is structural and is not this.',
   },
@@ -407,7 +407,7 @@ export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
     pathPattern: /^stations\[\d+\]\.coordinates\.[xyz]$/,
     accepts: isNumericMove,
     description:
-      'Station coordinates are derived from section_offsets, so they move with the re-solve a ' +
+      'Station coordinates are derived from line_offsets, so they move with the re-solve a ' +
       'reload performs. A numeric MOVE only.',
   },
 ];
@@ -467,9 +467,9 @@ export function maxNumericDelta(diffs: readonly SnapshotDiff[]): number | null {
   return worst;
 }
 
-/** Per-section shot-identity delta between two canonical snapshots. */
+/** Per-line shot-identity delta between two canonical snapshots. */
 export interface ShotSetDelta {
-  sectionId: number;
+  lineId: number;
   /** Shot uuids present in `expected` but missing from `actual`. */
   missing: string[];
   /** Shot uuids present in `actual` but missing from `expected`. */
@@ -479,7 +479,7 @@ export interface ShotSetDelta {
 }
 
 /**
- * Which SHOTS (by uuid, the identity that survives a save/reload) a section
+ * Which SHOTS (by uuid, the identity that survives a save/reload) a line
  * gained or lost between two snapshots.
  *
  * A shifted shot list produces dozens of field-level diffs that all look like
@@ -487,11 +487,11 @@ export interface ShotSetDelta {
  * different shot was removed". This answers that directly, which is the
  * difference between a reordering and data loss.
  *
- * Sections present on only ONE side count as the whole section's shots gained
+ * Lines present on only ONE side count as the whole line's shots gained
  * or lost. They are the LARGEST identity change there is, and skipping them -
  * which an earlier version did, by iterating `expected` and `continue`ing when
  * the id was missing from `actual` - reported an EMPTY delta for a run that
- * dropped an entire section, whereupon the caller printed "shot identity by
+ * dropped an entire line, whereupon the caller printed "shot identity by
  * uuid is IDENTICAL on both sides - the shots moved, none was lost".
  */
 export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetDelta[] {
@@ -504,14 +504,14 @@ export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetD
       return out;
     }
     const project = isPlainObject(parsed) ? parsed.project : null;
-    if (!isPlainObject(project) || !Array.isArray(project.sections)) return out;
-    for (const section of project.sections) {
-      if (!isPlainObject(section) || !Array.isArray(section.shots)) continue;
+    if (!isPlainObject(project) || !Array.isArray(project.lines)) return out;
+    for (const line of project.lines) {
+      if (!isPlainObject(line) || !Array.isArray(line.shots)) continue;
       const uuids: string[] = [];
-      for (const shot of section.shots) {
+      for (const shot of line.shots) {
         if (isPlainObject(shot)) uuids.push(typeof shot.uuid === 'string' ? shot.uuid : '<no-uuid>');
       }
-      out.set(Number(section.id), uuids);
+      out.set(Number(line.id), uuids);
     }
     return out;
   };
@@ -519,17 +519,17 @@ export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetD
   const expected = read(expectedJson);
   const actual = read(actualJson);
   const deltas: ShotSetDelta[] = [];
-  const sectionIds = [...new Set([...expected.keys(), ...actual.keys()])].sort((a, b) => a - b);
-  for (const sectionId of sectionIds) {
-    const expectedUuids = expected.get(sectionId) ?? [];
-    const actualUuids = actual.get(sectionId) ?? [];
+  const lineIds = [...new Set([...expected.keys(), ...actual.keys()])].sort((a, b) => a - b);
+  for (const lineId of lineIds) {
+    const expectedUuids = expected.get(lineId) ?? [];
+    const actualUuids = actual.get(lineId) ?? [];
     const actualSet = new Set(actualUuids);
     const expectedSet = new Set(expectedUuids);
     const missing = expectedUuids.filter((uuid) => !actualSet.has(uuid));
     const extra = actualUuids.filter((uuid) => !expectedSet.has(uuid));
     if (missing.length > 0 || extra.length > 0) {
       deltas.push({
-        sectionId,
+        lineId,
         missing,
         extra,
         expectedCount: expectedUuids.length,
@@ -545,7 +545,7 @@ export function describeShotSetDelta(deltas: readonly ShotSetDelta[]): string {
   return deltas
     .map(
       (delta) =>
-        `  section ${delta.sectionId}: ${delta.expectedCount} shot(s) expected, ${delta.actualCount} present\n` +
+        `  line ${delta.lineId}: ${delta.expectedCount} shot(s) expected, ${delta.actualCount} present\n` +
         `    shots MISSING (present before, gone now): ${JSON.stringify(delta.missing)}\n` +
         `    shots UNEXPECTED (absent before, present now): ${JSON.stringify(delta.extra)}`,
     )

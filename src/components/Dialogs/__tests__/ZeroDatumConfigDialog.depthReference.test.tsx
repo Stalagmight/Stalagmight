@@ -32,7 +32,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
@@ -47,9 +47,9 @@ vi.mock('../DialogWrapper', () => ({
   }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
 }));
 
-vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
-  SectionMetadataForm: () => null,
+vi.mock('../../common/LineMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/LineMetadataForm')>()),
+  LineMetadataForm: () => null,
 }));
 
 import ZeroDatumConfigDialog, {
@@ -82,7 +82,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -90,7 +90,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: 3 }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -107,7 +107,7 @@ function renderDialog(initialConfig?: ZeroDatumConfigDraft, onBack = vi.fn()) {
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={onBack}
@@ -268,9 +268,9 @@ describe('ZeroDatumConfigDialog depth reference survives Back (#566)', () => {
     expect(draft.depthReferenceText).toBe('-12.5');
   });
 
-  it('re-seeds the typed depth on a same-section forward pass', () => {
+  it('re-seeds the typed depth on a same-line forward pass', () => {
     const draft: ZeroDatumConfigDraft = {
-      sectionIndex: 0,
+      lineIndex: 0,
       stationIndex: 0,
       gps: null,
       gpsInputText: 'not coordinates',
@@ -299,7 +299,7 @@ describe('ZeroDatumConfigDialog depth reference survives Back (#566)', () => {
    */
   it('falls back to the confirmed depth when there is no carried text', () => {
     const confirmed = {
-      sectionIndex: 0,
+      lineIndex: 0,
       stationIndex: 0,
       gps: { latitude: 20.2, longitude: -87.4, depth_reference: -4 },
       metadata: {
@@ -320,7 +320,7 @@ describe('ZeroDatumConfigDialog depth reference survives Back (#566)', () => {
 
   it('shows an explicit zero rather than a blank box', () => {
     const atSurface = {
-      sectionIndex: 0,
+      lineIndex: 0,
       stationIndex: 0,
       gps: { latitude: 20.2, longitude: -87.4, depth_reference: 0 },
       metadata: {

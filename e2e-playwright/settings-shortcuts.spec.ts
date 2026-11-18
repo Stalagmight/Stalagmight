@@ -22,7 +22,7 @@ const KEY = {
 };
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project with mock lines/stations
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();

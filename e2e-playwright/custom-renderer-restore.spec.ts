@@ -3,7 +3,7 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForDrawnStations,
   getDrawnGeometry,
@@ -11,7 +11,7 @@ import {
   getStationScreenPositions,
   readCanvasPixel,
   countCanvasInk,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -23,7 +23,7 @@ import {
  * midpoint again.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Restore Main',
     direction: 'in',
@@ -69,7 +69,7 @@ async function surveyInk(page: Page): Promise<number> {
 async function bootSurvey(page: Page): Promise<string[]> {
   await setupMockedPage(page);
   await createProject(page, 'Restore');
-  await seedProjectWithSections(page, sectionSeeds);
+  await seedProjectWithLines(page, lineSeeds);
   await waitForMapReady(page);
   await waitForDrawnStations(page, 1);
   await expect.poll(() => surveyInk(page), { timeout: 10000 }).toBeGreaterThan(0);
@@ -135,11 +135,11 @@ test.describe('Custom renderer restore', () => {
     await expectRestored(page, before);
   });
 
-  test('a section added while the context is lost is drawn after the restore', async ({ page }) => {
+  test('a line added while the context is lost is drawn after the restore', async ({ page }) => {
     const before = await bootSurvey(page);
     const stationsBefore = (await getDrawnGeometry(page)).stations.length;
     expect(await loseContext(page), 'WEBGL_lose_context unavailable').toBe(true);
-    await seedProjectWithSections(page, [
+    await seedProjectWithLines(page, [
       {
         name: 'Restore Added',
         direction: 'in',

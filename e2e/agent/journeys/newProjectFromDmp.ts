@@ -45,7 +45,7 @@ interface ParsedDmpShot {
 }
 
 interface ParsedDmp {
-  sections: { shots: ParsedDmpShot[] }[];
+  lines: { shots: ParsedDmpShot[] }[];
 }
 
 /**
@@ -53,23 +53,23 @@ interface ParsedDmp {
  * (`src/hooks/useImportState.ts` `isImportableDmpShot`, and
  * `DmpSelectionDialog.tsx`'s initial `selectedIndices`): a shot is importable
  * when it is `Standard` and its length is not the 1.0 excluded-shot sentinel
- * (`DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1`); a section is selected by default
+ * (`DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1`); a line is selected by default
  * when it has MORE THAN ONE importable shot. The golden path accepts the
  * defaults, so expectations are derived through this rule. (Duplicate-hash
  * auto-deselection cannot fire here: the project is brand new.)
  */
-function defaultSelectionCounts(parsed: ParsedDmp): { sections: number; shots: number } {
+function defaultSelectionCounts(parsed: ParsedDmp): { lines: number; shots: number } {
   const importable = (s: ParsedDmpShot): boolean =>
     s.shot_type === 'Standard' && Math.abs(s.length - 1) > 1e-9;
-  let sections = 0;
+  let lines = 0;
   let shots = 0;
-  for (const section of parsed.sections) {
-    const kept = section.shots.filter(importable).length;
+  for (const line of parsed.lines) {
+    const kept = line.shots.filter(importable).length;
     if (kept <= 1) continue;
-    sections += 1;
+    lines += 1;
     shots += kept;
   }
-  return { sections, shots };
+  return { lines, shots };
 }
 
 const click = (testid: string): Move => ({ kind: 'ui', testid, label: `click ${testid}` });
@@ -141,10 +141,10 @@ export const newProjectFromDmp: Journey = {
     if (!parsedRes.ok || !parsedRes.result) {
       throw new Error(`importDmp (parse) failed: ${parsedRes.error ?? 'unknown'}`);
     }
-    const { sections: expectedSections, shots: expectedShots } = defaultSelectionCounts(parsedRes.result);
-    ctx.expect('fixture parses with default-selected sections', expectedSections > 0,
-      `default-selected sections=${expectedSections} shots=${expectedShots}` +
-        ` (of ${parsedRes.result.sections.length} parsed)`);
+    const { lines: expectedLines, shots: expectedShots } = defaultSelectionCounts(parsedRes.result);
+    ctx.expect('fixture parses with default-selected lines', expectedLines > 0,
+      `default-selected lines=${expectedLines} shots=${expectedShots}` +
+        ` (of ${parsedRes.result.lines.length} parsed)`);
 
     // The digest's invariant hook reads the fuzz oracle global, so the oracle
     // source goes in first (same order as importDialogFuzz).
@@ -178,9 +178,9 @@ export const newProjectFromDmp: Journey = {
         const shotsOk = overlapPath
           ? claim.shots !== null && claim.shots > 0 && claim.shots <= expectedShots
           : claim.shots === expectedShots;
-        ctx.expect('receipt accounts for every imported section and shot',
-          claim.sections === expectedSections && shotsOk,
-          `summary="${digest.receipt.summary}" expected ${expectedSections}/` +
+        ctx.expect('receipt accounts for every imported line and shot',
+          claim.lines === expectedLines && shotsOk,
+          `summary="${digest.receipt.summary}" expected ${expectedLines}/` +
             `${overlapPath ? `<=${expectedShots}` : expectedShots}`);
         await ctx.checkpoint('receipt');
       }
@@ -237,9 +237,9 @@ export const newProjectFromDmp: Journey = {
 
     const project = await projectFacts(ctx);
     ctx.expect('a project exists after the flow', project.exists);
-    ctx.expect('project carries every default-selected section',
-      project.sections === expectedSections,
-      `sections=${project.sections} expected=${expectedSections}`);
+    ctx.expect('project carries every default-selected line',
+      project.lines === expectedLines,
+      `lines=${project.lines} expected=${expectedLines}`);
     // A CONFIRMED overlap suggestion legitimately deletes actionable overlap
     // shots (docs/dmp-import.md, overlap treatment), so the exact-count claim
     // only holds when the wizard never offered one. With a suggestion in the
@@ -256,7 +256,7 @@ export const newProjectFromDmp: Journey = {
         project.shots > 0 && project.shots <= expectedShots,
         `shots=${project.shots} expected<=${expectedShots}; path: ${visited.join(' -> ')}`);
     } else {
-      ctx.expect('project carries every importable shot of those sections',
+      ctx.expect('project carries every importable shot of those lines',
         project.shots === expectedShots,
         `shots=${project.shots} expected=${expectedShots}`);
     }
@@ -285,17 +285,17 @@ export const newProjectFromDmp: Journey = {
 
 async function projectFacts(ctx: JourneyContext): Promise<{
   exists: boolean;
-  sections: number;
+  lines: number;
   shots: number;
   filePath: string | null;
 }> {
   return ctx.eval(`
     const p = window.__E2E_TEST__.projectStore.getState().project;
-    if (!p) return { exists: false, sections: 0, shots: 0, filePath: null };
+    if (!p) return { exists: false, lines: 0, shots: 0, filePath: null };
     return {
       exists: true,
-      sections: (p.sections || []).length,
-      shots: (p.sections || []).reduce((n, s) => n + ((s.shots || []).length), 0),
+      lines: (p.lines || []).length,
+      shots: (p.lines || []).reduce((n, s) => n + ((s.shots || []).length), 0),
       filePath: p.file_path ?? null,
     };
   `);

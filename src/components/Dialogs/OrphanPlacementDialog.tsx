@@ -3,24 +3,26 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
-import SectionPreview from './SectionPreview';
+import LinePreview from './LinePreview';
 import { usePreviewSize } from './usePreviewSize';
-import type { MergePreviewConfig } from './SectionPreview';
+import type { MergePreviewConfig } from './LinePreview';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
-import type { Section } from '../../types/project';
+import type { Line } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
-import { formatShotId } from '../../utils/formatters';
-import { computeOverlapPairs, type MergeOption } from '../../utils/overlapHelpers';
+import { formatShotLabel, formatStationLabel } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { computeOverlapPairs, needsDirectionReversal, type MergeOption } from '../../utils/overlapHelpers';
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
 import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
 import OverlapShotTable, { type OverlapShotRow } from './OverlapShotTable';
-import { sectionFirstDate } from '../../utils/sectionCredit';
+import { lineFirstDate } from '../../utils/lineCredit';
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
@@ -28,10 +30,10 @@ interface OrphanPlacementDialogProps {
   receipt?: ImportReceipt | undefined;
 }
 
-/** Group key for an orphan end: sectionId + stationIndex. */
+/** Group key for an orphan end: lineId + stationIndex. */
 interface OrphanEnd {
   key: string;
-  orphanSectionId: number;
+  orphanLineId: number;
   orphanStationIndex: number;
   suggestions: OrphanPlacementSuggestion[];
 }
@@ -53,15 +55,15 @@ const directionLabel = (direction: string) =>
  */
 const scorePercent = (score: number): number => Math.round(Math.min(score, 1) * 100);
 
-/** Convert a project Section to DmpSection format for SectionPreview. */
-function sectionToDmpSection(section: Section): DmpSection {
+/** Convert a project Line to DmpSection format for LinePreview. */
+function sectionToDmpSection(line: Line): DmpSection {
   return {
     version: 1,
-    name: section.name ?? '',
-    direction: section.direction,
-    date: sectionFirstDate(section),
+    name: line.name ?? '',
+    direction: line.direction,
+    date: lineFirstDate(line),
     content_hash: '',
-    shots: section.shots.map((s) => ({
+    shots: line.shots.map((s) => ({
       shot_type: 'Standard' as const,
       heading_in: s.azimuth_in,
       heading_out: s.azimuth_out,
@@ -96,6 +98,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     [t],
   );
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
+  const labels = useIdentityLabels();
+  // `Main Line / 17`. The line name comes with the suggestion (the backend
+  // names every line), the station name from the project.
+  const stationOn = useCallback(
+    (lineId: number, lineName: string, stationIndex: number) =>
+      formatStationLabel(labels.stationName({ line_id: lineId, station_index: stationIndex }), lineDisplayName(lineName)),
+    [labels],
+  );
   const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
 
   const [processing, setProcessing] = useState(false);
@@ -113,7 +123,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const [placeError, setPlaceError] = useState<string | null>(null);
   const [previewRef, previewSize] = usePreviewSize(340, 200);
   // Set while finish() runs or once it closed the dialog, so its several callers
-  // (the auto-close effect, Skip on the last section, Accept All, Skip All, the
+  // (the auto-close effect, Skip on the last line, Accept All, Skip All, the
   // X) save, toast and report completion once.
   const finishingRef = useRef(false);
   // Set while Accept / Accept All place: a second click in the same task lands
@@ -124,7 +134,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const allOrphanEnds = useMemo((): OrphanEnd[] => {
     const map = new Map<string, OrphanPlacementSuggestion[]>();
     for (const s of suggestions) {
-      const key = `${s.orphanSectionId}-${s.orphanStationIndex}`;
+      const key = `${s.orphanLineId}-${s.orphanStationIndex}`;
       const list = map.get(key) ?? [];
       list.push(s);
       map.set(key, list);
@@ -134,7 +144,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       group.sort((a, b) => b.score - a.score);
       ends.push({
         key,
-        orphanSectionId: group[0]!.orphanSectionId,
+        orphanLineId: group[0]!.orphanLineId,
         orphanStationIndex: group[0]!.orphanStationIndex,
         suggestions: group,
       });
@@ -142,9 +152,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return ends;
   }, [suggestions]);
 
-  // Filter out ends whose orphan section has already been accepted
+  // Filter out ends whose orphan line has already been accepted
   const remainingEnds = useMemo(
-    () => allOrphanEnds.filter((e) => !acceptedOrphans.has(e.orphanSectionId)),
+    () => allOrphanEnds.filter((e) => !acceptedOrphans.has(e.orphanLineId)),
     [allOrphanEnds, acceptedOrphans],
   );
 
@@ -157,21 +167,21 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
 
   const isFinished = currentEnd == null;
 
-  // Look up sections from project
-  const orphanSection = useMemo(
-    () => project?.sections.find((s) => s.id === currentSuggestion?.orphanSectionId) ?? null,
+  // Look up lines from project
+  const orphanLine = useMemo(
+    () => project?.lines.find((s) => s.id === currentSuggestion?.orphanLineId) ?? null,
     [project, currentSuggestion],
   );
-  const targetSection = useMemo(
-    () => project?.sections.find((s) => s.id === currentSuggestion?.targetSectionId) ?? null,
+  const targetLine = useMemo(
+    () => project?.lines.find((s) => s.id === currentSuggestion?.targetLineId) ?? null,
     [project, currentSuggestion],
   );
 
   // Compute merge options for the current suggestion
   const importShotCount = useMemo(() => {
-    if (!orphanSection) return 0;
-    return orphanSection.shots.length;
-  }, [orphanSection]);
+    if (!orphanLine) return 0;
+    return orphanLine.shots.length;
+  }, [orphanLine]);
 
   const mergeOptions = useMemo(
     () => (currentSuggestion ? mergeOptionsOf(currentSuggestion, importShotCount) : []),
@@ -206,16 +216,22 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   // The repeated shots up to the "Merge at" station, which sets how long the
   // repeat is, existing reading beside the new one oriented the same way.
   const overlapRows = useMemo((): OverlapShotRow[] => {
-    if (!currentSuggestion || !orphanSection || !targetSection) return [];
+    if (!currentSuggestion || !orphanLine || !targetLine) return [];
     const params = overlapParamsOf(currentSuggestion);
-    return repeatedShots(params, mergeImportStation, orphanSection.shots, targetSection.shots).map((r) => ({
+    // The new reading is shown turned to run the way the existing one does, so
+    // its label names its stations in that order too.
+    const reversed = needsDirectionReversal(params.importStationIndex, params.direction);
+    const orphanStation = (k: number) => labels.stationName({ line_id: orphanLine.id, station_index: k });
+    return repeatedShots(params, mergeImportStation, orphanLine.shots, targetLine.shots).map((r) => ({
       orphanShotIndex: r.orphanShotIndex,
-      existingLabel: formatShotId(targetSection.id, r.targetShotIndex + 1),
-      newLabel: formatShotId(orphanSection.id, r.orphanShotIndex + 1),
+      existingLabel: labels.shotAt(targetLine.id, r.targetShotIndex),
+      newLabel: reversed
+        ? formatShotLabel(orphanStation(r.orphanShotIndex + 1), orphanStation(r.orphanShotIndex))
+        : labels.shotAt(orphanLine.id, r.orphanShotIndex),
       existing: r.targetShot,
       incoming: r.incoming,
     }));
-  }, [currentSuggestion, orphanSection, targetSection, mergeImportStation]);
+  }, [currentSuggestion, orphanLine, targetLine, mergeImportStation, labels]);
 
   // The choices that will be applied: a doubly-anchored target forces Keep
   // existing on every row, as the single overlap mode did before.
@@ -246,21 +262,21 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     setOverlapChoices((prev) => new Map([...prev].filter(([index]) => listed.has(index))));
   }, [currentSuggestion, mergeOptions]);
 
-  // Convert orphan section to DmpSection for SectionPreview
+  // Convert orphan line to DmpSection for LinePreview
   const orphanDmpSection = useMemo(
-    () => (orphanSection ? sectionToDmpSection(orphanSection) : null),
-    [orphanSection],
+    () => (orphanLine ? sectionToDmpSection(orphanLine) : null),
+    [orphanLine],
   );
 
   // Build merge preview config using selected merge pair
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
-    if (!targetSection || !currentSuggestion) return null;
+    if (!targetLine || !currentSuggestion) return null;
     return {
-      targetSection,
+      targetLine,
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.orphanStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.targetStationIndex,
     };
-  }, [targetSection, currentSuggestion, selectedMergePair]);
+  }, [targetLine, currentSuggestion, selectedMergePair]);
 
   const finish = useCallback(async () => {
     if (finishingRef.current) return;
@@ -285,8 +301,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     closeDialog();
     setView('single');
     triggerFitToBounds();
-    // Deliberately no "N sections unanchored" info line here, even if the
-    // user skipped/declined every suggestion and sections remain unanchored:
+    // Deliberately no "N lines unanchored" info line here, even if the
+    // user skipped/declined every suggestion and lines remain unanchored:
     // this dialog existing at all means suggestions WERE offered and the
     // user made an explicit choice about them - unlike
     // `finishImportWithoutOrphanSuggestions` (saveFeedback.ts), whose info
@@ -298,7 +314,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [refreshProjectState, closeDialog, setView, triggerFitToBounds, receipt, openDialog, showToast]);
 
   // Auto-close when all suggestions have been processed. This is the one owner
-  // of finishing after Accept: accepting the last section empties
+  // of finishing after Accept: accepting the last line empties
   // `remainingEnds`, which lands here.
   useEffect(() => {
     if (isFinished) {
@@ -328,7 +344,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     });
     if (merged.success) return null;
     return t('dialogs.orphanPlacement.mergeFailed', {
-      name: suggestion.orphanSectionName,
+      name: suggestion.orphanLineName,
       error: merged.error ?? t('editGate.commandFailed'),
     });
   }, [mergeStations, setShotKind, updateShot, t]);
@@ -352,7 +368,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
         setPlaceError(error);
         return;
       }
-      setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanSectionId));
+      setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanLineId));
       setShowAlternatives(false);
       setSelectedSuggestionIndex(0);
     } finally {
@@ -376,33 +392,33 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       const placed = new Set<number>();
       for (let i = currentEndIndex; i < remainingEnds.length; i++) {
         const end = remainingEnds[i]!;
-        if (placed.has(end.orphanSectionId)) continue;
+        if (placed.has(end.orphanLineId)) continue;
         let error: string | null;
         if (i === currentEndIndex && currentSuggestion) {
-          // The section on screen: exactly what the user set up on it.
+          // The line on screen: exactly what the user set up on it.
           error = await place(currentSuggestion, selectedMergePair, effectiveChoices);
         } else {
-          // Every other section: its best suggestion, the default merge pair
+          // Every other line: its best suggestion, the default merge pair
           // (end of the repeat) and Keep existing on every repeated shot.
           const best = end.suggestions[0];
           if (!best) continue;
-          const shotCount = project?.sections.find((s) => s.id === best.orphanSectionId)?.shots.length ?? 0;
+          const shotCount = project?.lines.find((s) => s.id === best.orphanLineId)?.shots.length ?? 0;
           const opts = mergeOptionsOf(best, shotCount);
           error = await place(best, opts[opts.length - 1] ?? null, new Map());
         }
         if (error) {
-          // Stop on the section whose merge was refused, on screen with the
-          // error; the sections joined before it count as placed.
+          // Stop on the line whose merge was refused, on screen with the
+          // error; the lines joined before it count as placed.
           setPlaceError(error);
           if (placed.size > 0) {
             setAcceptedOrphans((prev) => new Set([...prev, ...placed]));
-            setCurrentEndIndex(remainingEnds.filter((e) => !placed.has(e.orphanSectionId)).indexOf(end));
+            setCurrentEndIndex(remainingEnds.filter((e) => !placed.has(e.orphanLineId)).indexOf(end));
             setShowAlternatives(false);
             setSelectedSuggestionIndex(0);
           }
           return;
         }
-        placed.add(end.orphanSectionId);
+        placed.add(end.orphanLineId);
       }
       await finish();
     } finally {
@@ -461,7 +477,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       {isFinished ? null : (
         /* Side-by-side layout */
         <div className="flex-1 flex min-h-0 overflow-hidden relative">
-          {/* Left column: SectionPreview. 40% of the dialog, not a fixed 380 px,
+          {/* Left column: LinePreview. 40% of the dialog, not a fixed 380 px,
               so the details column keeps room for the repeat table at the
               800 px window minimum (#681). */}
           <div
@@ -469,9 +485,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             className="shrink-0 w-[40%] flex flex-col items-center justify-center p-4 border-r border-border"
           >
             {orphanDmpSection && (
-              <SectionPreview
-                section={orphanDmpSection}
-                color={orphanSection?.color ?? '#4a9eff'}
+              <LinePreview
+                line={orphanDmpSection}
+                color={orphanLine?.color ?? '#4a9eff'}
                 size={previewSize.width}
                 height={previewSize.height}
                 mergePreview={mergePreviewConfig}
@@ -500,12 +516,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {/* Connection description */}
             <div className="p-3 rounded border border-border bg-surface-alt space-y-2">
               <div className="text-sm">
-                <span className="font-medium">{currentSuggestion!.orphanSectionName}</span>
-                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayOrphanStation })}</span>
+                <span className="font-medium">
+                  {stationOn(currentSuggestion!.orphanLineId, currentSuggestion!.orphanLineName, displayOrphanStation)}
+                </span>
               </div>
               <div className="text-xs text-text-secondary">
-                &rarr; <span className="font-medium text-text-primary">{currentSuggestion!.targetSectionName}</span>
-                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayTargetStation })}</span>
+                &rarr;{' '}
+                <span className="font-medium text-text-primary">
+                  {stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, displayTargetStation)}
+                </span>
               </div>
             </div>
 
@@ -550,9 +569,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                   options={mergeOptions.map((opt) => ({
                     value: String(opt.offset),
                     label: t('dialogs.orphanPlacement.mergeOption', {
-                      importStation: opt.importStation,
-                      targetName: currentSuggestion!.targetSectionName,
-                      existingStation: opt.existingStation,
+                      importStation: labels.station({ line_id: currentSuggestion!.orphanLineId, station_index: opt.importStation }),
+                      targetStation: stationOn(currentSuggestion!.targetLineId, currentSuggestion!.targetLineName, opt.existingStation),
                     }),
                   }))}
                   size="sm"
@@ -626,7 +644,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                   <div className="mt-2 space-y-1" data-testid="alternatives-list">
                     {alternatives.map((alt, idx) => (
                       <button
-                        key={`${alt.targetSectionId}-${alt.targetStationIndex}-${alt.direction}`}
+                        key={`${alt.targetLineId}-${alt.targetStationIndex}-${alt.direction}`}
                         type="button"
                         className={`w-full p-2 rounded border text-left text-xs flex items-center gap-2 hover:bg-accent-5 transition-colors ${confidenceColors[alt.confidence] ?? ''}`}
                         onClick={() => handleAlternativeClick(idx)}
@@ -636,10 +654,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                           {confidenceLabel(alt.confidence)}
                         </span>
                         <span className="truncate">
-                          {t('dialogs.orphanPlacement.alternativeTarget', {
-                            name: alt.targetSectionName,
-                            index: alt.targetStationIndex,
-                          })}
+                          {stationOn(alt.targetLineId, alt.targetLineName, alt.targetStationIndex)}
                         </span>
                         <span className="text-text-tertiary ml-auto shrink-0">
                           {t('dialogs.orphanPlacement.alternativeSummary', {

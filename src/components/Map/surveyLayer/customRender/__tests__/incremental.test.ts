@@ -59,31 +59,31 @@ interface SecSpec {
 function buildSurvey(specs: SecSpec[]): SurveyData {
   const d = emptySurveyData();
   const shotIds: number[] = [];
-  const shotSectionIds: number[] = [];
+  const shotLineIds: number[] = [];
   const shotFlags: number[] = [];
   const shotDepthIn: number[] = [];
   const shotDepthOut: number[] = [];
-  const stSectionIds: number[] = [];
+  const stLineIds: number[] = [];
   const stIndices: number[] = [];
   const stCoords: number[] = [];
   const stFlags: number[] = [];
   let shotOffset = 0;
   for (const s of specs) {
     const shotCount = Math.max(0, s.stations.length - 1);
-    d.sections.push({
+    d.lines.push({
       id: s.id, name: null, color: s.color,
       direction: 'in' as never, quality: 0, next_shot_id: shotCount + 1, shotOffset, shotCount,
     });
     for (let i = 0; i < shotCount; i++) {
       shotIds.push(i);
-      shotSectionIds.push(s.id);
+      shotLineIds.push(s.id);
       shotFlags.push(s.refShots?.has(i) ? shotKindToFlags('Reference') : 0);
       shotDepthIn.push(-i);
       shotDepthOut.push(-(i + 1));
     }
     shotOffset += shotCount;
     s.stations.forEach((c, idx) => {
-      stSectionIds.push(s.id);
+      stLineIds.push(s.id);
       stIndices.push(idx);
       stCoords.push(c[0], c[1], c[2]);
       stFlags.push(s.zeroDatum?.has(idx) ? STATION_FLAG_IS_ZERO_DATUM : 0);
@@ -91,12 +91,12 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
   }
   d.shotCount = shotIds.length;
   d.shotIds = Uint32Array.from(shotIds);
-  d.shotSectionIds = Uint32Array.from(shotSectionIds);
+  d.shotLineIds = Uint32Array.from(shotLineIds);
   d.shotFlags = Uint8Array.from(shotFlags);
   d.shotDepthIn = Float32Array.from(shotDepthIn);
   d.shotDepthOut = Float32Array.from(shotDepthOut);
-  d.stationCount = stSectionIds.length;
-  d.stationSectionIds = Uint32Array.from(stSectionIds);
+  d.stationCount = stLineIds.length;
+  d.stationLineIds = Uint32Array.from(stLineIds);
   d.stationIndices = Uint32Array.from(stIndices);
   d.stationCoords = Float64Array.from(stCoords);
   d.stationFlags = Uint8Array.from(stFlags);
@@ -106,7 +106,7 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
 function cloneSurvey(d: SurveyData): SurveyData {
   return {
     ...d,
-    sections: d.sections.map((s) => ({ ...s })),
+    lines: d.lines.map((s) => ({ ...s })),
     stationCoords: Float64Array.from(d.stationCoords),
     stationFlags: Uint8Array.from(d.stationFlags),
     shotFlags: Uint8Array.from(d.shotFlags),
@@ -116,10 +116,10 @@ function cloneSurvey(d: SurveyData): SurveyData {
 }
 
 /** A survey with pinned bbox corners (never edited) so interior edits do not
- *  shift the mercator anchor; several editable interior sections. */
+ *  shift the mercator anchor; several editable interior lines. */
 function pinnedSurvey(): SurveyData {
   return buildSurvey([
-    // Section 0: two pins at the extreme corners; keeps the bbox fixed.
+    // Line 0: two pins at the extreme corners; keeps the bbox fixed.
     { id: 0, color: '#111111', stations: [[-1000, -1000, -1], [1000, 1000, -1]] },
     { id: 1, color: '#ff0000', stations: [[0, 0, -1], [50, 10, -2], [80, 40, -3]], zeroDatum: new Set([0]) },
     { id: 2, color: '#00ff00', stations: [[-100, 20, -1], [-60, -30, -2], [-20, 5, -3], [10, -10, -4]] },
@@ -148,12 +148,12 @@ describe('sameSurveyLayout', () => {
     expect(sameSurveyLayout(a, moved)).toBe(true);
 
     const dropped = cloneSurvey(a);
-    dropped.sections = dropped.sections.slice(0, 3);
+    dropped.lines = dropped.lines.slice(0, 3);
     expect(sameSurveyLayout(a, dropped)).toBe(false);
 
     const remapped = cloneSurvey(a);
-    remapped.stationSectionIds = Uint32Array.from(remapped.stationSectionIds);
-    remapped.stationSectionIds[remapped.stationCount - 1] = 99;
+    remapped.stationLineIds = Uint32Array.from(remapped.stationLineIds);
+    remapped.stationLineIds[remapped.stationCount - 1] = 99;
     expect(sameSurveyLayout(a, remapped)).toBe(false);
 
     // A shotId that changed slot under an otherwise-stable layout must force a
@@ -211,7 +211,7 @@ describe('sameColorGlobals', () => {
     expect(sameColorGlobals(ctx(), ctx({ commentTint: true }))).toBe(false);
     expect(sameColorGlobals(ctx({ commentTint: true }), ctx())).toBe(false);
     // While on: a flush can relocate a comment (recolor a feature) without any
-    // coord/flag/section-color change the diff tracks, so stay conservative.
+    // coord/flag/line-color change the diff tracks, so stay conservative.
     expect(sameColorGlobals(ctx({ commentTint: true }), ctx({ commentTint: true }))).toBe(false);
   });
 });
@@ -228,28 +228,28 @@ describe('planIncrementalUpdate', () => {
   // The controller feeds the cached anchor; recompute it here the same way.
   const anchorOf = (d: SurveyData): [number, number] => computeMercatorAnchor(d, null);
 
-  it('plans a single-station move: its section dirty, the station reprojected', () => {
+  it('plans a single-station move: its line dirty, the station reprojected', () => {
     const prev = pinnedSurvey();
     const [ax, ay] = anchorOf(prev);
     const next = cloneSurvey(prev);
-    // Move section 2's second station (global index 2 pins + 3 in sec1 = 5).
+    // Move line 2's second station (global index 2 pins + 3 in sec1 = 5).
     const g = 5;
     next.stationCoords[g * 3] = next.stationCoords[g * 3]! + 5;
     const plan = planIncrementalUpdate(prev, next, ctx(), ctx(), null, null, ax, ay);
     expect(plan).not.toBeNull();
     expect(plan!.reprojectStationGlobals).toEqual([g]);
-    expect(plan!.dirtySectionIdxs).toEqual([2]); // section id 2 is index 2
+    expect(plan!.dirtyLineIdxs).toEqual([2]); // line id 2 is index 2
   });
 
-  it('plans a recolor: section dirty, no reprojection', () => {
+  it('plans a recolor: line dirty, no reprojection', () => {
     const prev = pinnedSurvey();
     const [ax, ay] = anchorOf(prev);
     const next = cloneSurvey(prev);
-    next.sections[1]!.color = '#abcdef';
+    next.lines[1]!.color = '#abcdef';
     const plan = planIncrementalUpdate(prev, next, ctx(), ctx(), null, null, ax, ay);
     expect(plan).not.toBeNull();
     expect(plan!.reprojectStationGlobals).toEqual([]);
-    expect(plan!.dirtySectionIdxs).toEqual([1]);
+    expect(plan!.dirtyLineIdxs).toEqual([1]);
   });
 
   it('falls back (null) on structural change, anchor shift, depthRange shift, gps + theme change', () => {
@@ -257,7 +257,7 @@ describe('planIncrementalUpdate', () => {
     const [ax, ay] = anchorOf(prev);
 
     const structural = cloneSurvey(prev);
-    structural.sections = structural.sections.slice(0, 3);
+    structural.lines = structural.lines.slice(0, 3);
     expect(planIncrementalUpdate(prev, structural, ctx(), ctx(), null, null, ax, ay)).toBeNull();
 
     // Move a PIN corner -> the bbox (and anchor) shifts -> full rebuild.
@@ -267,7 +267,7 @@ describe('planIncrementalUpdate', () => {
 
     const move = cloneSurvey(prev);
     move.stationCoords[5 * 3] = move.stationCoords[5 * 3]! + 5;
-    // depthRange shift recolors every depth section -> full rebuild.
+    // depthRange shift recolors every depth line -> full rebuild.
     expect(planIncrementalUpdate(
       prev, move, ctx({ showDepthGradient: true }), ctx({ showDepthGradient: true, depthRange: { min: 0, max: 99 } }), null, null, ax, ay,
     )).toBeNull();
@@ -349,7 +349,7 @@ function params(surveyData: SurveyData, colorCtx: DisplayColorContext = ctx()): 
   return { surveyData, gpsOrigin: null, colorCtx, shotWidthPx: 2, stationRadiusPx: 3, stationStrokePx: 1 };
 }
 
-const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'colorFrom', 'colorTo', 'reference', 'dim', 'hide', 'highlight', 'indices', 'sectionRanges'] as const;
+const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'colorFrom', 'colorTo', 'reference', 'dim', 'hide', 'highlight', 'indices', 'lineRanges'] as const;
 const circleArrays = ['center', 'corner', 'fill', 'stroke', 'sizeMul', 'dim', 'hide', 'highlight', 'allReference', 'indices'] as const;
 
 function expectDataEqual(a: CustomRenderData, b: CustomRenderData): void {
@@ -425,14 +425,14 @@ describe('SurveyCustomController incremental apply', () => {
     // regression that silently fell back to full-rebuild would still pass `> 0`
     // while the byte-identity oracle held on the rebuild path, leaving the
     // incremental path effectively dead. The 3 non-incremental iterations are the
-    // legitimate `dirty.size > sections/2` fallback (a 3-move iteration dirtying
-    // all three interior sections of the 4-section fixture).
+    // legitimate `dirty.size > lines/2` fallback (a 3-move iteration dirtying
+    // all three interior lines of the 4-line fixture).
     expect(incrementalRuns).toBe(37);
   });
 
   // Kind edits are what move a station between draw ranks (real-line markers on
   // top), so the circle index order must follow them too. Random kind flips on
-  // the interior sections, mixed with a position edit, against a fresh rebuild.
+  // the interior lines, mixed with a position edit, against a fresh rebuild.
   it('shot-kind edits stay byte-identical to a full rebuild, both draw orders included (property test)', () => {
     const rand = rng(0x5EED);
     let incrementalRuns = 0;
@@ -445,7 +445,7 @@ describe('SurveyCustomController incremental apply', () => {
       // A few edits in sequence, so a later edit starts from reordered indices.
       for (let step = 0; step < 3; step++) {
         const next = cloneSurvey(cur);
-        // Interior shots are globals 1..6 (section 0's pin shot is global 0).
+        // Interior shots are globals 1..6 (line 0's pin shot is global 0).
         const flips = 1 + Math.floor(rand() * 2);
         for (let f = 0; f < flips; f++) {
           const gi = 1 + Math.floor(rand() * 6);
@@ -471,7 +471,7 @@ describe('SurveyCustomController incremental apply', () => {
       c.destroy();
     }
     // Pinned for this seed, like the position property test: 117 of the 120
-    // edits take the incremental path (3 dirty most sections and rebuild); 82 of
+    // edits take the incremental path (3 dirty most lines and rebuild); 82 of
     // them rewrite the circle draw order and 91 the line draw order. A
     // regression that fell back to rebuilds, or never reordered, would still
     // pass the byte-identity check alone.
@@ -493,27 +493,27 @@ describe('SurveyCustomController incremental apply', () => {
     expectDataEqual(dataOf(c), dataOf(ref));
   });
 
-  // The raised section (the selection's) stays on top through a kind edit
+  // The raised line (the selection's) stays on top through a kind edit
   // elsewhere: the incremental reorder must honour it as the rebuild does.
-  it('a kind edit keeps the raised section on top, as a rebuild does', () => {
+  it('a kind edit keeps the raised line on top, as a rebuild does', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());
-    c.setRaisedSection(3); // section 3's lone shot is a Reference
+    c.setRaisedLine(3); // line 3's lone shot is a Reference
     c.sync(params(prev));
     const fu = h.state.fullUpdates;
     const iu = h.state.circleIndexUploads;
     const lu = h.state.lineIndexUploads;
     const jump = cloneSurvey(prev);
-    jump.shotFlags[3] = shotKindToFlags('Jump'); // section 2's first shot
+    jump.shotFlags[3] = shotKindToFlags('Jump'); // line 2's first shot
     c.sync(params(jump));
     expect(h.state.fullUpdates).toBe(fu); // incremental, not a rebuild
     expect(h.state.circleIndexUploads).toBe(iu + 1);
     expect(h.state.lineIndexUploads).toBe(lu + 1);
     const ref = new SurveyCustomController(makeFakeMap());
-    ref.setRaisedSection(3);
+    ref.setRaisedLine(3);
     ref.sync(params(jump));
     expectDataEqual(dataOf(c), dataOf(ref));
-    // The raise is what keeps section 3 last: unraised, its reference draws first.
+    // The raise is what keeps line 3 last: unraised, its reference draws first.
     const plain = new SurveyCustomController(makeFakeMap());
     plain.sync(params(jump));
     expect(Array.from(dataOf(c).line.indices)).not.toEqual(Array.from(dataOf(plain).line.indices));
@@ -531,7 +531,7 @@ describe('SurveyCustomController incremental apply', () => {
     c.sync(params(prev));
     const fu = h.state.fullUpdates;
 
-    // Section 2's first shot (global 3) Normal -> Jump: station (2,0) touches
+    // Line 2's first shot (global 3) Normal -> Jump: station (2,0) touches
     // nothing else, so it drops from real to jump rank.
     const jump = cloneSurvey(prev);
     jump.shotFlags[3] = shotKindToFlags('Jump');
@@ -569,8 +569,8 @@ describe('SurveyCustomController incremental apply', () => {
     c.sync(params(prev));
     expect(h.state.fullUpdates).toBe(0); // enable() constructs, does not update()
     const next = cloneSurvey(prev);
-    next.sections = next.sections.slice(0, 3); // drop a section (structural)
-    // Rebuild the SoA so counts match the trimmed sections.
+    next.lines = next.lines.slice(0, 3); // drop a line (structural)
+    // Rebuild the SoA so counts match the trimmed lines.
     const trimmed = buildSurvey([
       { id: 0, color: '#111111', stations: [[-1000, -1000, -1], [1000, 1000, -1]] },
       { id: 1, color: '#ff0000', stations: [[0, 0, -1], [50, 10, -2], [80, 40, -3]], zeroDatum: new Set([0]) },
@@ -588,19 +588,19 @@ describe('SurveyCustomController incremental apply', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());
     c.sync(params(prev));
-    // Drag begins: hide section id 2.
-    c.setDragHide({ sectionIds: new Set([2]) });
-    // Commit-time flush moves a station in the hidden section.
+    // Drag begins: hide line id 2.
+    c.setDragHide({ lineIds: new Set([2]) });
+    // Commit-time flush moves a station in the hidden line.
     const next = cloneSurvey(prev);
     next.stationCoords[6 * 3] = next.stationCoords[6 * 3]! + 3;
     c.sync(params(next));
     // A fresh full build of `next` WITH the same hide state is the oracle.
     const ref = new SurveyCustomController(makeFakeMap());
     ref.sync(params(next));
-    ref.setDragHide({ sectionIds: new Set([2]) });
+    ref.setDragHide({ lineIds: new Set([2]) });
     ref.sync(params(next));
     expectDataEqual(dataOf(c), dataOf(ref));
-    // Section id 2 (index 2) stations are all hidden in the incremental result.
+    // Line id 2 (index 2) stations are all hidden in the incremental result.
     const data = dataOf(c);
     expect(Array.from(data.circle.hide).some((v) => v === 1)).toBe(true);
   });
@@ -612,7 +612,7 @@ describe('SurveyCustomController incremental apply', () => {
     // No emphasis yet.
     expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
-    // Move-Segment hover emphasizes the connected section id 2 at HOVER level (2).
+    // Move-Segment hover emphasizes the connected line id 2 at HOVER level (2).
     c.setHighlight([2]);
     expect(Array.from(dataOf(c).circle.highlight).some((v) => v === 2)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
@@ -628,26 +628,26 @@ describe('SurveyCustomController incremental apply', () => {
     expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
   });
 
-  it('section hover (level 2) and selection (level 1) merge with hover winning', () => {
+  it('line hover (level 2) and selection (level 1) merge with hover winning', () => {
     const prev = pinnedSurvey();
     const c = new SurveyCustomController(makeFakeMap());
     c.sync(params(prev));
-    // Selection alone: connected section id 2 emphasized at SELECTION level (1).
-    c.setSectionSelect([2]);
+    // Selection alone: connected line id 2 emphasized at SELECTION level (1).
+    c.setLineSelect([2]);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(false);
-    // Hovering the SAME section promotes it to hover level (2); hover wins.
-    c.setSectionHover([2]);
+    // Hovering the SAME line promotes it to hover level (2); hover wins.
+    c.setLineHover([2]);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(false);
     // Full build with both sources set reproduces the merged levels byte-for-byte.
     const ref = new SurveyCustomController(makeFakeMap());
-    ref.setSectionSelect([2]);
-    ref.setSectionHover([2]);
+    ref.setLineSelect([2]);
+    ref.setLineHover([2]);
     ref.sync(params(prev));
     expectDataEqual(dataOf(c), dataOf(ref));
     // Leaving the hover drops back to selection level (1); clearHighlights zeroes all.
-    c.setSectionHover([]);
+    c.setLineHover([]);
     expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
     c.clearHighlights();
     expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);

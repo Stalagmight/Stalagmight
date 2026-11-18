@@ -1,5 +1,5 @@
 /**
- * Positional-ref mirroring after a section reverse (#24).
+ * Positional-ref mirroring after a line reverse (#24).
  *
  * The hazard these pin: a reverse renumbers station `i` to `N - i`, so a
  * positional `StationRef` stays IN RANGE and silently names a different physical
@@ -24,22 +24,22 @@ import {
 import { applyReverseAftermath } from '../reverseAftermath';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useUIStore } from '../../store/uiStore';
-import type { Section } from '../../types/project';
+import type { Line } from '../../types/project';
 
 const REVERSED = 7;
 const UNTOUCHED = 9;
 /** 7 shots -> 8 stations, so station 2 mirrors to 5. Deliberately not 4 (its own mirror). */
 const counts = new Map([[REVERSED, singleReverseTransform(7)]]);
 
-const ref = (section_id: number, station_index: number) => ({ section_id, station_index });
+const ref = (line_id: number, station_index: number) => ({ line_id, station_index });
 
 describe('mirrorRef', () => {
-  it('maps i to N - i inside a reversed section', () => {
+  it('maps i to N - i inside a reversed line', () => {
     expect(mirrorRef(ref(REVERSED, 2), counts)).toEqual(ref(REVERSED, 5));
     expect(mirrorRef(ref(REVERSED, 0), counts)).toEqual(ref(REVERSED, 7));
   });
 
-  it('leaves a section this batch did not reverse alone', () => {
+  it('leaves a line this batch did not reverse alone', () => {
     expect(mirrorRef(ref(UNTOUCHED, 2), counts)).toEqual(ref(UNTOUCHED, 2));
   });
 
@@ -50,7 +50,7 @@ describe('mirrorRef', () => {
 
   it('clamps a ref that outlived the shots it was dropped on', () => {
     // The distance origin survives shot deletion (its only reset is a project
-    // switch), so station_index can sit past the end of a now-shorter section.
+    // switch), so station_index can sit past the end of a now-shorter line.
     // The raw mirror would go NEGATIVE, and station_index is a u32 on the Rust
     // side - serde would reject the whole call and the overlay would fail
     // permanently on one poisoned ref.
@@ -75,10 +75,10 @@ describe('mirrorRef', () => {
 });
 
 /**
- * Which sections a reverse (or the undo/redo of one) renumbered, and against
- * which shot count, comes straight off `CommandResult.reversed_sections` (#24) -
+ * Which lines a reverse (or the undo/redo of one) renumbered, and against
+ * which shot count, comes straight off `CommandResult.reversed_lines` (#24) -
  * the geometry cannot answer it, because a reverse keeps every world coordinate
- * and a section that was reversed AND moved in the same action matches neither
+ * and a line that was reversed AND moved in the same action matches neither
  * arrangement afterwards.
  *
  * From `undo_to`/`redo_to` that field is an ORDERED PER-STEP LOG with repeats
@@ -91,28 +91,28 @@ describe('mirrorRef', () => {
  */
 describe('composeReverseTransforms', () => {
   /** Only `id` and `shots.length` are read, so the shots are placeholders. */
-  const section = (id: number, shotCount: number) =>
+  const line = (id: number, shotCount: number) =>
     ({ id, shots: Array.from({ length: shotCount }, () => ({})) }) as unknown as Pick<
-      Section,
+      Line,
       'id' | 'shots'
     >;
 
-  const sections = [section(REVERSED, 7), section(UNTOUCHED, 4)];
-  const entry = (section_id: number, shot_count: number) => ({ section_id, shot_count });
+  const lines = [line(REVERSED, 7), line(UNTOUCHED, 4)];
+  const entry = (line_id: number, shot_count: number) => ({ line_id, shot_count });
 
-  /** Run one index through the composed transform for `sectionId`. */
+  /** Run one index through the composed transform for `lineId`. */
   const move = (
     transforms: Map<number, ReverseTransform>,
-    sectionId: number,
+    lineId: number,
     stationIndex: number
-  ) => mirrorRef(ref(sectionId, stationIndex), transforms).station_index;
+  ) => mirrorRef(ref(lineId, stationIndex), transforms).station_index;
 
-  it('pairs each reported section with the count it was reversed against', () => {
-    expect(composeReverseTransforms([entry(REVERSED, 7)], sections)).toEqual(
+  it('pairs each reported line with the count it was reversed against', () => {
+    expect(composeReverseTransforms([entry(REVERSED, 7)], lines)).toEqual(
       new Map([[REVERSED, singleReverseTransform(7)]])
     );
     expect(
-      composeReverseTransforms([entry(UNTOUCHED, 4), entry(REVERSED, 7)], sections)
+      composeReverseTransforms([entry(UNTOUCHED, 4), entry(REVERSED, 7)], lines)
     ).toEqual(
       new Map([
         [REVERSED, singleReverseTransform(7)],
@@ -123,14 +123,14 @@ describe('composeReverseTransforms', () => {
 
   it('is empty when the operation renumbered nothing', () => {
     // Absent is the wire truth for every command that reversed nothing.
-    expect(composeReverseTransforms(undefined, sections).size).toBe(0);
-    expect(composeReverseTransforms([], sections).size).toBe(0);
+    expect(composeReverseTransforms(undefined, lines).size).toBe(0);
+    expect(composeReverseTransforms([], lines).size).toBe(0);
   });
 
-  it('collapses two equal-count reverses of one section to the identity', () => {
+  it('collapses two equal-count reverses of one line to the identity', () => {
     const composed = composeReverseTransforms(
       [entry(REVERSED, 7), entry(REVERSED, 7)],
-      sections
+      lines
     );
     const transform = composed.get(REVERSED);
     expect(transform).toBeDefined();
@@ -141,16 +141,16 @@ describe('composeReverseTransforms', () => {
   it('keeps a third listing as a single net flip', () => {
     const composed = composeReverseTransforms(
       [entry(REVERSED, 7), entry(REVERSED, 7), entry(REVERSED, 7)],
-      sections
+      lines
     );
     expect(composed.get(REVERSED)).toEqual(singleReverseTransform(7));
     expect(move(composed, REVERSED, 2)).toBe(5);
   });
 
-  it('composes an interleaved log per section', () => {
+  it('composes an interleaved log per line', () => {
     const composed = composeReverseTransforms(
       [entry(REVERSED, 7), entry(UNTOUCHED, 4), entry(REVERSED, 7)],
-      sections
+      lines
     );
     expect(isIdentityTransform(composed.get(REVERSED) as ReverseTransform)).toBe(true);
     expect(composed.get(UNTOUCHED)).toEqual(singleReverseTransform(4));
@@ -158,11 +158,11 @@ describe('composeReverseTransforms', () => {
 
   it('composes unequal counts into a pure shift, which neither naive fold gets', () => {
     // `[Reverse, CreateShot, Reverse]` undone as one range: the first step
-    // mirrors against 4 shots, the second against 3, and the refreshed section
+    // mirrors against 4 shots, the second against 3, and the refreshed line
     // has 3. Composed that is `i -> 3 - (4 - i) = i - 1`.
     const composed = composeReverseTransforms(
       [entry(REVERSED, 4), entry(REVERSED, 3)],
-      [section(REVERSED, 3)]
+      [line(REVERSED, 3)]
     );
     expect(composed.get(REVERSED)).toEqual({ shift: -1, sign: 1, maxIndex: 3 });
     // Cancelling the repeat (the old parity Set) leaves this at 2.
@@ -174,27 +174,27 @@ describe('composeReverseTransforms', () => {
   });
 
   it('divides by the count in force at the step, not the post-range one', () => {
-    // A single undone reverse whose section then lost a shot later in the range:
+    // A single undone reverse whose line then lost a shot later in the range:
     // the entry says 4, the refreshed project says 3. Mirroring against 3 would
     // land station 3 on 0; against 4 it lands on 1.
     const composed = composeReverseTransforms(
       [entry(REVERSED, 4)],
-      [section(REVERSED, 3)]
+      [line(REVERSED, 3)]
     );
     expect(composed.get(REVERSED)).toEqual({ shift: 4, sign: -1, maxIndex: 3 });
     expect(move(composed, REVERSED, 3)).toBe(1);
   });
 
-  it('drops a section the refreshed project no longer has', () => {
+  it('drops a line the refreshed project no longer has', () => {
     // Nothing left to mirror into, and no range to clamp against.
     expect(composeReverseTransforms([entry(REVERSED, 7)], []).size).toBe(0);
   });
 
-  it('drops a shot-less section, which reverses to itself', () => {
+  it('drops a shot-less line, which reverses to itself', () => {
     // A single station has no other end - mirroring it would only churn the UI
     // state `applyReverseAftermath` clears.
     expect(
-      composeReverseTransforms([entry(REVERSED, 7)], [section(REVERSED, 0)]).size
+      composeReverseTransforms([entry(REVERSED, 7)], [line(REVERSED, 0)]).size
     ).toBe(0);
   });
 });

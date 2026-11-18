@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { setupMockedPage, createProject, createLineViaStore } from './helpers/app';
 import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
 
 /**
@@ -18,8 +18,8 @@ import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
  * the timer never fires mid-test.
  */
 async function makeDirty(page: Page): Promise<void> {
-  await createSectionViaStore(page, {
-    name: 'Autosave Dirty Section',
+  await createLineViaStore(page, {
+    name: 'Autosave Dirty Line',
     shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 0 }],
   });
   // The edit must have landed as dirtiness, or the failure tests would fail

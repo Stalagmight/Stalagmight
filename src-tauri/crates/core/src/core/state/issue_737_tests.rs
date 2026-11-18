@@ -12,8 +12,8 @@ use super::command_shot::closure_removed_message;
 use super::AppState;
 use crate::core::{Command, WarningSeverity};
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, SectionId, ShotData,
-    ShotId, StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
+    ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project, ShotData, ShotId,
+    StationRef, CLOSURE_ACROSS_ONE_SHOT, CLOSURE_ADJUSTMENT_FAILED,
     CLOSURE_REMOVED_ACROSS_ONE_SHOT,
 };
 
@@ -26,17 +26,17 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
         .id
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 fn state_with(project: Project) -> AppState {
@@ -49,8 +49,8 @@ fn project(state: &AppState) -> Project {
     state.get_project_state().unwrap()
 }
 
-fn shot_id(state: &AppState, section: SectionId, position: usize) -> ShotId {
-    project(state).get_section(section).unwrap().shots[position].id
+fn shot_id(state: &AppState, line: LineId, position: usize) -> ShotId {
+    project(state).get_line(line).unwrap().shots[position].id
 }
 
 /// Plant a closure directly, as a file written before the creation-time
@@ -85,7 +85,7 @@ fn plant(project: &mut Project, a: StationRef, b: StationRef) -> u64 {
 
 /// The issue's loop: A two shots east, B north/east/south, merged at their
 /// starts, closed B:3-A:2.
-fn issue_loop() -> (Project, SectionId, SectionId) {
+fn issue_loop() -> (Project, LineId, LineId) {
     let mut p = Project::new("737".to_string(), None);
     let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let b = add(
@@ -98,9 +98,9 @@ fn issue_loop() -> (Project, SectionId, SectionId) {
     (p, a, b)
 }
 
-/// A straight section of `n` shots with varied bearings (so a gap-close moves
+/// A straight line of `n` shots with varied bearings (so a gap-close moves
 /// something), and nothing else.
-fn chain(n: usize) -> (Project, SectionId) {
+fn chain(n: usize) -> (Project, LineId) {
     let mut p = Project::new("chain".to_string(), None);
     let shots = (0..n)
         .map(|i| shot(30.0 * i as f64, 4.0 + i as f64))
@@ -129,7 +129,7 @@ fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
     assert_eq!(ours.len(), 1, "{warnings:?}");
     let w = ours[0];
     assert_eq!(w.closure_id, Some(id));
-    assert_eq!((w.section_id, w.shot_index), (a, 1));
+    assert_eq!((w.line_id, w.shot_index), (a, 1));
     assert_eq!(w.shot_id, shot_id(&state, a, 1));
     assert_eq!(w.severity, WarningSeverity::Error);
     assert!(!w.is_resolved);
@@ -138,15 +138,16 @@ fn a_closure_across_one_shot_raises_one_unignorable_error_on_its_shot() {
     ));
     assert_eq!(
         w.message,
-        format!(
-            "Shot {a}:2 has both ends joined by loop closure {a}:1 to {a}:2, which would squeeze \
-             the shot to zero length, so the Closures Computed View skips that closure. Remove \
-             the closure, or close the loop at two stations that are not the ends of a single \
-             shot."
-        )
+        "Shot Line 1: 1 \u{2192} 2 has both ends joined by loop closure Line 1 / 1 to Line 1 / 2, \
+         which would squeeze the shot to zero length, so the Closures Computed View skips that \
+         closure. Remove the closure, or close the loop at two stations that are not the ends of \
+         a single shot."
     );
-    // The DetailPanel pill parses the leading shot reference.
-    assert!(w.message.starts_with(&format!("Shot {a}:2 ")));
+    // The DetailPanel pill splits the leading shot off by its name.
+    assert!(w.message.starts_with(&format!(
+        "Shot {} ",
+        project(&state).shot_label_at(a, 1).unwrap()
+    )));
 }
 
 #[test]
@@ -162,7 +163,7 @@ fn two_closures_across_the_same_shot_are_two_warnings_told_apart_by_closure_id()
         .iter()
         .filter(|w| w.code == CLOSURE_ACROSS_ONE_SHOT)
         .map(|w| {
-            assert_eq!((w.section_id, w.shot_index), (a, 1));
+            assert_eq!((w.line_id, w.shot_index), (a, 1));
             w.closure_id
         })
         .collect();
@@ -198,9 +199,10 @@ fn the_connectivity_check_carries_the_backend_refusal() {
     let across = state.check_merge_connectivity(st(a, 1), st(a, 2)).unwrap();
     assert!(across.connected && !across.can_merge);
     let refusal = across.closure_refusal.expect("a refusal for one shot");
+    let line = state.get_project_state().unwrap().line_label(a).unwrap();
     assert!(refusal.starts_with(&format!(
-        "This closure would join the two ends of one shot ({a}:1 to {a}:2) and squeeze that \
-         shot to zero length."
+        "This closure would join the two ends of one shot ({line} / 1 to {line} / 2) and \
+         squeeze that shot to zero length."
     )));
     // The very words the create command answers with.
     let created = state.execute(Command::CreateLoopClosure {
@@ -269,7 +271,7 @@ fn a_redundant_tie_gets_no_refusal_and_is_created() {
 fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     let (mut p, a, _) = issue_loop();
     let skipped_id = plant(&mut p, st(a, 1), st(a, 2));
-    // A second component that cannot be adjusted: two datum-anchored sections
+    // A second component that cannot be adjusted: two datum-anchored lines
     // tied datum to datum by a closure, which creation allows.
     let x = add(&mut p, vec![shot(90.0, 10.0)]);
     let y = add(&mut p, vec![shot(0.0, 10.0)]);
@@ -286,7 +288,7 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     assert_eq!(report.skipped_closures.len(), 1);
     let skipped = &report.skipped_closures[0];
     assert_eq!(skipped.closure_id, skipped_id);
-    assert_eq!((skipped.shot_section_id, skipped.shot_index), (a, 1));
+    assert_eq!((skipped.shot_line_id, skipped.shot_index), (a, 1));
     assert!(report.failures.is_empty(), "no solve has run yet");
     let warnings = state.compute_project_warnings(&project(&state), None);
     assert!(warnings.iter().all(|w| w.code != CLOSURE_ADJUSTMENT_FAILED));
@@ -298,7 +300,7 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     let failure = &report.failures[0];
     let mut expected = vec![x, y];
     expected.sort_unstable();
-    assert_eq!(failure.section_ids, expected);
+    assert_eq!(failure.line_ids, expected);
     assert!(
         failure
             .reason
@@ -318,7 +320,7 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
         .collect();
     assert_eq!(failed.len(), 1, "{warnings:?}");
     let w = failed[0];
-    assert!(expected.contains(&w.section_id));
+    assert!(expected.contains(&w.line_id));
     // Advisory: it lives only while the cached solve matches this version, so
     // it must not gate like an error (the upload gate counts errors).
     assert_eq!(w.severity, WarningSeverity::Warning);
@@ -328,9 +330,10 @@ fn the_report_lists_skipped_closures_and_failures_only_from_a_current_solve() {
     assert!(!w.is_resolved);
     assert!(
         w.message.starts_with(&format!(
-            "Shot {}:{} is in a part of the survey (2 sections)",
-            w.section_id,
-            w.shot_index + 1
+            "Shot {} is in a part of the survey (2 lines)",
+            project(&state)
+                .shot_label_at(w.line_id, w.shot_index)
+                .unwrap()
         )),
         "{}",
         w.message
@@ -488,16 +491,16 @@ fn a_range_gap_close_removes_a_closure_it_leaves_across_one_shot_and_one_undo_re
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
     // Named by the stations it was created with, not the renumbered A:1-A:2.
-    assert_removed(&result, &[&format!("{a}:1 to {a}:4")]);
+    assert_removed(&result, &["Line 1 / 1 to Line 1 / 4"]);
     let after = project(&state);
-    assert_eq!(after.get_section(a).unwrap().shots.len(), 3);
+    assert_eq!(after.get_line(a).unwrap().shots.len(), 3);
     assert!(after.loop_closures.iter().all(|lc| lc.id != id));
     assert!(after.closures_across_one_shot().is_empty());
 
     // ONE undo restores the shots and the closure, exactly.
     assert!(state.undo().success);
     let undone = project(&state);
-    assert_eq!(undone.get_section(a).unwrap().shots.len(), 5);
+    assert_eq!(undone.get_line(a).unwrap().shots.len(), 5);
     assert_eq!(closure_endpoints(&undone, id), Some((st(a, 1), st(a, 4))));
     assert_eq!(
         serde_json::to_value(&undone.loop_closures).unwrap(),
@@ -506,7 +509,7 @@ fn a_range_gap_close_removes_a_closure_it_leaves_across_one_shot_and_one_undo_re
     // Redo removes it again.
     assert!(state.redo().success);
     let redone = project(&state);
-    assert_eq!(redone.get_section(a).unwrap().shots.len(), 3);
+    assert_eq!(redone.get_line(a).unwrap().shots.len(), 3);
     assert!(redone.loop_closures.iter().all(|lc| lc.id != id));
     // And undo once more is still the same restore.
     assert!(state.undo().success);
@@ -531,7 +534,7 @@ fn a_one_shot_range_does_what_the_single_delete_refuses() {
     let middle = shot_id(&state, a, 1);
 
     let single = state.execute(Command::DeleteShot {
-        section_id: a,
+        line_id: a,
         shot_id: middle,
     });
     assert!(!single.success, "the single delete is shift-blocked");
@@ -539,7 +542,7 @@ fn a_one_shot_range_does_what_the_single_delete_refuses() {
 
     let range = state.execute_delete_shot_range_shift(a, middle, middle);
     assert!(range.success, "{:?}", range.error);
-    assert_removed(&range, &[&format!("{a}:1 to {a}:3")]);
+    assert_removed(&range, &["Line 1 / 1 to Line 1 / 3"]);
     assert!(project(&state).loop_closures.is_empty());
     assert!(state.undo().success);
     assert_eq!(
@@ -564,7 +567,7 @@ fn a_closure_through_a_merge_is_removed_by_the_shot_it_collapses() {
     let (s1, s2) = (shot_id(&state, a, 1), shot_id(&state, a, 2));
     let result = state.execute_delete_shot_range_shift(a, s1, s2);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{b}:0 to {a}:4")]);
+    assert_removed(&result, &["Line 2 / 0 to Line 1 / 4"]);
     assert!(project(&state).loop_closures.iter().all(|lc| lc.id != id));
     assert!(state.undo().success);
     assert_eq!(
@@ -607,7 +610,7 @@ fn a_delete_leaves_a_closure_that_already_spanned_one_shot_alone() {
     let state = state_with(p);
     let tail = shot_id(&state, c, 2);
     let result = state.execute(Command::DeleteShot {
-        section_id: c,
+        line_id: c,
         shot_id: tail,
     });
     assert!(result.success, "{:?}", result.error);
@@ -615,7 +618,7 @@ fn a_delete_leaves_a_closure_that_already_spanned_one_shot_alone() {
     assert!(project(&state).loop_closures.iter().any(|lc| lc.id == old));
 }
 
-/// The reviewer's case, through the preview AND the command: section C goes
+/// The reviewer's case, through the preview AND the command: line C goes
 /// east 5, east 5, south 5, west 5, north 4.8 and closure C:1-C:5 closes the
 /// loop. Close Gap & Delete on shots C:2..C:4 (positions 1..=3) leaves the
 /// closure as C:1-C:2. The bulk-delete dialog must list it BEFORE the user
@@ -669,12 +672,13 @@ fn the_range_preview_lists_the_closure_the_gap_close_removes_by_its_pre_delete_i
         5
     );
 
+    let before = project(&state);
     let result = state.execute_delete_shot_range_shift(c, first, last);
     assert!(result.success, "{:?}", result.error);
-    assert_removed(&result, &[&format!("{c}:1 to {c}:5")]);
+    assert_removed(&result, &["Line 1 / 1 to Line 1 / 5"]);
     assert_eq!(
         result.warnings[0].message,
-        closure_removed_message(&predicted[0])
+        closure_removed_message(&before, &before.closures_before_edit(), &predicted[0])
     );
     assert!(project(&state).loop_closures.is_empty());
     // Undo puts it back as C:1-C:5.
@@ -699,7 +703,7 @@ fn the_range_preview_predicts_nothing_where_nothing_goes() {
     assert!(impact
         .closures_removed_across_one_shot
         .is_some_and(|v| v.is_empty()));
-    // The whole section offers no gap-close, so nothing is predicted at all,
+    // The whole line offers no gap-close, so nothing is predicted at all,
     // and the key stays off the wire.
     let (first, last) = (shot_id(&state, a, 0), shot_id(&state, a, 3));
     let whole = project(&state)
@@ -748,7 +752,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
 /// snap's two stations as one point, so a snap takes part in the knots the
 /// delete's removal reads, while the snap's alignment flag is re-measured
 /// only in the command's epilogue, after that removal. Each snap is real: a
-/// one-shot section from station x that ends exactly on station y, closed
+/// one-shot line from station x that ends exactly on station y, closed
 /// with a `Move` closure. `STALAGMIGHT_737_DELETE_CASES` widens it.
 #[test]
 fn no_delete_leaves_a_new_closure_across_one_shot_with_snaps() {
@@ -804,21 +808,21 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
     let mut run = DeleteFuzz::default();
     for _case in 0..cases {
         let mut p = Project::new("fuzz".to_string(), None);
-        let mut sections: Vec<SectionId> = Vec::new();
+        let mut lines: Vec<LineId> = Vec::new();
         for i in 0..(2 + next(2)) {
             let shots = (0..(3 + next(4)))
                 .map(|_| shot(next(360) as f64, 3.0 + next(8) as f64))
                 .collect();
             let id = add(&mut p, shots);
             if i > 0 {
-                let prev = sections[next(sections.len() as u64) as usize];
-                let len = p.get_section(prev).unwrap().shots.len() as u64;
+                let prev = lines[next(lines.len() as u64) as usize];
+                let len = p.get_line(prev).unwrap().shots.len() as u64;
                 let _ = p.merge_stations(st(id, 0), st(prev, next(len + 1) as u32));
             }
-            sections.push(id);
+            lines.push(id);
         }
         let stations: Vec<StationRef> = p
-            .sections
+            .lines
             .iter()
             .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
             .collect();
@@ -833,7 +837,7 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
                 ) else {
                     continue;
                 };
-                // One in three is a torn snap: the section ends 1.5 to 5.5 cm
+                // One in three is a torn snap: the line ends 1.5 to 5.5 cm
                 // off y, so the `Move` closure is measured apart (not
                 // aligned) - the shape a delete's shift can close again.
                 let torn = next(3) == 0;
@@ -873,28 +877,25 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
             .into_iter()
             .map(|c| c.closure_id)
             .collect();
-        let section = sections[next(sections.len() as u64) as usize];
-        let n = before.get_section(section).unwrap().shots.len();
+        let line = lines[next(lines.len() as u64) as usize];
+        let n = before.get_line(line).unwrap().shots.len();
         let mut predicted = None;
         let result = if next(2) == 0 {
             let pos = next(n as u64) as usize;
             state.execute(Command::DeleteShot {
-                section_id: section,
-                shot_id: shot_id(&state, section, pos),
+                line_id: line,
+                shot_id: shot_id(&state, line, pos),
             })
         } else {
             let start = 1 + next((n - 2) as u64) as usize;
             let end = (start + next(2) as usize).min(n - 2);
-            let (first, last) = (
-                shot_id(&state, section, start),
-                shot_id(&state, section, end),
-            );
+            let (first, last) = (shot_id(&state, line, start), shot_id(&state, line, end));
             // What the bulk-delete dialog will show, taken before the delete.
             predicted = before
-                .preview_delete_shot_range(section, first, last)
+                .preview_delete_shot_range(line, first, last)
                 .ok()
                 .and_then(|impact| impact.closures_removed_across_one_shot);
-            state.execute_delete_shot_range_shift(section, first, last)
+            state.execute_delete_shot_range_shift(line, first, last)
         };
         if !result.success {
             continue;
@@ -903,7 +904,11 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
         // The preview predicts exactly what the gap-close removed, by the same
         // pre-delete names (#737).
         if let Some(predicted) = predicted {
-            let shown: Vec<String> = predicted.iter().map(closure_removed_message).collect();
+            let before_edit = before.closures_before_edit();
+            let shown: Vec<String> = predicted
+                .iter()
+                .map(|closure| closure_removed_message(&before, &before_edit, closure))
+                .collect();
             let removed: Vec<String> = result
                 .warnings
                 .iter()

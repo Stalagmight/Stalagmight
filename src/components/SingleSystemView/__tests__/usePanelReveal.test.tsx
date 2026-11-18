@@ -58,7 +58,7 @@ describe('usePanelReveal - close-grace + pin clearing', () => {
     act(() => result.current.scheduleClose(700));
     expect(result.current.isFloatingOpen).toBe(true);
 
-    // Pin (section-focus / keyboard / menu all force mode='pin').
+    // Pin (line-focus / keyboard / menu all force mode='pin').
     act(() => {
       useUIStore.setState({ detailPanelMode: 'pin' });
     });

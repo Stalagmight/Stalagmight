@@ -1,8 +1,8 @@
-//! Timing of the Combine Sections candidate queries on a large synthetic
+//! Timing of the Combine Lines candidate queries on a large synthetic
 //! survey (#737 review, point 2): the station menu (`combine_candidates`,
-//! `combine_candidates_at_point`) and the two-section query
-//! (`combine_candidate_for_sections`) on 2000 sections of 20 shots, a merged
-//! tree, and 300 Batch closures tying section ends (each one a closure join
+//! `combine_candidates_at_point`) and the two-line query
+//! (`combine_candidate_for_lines`) on 2000 lines of 20 shots, a merged
+//! tree, and 300 Batch closures tying line ends (each one a closure join
 //! that closes by a shift, so every query plans the anchor rule).
 //!
 //! `#[ignore]`: run it in release, by hand -
@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use crate::{ClosureStrategy, LoopClosure, Project, SectionData, ShotData, StationRef};
+use crate::{ClosureStrategy, LineData, LoopClosure, Project, ShotData, StationRef};
 
 /// xorshift64*: deterministic, no dependency.
 struct Rng(u64);
@@ -30,17 +30,17 @@ impl Rng {
     }
 }
 
-const SECTIONS: u64 = 2_000;
+const LINES: u64 = 2_000;
 const SHOTS: u32 = 20;
 const CLOSURES: u64 = 300;
 
 /// The survey, and the closure joins: (the end station the menu is opened on,
-/// the two sections it joins).
+/// the two lines it joins).
 fn large_survey() -> (Project, Vec<(StationRef, u32, u32)>) {
     let mut rng = Rng(0x0737_b3c4);
     let mut project = Project::new("Bench".to_string(), None);
     let mut ids = Vec::new();
-    for i in 0..SECTIONS {
+    for i in 0..LINES {
         let shots = (0..SHOTS)
             .map(|_| {
                 let azimuth = rng.below(360) as f64;
@@ -53,14 +53,14 @@ fn large_survey() -> (Project, Vec<(StationRef, u32, u32)>) {
             })
             .collect();
         let id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 name: Some(format!("S{i}")),
                 shots,
                 ..Default::default()
             })
             .id;
         if i > 0 {
-            // A tree: this section's start merged to a station of an earlier one.
+            // A tree: this line's start merged to a station of an earlier one.
             let parent = ids[rng.below(i) as usize];
             let at = rng.below(u64::from(SHOTS) + 1) as u32;
             project
@@ -69,12 +69,12 @@ fn large_survey() -> (Project, Vec<(StationRef, u32, u32)>) {
         }
         ids.push(id);
     }
-    // Closures from a section's end to another's start: each is a closure
+    // Closures from a line's end to another's start: each is a closure
     // join the station menu offers on that end.
     let mut joins = Vec::new();
     for _ in 0..CLOSURES {
-        let a = ids[rng.below(SECTIONS) as usize];
-        let b = ids[rng.below(SECTIONS) as usize];
+        let a = ids[rng.below(LINES) as usize];
+        let b = ids[rng.below(LINES) as usize];
         if a == b {
             continue;
         }
@@ -112,10 +112,10 @@ fn time(what: &str, queries: usize, mut f: impl FnMut() -> usize) {
 fn combine_candidate_queries_on_a_large_survey() {
     let built = Instant::now();
     let (project, joins) = large_survey();
-    let stations: usize = project.sections.iter().map(|s| s.shots.len() + 1).sum();
+    let stations: usize = project.lines.iter().map(|s| s.shots.len() + 1).sum();
     eprintln!(
-        "survey: {} sections, {stations} stations, {} merges, {} closures (built in {:?})",
-        project.sections.len(),
+        "survey: {} lines, {stations} stations, {} merges, {} closures (built in {:?})",
+        project.lines.len(),
         project.station_merges.len(),
         project.loop_closures.len(),
         built.elapsed()
@@ -129,9 +129,9 @@ fn combine_candidate_queries_on_a_large_survey() {
             .sum()
     });
     // For scale: the component walk every shifting plan already does (#735).
-    time("get_connected_section_ids (one walk)", 20, || {
+    time("get_connected_line_ids (one walk)", 20, || {
         (0..20)
-            .map(|_| project.get_connected_section_ids(sample[0].1).len())
+            .map(|_| project.get_connected_line_ids(sample[0].1).len())
             .sum()
     });
     time("combine_candidates (station menu)", sample.len(), || {
@@ -147,12 +147,12 @@ fn combine_candidate_queries_on_a_large_survey() {
             .sum()
     });
     time(
-        "combine_candidate_for_sections (Combine Sections...)",
+        "combine_candidate_for_lines (Combine Lines...)",
         sample.len(),
         || {
             sample
                 .iter()
-                .filter_map(|(_, a, b)| project.combine_candidate_for_sections(*a, *b))
+                .filter_map(|(_, a, b)| project.combine_candidate_for_lines(*a, *b))
                 .count()
         },
     );

@@ -16,9 +16,9 @@ import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
 import { ExpandIcon, ShrinkIcon } from './icons';
 import {
-  useEditSectionViewPersistence,
+  useEditLineViewPersistence,
   useImportShotsViewPersistence,
-} from '../Dialogs/useEditSectionViewPersistence';
+} from '../Dialogs/useEditLineViewPersistence';
 import type { CellEdit } from './SpreadsheetGrid/types';
 import {
   buildEditableShotColumns,
@@ -34,7 +34,7 @@ import {
   normalizeAngleFamilies,
   reorderForAngleMode,
   type AzimuthMode,
-} from '../Dialogs/newSectionRows';
+} from '../Dialogs/newLineRows';
 import type { EditableShot } from './editableShot';
 import { missingRequiredCells } from './editableShotStatus';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -44,7 +44,7 @@ export type { EditableShot };
 /**
  * The shared editable shot table, on the app's spreadsheet grid.
  *
- * Rendered by EditSectionDialog, ZeroDatumConfigDialog and (twice) the MNemo
+ * Rendered by EditLineDialog, ZeroDatumConfigDialog and (twice) the MNemo
  * import wizard. It used to be a hand-rolled `<table>` of `<input>`s with its
  * own draft/blur/Escape bookkeeping; that predated `SpreadsheetGrid` and carried
  * the defects that came with it - locale-naive `parseFloat` (a comma decimal
@@ -105,23 +105,23 @@ export interface ShotTableEditorProps {
   onRowSelect?: (index: number) => void;
   /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
   frozenShotIndices?: Set<number>;
-  /** The section these shots belong to. Supply it and the warning column shows
+  /** The line these shots belong to. Supply it and the warning column shows
    *  the project's warnings for each shot, exactly as the data table does; the
    *  editor's own threshold checks are layered on top for edits the backend has
-   *  not seen yet. Omit it for shots that are not in a section yet (the import
+   *  not seen yet. Omit it for shots that are not in a line yet (the import
    *  wizard, zero-datum config), where there is nothing to look up. */
-  sectionId?: number;
+  lineId?: number;
   /** Whether the host dialog is currently enlarged. Supply this together with
    *  {@link onToggleExpand} to get the Expand control; the HOST owns the size,
    *  because this editor is a child of three different dialogs and cannot
    *  resize any of them itself. */
   expanded?: boolean;
   onToggleExpand?: () => void;
-  /** Which persisted layout this instance reads and writes. `edit-section` is
+  /** Which persisted layout this instance reads and writes. `edit-line` is
    *  the saved-survey review grid; `import` covers the wizard and zero-datum,
    *  which edit shots that are not in the project yet. Separate because sharing
    *  one slice meant reshaping columns mid-import rewrote the review layout. */
-  layoutScope?: 'edit-section' | 'import';
+  layoutScope?: 'edit-line' | 'import';
 }
 
 const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
@@ -209,17 +209,17 @@ const PHANTOM_ROW: EditableShot = {
 /** The azimuth legs and the whole inclination family start hidden: the averages
  *  are what this editor has always shown. Everything else stays visible - it
  *  edits a survey that already exists, so there is no "start simple" case the
- *  way there is for a brand-new section.
+ *  way there is for a brand-new line.
  *
- *  ONLY reaches a config that has never carried `edit_section_hidden_columns`.
+ *  ONLY reaches a config that has never carried `edit_line_hidden_columns`.
  *  That key shipped before these columns did, so an existing install has it
  *  stored as `[]` and the stored value wins - such a user gets the inclination
  *  AVERAGE column on upgrade (the legs are hidden anyway, by the repair in
  *  `normalizeAngleFamilies`). Deliberate: one new column is a smaller cost than
  *  a migration that cannot tell a stale setting from a deliberate choice.
  *
- *  Mirrors `default_edit_section_hidden_columns` in src-tauri/src/config/panels.rs. */
-const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [
+ *  Mirrors `default_edit_line_hidden_columns` in src-tauri/src/config/panels.rs. */
+const DEFAULT_EDIT_LINE_HIDDEN_COLUMNS: readonly string[] = [
   'azimuth_in',
   'azimuth_out',
   EDITABLE_PITCH_AVG_KEY,
@@ -241,7 +241,7 @@ export function ShotTableEditor({
   selectedRowIndex,
   onRowSelect,
   frozenShotIndices,
-  sectionId,
+  lineId,
   layoutScope = 'import',
   expanded = false,
   onToggleExpand,
@@ -262,22 +262,23 @@ export function ShotTableEditor({
    *  table's warning column reads exactly this; without it the editor showed only
    *  its own two threshold checks and the column sat empty on shots the data
    *  table flagged. A row added here has no backend warnings yet - it does not
-   *  exist as far as the last analysis is concerned. */
+   *  exist as far as the last analysis is concerned. The backend names each
+   *  shot by its line and stations (`Shot Main: 4 → 5 has zero length`). */
   const backendWarningsFor = useCallback(
     (shot: EditableShot): { errors: string[]; warnings: string[]; codes: Set<string> } => {
       const empty = { errors: [], warnings: [], codes: new Set<string>() };
-      if (sectionId === undefined || shot.isNew === true || shot.isDeleted === true) return empty;
+      if (lineId === undefined || shot.isNew === true || shot.isDeleted === true) return empty;
       const errors: string[] = [];
       const warnings: string[] = [];
       const codes = new Set<string>();
       for (const w of projectWarnings) {
-        if (w.sectionId !== sectionId || w.shotId !== shot.id || w.isResolved) continue;
+        if (w.lineId !== lineId || w.shotId !== shot.id || w.isResolved) continue;
         (w.severity === 'error' ? errors : warnings).push(w.message);
         codes.add(w.code);
       }
       return { errors, warnings, codes };
     },
-    [projectWarnings, sectionId]
+    [projectWarnings, lineId]
   );
 
   const effectiveValidation: ValidationConfig = {
@@ -313,7 +314,7 @@ export function ShotTableEditor({
   );
 
   /** The always-present empty row at the end. Typing in it is what adds a shot -
-   *  the same affordance the data table and the new-section dialog use, instead
+   *  the same affordance the data table and the new-line dialog use, instead
    *  of a separate Add button. It is a render-only phantom: it becomes real via
    *  `onAddShot` the moment a value lands in it. */
   const isPhantomAt = useCallback(
@@ -378,22 +379,22 @@ export function ShotTableEditor({
     [readOnly, actualIndex, visibleShots, onShotChange]
   );
 
-  // --- Column layout, persisted under the dialog's own `edit_section_*` keys --
+  // --- Column layout, persisted under the dialog's own `edit_line_*` keys --
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
   // Seeded from the default, not empty: the persisted config overrides this as
   // soon as it loads, but before it does the grid must not flash the five columns
   // that ship hidden.
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(
-    () => new Set(DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS)
+    () => new Set(DEFAULT_EDIT_LINE_HIDDEN_COLUMNS)
   );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const viewSetters = useMemo(() => ({ setColumnOrder, setHiddenColumns, setColumnWidths }), []);
   const usePersistence =
-    layoutScope === 'edit-section' ? useEditSectionViewPersistence : useImportShotsViewPersistence;
+    layoutScope === 'edit-line' ? useEditLineViewPersistence : useImportShotsViewPersistence;
   usePersistence(
     { columnOrder, hiddenColumns, columnWidths },
     viewSetters,
-    DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS
+    DEFAULT_EDIT_LINE_HIDDEN_COLUMNS
   );
   // What is ACTUALLY hidden on screen. A set stored before these columns existed
   // can leave an average AND its legs visible at once, so it is repaired on the
@@ -620,7 +621,7 @@ export function ShotTableEditor({
       if (readOnly) return;
       // The menu says "Insert N shots" and passes N. Dropping it inserted one,
       // so the label was a promise the table did not keep; the data table and
-      // the new-section dialog have always honoured it.
+      // the new-line dialog have always honoured it.
       const n = Math.max(1, count);
       const last = visibleShots.length - 1;
       // An empty table has no row to insert relative to, so the only thing an
@@ -698,7 +699,7 @@ export function ShotTableEditor({
   const rowClassName = useCallback(
     (shot: EditableShot, rowIndex: number): string | undefined => {
       // A virtual shot (jump/reference) is indicated by the J/R column, exactly
-      // as in the data table and the new-section dialog. It is deliberately NOT
+      // as in the data table and the new-line dialog. It is deliberately NOT
       // dimmed: the old table faded the whole row, which read as "disabled" on
       // a row that is perfectly editable.
       if (isPhantomAt(rowIndex)) return 'sg-row-draft';
@@ -756,9 +757,9 @@ export function ShotTableEditor({
   return (
     <div data-testid="shot-table-container" className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex shrink-0 items-center justify-end gap-3">
-        {/* No section-id / shot-id rows: those columns are the data table's way
-            of pointing at a shot across sections, and this grid edits one
-            section's shots in place. The warnings column IS here, so it gets a
+        {/* No line-id / shot-id rows: those columns are the data table's way
+            of pointing at a shot across lines, and this grid edits one
+            line's shots in place. The warnings column IS here, so it gets a
             toggle like the data table's. */}
         <ShotColumnsMenu
           hidden={hiddenColumns}
@@ -794,7 +795,7 @@ export function ShotTableEditor({
         <SpreadsheetGrid<EditableShot>
           columns={columns}
           rows={readOnly ? visibleShots : gridRows}
-          // Namespaced like EditSectionDialog's own shot key: temp ids and
+          // Namespaced like EditLineDialog's own shot key: temp ids and
           // imported ids are both small integers drawn from separate counters,
           // so a bare `tempId ?? id` collides the moment the MNemo wizard shows
           // a fresh row beside an imported one. React then reuses one row's DOM

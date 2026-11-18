@@ -46,7 +46,7 @@ describe('DivePlanBar refuses to save an unresolved pin (#310)', () => {
 
   it('disables Save as and explains why once a pin is flagged', () => {
     useGasPlanStore.setState({
-      endpoint: { section_id: 1, station_index: 3 },
+      endpoint: { line_id: 1, station_index: 3 },
       unresolved: {
         origin: false,
         endpoint: true,
@@ -62,7 +62,7 @@ describe('DivePlanBar refuses to save an unresolved pin (#310)', () => {
 
   it('blocks a flagged WAY POINT too, not just the endpoint', () => {
     useGasPlanStore.setState({
-      waypoints: [{ section_id: 1, station_index: 2 }],
+      waypoints: [{ line_id: 1, station_index: 2 }],
       unresolved: {
         origin: false,
         endpoint: false,

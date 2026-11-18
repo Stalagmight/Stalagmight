@@ -1,6 +1,6 @@
-//! Shot runs: how a delta rebuilds a section's shots out of the source's,
-//! copying by uuid from any section, in either direction, turned around when
-//! the section was reversed.
+//! Shot runs: how a delta rebuilds a line's shots out of the source's,
+//! copying by uuid from any line, in either direction, turned around when
+//! the line was reversed.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -81,7 +81,7 @@ pub(super) mod shot_rows {
     }
 }
 
-/// One shot turned around the way Reverse Section turns it
+/// One shot turned around the way Reverse Line turns it
 /// (`crate::models::reverse_shots`): the bearing reversed, the depths and the
 /// pitches swapped end for end (the pitches negated), and left and right
 /// swapped when `swap_lr`. A member that is missing, or not a number where a
@@ -139,50 +139,50 @@ pub(super) fn flip_shot(shot: &Value, swap_lr: bool) -> Value {
 }
 
 /// The source's shots, indexed by uuid, built on first use: only an edited or
-/// new section needs it.
+/// new line needs it.
 ///
-/// Each source shot is copied at most once, and never out of a section the
+/// Each source shot is copied at most once, and never out of a line the
 /// target keeps in place ([`Self::reserve`]): a shot matched a second time (two
 /// shots sharing a uuid) is written literally instead. That is what lets an
 /// apply refuse any delta that copies a source shot twice
 /// ([`super::ProjectDelta::check_shape`]), so an applied delta is never larger
 /// than its source plus the literals it carries.
 pub(super) struct ShotPool<'a> {
-    sections: &'a BTreeMap<usize, Value>,
+    lines: &'a BTreeMap<usize, Value>,
     by_uuid: Option<HashMap<&'a str, Vec<(usize, usize)>>>,
     used: HashSet<(usize, usize)>,
 }
 
 impl<'a> ShotPool<'a> {
-    pub(super) fn new(sections: &'a BTreeMap<usize, Value>) -> Self {
+    pub(super) fn new(lines: &'a BTreeMap<usize, Value>) -> Self {
         Self {
-            sections,
+            lines,
             by_uuid: None,
             used: HashSet::new(),
         }
     }
 
-    /// Take every shot of the source section at `section` out of the pool: the
+    /// Take every shot of the source line at `line` out of the pool: the
     /// target keeps them where they are.
-    pub(super) fn reserve(&mut self, section: usize) {
-        let count = self.shots(section).len();
-        self.used.extend((0..count).map(|i| (section, i)));
+    pub(super) fn reserve(&mut self, line: usize) {
+        let count = self.shots(line).len();
+        self.used.extend((0..count).map(|i| (line, i)));
     }
 
-    fn shots(&self, section: usize) -> &'a [Value] {
-        self.sections
-            .get(&section)
+    fn shots(&self, line: usize) -> &'a [Value] {
+        self.lines
+            .get(&line)
             .and_then(|s| s.get(SHOTS))
             .and_then(Value::as_array)
             .map_or(&[], Vec::as_slice)
     }
 
     fn index(&mut self) -> &HashMap<&'a str, Vec<(usize, usize)>> {
-        let sections = self.sections;
+        let lines = self.lines;
         self.by_uuid.get_or_insert_with(|| {
             let mut index: HashMap<&'a str, Vec<(usize, usize)>> = HashMap::new();
-            for (&p, section) in sections {
-                let shots = section
+            for (&p, line) in lines {
+                let shots = line
                     .get(SHOTS)
                     .and_then(Value::as_array)
                     .map_or(&[][..], Vec::as_slice);
@@ -197,7 +197,7 @@ impl<'a> ShotPool<'a> {
     }
 
     /// The target shots `target` as runs over the source's shots. `home` is
-    /// the source position of the section being rebuilt, preferred when a
+    /// the source position of the line being rebuilt, preferred when a
     /// uuid is held in several places.
     pub(super) fn rebuild(&mut self, target: &[Value], home: Option<usize>) -> Vec<ShotRun> {
         let mut out = Vec::new();
@@ -313,8 +313,8 @@ impl OpenCopy {
         self.n += 1;
     }
 
-    /// The finished run over `source` (the copied section's shots) towards
-    /// `target`. A run copied in reverse is a reversed section, so its copies
+    /// The finished run over `source` (the copied line's shots) towards
+    /// `target`. A run copied in reverse is a reversed line, so its copies
     /// are also tried turned around ([`flip_shot`], with and without the
     /// left-right swap): whichever leaves the fewest edits is kept.
     fn finish(self, source: &[Value], target: &[Value]) -> ShotRun {
@@ -375,9 +375,10 @@ pub(super) fn build_shots(
                 flip,
                 m,
             } => {
-                let shots = source.get(sec).and_then(shots_array).ok_or_else(|| {
-                    format!("a shot run copies from section {sec}, past the source")
-                })?;
+                let shots = source
+                    .get(sec)
+                    .and_then(shots_array)
+                    .ok_or_else(|| format!("a shot run copies from line {sec}, past the source"))?;
                 let mut mods = m.iter().peekable();
                 for k in 0..*n {
                     let index = if *rev {
@@ -387,7 +388,7 @@ pub(super) fn build_shots(
                     };
                     let Some(shot) = index.and_then(|i| shots.get(i)) else {
                         return Err(format!(
-                            "a shot run copies {n} shots from {at} of section {sec}, past its {}",
+                            "a shot run copies {n} shots from {at} of line {sec}, past its {}",
                             shots.len()
                         ));
                     };

@@ -1,17 +1,17 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   getStationScreenPositions,
   getMeasuredPathCounts,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
  * E2E for the dual-distance ruler/measure tool (#26): direct + along-cave-line
  * distance, shot tinting, and reset behavior. The mock returns a deterministic
- * along-line distance (12.34) and tints the first shots of the section.
+ * along-line distance (12.34) and tints the first shots of the line.
  */
 
 async function createProject(page: Page, name: string): Promise<void> {
@@ -23,7 +23,7 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
     name: 'Ruler Main',
     direction: 'in',
@@ -72,7 +72,7 @@ test.describe('Measure tool - dual distance + tint (#26)', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await createProject(page, 'Ruler Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(1);
     await page.keyboard.press('r');

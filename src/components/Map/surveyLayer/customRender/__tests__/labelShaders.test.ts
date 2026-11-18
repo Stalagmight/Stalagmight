@@ -17,7 +17,7 @@ describe('LABEL_FLAG bit contract', () => {
       expect(acc & v).toBe(0); // no two share a bit
       acc |= v;
     }
-    // FIRST_IN_SECTION / REFERENCE / ALL_REFERENCE / DIM / DRAG_HIDE /
+    // FIRST_IN_LINE / REFERENCE / ALL_REFERENCE / DIM / DRAG_HIDE /
     // COMMENT_HIDE / JUMP / ALL_JUMP (no COLLIDE_HIDE).
     expect(Object.keys(LABEL_FLAG)).toHaveLength(8);
   });

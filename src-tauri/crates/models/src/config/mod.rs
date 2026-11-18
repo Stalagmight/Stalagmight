@@ -118,7 +118,7 @@ pub fn default_sigma_depth_m() -> f64 {
 }
 
 /// Placement suggestion algorithm configuration.
-/// Controls how imported DMP sections are matched against existing project data.
+/// Controls how imported DMP lines are matched against existing project data.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct PlacementSuggestionConfig {
     /// Sigma for azimuth error (degrees)

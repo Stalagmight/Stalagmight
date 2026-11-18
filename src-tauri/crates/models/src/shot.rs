@@ -3,27 +3,27 @@ use std::sync::Arc;
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
-/// Unique identifier for a shot within a section
+/// Unique identifier for a shot within a line
 pub type ShotId = u32;
 
 use super::{
-    normalize_azimuth, AzimuthReference, SectionId, SurveyCredit, EMPTY_CREDIT, FEATURE_ID_STRIDE,
+    normalize_azimuth, AzimuthReference, LineId, SurveyCredit, EMPTY_CREDIT, FEATURE_ID_STRIDE,
 };
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
-/// After database reload, shot IDs have the form `section_id * FEATURE_ID_STRIDE + sequence_order`
+/// After database reload, shot IDs have the form `line_id * FEATURE_ID_STRIDE + sequence_order`
 /// where `sequence_order` is 0-indexed. Before first save, shot IDs are plain
 /// sequential integers (0, 1, 2, …).
 ///
 /// Returns a 1-indexed position suitable for user display (e.g., "13:5").
 ///
 /// Total for every value the type admits: `Command::description()` calls this
-/// on every command path BEFORE the id is validated against the section, so an
+/// on every command path BEFORE the id is validated against the line, so an
 /// out-of-range id (e.g. `ShotId::MAX`) must saturate rather than overflow
 /// (#413 finding 24).
-pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
-    let base = section_id.saturating_mul(FEATURE_ID_STRIDE);
+pub fn shot_display_position(shot_id: ShotId, line_id: LineId) -> u32 {
+    let base = line_id.saturating_mul(FEATURE_ID_STRIDE);
     if shot_id >= base {
         (shot_id - base).saturating_add(1)
     } else {
@@ -51,7 +51,7 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 ///
 /// The mean of two readings exactly 180 degrees apart is undefined (both
 /// perpendiculars are equidistant); the `+540, wrap, -180` normalisation
-/// resolves that tie to `azimuth_in - 90`. Reversing a section has to cope with
+/// resolves that tie to `azimuth_in - 90`. Reversing a line has to cope with
 /// that arbitrary choice - see [`crate::reverse_shots`].
 ///
 /// Wraps with `rem_euclid`, not `%`. Rust's `%` is *truncated* - it keeps the
@@ -61,7 +61,7 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 /// azimuth, and the DMP parser stores headings verbatim where the Compass and
 /// TML importers normalise theirs. It also broke the reverse, whose helpers all
 /// use `rem_euclid`: the two disagreed, so the degenerate-pair guard missed and
-/// the bearing survived un-turned while the rest of the section flipped, moving
+/// the bearing survived un-turned while the rest of the line flipped, moving
 /// the cave by its own span. In-range readings are NOT bit-for-bit what `%`
 /// returned: the old wrap was `(x + 360.0) % 360.0` and its addend rounds, where
 /// `x.rem_euclid(360.0)` returns an in-range `x` untouched. About half of the
@@ -145,12 +145,12 @@ pub enum ShotKind {
 /// the raw value so a genuinely newer file is distinguishable from corruption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct UnrecognisedShotKind {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     /// In-memory shot id, i.e. what `set_shot_kind` expects.
     pub shot_id: ShotId,
-    /// 1-based position in the section, for display.
+    /// 1-based position in the line, for display.
     pub shot_number: u32,
-    pub section_name: Option<String>,
+    pub line_name: Option<String>,
     /// The value actually stored, rendered as text. A string rather than an
     /// integer because the column is not STRICT: a corrupt or hand-edited row
     /// can hold TEXT, REAL or a BLOB, and the case most worth showing the user
@@ -232,8 +232,8 @@ pub struct Shot {
     /// Persistent v4 UUID minted at shot creation, stable across saves
     /// and reloads.  Emitted into the TML on export so Ariane 26+ can
     /// round-trip shot identity without depending on the lossy
-    /// `(section_id, shot_index)` key (which drifts as soon as the user
-    /// inserts or deletes a shot in the same section).  `None` only for
+    /// `(line_id, shot_index)` key (which drifts as soon as the user
+    /// inserts or deletes a shot in the same line).  `None` only for
     /// shots loaded from .stalx files written before schema v6; those
     /// get a fresh UUID minted lazily on the next save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,7 +287,7 @@ pub struct Shot {
     /// the literal `Option::is_none` predicate.
     ///
     /// Behind an [`Arc`] so shots that share one credit share one allocation:
-    /// a section's legacy surveyor/date becomes the credit of every shot that
+    /// a line's legacy surveyor/date becomes the credit of every shot that
     /// has no row of its own (`persistence::sqlite::shot_credits`), and a
     /// copy per shot let a file with a long legacy list and many shots blow
     /// up the memory of every open. The wire shape is the credit itself.
@@ -302,7 +302,7 @@ pub struct Shot {
 
 /// A credit in the form a shot stores it ([`SurveyCredit::into_storable`])
 /// behind one allocation, for many shots to share ([`Shot::set_shared_credit`]):
-/// a section's legacy template, the fallback of every shot without a row. It
+/// a line's legacy template, the fallback of every shot without a row. It
 /// is normalized once when made, so a long list over many shots is checked
 /// once, not once per shot.
 #[derive(Debug, Clone)]
@@ -383,12 +383,12 @@ pub struct ShotData {
     /// Persistent identity for the shot this data will become, or `None` to
     /// mint a fresh one. Set by the Ariane importer from the file's `<UUID>`
     /// (#423) and by [`Shot::to_shot_data`], so identity survives every
-    /// transform that rebuilds shots from their data - a section split, a
+    /// transform that rebuilds shots from their data - a line split, a
     /// reverse, a project merge, an undo/redo round trip.
     ///
     /// **Any future clone/duplicate-shot path MUST clear this field.** The
     /// uniqueness repair ([`crate::Project::ensure_unique_shot_uuids`],
-    /// and the same rule in [`crate::Section::new`]) keeps the FIRST
+    /// and the same rule in [`crate::Line::new`]) keeps the FIRST
     /// occurrence, so a copy that kept its source's identity would get the
     /// original re-minted instead of the copy - silently moving every station
     /// cross-reference anchored on it.
@@ -844,7 +844,7 @@ impl Shot {
     /// source file carried, with no declination applied (#438).
     ///
     /// Named the long way on purpose. This is not the bearing geometry walks:
-    /// that is [`Self::average_azimuth_true`], which adds the section's
+    /// that is [`Self::average_azimuth_true`], which adds the line's
     /// correction. Use this one only where the MEASUREMENT is what is wanted -
     /// display of the raw reading, validation of the reading itself, an export
     /// that has declared the file magnetic. A bare call in a geometry path is a
@@ -854,11 +854,11 @@ impl Shot {
     }
 
     /// The true-north bearing this shot walks, in degrees: the measured mean
-    /// plus the section's declination correction (#438).
+    /// plus the line's declination correction (#438).
     ///
-    /// `reference` is the section's resolved [`AzimuthReference`] - get it from
+    /// `reference` is the line's resolved [`AzimuthReference`] - get it from
     /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for)
-    /// once per section, not once per shot.
+    /// once per line, not once per shot.
     pub fn average_azimuth_true(&self, reference: AzimuthReference) -> f64 {
         reference.to_true(self.average_azimuth_measured())
     }
@@ -884,7 +884,7 @@ impl Shot {
     /// Convert to ShotData (for undo snapshots)
     pub fn to_shot_data(&self) -> ShotData {
         ShotData {
-            // Identity travels with the record. This is what lets a section
+            // Identity travels with the record. This is what lets a line
             // split, a reverse or a merge rebuild shots from their data without
             // re-minting - see [`ShotData::uuid`] for the one path (clone /
             // duplicate) that must clear it instead.
@@ -1261,16 +1261,16 @@ mod tests {
         // Before save/load, shot IDs are small sequential integers (0-indexed)
         assert_eq!(shot_display_position(0, 1), 1); // first shot → position 1
         assert_eq!(shot_display_position(4, 1), 5); // fifth shot → position 5
-        assert_eq!(shot_display_position(0, 0), 1); // section 0 edge case
+        assert_eq!(shot_display_position(0, 0), 1); // line 0 edge case
     }
 
     #[test]
     fn shot_display_position_post_reload_ids() {
-        // After reload: shot_id = section_id * FEATURE_ID_STRIDE + sequence_order
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 13 + 4, 13), 5); // section 13, seq 4 → pos 5
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE, 1), 1); // section 1, seq 0 → pos 1
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10); // section 1, seq 9 → pos 10
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3); // section 5, seq 2 → pos 3
+        // After reload: shot_id = line_id * FEATURE_ID_STRIDE + sequence_order
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 13 + 4, 13), 5); // line 13, seq 4 → pos 5
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE, 1), 1); // line 1, seq 0 → pos 1
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10); // line 1, seq 9 → pos 10
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3); // line 5, seq 2 → pos 3
     }
 
     // ========================================================================

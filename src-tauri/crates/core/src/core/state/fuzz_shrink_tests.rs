@@ -29,7 +29,7 @@
 //!   collapsed to `#`, plus any DISCRIMINATOR the payload carries below its
 //!   headline, plus the first differing snapshot path, collapsed the same way.
 //!   That is the same normalization the classifiers use, and it is what keeps
-//!   "did not restore the state recorded at depth 23 | at sections[#].shots[#].length"
+//!   "did not restore the state recorded at depth 23 | at lines[#].shots[#].length"
 //!   from splitting into one bucket per depth.
 //!
 //! The discriminator exists because a headline can name an INVARIANT rather than
@@ -51,7 +51,7 @@
 //!
 //! Removing a move can orphan the ones after it: an `updateShot` whose shot was
 //! created by the `createShot` that just went away has nothing to address. The
-//! trace names entities the way that survives this - sections by id, shots by
+//! trace names entities the way that survives this - lines by id, shots by
 //! `Shot::uuid`, closures by id, stations positionally - and [`Refs`] maps the
 //! recorded name onto the live one, learning each pairing from what a move
 //! CREATED. A name it cannot map makes the move INAPPLICABLE, and an
@@ -964,18 +964,18 @@ fn ddmin_reaches_the_minimum_of_a_known_predicate() {
 ///
 /// So the failure is INJECTED into the REPLAY (see `Fault` in
 /// `fuzz_undo_tests.rs`): the trace fails once the project holds
-/// [`FAULT_AT_SECTIONS`] sections, which is a property of the moves a candidate
+/// [`FAULT_AT_LINES`] lines, which is a property of the moves a candidate
 /// kept rather than of the app. Everything the gate covers is unchanged - the
 /// recorder, `Refs`' reference remapping, the panic-signature match, the ddmin
 /// schedule and the verification replay - and the app is not required to be
 /// broken for any of it.
 ///
-/// The starting project has SEVEN sections (`build_project`), so the threshold is
+/// The starting project has SEVEN lines (`build_project`), so the threshold is
 /// above it by construction: the empty trace cannot reproduce, and a minimum has
-/// to keep the `createSection` moves that get from seven to twelve. That is what
+/// to keep the `createLine` moves that get from seven to twelve. That is what
 /// the assertions below pin - a non-empty minimum that is strictly smaller than
 /// the trace it came from.
-const FAULT_AT_SECTIONS: usize = 12;
+const FAULT_AT_LINES: usize = 12;
 
 #[test]
 fn the_shrinker_minimizes_an_injected_failure() {
@@ -1000,12 +1000,12 @@ fn the_shrinker_minimizes_an_injected_failure() {
     // hunt would call: record, choose the target from what the run produced,
     // shrink. The only difference from a real hunt is the armed fault.
     let fault = Some(Fault {
-        at_sections: FAULT_AT_SECTIONS,
+        at_lines: FAULT_AT_LINES,
     });
     let Some((trace, target, shrunk)) = shrink_seed(1, plan, fault, None, 400, false) else {
         panic!(
             "the injected fault did not fire over the whole trace, so seed 1 never reaches \
-             {FAULT_AT_SECTIONS} sections - re-choose FAULT_AT_SECTIONS"
+             {FAULT_AT_LINES} lines - re-choose FAULT_AT_LINES"
         );
     };
     assert!(
@@ -1021,7 +1021,7 @@ fn the_shrinker_minimizes_an_injected_failure() {
     );
     assert!(
         !shrunk.moves.is_empty(),
-        "the empty trace cannot reach {FAULT_AT_SECTIONS} sections from the seven the starting \
+        "the empty trace cannot reach {FAULT_AT_LINES} lines from the seven the starting \
          project has, so a minimum of zero moves means the predicate stopped depending on the \
          moves"
     );
@@ -1059,7 +1059,7 @@ fn a_different_signature_is_not_a_match() {
     hits.insert("finding-8-stale-id-deletes-the-wrong-shot", 1);
     let completed: Probe = Ok(Outcome::from_hits(hits));
     let panicked: Probe = Err("did not restore the state recorded at depth 23\n    at \
-                               sections[4].shots[2].length"
+                               lines[4].shots[2].length"
         .to_string());
 
     let eight = Target::Classified("finding-8-stale-id-deletes-the-wrong-shot".to_string());
@@ -1081,7 +1081,7 @@ fn a_different_signature_is_not_a_match() {
     // The digit collapse is what makes one defect one bucket: the same failure
     // at a different depth and a different index has the same signature.
     let deeper: Probe = Err("did not restore the state recorded at depth 7\n    at \
-                             sections[11].shots[9].length"
+                             lines[11].shots[9].length"
         .to_string());
     assert_eq!(
         failure_signature(panicked.as_ref().unwrap_err()),
@@ -1109,8 +1109,8 @@ fn alignment_payload(context: &str, depth: usize, distance: f64, coords: (f64, f
          mergeStations(4/1, 8/3) -> ok (undo {depth}->{depth}, redo 0->0)\n    \
          deleteShotRangeShift(s=4, 400000..400002) -> PANICKED (did not return)\n      \
          ^ the app's own merge-alignment assert fired: Merge alignment violated after \
-         {context}: stations StationKey {{ section_id: 3, station_index: 0 }} and \
-         StationKey {{ section_id: 8, station_index: 2 }} are {distance:.6}m apart \
+         {context}: stations StationKey {{ line_id: 3, station_index: 0 }} and \
+         StationKey {{ line_id: 8, station_index: 2 }} are {distance:.6}m apart \
          (threshold 0.01m). A=({:.6}, {:.6}), B=(0.000000, 0.000000)",
         coords.0, coords.1,
     )

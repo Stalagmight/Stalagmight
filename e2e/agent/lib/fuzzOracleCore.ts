@@ -34,10 +34,10 @@
  *     (`src-tauri/src/core/state/undo.rs`).
  *   - `project.file_path`    - `restore_snapshot_into` carries the LIVE path
  *     across a snapshot restore (`core/state/app_state.rs`).
- *   - `project.next_section_id`, `project.next_closure_id`,
- *     `project.sections.*.next_shot_id` - monotonic id counters, and an
+ *   - `project.next_line_id`, `project.next_closure_id`,
+ *     `project.lines.*.next_shot_id` - monotonic id counters, and an
  *     ASYMMETRY rather than a bug: a snapshot-pair undo restores them verbatim
- *     while a targeted restore (`restore_section`, a re-created shot) only ever
+ *     while a targeted restore (`restore_line`, a re-created shot) only ever
  *     raises them, so comparing them would fire on every mixed history.
  *
  * Everything else is compared: shot uuids, `reverse_parity`, the gauge anchors,
@@ -45,7 +45,7 @@
  * vectors, and all geometry.
  *
  * Two other classes of noise are handled without dropping anything. Object keys
- * are sorted recursively, which canonicalizes `Project::section_offsets` (a
+ * are sorted recursively, which canonicalizes `Project::line_offsets` (a
  * `HashMap`, so its JSON key order is not stable across a snapshot restore)
  * without hiding a value. And numbers are rounded to 12 significant digits,
  * because geometry is RE-DERIVED after every undo/redo rather than copied. The
@@ -58,9 +58,9 @@
 export const NON_ROLLBACK_PATHS: readonly string[] = [
   'project.modified_at',
   'project.file_path',
-  'project.next_section_id',
+  'project.next_line_id',
   'project.next_closure_id',
-  'project.sections.*.next_shot_id',
+  'project.lines.*.next_shot_id',
 ];
 
 /** Documentation mirror of the constant inlined in `canonicalProjectSnapshot`. */
@@ -80,9 +80,9 @@ export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): 
   const dropped: Record<string, true> = {
     'project.modified_at': true,
     'project.file_path': true,
-    'project.next_section_id': true,
+    'project.next_line_id': true,
     'project.next_closure_id': true,
-    'project.sections.*.next_shot_id': true,
+    'project.lines.*.next_shot_id': true,
   };
   const digits = 12;
 
@@ -121,21 +121,21 @@ export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): 
   const normalized = walk(state, '');
   // ID-AGNOSTIC mode, used ONLY for comparisons that cross a save/reload.
   // `Shot::id` is not persisted: the loader renumbers every shot to
-  // `section_id * FEATURE_ID_STRIDE + sequence_order`
+  // `line_id * FEATURE_ID_STRIDE + sequence_order`
   // (src-tauri/src/persistence/sqlite/read.rs:372), so a session that deleted or
-  // inserted a shot mid-section comes back with different ids for the same
+  // inserted a shot mid-line comes back with different ids for the same
   // shots. Replacing each id with its position makes the comparison independent
   // of that renumbering while leaving everything else - uuids, geometry,
-  // ordering, every other field - compared exactly. Section ids ARE persisted
+  // ordering, every other field - compared exactly. Line ids ARE persisted
   // and are NOT touched here.
   if (idAgnostic === true && normalized !== null && typeof normalized === 'object') {
     const project = (normalized as Record<string, unknown>).project;
-    if (isPlainObject(project) && Array.isArray(project.sections)) {
-      for (let i = 0; i < project.sections.length; i++) {
-        const section = project.sections[i];
-        if (!isPlainObject(section) || !Array.isArray(section.shots)) continue;
-        for (let j = 0; j < section.shots.length; j++) {
-          const shot = section.shots[j];
+    if (isPlainObject(project) && Array.isArray(project.lines)) {
+      for (let i = 0; i < project.lines.length; i++) {
+        const line = project.lines[i];
+        if (!isPlainObject(line) || !Array.isArray(line.shots)) continue;
+        for (let j = 0; j < line.shots.length; j++) {
+          const shot = line.shots[j];
           if (isPlainObject(shot) && 'id' in shot) shot.id = j;
         }
       }
@@ -163,12 +163,12 @@ export function idAgnosticSnapshot(canonicalJsonText: string): string {
     typeof value === 'object' && value !== null && !Array.isArray(value);
   if (!isObj(parsed)) return canonicalJsonText;
   const project = parsed.project;
-  if (isObj(project) && Array.isArray(project.sections)) {
-    for (let i = 0; i < project.sections.length; i++) {
-      const section = project.sections[i];
-      if (!isObj(section) || !Array.isArray(section.shots)) continue;
-      for (let j = 0; j < section.shots.length; j++) {
-        const shot = section.shots[j];
+  if (isObj(project) && Array.isArray(project.lines)) {
+    for (let i = 0; i < project.lines.length; i++) {
+      const line = project.lines[i];
+      if (!isObj(line) || !Array.isArray(line.shots)) continue;
+      for (let j = 0; j < line.shots.length; j++) {
+        const shot = line.shots[j];
         if (isObj(shot) && 'id' in shot) shot.id = j;
       }
     }
@@ -192,13 +192,13 @@ export function idAgnosticSnapshot(canonicalJsonText: string): string {
  * naharon's full payload is ~277 KB, its digest ~15 KB.
  */
 export interface TargetingDigest {
-  /** `[sectionId, [shotId, ...]]`, in `project.sections` order. */
+  /** `[lineId, [shotId, ...]]`, in `project.lines` order. */
   s: [number, number[]][];
-  /** `[section_id, station_index]`, in `stations` order. */
+  /** `[line_id, station_index]`, in `stations` order. */
   st: [number, number][];
-  /** `[a.section_id, a.station_index, b.section_id, b.station_index]`, in `project.station_merges` order. */
+  /** `[a.line_id, a.station_index, b.line_id, b.station_index]`, in `project.station_merges` order. */
   m: [number, number, number, number][];
-  /** `[section_id, station_index]`, in `project.zero_datums` order. */
+  /** `[line_id, station_index]`, in `project.zero_datums` order. */
   z: [number, number][];
   /** Closure ids, in `project.loop_closures` order. */
   c: number[];
@@ -212,7 +212,7 @@ export interface TargetingDigest {
 export function buildTargetingDigest(state: unknown): TargetingDigest {
   const root = (state ?? {}) as Record<string, unknown>;
   const project = (root.project ?? {}) as Record<string, unknown>;
-  const sections = Array.isArray(project.sections) ? project.sections : [];
+  const lines = Array.isArray(project.lines) ? project.lines : [];
   const stations = Array.isArray(root.stations) ? root.stations : [];
   const merges = Array.isArray(project.station_merges) ? project.station_merges : [];
   const datums = Array.isArray(project.zero_datums) ? project.zero_datums : [];
@@ -220,18 +220,18 @@ export function buildTargetingDigest(state: unknown): TargetingDigest {
 
   const refPair = (value: unknown): [number, number] => {
     const ref = (value ?? {}) as Record<string, unknown>;
-    return [Number(ref.section_id), Number(ref.station_index)];
+    return [Number(ref.line_id), Number(ref.station_index)];
   };
 
   const s: [number, number[]][] = [];
-  for (let i = 0; i < sections.length; i++) {
-    const section = (sections[i] ?? {}) as Record<string, unknown>;
-    const shots = Array.isArray(section.shots) ? section.shots : [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] ?? {}) as Record<string, unknown>;
+    const shots = Array.isArray(line.shots) ? line.shots : [];
     const shotIds: number[] = [];
     for (let j = 0; j < shots.length; j++) {
       shotIds.push(Number((shots[j] as Record<string, unknown>).id));
     }
-    s.push([Number(section.id), shotIds]);
+    s.push([Number(line.id), shotIds]);
   }
 
   const st: [number, number][] = [];
@@ -330,11 +330,11 @@ export function oracleInjectionSource(): string {
  * so this suite deliberately does NOT re-check what it owns:
  *
  *   - non-finite (NaN/inf) shot geometry
- *   - two shots in ONE section sharing a uuid (note: the app's contract is
- *     per-section, not global - `ensure_unique_shot_uuids` dedupes per section -
+ *   - two shots in ONE line sharing a uuid (note: the app's contract is
+ *     per-line, not global - `ensure_unique_shot_uuids` dedupes per line -
  *     so global uniqueness is NOT asserted here either)
  *   - dangling merge / loop-closure / zero-datum refs, orphan station offsets
- *     and comments, orphan `section_offsets` keys
+ *     and comments, orphan `line_offsets` keys
  *
  * Those are covered instead by the integrity-DELTA oracle, which records the
  * checker's own verdict per depth and asserts undo/redo restores it. Two further
@@ -354,48 +354,48 @@ export function checkProjectInvariants(state: unknown): string[] {
   const violations: string[] = [];
   const root = (state ?? {}) as Record<string, unknown>;
   const project = (root.project ?? {}) as Record<string, unknown>;
-  const sections = Array.isArray(project.sections) ? project.sections : [];
+  const lines = Array.isArray(project.lines) ? project.lines : [];
   const stations = Array.isArray(root.stations) ? root.stations : [];
   const closures = Array.isArray(project.loop_closures) ? project.loop_closures : [];
   const frozen = Array.isArray(root.frozen_shots) ? root.frozen_shots : [];
   const stats = (root.stats ?? {}) as Record<string, unknown>;
 
-  const nextSectionId = Number(project.next_section_id);
+  const nextLineId = Number(project.next_line_id);
   const nextClosureId = Number(project.next_closure_id);
 
-  // Section id uniqueness + allocator dominance. `get_section` takes the FIRST
-  // match, so a duplicate id silently shadows a section; an id at or above the
-  // allocator means the next create collides with a live section.
-  const seenSectionIds: Record<string, true> = {};
+  // Line id uniqueness + allocator dominance. `get_line` takes the FIRST
+  // match, so a duplicate id silently shadows a line; an id at or above the
+  // allocator means the next create collides with a live line.
+  const seenLineIds: Record<string, true> = {};
   const shotCounts: Record<string, number> = {};
   let totalShots = 0;
-  for (let i = 0; i < sections.length; i++) {
-    const section = (sections[i] ?? {}) as Record<string, unknown>;
-    const id = Number(section.id);
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] ?? {}) as Record<string, unknown>;
+    const id = Number(line.id);
     const key = String(id);
-    if (seenSectionIds[key] === true) {
-      violations.push(`duplicate section id ${id}`);
+    if (seenLineIds[key] === true) {
+      violations.push(`duplicate line id ${id}`);
     }
-    seenSectionIds[key] = true;
-    if (Number.isFinite(nextSectionId) && id >= nextSectionId) {
-      violations.push(`section id ${id} is at or above next_section_id ${nextSectionId}`);
+    seenLineIds[key] = true;
+    if (Number.isFinite(nextLineId) && id >= nextLineId) {
+      violations.push(`line id ${id} is at or above next_line_id ${nextLineId}`);
     }
 
-    const shots = Array.isArray(section.shots) ? section.shots : [];
+    const shots = Array.isArray(line.shots) ? line.shots : [];
     shotCounts[key] = shots.length;
     totalShots += shots.length;
-    const nextShotId = Number(section.next_shot_id);
+    const nextShotId = Number(line.next_shot_id);
     const seenShotIds: Record<string, true> = {};
     for (let j = 0; j < shots.length; j++) {
       const shot = (shots[j] ?? {}) as Record<string, unknown>;
       const shotId = Number(shot.id);
       const shotKey = String(shotId);
       if (seenShotIds[shotKey] === true) {
-        violations.push(`section ${id} has two shots with id ${shotId}`);
+        violations.push(`line ${id} has two shots with id ${shotId}`);
       }
       seenShotIds[shotKey] = true;
       if (Number.isFinite(nextShotId) && shotId >= nextShotId) {
-        violations.push(`section ${id} shot id ${shotId} is at or above next_shot_id ${nextShotId}`);
+        violations.push(`line ${id} shot id ${shotId} is at or above next_shot_id ${nextShotId}`);
       }
     }
   }
@@ -420,16 +420,16 @@ export function checkProjectInvariants(state: unknown): string[] {
   // do not resolve; this validates what consumers actually index into.
   const checkRef = (label: string, value: unknown): void => {
     const ref = (value ?? {}) as Record<string, unknown>;
-    const sectionId = Number(ref.section_id);
+    const lineId = Number(ref.line_id);
     const index = Number(ref.station_index);
-    const count = shotCounts[String(sectionId)];
+    const count = shotCounts[String(lineId)];
     if (count === undefined) {
-      violations.push(`${label} references missing section ${sectionId}`);
+      violations.push(`${label} references missing line ${lineId}`);
       return;
     }
-    // A section with N shots has N+1 stations, indices 0..N.
+    // A line with N shots has N+1 stations, indices 0..N.
     if (!Number.isInteger(index) || index < 0 || index > count) {
-      violations.push(`${label} station index ${index} out of range for section ${sectionId} (0..${count})`);
+      violations.push(`${label} station index ${index} out of range for line ${lineId} (0..${count})`);
     }
   };
 
@@ -453,34 +453,34 @@ export function checkProjectInvariants(state: unknown): string[] {
   }
 
   // The derived station list must agree with the model it was computed from:
-  // one station per shot plus a terminal one, per section.
-  const expectedStations = sections.length + totalShots;
+  // one station per shot plus a terminal one, per line.
+  const expectedStations = lines.length + totalShots;
   if (stations.length !== expectedStations) {
     violations.push(
-      `stations has ${stations.length} entries but the sections imply ${expectedStations} ` +
-        `(${sections.length} section(s) + ${totalShots} shot(s))`,
+      `stations has ${stations.length} entries but the lines imply ${expectedStations} ` +
+        `(${lines.length} line(s) + ${totalShots} shot(s))`,
     );
   }
 
   // frozen_shots indexes into the same model.
   for (let i = 0; i < frozen.length; i++) {
     const entry = (frozen[i] ?? {}) as Record<string, unknown>;
-    const sectionId = Number(entry.section_id);
-    const count = shotCounts[String(sectionId)];
+    const lineId = Number(entry.line_id);
+    const count = shotCounts[String(lineId)];
     const shotIndex = Number(entry.shot_index);
     if (count === undefined) {
-      violations.push(`frozen_shots[${i}] references missing section ${sectionId}`);
+      violations.push(`frozen_shots[${i}] references missing line ${lineId}`);
     } else if (!Number.isInteger(shotIndex) || shotIndex < 0 || shotIndex >= count) {
       violations.push(
-        `frozen_shots[${i}] shot index ${shotIndex} out of range for section ${sectionId} (0..${count - 1})`,
+        `frozen_shots[${i}] shot index ${shotIndex} out of range for line ${lineId} (0..${count - 1})`,
       );
     }
   }
 
   // Derived stats vs the model. Cheap, and it catches a stats computation that
   // has drifted from the project it summarizes.
-  if (Number.isFinite(Number(stats.section_count)) && Number(stats.section_count) !== sections.length) {
-    violations.push(`stats.section_count ${Number(stats.section_count)} != ${sections.length} section(s)`);
+  if (Number.isFinite(Number(stats.line_count)) && Number(stats.line_count) !== lines.length) {
+    violations.push(`stats.line_count ${Number(stats.line_count)} != ${lines.length} line(s)`);
   }
   if (Number.isFinite(Number(stats.shot_count)) && Number(stats.shot_count) !== totalShots) {
     violations.push(`stats.shot_count ${Number(stats.shot_count)} != ${totalShots} shot(s)`);

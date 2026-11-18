@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    AzimuthReference, GpsBounds, Line, LineData, LineId, LineUpdates, LoopClosure, Section,
+    SectionId, ShotData, ShotId, StationAnchor, StationId, StationKey, StationMerge,
+    StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{DatumRole, LoopClosureWire, ZeroDatumWire};
 
@@ -44,14 +44,16 @@ mod closure_dedupe;
 mod closure_shots;
 mod combine_alignment;
 mod combine_candidate;
+mod combine_lines;
 mod combine_plan;
-mod combine_sections;
 mod connectivity;
 mod gap_close;
 mod gauge;
 mod mutations;
 mod shots;
-mod split_section;
+mod split_line;
+mod station_identity;
+pub mod station_naming;
 mod station_rekey;
 
 mod integrity;
@@ -60,6 +62,7 @@ mod merge_topology;
 mod offsets;
 mod relationships;
 mod reverse;
+mod sections;
 mod stats;
 mod union_find;
 mod uuid_unique;
@@ -128,6 +131,13 @@ mod combine_hand_move_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_lines_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -138,13 +148,6 @@ mod combine_realign_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_residual_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point"
-)]
-mod combine_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -200,18 +203,16 @@ mod multi_datum_tests;
     clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
-mod split_section_tests;
+mod split_line_tests;
 
 pub use adjustment_report::{
     AdjustedStations, AdjustmentFailure, AdjustmentFailureReport, AdjustmentReport, FarGpsFix,
     SkippedClosure,
 };
 pub use classify::ClassifyScope;
-pub use closure_shots::{
-    closure_across_one_shot_refusal, station_id_label, ClosureAcrossOneShot, ClosuresBeforeEdit,
-};
+pub use closure_shots::{ClosureAcrossOneShot, ClosuresBeforeEdit};
 pub use combine_candidate::{
-    section_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
+    line_label, COMBINE_DEPTH_NOTICE_M, COMBINE_TOLERANCE_M, MAX_COMBINE_PARTNERS,
 };
 pub use datum_placement::DatumLayout;
 pub use datum_roles::{
@@ -229,25 +230,26 @@ pub use merge_topology::MergeTopology;
 pub use offsets::{log_removed_closures, ClosuresBeforeSweep, OrphanClosureSweep, RemovedClosure};
 pub use reverse::{reverse_shots, reversed_azimuths, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
+pub use station_identity::{IdentityHeal, UNNAMED_LINE};
 pub use uuid_unique::{
     live_shot_uuid_for_stored, remap_project_json, remap_station_keys_json, reminted_shot_uuid,
     reminted_shot_uuid_avoiding, stored_shot_uuid_matches, ShotUuidRemap,
     SHOT_UUID_REMINT_NAMESPACE,
 };
 
-/// Relationships that reference a given section (merges, closures, offsets, zero datums).
-/// Used by the frontend to show affected relationships before section deletion.
+/// Relationships that reference a given line (merges, closures, offsets, zero datums).
+/// Used by the frontend to show affected relationships before line deletion.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SectionRelationships {
-    /// Station merges referencing the section (positional wire form)
+pub struct LineRelationships {
+    /// Station merges referencing the line (positional wire form)
     pub merges: Vec<StationMergeWire>,
-    /// Loop closures referencing the section (positional wire form)
+    /// Loop closures referencing the line (positional wire form)
     pub closures: Vec<LoopClosureWire>,
-    /// Whether the section has a section offset
-    pub has_section_offset: bool,
-    /// Number of station offsets referencing the section
+    /// Whether the line has a line offset
+    pub has_line_offset: bool,
+    /// Number of station offsets referencing the line
     pub station_offset_count: usize,
-    /// Number of zero datums referencing the section
+    /// Number of zero datums referencing the line
     pub zero_datum_count: usize,
 }
 
@@ -267,7 +269,7 @@ pub struct ClosurePair {
 #[derive(Debug, Clone, Copy)]
 enum PathEdge {
     Shot {
-        section_id: SectionId,
+        line_id: LineId,
         shot_index: usize,
         forward: bool,
     },
@@ -344,29 +346,29 @@ pub struct DeleteShotImpact {
 }
 
 /// Which structural case a contiguous shot-range deletion falls into. Computed
-/// from the range endpoints relative to the section's shot count.
+/// from the range endpoints relative to the line's shot count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RangeDeleteKind {
-    /// The range covers every shot - the whole section is removed.
-    WholeSection,
+    /// The range covers every shot - the whole line is removed.
+    WholeLine,
     /// The range starts at the first shot (nothing before); the survivors keep
     /// their absolute position by an offset shift.
     Prefix,
     /// The range ends at the last shot (nothing after); the head is truncated.
     Suffix,
-    /// Shots remain both before and after - the section can be split (A=before,
+    /// Shots remain both before and after - the line can be split (A=before,
     /// B=after) or gap-closed (shift).
     Interior,
 }
 
 /// Aggregate impact of deleting a contiguous range of shots `[start_pos..=end_pos]`
-/// from one section. The merge/closure fields mirror [`DeleteShotImpact`] (so the
+/// from one line. The merge/closure fields mirror [`DeleteShotImpact`] (so the
 /// frontend can render them with the same component); `kind` drives the dialog
 /// routing and `shift_blocked` reports whether the gap-close path is available.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DeleteShotRangeImpact {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub start_pos: u32,
     pub end_pos: u32,
     pub kind: RangeDeleteKind,
@@ -408,7 +410,7 @@ pub struct DeleteShotRangeImpact {
     /// Predicted by running the very gap-close the command runs on a clone
     /// ([`Project::preview_gap_close_closure_removals`]), so preview and
     /// execution cannot disagree. `None` when no gap-close is offered (the
-    /// whole section, or a blocked shift), or when it could not be simulated.
+    /// whole line, or a blocked shift), or when it could not be simulated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub closures_removed_across_one_shot: Option<Vec<ClosurePair>>,
@@ -427,12 +429,12 @@ pub struct Project {
     /// Last modification timestamp
     #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
-    /// All sections in this project
-    pub sections: Vec<Section>,
+    /// All lines in this project
+    pub lines: Vec<Line>,
     /// Station merges. Stored with position-independent [`StationKey`] endpoints;
     /// the TS/frontend shape is the positional wire form (resolved at IPC encode).
     /// Reads like a `[StationMerge]` slice; [`MergeTopology`] additionally owns
-    /// the merge-only section adjacency memo and keeps it honest across every
+    /// the merge-only line adjacency memo and keeps it honest across every
     /// mutation (serde shape is unchanged - the bare merge array).
     #[ts(type = "Array<StationMerge>")]
     pub station_merges: MergeTopology,
@@ -446,11 +448,11 @@ pub struct Project {
     /// File path if saved (None for new unsaved projects)
     #[ts(type = "string | null")]
     pub file_path: Option<PathBuf>,
-    /// Next section ID to assign
-    pub next_section_id: SectionId,
-    /// Section offsets (x, y) applied when sections are merged/aligned
-    #[serde(default, serialize_with = "serialize_section_offsets")]
-    pub section_offsets: HashMap<SectionId, (f64, f64)>,
+    /// Next line ID to assign
+    pub next_line_id: LineId,
+    /// Line offsets (x, y) applied when lines are merged/aligned
+    #[serde(default, serialize_with = "serialize_line_offsets")]
+    pub line_offsets: HashMap<LineId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(
         default,
@@ -462,31 +464,55 @@ pub struct Project {
     /// Station comments keyed by StationRef
     #[serde(
         default,
-        serialize_with = "serialize_station_texts",
-        deserialize_with = "deserialize_station_texts"
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
     )]
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
-    /// Station names: a short free-text identifier per station, such as the
-    /// station number an MNemo dump gave it (a DMP import records it here).
-    /// Not unique - MNemo numbers restart at 0 in every section - so it is
-    /// always shown next to the positional `S:I` id, never instead of it.
-    /// Stored in its own `station_names` table so readers that know only the
-    /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps
-    /// with - see `station_texts` in the persistence crate) are unaffected.
+    /// Station names: the name that identifies a station to the user, such as
+    /// the station number an MNemo dump gave it (a DMP import records it here)
+    /// or `"4a"` for a station inserted after `"4"`. UNIQUE WITHIN ITS LINE
+    /// (not across the project - MNemo numbers restart at 0 in every line), so
+    /// a station reads as `Line name / station name` and a shot as
+    /// `from -> to`. Every station has one once the project is normalized
+    /// ([`Self::ensure_station_identities`] seeds a missing name from the
+    /// station's index and letter-suffixes a repeat). Stored in its own
+    /// `station_names` table so readers that know only the v18 tables
+    /// (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps with - see
+    /// `station_texts` in the persistence crate) are unaffected.
     #[serde(
         default,
-        serialize_with = "serialize_station_texts",
-        deserialize_with = "deserialize_station_texts"
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
     )]
     #[ts(skip)]
     pub station_names: HashMap<StationKey, String>,
+    /// Station IDs: every station's project-unique [`StationId`], keyed and
+    /// walked exactly like `station_names`, so it stays on its physical station
+    /// through inserts, deletes, reverses, splits and combines. Allocated from
+    /// [`Self::next_station_id`] by [`Self::ensure_station_identities`], never
+    /// reused. Stored in its own `station_ids` table (no schema bump, like
+    /// `station_names`).
+    #[serde(
+        default,
+        serialize_with = "serialize_station_map",
+        deserialize_with = "deserialize_station_map"
+    )]
+    #[ts(skip)]
+    pub station_ids: HashMap<StationKey, StationId>,
+    /// The next [`StationId`] to allocate; above every id in `station_ids`.
+    /// Monotonic within one timeline: a snapshot restore puts back the value
+    /// the snapshot was taken with, together with the ids it allocated.
+    /// Persisted in `project_settings` (no schema bump).
+    #[serde(default)]
+    #[ts(skip)]
+    pub next_station_id: StationId,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
-    /// Content hashes of imported DMP sections (for section-level duplicate detection)
+    /// Content hashes of imported DMP lines (for line-level duplicate detection)
     #[serde(default)]
-    pub imported_section_hashes: Vec<String>,
+    pub imported_line_hashes: Vec<String>,
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
@@ -510,31 +536,31 @@ pub struct Project {
     #[serde(default)]
     pub surface_elevation: Option<f64>,
 
-    /// The north reference a section inherits when it declares none (#438).
+    /// The north reference a line inherits when it declares none (#438).
     ///
     /// `None` - the value on every project that predates the field, and on every
-    /// project whose sections all declare their own - resolves to
+    /// project whose lines all declare their own - resolves to
     /// [`AzimuthReference::default`], "nothing recorded", correction 0. So this
     /// being absent is exactly the pre-#438 geometry.
     ///
-    /// The per-SECTION field is the authoritative one (the formats declare
+    /// The per-LINE field is the authoritative one (the formats declare
     /// declination per survey); this exists so a user-level "this project is
-    /// true north" policy has somewhere to live without touching sections that
+    /// true north" policy has somewhere to live without touching lines that
     /// carry a file-declared value of their own.
     #[serde(default)]
     #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
 
-    /// Shots whose RECORD orientation runs against their section's
-    /// [`Section::reverse_parity`], by uuid: a shot's record parity is its
-    /// section's parity, flipped when its uuid is here
+    /// Shots whose RECORD orientation runs against their line's
+    /// [`Line::reverse_parity`], by uuid: a shot's record parity is its
+    /// line's parity, flipped when its uuid is here
     /// ([`Self::shot_record_parity`]).
     ///
     /// A parity flips with every reverse of the record, which is what a
     /// single-neighbour dive-plan pin reads to know which end of its shot it
-    /// sits on. While every shot of a section shares the section's parity, the
-    /// section's flag says it all. Combine Sections breaks that: the other
-    /// section's shots join a section whose parity can differ from theirs, and
+    /// sits on. While every shot of a line shares the line's parity, the
+    /// line's flag says it all. Combine Lines breaks that: the other
+    /// line's shots join a line whose parity can differ from theirs, and
     /// they are recorded here (toggled) so every shot keeps its own. Because
     /// this lives on the project, every undo snapshot carries it with the
     /// shots, so an undo puts the shots and their orientation back together.
@@ -546,10 +572,10 @@ pub struct Project {
     pub counter_parity_shots: BTreeSet<String>,
 
     /// Stations that hold their component fixed in the least-squares
-    /// adjustment in place of the lowest-id section's gauge station
+    /// adjustment in place of the lowest-id line's gauge station
     /// (`default_anchor_for_component` reads them first, in order): a Split
-    /// Section Here, Combine Sections or delete-and-split kept a component's
-    /// gauge on its physical station, and the section that anchors the
+    /// Line Here, Combine Lines or delete-and-split kept a component's
+    /// gauge on its physical station, and the line that anchors the
     /// component afterwards does not hold that station (see `project/gauge.rs`).
     /// Named by shot uuids, so they follow their shots through later edits.
     ///
@@ -561,10 +587,32 @@ pub struct Project {
     #[ts(skip)]
     pub held_gauges: Vec<HeldGauge>,
 
+    /// Sections: named groupings of lines (#327), in panel order. Membership
+    /// is on the lines ([`Line::section_id`]). Serialized as `cave_sections`
+    /// (never `sections`, the disk name of the lines, see `disk_names`) and
+    /// omitted when empty, so a project without Sections serializes as before.
+    /// Persisted in the `cave_sections` / `cave_section_lines` side tables.
+    #[serde(
+        default,
+        rename = "cave_sections",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub sections: Vec<Section>,
+    /// Next [`SectionId`] to assign. Persisted as the `next_cave_section_id`
+    /// project setting and read as the larger of that and the highest saved id
+    /// plus one, so an id freed by an undo or a delete is never handed out
+    /// again (a hidden-Sections entry could otherwise hide the newcomer).
+    #[serde(
+        default,
+        rename = "next_cave_section_id",
+        skip_serializing_if = "is_zero_section_id"
+    )]
+    pub next_section_id: SectionId,
+
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
-    /// single cascade after all sections / merges are in place. Callers
+    /// single cascade after all lines / merges are in place. Callers
     /// must set the flag, run their batch, clear the flag, and then
     /// invoke `cascade_connection_offsets` themselves to leave the
     /// project in a consistent state.
@@ -572,20 +620,20 @@ pub struct Project {
     #[ts(skip)]
     pub cascade_deferred: bool,
 
-    /// Section-id → `sections[i]` index cache (transient, NOT persisted).
-    /// Lookups via [`Self::get_section`] / [`Self::get_section_mut`]
+    /// Line-id → `lines[i]` index cache (transient, NOT persisted).
+    /// Lookups via [`Self::get_line`] / [`Self::get_line_mut`]
     /// consult this map first to avoid the O(N) linear scan that used to
     /// dominate `merge_stations` and `compute_station_raw_coords` on
     /// large imports (~4 lookups per merge × 14 k merges = ~400 M ops).
-    /// Maintained incrementally by `add_section` / `remove_section`.
+    /// Maintained incrementally by `add_line` / `remove_line`.
     /// After deserialization the map is empty and a linear fallback
     /// kicks in - callers that hammer the lookup (e.g. the batch
-    /// importer) should call [`Self::rebuild_section_index`] first.
+    /// importer) should call [`Self::rebuild_line_index`] first.
     #[serde(skip, default)]
     #[ts(skip)]
-    pub section_index_cache: HashMap<SectionId, usize>,
+    pub line_index_cache: HashMap<LineId, usize>,
 
-    /// `(section_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
+    /// `(line_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
     /// Turns `resolve_key`'s `AfterShot` arm from an O(shots) linear scan with a
     /// per-element UUID string compare into an O(1) lookup - the dominant cost
     /// when building merge/closure connectivity over a large import (issue:
@@ -596,7 +644,7 @@ pub struct Project {
     /// shot's UUID, so a stale entry is harmless (it falls back to the scan).
     #[serde(skip, default)]
     #[ts(skip)]
-    pub shot_uuid_index: HashMap<(SectionId, String), u32>,
+    pub shot_uuid_index: HashMap<(LineId, String), u32>,
 
     /// Fingerprint of a merge residual the offset solver has already proven it
     /// cannot reduce. Transient, NOT persisted. Read and written by exactly one
@@ -615,6 +663,12 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub realign_fixpoint: Option<offsets::RealignFixpoint>,
+}
+
+/// `skip_serializing_if` for [`Project::next_section_id`]: a project that
+/// never had a Section serializes exactly as before.
+fn is_zero_section_id(id: &SectionId) -> bool {
+    *id == 0
 }
 
 /// Apply the Ariane `.tml`/`.tmlu` no-data convention to a raw
@@ -637,7 +691,7 @@ pub struct ProjectMetadata {
     pub file_path: PathBuf,
     #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
-    pub section_count: usize,
+    pub line_count: usize,
     /// Surveyed length, Reference shots excluded (#689). The on-disk listing
     /// computes it in SQL (`Database::load_metadata`) with the same rule as
     /// [`ProjectStats::total_length`], so an opened project reports the same
@@ -645,7 +699,7 @@ pub struct ProjectMetadata {
     /// is an upper bound until its first open, which classifies the migrated
     /// virtual shots and re-saves them.
     pub total_length: f64,
-    /// Number of stations in the project (shots + 1 per section)
+    /// Number of stations in the project (shots + 1 per line)
     pub station_count: usize,
     /// GPS center from first zero datum (lng, lat) - MapLibre order
     pub gps_center: Option<(f64, f64)>,
@@ -684,7 +738,7 @@ pub struct DistanceField {
 /// `shot_id` + `t`). `t` ≈ 0 / ≈ 1 collapses to the from/to station.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct RulerEndpoint {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     #[serde(default)]
     pub station_index: Option<u32>,
     #[serde(default)]
@@ -696,7 +750,7 @@ pub struct RulerEndpoint {
 /// A shot on the along-line path, identified for tinting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct PathShot {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub shot_id: ShotId,
 }
 
@@ -720,10 +774,10 @@ pub struct AlongLineResult {
 /// Overall project statistics
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
-    pub section_count: usize,
+    pub line_count: usize,
     /// Every shot, Reference shots included.
     pub shot_count: usize,
-    /// Surveyed length: the sum of [`crate::SectionStats::total_length`], which leaves
+    /// Surveyed length: the sum of [`crate::LineStats::total_length`], which leaves
     /// out Reference shots (#689).
     pub total_length: f64,
     /// Shallowest absolute station z. Filled by the caller from
@@ -750,8 +804,8 @@ pub struct ProjectStats {
 
 /// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE HASHMAPS
 ///
-/// `section_offsets`, `station_offsets`, `station_comments` and `station_names`
-/// are `HashMap`s,
+/// `line_offsets`, `station_offsets`, `station_comments`, `station_names` and
+/// `station_ids` are `HashMap`s,
 /// and a `HashMap`'s iteration order is a function of its RandomState seed and
 /// its insertion history - NOT of its contents. Emitting them in iteration order
 /// makes the serialized `Project` a function of how the map was built rather
@@ -764,37 +818,37 @@ pub struct ProjectStats {
 ///   bytes and re-rolled the save/load fixpoint.
 ///
 /// So every one of them sorts its keys before it emits them. Ascending by
-/// section id for `section_offsets`; by [`station_key_order`] for the
+/// line id for `line_offsets`; by [`station_key_order`] for the
 /// `StationKey`-keyed maps, whose entries are emitted as a `Vec` of pairs anyway
 /// (serde_json cannot use a struct as an object key). The DESERIALIZE side is
 /// untouched: order was never load-bearing on the way in, and both shapes
 /// (object / array of pairs) are unchanged, so this is not a format change.
-fn serialize_section_offsets<S: serde::Serializer>(
-    map: &HashMap<SectionId, (f64, f64)>,
+fn serialize_line_offsets<S: serde::Serializer>(
+    map: &HashMap<LineId, (f64, f64)>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let ordered: BTreeMap<SectionId, (f64, f64)> = map.iter().map(|(k, v)| (*k, *v)).collect();
+    let ordered: BTreeMap<LineId, (f64, f64)> = map.iter().map(|(k, v)| (*k, *v)).collect();
     ordered.serialize(serializer)
 }
 
-/// Total order over [`StationKey`], for the maps keyed by one. Section
+/// Total order over [`StationKey`], for the maps keyed by one. Line
 /// first, then the anchor variant, then the variant's payload. Distinct keys
-/// never tie - a key IS its section plus its anchor - so this is a total order
+/// never tie - a key IS its line plus its anchor - so this is a total order
 /// on any map's key set, which is what makes the sorted output a function of the
 /// contents alone. (`StationKey` deliberately has no `Ord` of its own: nothing
 /// else in the model ranks stations, and an order that only serialization needs
 /// belongs next to it.)
-fn station_key_order(key: &StationKey) -> (SectionId, u8, &str, u32) {
+pub(crate) fn station_key_order(key: &StationKey) -> (LineId, u8, &str, u32) {
     match &key.anchor {
-        StationAnchor::SectionStart => (key.section_id, 0, "", 0),
-        StationAnchor::AfterShot(uuid) => (key.section_id, 1, uuid.as_str(), 0),
-        StationAnchor::Index(index) => (key.section_id, 2, "", *index),
+        StationAnchor::LineStart => (key.line_id, 0, "", 0),
+        StationAnchor::AfterShot(uuid) => (key.line_id, 1, uuid.as_str(), 0),
+        StationAnchor::Index(index) => (key.line_id, 2, "", *index),
     }
 }
 
 /// Serialize station_offsets as a Vec of (StationRef, (f64, f64, f64)) tuples
 /// to avoid serde_json's requirement that map keys be strings. Key-ordered - see
-/// [`serialize_section_offsets`].
+/// [`serialize_line_offsets`].
 fn serialize_station_offsets<S: serde::Serializer>(
     map: &HashMap<StationKey, (f64, f64, f64)>,
     serializer: S,
@@ -812,30 +866,30 @@ fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
     Ok(entries.into_iter().collect())
 }
 
-/// Serialize a station-keyed text map (`station_comments`, `station_names`) as
-/// a Vec of (StationKey, String) tuples. Key-ordered - see
-/// [`serialize_section_offsets`].
-fn serialize_station_texts<S: serde::Serializer>(
-    map: &HashMap<StationKey, String>,
+/// Serialize a station-keyed map (`station_comments`, `station_names`,
+/// `station_ids`) as a Vec of (StationKey, value) tuples. Key-ordered - see
+/// [`serialize_line_offsets`].
+fn serialize_station_map<S: serde::Serializer, V: Serialize>(
+    map: &HashMap<StationKey, V>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let mut entries: Vec<(&StationKey, &String)> = map.iter().collect();
+    let mut entries: Vec<(&StationKey, &V)> = map.iter().collect();
     entries.sort_by(|(a, _), (b, _)| station_key_order(a).cmp(&station_key_order(b)));
     entries.serialize(serializer)
 }
 
-/// Deserialize a station-keyed text map from a Vec of (StationKey, String) tuples.
-fn deserialize_station_texts<'de, D: serde::Deserializer<'de>>(
+/// Deserialize a station-keyed map from a Vec of (StationKey, value) tuples.
+fn deserialize_station_map<'de, D: serde::Deserializer<'de>, V: Deserialize<'de>>(
     deserializer: D,
-) -> Result<HashMap<StationKey, String>, D::Error> {
-    let entries: Vec<(StationKey, String)> = Vec::deserialize(deserializer)?;
+) -> Result<HashMap<StationKey, V>, D::Error> {
+    let entries: Vec<(StationKey, V)> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
 }
 
 /// IPC serialization view of [`Project`]. The stored `Project` keeps its
 /// `StationKey`-based serde (lossless, required by the undo snapshot path), but
 /// the frontend and the ts-rs `Project` type expect the three cross-reference
-/// collections in positional wire form (`StationRef { section_id, station_index }`).
+/// collections in positional wire form (`StationRef { line_id, station_index }`).
 /// This wrapper forwards every ts-exported field and re-encodes those three to
 /// wire, dropping dangling refs (the same resolution the binary load path's
 /// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` - the
@@ -859,32 +913,35 @@ impl Serialize for ProjectIpc<'_> {
             .filter_map(|c| p.closure_to_wire(c))
             .collect();
         // Key-ordered, for the same reason the stored serde is (see
-        // `serialize_section_offsets`): this writer emits the field itself rather
+        // `serialize_line_offsets`): this writer emits the field itself rather
         // than through the field attribute, so it would otherwise be the one path
         // left where the same project produces two different payloads.
-        let section_offsets: BTreeMap<SectionId, (f64, f64)> =
-            p.section_offsets.iter().map(|(k, v)| (*k, *v)).collect();
+        let line_offsets: BTreeMap<LineId, (f64, f64)> =
+            p.line_offsets.iter().map(|(k, v)| (*k, *v)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (17 ts-exported fields). Adding a ts-exported field to `Project`
+        // (19 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 17)?;
+        let mut st = serializer.serialize_struct("Project", 19)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
         st.serialize_field("modified_at", &p.modified_at)?;
-        st.serialize_field("sections", &p.sections)?;
+        st.serialize_field("lines", &p.lines)?;
         st.serialize_field("station_merges", &station_merges)?;
         st.serialize_field("zero_datums", &zero_datums)?;
         st.serialize_field("loop_closures", &loop_closures)?;
         st.serialize_field("file_path", &p.file_path)?;
-        st.serialize_field("next_section_id", &p.next_section_id)?;
-        st.serialize_field("section_offsets", &section_offsets)?;
+        st.serialize_field("next_line_id", &p.next_line_id)?;
+        st.serialize_field("line_offsets", &line_offsets)?;
         st.serialize_field("imported_file_hashes", &p.imported_file_hashes)?;
-        st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
+        st.serialize_field("imported_line_hashes", &p.imported_line_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
         st.serialize_field("validation", &p.validation)?;
         st.serialize_field("surface_elevation", &p.surface_elevation)?;
         st.serialize_field("default_azimuth_reference", &p.default_azimuth_reference)?;
+        // Always sent, empty or not (the stored serde omits them when empty).
+        st.serialize_field("cave_sections", &p.sections)?;
+        st.serialize_field("next_cave_section_id", &p.next_section_id)?;
         st.end()
     }
 }
@@ -909,26 +966,30 @@ impl Project {
             location,
             created_at: now,
             modified_at: now,
-            sections: Vec::new(),
+            lines: Vec::new(),
             station_merges: MergeTopology::default(),
             zero_datums: Vec::new(),
             loop_closures: Vec::new(),
             file_path: None,
-            next_section_id: 0,
-            section_offsets: HashMap::new(),
+            next_line_id: 0,
+            line_offsets: HashMap::new(),
             station_offsets: HashMap::new(),
             station_comments: HashMap::new(),
             station_names: HashMap::new(),
+            station_ids: HashMap::new(),
+            next_station_id: 0,
             imported_file_hashes: Vec::new(),
-            imported_section_hashes: Vec::new(),
+            imported_line_hashes: Vec::new(),
             next_closure_id: 1,
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
             default_azimuth_reference: None,
             counter_parity_shots: BTreeSet::new(),
             held_gauges: Vec::new(),
+            sections: Vec::new(),
+            next_section_id: 0,
             cascade_deferred: false,
-            section_index_cache: HashMap::new(),
+            line_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
             realign_fixpoint: None,
         }
@@ -981,93 +1042,89 @@ impl Project {
         self.modified_at = Utc::now();
     }
 
-    // === Section operations ===
+    // === Line operations ===
 
-    /// Add a new section to the project
-    pub fn add_section(&mut self, data: SectionData) -> &Section {
-        let section = Section::new(self.next_section_id, data);
-        self.next_section_id += 1;
-        let new_idx = self.sections.len();
-        self.section_index_cache.insert(section.id, new_idx);
+    /// Add a new line to the project
+    pub fn add_line(&mut self, data: LineData) -> &Line {
+        let line = Line::new(self.next_line_id, data);
+        self.next_line_id += 1;
+        let new_idx = self.lines.len();
+        self.line_index_cache.insert(line.id, new_idx);
         // Maintain the shot-UUID index incrementally so `resolve_key`'s AfterShot
-        // lookup stays O(1) as the batch importer creates sections AND the
+        // lookup stays O(1) as the batch importer creates lines AND the
         // merges/closures that reference them by shot UUID (the import's hot
-        // path). `Section::new` mints a UUID for every shot, so they are all
+        // path). `Line::new` mints a UUID for every shot, so they are all
         // present here.
-        for (i, shot) in section.shots.iter().enumerate() {
+        for (i, shot) in line.shots.iter().enumerate() {
             if let Some(u) = &shot.uuid {
                 // First-occurrence wins: mirror the cold-path `resolve_key`,
                 // which uses `shots.iter().position(...)` (first match). Under a
-                // duplicated within-section UUID, `or_insert` keeps the earliest
+                // duplicated within-line UUID, `or_insert` keeps the earliest
                 // index so the warm cache agrees with the cold scan.
                 self.shot_uuid_index
-                    .entry((section.id, u.clone()))
+                    .entry((line.id, u.clone()))
                     .or_insert(i as u32);
             }
         }
-        self.sections.push(section);
+        self.lines.push(line);
         self.touch();
-        &self.sections[new_idx]
+        &self.lines[new_idx]
     }
 
-    /// Get a section by ID. First tries the O(1) `section_index_cache`;
+    /// Get a line by ID. First tries the O(1) `line_index_cache`;
     /// if the cache is stale or empty (e.g. after deserialization), falls
     /// back to an O(N) linear scan so we never return a wrong answer.
-    pub fn get_section(&self, section_id: SectionId) -> Option<&Section> {
-        if let Some(&i) = self.section_index_cache.get(&section_id) {
-            if let Some(s) = self.sections.get(i) {
-                if s.id == section_id {
+    pub fn get_line(&self, line_id: LineId) -> Option<&Line> {
+        if let Some(&i) = self.line_index_cache.get(&line_id) {
+            if let Some(s) = self.lines.get(i) {
+                if s.id == line_id {
                     return Some(s);
                 }
             }
         }
-        self.sections.iter().find(|s| s.id == section_id)
+        self.lines.iter().find(|s| s.id == line_id)
     }
 
-    /// Get a mutable reference to a section by ID. Same cache + fallback
-    /// strategy as [`Self::get_section`].
-    pub fn get_section_mut(&mut self, section_id: SectionId) -> Option<&mut Section> {
-        let i = self.section_index_cache.get(&section_id).copied();
+    /// Get a mutable reference to a line by ID. Same cache + fallback
+    /// strategy as [`Self::get_line`].
+    pub fn get_line_mut(&mut self, line_id: LineId) -> Option<&mut Line> {
+        let i = self.line_index_cache.get(&line_id).copied();
         if let Some(i) = i {
-            if let Some(s) = self.sections.get(i) {
-                if s.id == section_id {
-                    return self.sections.get_mut(i);
+            if let Some(s) = self.lines.get(i) {
+                if s.id == line_id {
+                    return self.lines.get_mut(i);
                 }
             }
         }
-        self.sections.iter_mut().find(|s| s.id == section_id)
+        self.lines.iter_mut().find(|s| s.id == line_id)
     }
 
-    /// Update a section's metadata
-    pub fn update_section(
-        &mut self,
-        section_id: SectionId,
-        updates: &SectionUpdates,
-    ) -> Option<&Section> {
+    /// Update a line's metadata
+    pub fn update_line(&mut self, line_id: LineId, updates: &LineUpdates) -> Option<&Line> {
         if updates.surveyor.is_some() || updates.date.is_some() {
             // The legacy surveyor/date land on every shot; give each an
             // identity first so an undo can address it after a reload.
-            self.get_section(section_id)?;
-            self.ensure_section_shot_uuids(section_id);
-            self.reindex_section_shot_uuids(section_id);
+            self.get_line(line_id)?;
+            self.ensure_line_shot_uuids(line_id);
+            self.reindex_line_shot_uuids(line_id);
         }
-        let section = self.get_section_mut(section_id)?;
-        section.apply_updates(updates);
+        let line = self.get_line_mut(line_id)?;
+        line.apply_updates(updates);
         self.touch();
-        self.get_section(section_id)
+        self.get_line(line_id)
     }
 
-    /// Remove a section by ID
-    pub fn remove_section(&mut self, section_id: SectionId) -> Option<Section> {
-        let pos = self.sections.iter().position(|s| s.id == section_id)?;
-        // Removing shifts every later section's index down by one - rather
+    /// Remove a line by ID
+    pub fn remove_line(&mut self, line_id: LineId) -> Option<Line> {
+        let pos = self.lines.iter().position(|s| s.id == line_id)?;
+        // Removing shifts every later line's index down by one - rather
         // than touching N cache entries, we drop the cache and let the
         // linear fallback rebuild it on demand (removes are rare relative
         // to lookups). Callers running a batch can call
-        // `rebuild_section_index()` to restore O(1) lookups afterwards.
-        self.section_index_cache.clear();
+        // `rebuild_line_index()` to restore O(1) lookups afterwards.
+        self.line_index_cache.clear();
         self.touch();
-        Some(self.sections.remove(pos))
+        Some(self.lines.remove(pos))
     }
 
     /// Mint v4 UUIDs for any shot whose `uuid` field is `None` and write
@@ -1086,8 +1143,8 @@ impl Project {
     /// Calling this once at the top of `save_project` guarantees every
     /// consumer receives the same UUIDs.
     pub fn ensure_shot_uuids(&mut self) {
-        for section in &mut self.sections {
-            for shot in &mut section.shots {
+        for line in &mut self.lines {
+            for shot in &mut line.shots {
                 if shot.uuid.as_deref().map_or(true, str::is_empty) {
                     shot.uuid = Some(uuid::Uuid::new_v4().to_string());
                 }
@@ -1095,35 +1152,35 @@ impl Project {
         }
     }
 
-    /// Move every section's LEGACY surveyor/date onto its uncredited shots
-    /// ([`Section::absorb_legacy_credit`]). Run wherever a `Project` or
-    /// `Section` comes back from JSON written before the credit moved onto
+    /// Move every line's LEGACY surveyor/date onto its uncredited shots
+    /// ([`Line::absorb_legacy_credit`]). Run wherever a `Project` or
+    /// `Line` comes back from JSON written before the credit moved onto
     /// the shots - an undo snapshot, an older history entry - so the people it
-    /// named are not silently lost. Returns how many sections changed.
-    pub fn absorb_legacy_section_credit(&mut self) -> usize {
-        self.sections
+    /// named are not silently lost. Returns how many lines changed.
+    pub fn absorb_legacy_line_credit(&mut self) -> usize {
+        self.lines
             .iter_mut()
-            .map(Section::absorb_legacy_credit)
+            .map(Line::absorb_legacy_credit)
             .filter(|changed| *changed)
             .count()
     }
 
-    /// Mint a UUID for every shot of ONE section that lacks one.
+    /// Mint a UUID for every shot of ONE line that lacks one.
     ///
-    /// Section-scoped twin of [`Self::ensure_shot_uuids`], for callers that only
-    /// need one section's `AfterShot` anchors to be buildable (e.g.
-    /// [`Self::reverse_section`]). The project-wide version walks every shot of
-    /// every section, so calling it per section turns a batch of N single-section
-    /// commands into N full-project passes - and mints UUIDs in sections the
+    /// Line-scoped twin of [`Self::ensure_shot_uuids`], for callers that only
+    /// need one line's `AfterShot` anchors to be buildable (e.g.
+    /// [`Self::reverse_line`]). The project-wide version walks every shot of
+    /// every line, so calling it per line turns a batch of N single-line
+    /// commands into N full-project passes - and mints UUIDs in lines the
     /// command never touched.
     ///
     /// Does NOT update [`Self::shot_uuid_index`]; pair it with
-    /// [`Self::reindex_section_shot_uuids`] when the section's shots also move.
-    pub fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
-        let Some(section) = self.get_section_mut(section_id) else {
+    /// [`Self::reindex_line_shot_uuids`] when the line's shots also move.
+    pub fn ensure_line_shot_uuids(&mut self, line_id: LineId) {
+        let Some(line) = self.get_line_mut(line_id) else {
             return;
         };
-        for shot in &mut section.shots {
+        for shot in &mut line.shots {
             if shot.uuid.as_deref().map_or(true, str::is_empty) {
                 shot.uuid = Some(uuid::Uuid::new_v4().to_string());
             }
@@ -1131,21 +1188,21 @@ impl Project {
     }
 
     /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
-    /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
+    /// the SAME line, keeping the first occurrence (AfterShot anchors resolve
     /// to the first match via `position()`, so they stay valid). Returns the
-    /// number re-minted. Restores the in-section uniqueness `resolve_key` relies
+    /// number re-minted. Restores the in-line uniqueness `resolve_key` relies
     /// on; the companion detection lives in [`check_structural_integrity`].
     /// Empty UUIDs are left for [`ensure_shot_uuids`].
     pub fn ensure_unique_shot_uuids(&mut self) -> usize {
         let mut reminted = 0;
-        for section in &mut self.sections {
+        for line in &mut self.lines {
             let mut seen: HashSet<String> = HashSet::new();
-            for shot in &mut section.shots {
+            for shot in &mut line.shots {
                 let Some(u) = shot.uuid.clone() else { continue };
                 if u.is_empty() {
                     continue;
                 }
-                // insert() == false means this UUID already appeared in-section.
+                // insert() == false means this UUID already appeared in-line.
                 if !seen.insert(u) {
                     let fresh = uuid::Uuid::new_v4().to_string();
                     seen.insert(fresh.clone());
@@ -1160,13 +1217,13 @@ impl Project {
         reminted
     }
 
-    /// Map every shot that has a UUID to its `(section_id, shot_id)` position.
+    /// Map every shot that has a UUID to its `(line_id, shot_id)` position.
     /// Shared by both load entry points (`open_project` and
     /// `do_load_project_full`) to feed `backfill_resolved_warning_uuids`, so the
     /// two sites can't diverge. Shots with no UUID are skipped - call
     /// [`ensure_shot_uuids`] first if every shot must be represented.
     pub fn shot_uuid_by_position(&self) -> HashMap<(u32, u32), String> {
-        self.sections
+        self.lines
             .iter()
             .flat_map(|s| {
                 s.shots
@@ -1176,32 +1233,32 @@ impl Project {
             .collect()
     }
 
-    /// Rebuild the section-id → index cache from the current `sections`
+    /// Rebuild the line-id → index cache from the current `lines`
     /// vector. Cheap (O(N)) and safe to call any time; call this after a
     /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
     /// when you can't guarantee the cache is current.
-    pub fn rebuild_section_index(&mut self) {
-        self.section_index_cache.clear();
-        self.section_index_cache.reserve(self.sections.len());
-        for (i, s) in self.sections.iter().enumerate() {
-            self.section_index_cache.insert(s.id, i);
+    pub fn rebuild_line_index(&mut self) {
+        self.line_index_cache.clear();
+        self.line_index_cache.reserve(self.lines.len());
+        for (i, s) in self.lines.iter().enumerate() {
+            self.line_index_cache.insert(s.id, i);
         }
     }
 
-    /// Rebuild the `(section_id, shot_uuid)` → shot-index cache from the current
-    /// `sections`. O(total shots). Call before a hot `resolve_key` loop (batch
+    /// Rebuild the `(line_id, shot_uuid)` → shot-index cache from the current
+    /// `lines`. O(total shots). Call before a hot `resolve_key` loop (batch
     /// import, post-load, snapshot restore). Because `resolve_key` re-checks the
     /// cached index against the shot's UUID, a stale entry is harmless - it falls
     /// back to the linear scan - so this only needs to run often enough to keep
     /// the lookups fast, not for correctness.
     pub fn rebuild_shot_uuid_index(&mut self) {
         self.shot_uuid_index.clear();
-        for s in &self.sections {
+        for s in &self.lines {
             for (i, shot) in s.shots.iter().enumerate() {
                 if let Some(u) = &shot.uuid {
                     // First-occurrence wins: mirror the cold-path `resolve_key`,
                     // which uses `shots.iter().position(...)` (first match). Under
-                    // a duplicated within-section UUID, `or_insert` keeps the
+                    // a duplicated within-line UUID, `or_insert` keeps the
                     // earliest index so the warm cache agrees with the cold scan.
                     self.shot_uuid_index
                         .entry((s.id, u.clone()))
@@ -1211,28 +1268,27 @@ impl Project {
         }
     }
 
-    /// Refresh [`Self::shot_uuid_index`] for ONE section whose shots were
+    /// Refresh [`Self::shot_uuid_index`] for ONE line whose shots were
     /// reordered or re-minted, without the whole-project pass
     /// [`Self::rebuild_shot_uuid_index`] performs.
     ///
     /// A stale entry is never *wrong* - `resolve_key` re-checks the cached index
     /// against the shot's UUID and falls back to a linear scan - but an operation
-    /// that permutes every index in a section (a reverse) invalidates every one of
-    /// its entries at once, so every later `resolve_key` into that section pays the
+    /// that permutes every index in a line (a reverse) invalidates every one of
+    /// its entries at once, so every later `resolve_key` into that line pays the
     /// O(shots) scan until something else rebuilds the cache.
-    pub fn reindex_section_shot_uuids(&mut self, section_id: SectionId) {
-        self.shot_uuid_index
-            .retain(|(sid, _), _| *sid != section_id);
-        let Some(section) = self.get_section(section_id) else {
+    pub fn reindex_line_shot_uuids(&mut self, line_id: LineId) {
+        self.shot_uuid_index.retain(|(sid, _), _| *sid != line_id);
+        let Some(line) = self.get_line(line_id) else {
             return;
         };
-        // Collected first: `section` borrows self immutably, the insert needs it
+        // Collected first: `line` borrows self immutably, the insert needs it
         // mutably.
-        let entries: Vec<((SectionId, String), u32)> = section
+        let entries: Vec<((LineId, String), u32)> = line
             .shots
             .iter()
             .enumerate()
-            .filter_map(|(i, shot)| shot.uuid.clone().map(|u| ((section_id, u), i as u32)))
+            .filter_map(|(i, shot)| shot.uuid.clone().map(|u| ((line_id, u), i as u32)))
             .collect();
         for (key, index) in entries {
             // First-occurrence wins, as in `rebuild_shot_uuid_index`.
@@ -1247,40 +1303,39 @@ impl Project {
         self.station_merges.push(merge);
     }
 
-    /// The north reference in force for `section` (#438): the section's own,
+    /// The north reference in force for `line` (#438): the line's own,
     /// else the project default, else "nothing recorded" (correction 0).
     ///
-    /// THE single resolution point. Geometry calls it once per section and
+    /// THE single resolution point. Geometry calls it once per line and
     /// passes the (`Copy`) result into the per-shot accessor, so the correction
     /// costs one addition per shot and cannot disagree between two walks.
-    pub fn azimuth_reference_for(&self, section: &Section) -> AzimuthReference {
-        section
-            .azimuth_reference
+    pub fn azimuth_reference_for(&self, line: &Line) -> AzimuthReference {
+        line.azimuth_reference
             .or(self.default_azimuth_reference)
             .unwrap_or_default()
     }
 
-    /// Every section's resolved reference, by id.
+    /// Every line's resolved reference, by id.
     ///
     /// For the paths that cannot hold a `&self` borrow while they work - the
-    /// closure solve and the least-squares update both walk `sections.iter_mut()`
+    /// closure solve and the least-squares update both walk `lines.iter_mut()`
     /// - so that they still resolve through [`Self::azimuth_reference_for`]
-    /// instead of re-implementing the section-then-project fallback. The values
+    /// instead of re-implementing the line-then-project fallback. The values
     /// are `Copy` and the map is built once per solve.
-    pub(crate) fn azimuth_reference_map(&self) -> HashMap<SectionId, AzimuthReference> {
-        self.sections
+    pub(crate) fn azimuth_reference_map(&self) -> HashMap<LineId, AzimuthReference> {
+        self.lines
             .iter()
-            .map(|section| (section.id, self.azimuth_reference_for(section)))
+            .map(|line| (line.id, self.azimuth_reference_for(line)))
             .collect()
     }
 
-    /// [`Self::azimuth_reference_for`] by id. A section id that does not resolve
+    /// [`Self::azimuth_reference_for`] by id. A line id that does not resolve
     /// falls back to the project default rather than erroring: the callers are
     /// geometry paths that have already validated the id, and inventing a
-    /// correction for an unknown section is the one wrong answer.
-    pub fn azimuth_reference_for_id(&self, section_id: SectionId) -> AzimuthReference {
-        self.get_section(section_id)
-            .map(|section| self.azimuth_reference_for(section))
+    /// correction for an unknown line is the one wrong answer.
+    pub fn azimuth_reference_for_id(&self, line_id: LineId) -> AzimuthReference {
+        self.get_line(line_id)
+            .map(|line| self.azimuth_reference_for(line))
             .unwrap_or_else(|| self.default_azimuth_reference.unwrap_or_default())
     }
 
@@ -1288,33 +1343,34 @@ impl Project {
     /// in the same true-north frame the coordinate walk uses.
     ///
     /// Routed through [`ShotData::average_azimuth_true`] rather than re-deriving
-    /// the mean: this feeds the persisted `section_offsets` compensation that
+    /// the mean: this feeds the persisted `line_offsets` compensation that
     /// insert/prepend/delete apply, so a private copy that drifts from the
-    /// coordinate walk moves the section by twice the shot vector and saves it.
+    /// coordinate walk moves the line by twice the shot vector and saves it.
     /// An inlined `%` copy did exactly that once `average_azimuth_of` moved to
     /// `rem_euclid` - the two disagreed by 180 degrees for readings more than
     /// 540 apart, which validation only warns about.
     ///
     /// `reference` is why this takes an argument at all (#438): the compensation
     /// has to cancel the vector the WALK produced, and the walk is corrected. A
-    /// caller that passes the default here while the section carries a
-    /// declination shifts that section by the difference on every insert.
+    /// caller that passes the default here while the line carries a
+    /// declination shifts that line by the difference on every insert.
     pub fn shot_displacement(data: &ShotData, reference: AzimuthReference) -> (f64, f64) {
         let az_rad = data.average_azimuth_true_rad(reference);
         let horizontal = data.horizontal_length();
         (horizontal * az_rad.sin(), horizontal * az_rad.cos())
     }
 
-    // === Section offset helpers ===
+    // === Line offset helpers ===
 
-    /// Shift all StationRef indices in the project for the given section.
+    /// Shift all StationRef indices in the project for the given line.
     ///
-    /// All station references where `section_id` matches AND `station_index >= from_index`
+    /// All station references where `line_id` matches AND `station_index >= from_index`
     /// have their `station_index` shifted by `delta`. This is needed when inserting or
     /// removing shots, which changes station indices for all subsequent stations.
     ///
     /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
-    /// station_comments, station_names - all routed through [`Self::map_station_refs`].
+    /// station_comments, station_names, station_ids - all routed through
+    /// [`Self::map_station_refs`].
     /// THE single enumeration of every [`StationKey`]-bearing collection on the
     /// project, for READ access. `check_structural_integrity` and
     /// `reanchor_station_refs` consume this so a newly-added ref-bearing collection
@@ -1340,6 +1396,9 @@ impl Project {
         for k in self.station_names.keys() {
             f("station name", k.clone());
         }
+        for k in self.station_ids.keys() {
+            f("station id", k.clone());
+        }
     }
 
     /// THE single enumeration for REWRITING every [`StationKey`]-bearing collection
@@ -1349,7 +1408,7 @@ impl Project {
     /// insert/delete no longer rewrite them - `shift_station_refs` is gone.)
     pub fn map_station_refs(&mut self, mut f: impl FnMut(StationKey) -> StationKey) {
         // `iter_mut` invalidates the merge-adjacency memo: `f` can move an
-        // endpoint to another section (the delete-shot split does exactly that),
+        // endpoint to another line (the delete-shot split does exactly that),
         // which rewrites the very graph the memo describes.
         for m in self.station_merges.iter_mut() {
             m.station_a = f(m.station_a.clone());
@@ -1368,10 +1427,12 @@ impl Project {
         self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
         let names = std::mem::take(&mut self.station_names);
         self.station_names = names.into_iter().map(|(k, v)| (f(k), v)).collect();
+        let ids = std::mem::take(&mut self.station_ids);
+        self.station_ids = ids.into_iter().map(|(k, v)| (f(k), v)).collect();
     }
 
-    fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
-        (station_ref.section_id, station_ref.station_index)
+    fn station_ref_key(station_ref: &StationRef) -> (LineId, u32) {
+        (station_ref.line_id, station_ref.station_index)
     }
 
     fn has_direct_merge(&self, a: StationRef, b: StationRef) -> bool {
@@ -1509,20 +1570,20 @@ impl Project {
     /// it - never up alone.
     pub const MERGE_ALIGNMENT_INVARIANT_M: f64 = 0.01;
 
-    /// The displacement (metres) below which a section offset is float dust
+    /// The displacement (metres) below which a line offset is float dust
     /// rather than geometry, and is therefore normalized away instead of stored.
     ///
     /// It is what makes "not displaced" have exactly one spelling - see the
-    /// invariant on [`Self::write_section_offset`], which no `section_offsets`
+    /// invariant on [`Self::write_line_offset`], which no `line_offsets`
     /// entry in memory or on disk may violate.
     ///
     /// One constant for the six places that decide it (#413 finding 2's dust
-    /// half): [`Self::write_section_offset`], the offset solver's
+    /// half): [`Self::write_line_offset`], the offset solver's
     /// [`Self::cascade_bfs`] correction gate, the two merge-BFS gates in
     /// `reconcile_after_edit`, [`Self::settle_minted_merges`], and
     /// [`Self::renormalize_frame`]'s idempotence early-return. They used to
     /// disagree - the merge BFS declined below 1e-12 while `cascade_bfs`
-    /// "corrected" a femtometre, CREATING a `section_offsets` key for a section
+    /// "corrected" a femtometre, CREATING a `line_offsets` key for a line
     /// that is not displaced - and the difference between a key and no key is
     /// structural, not numeric: it survives into the `.stalx`, and two routes to
     /// the same geometry stopped comparing equal.
@@ -1567,7 +1628,7 @@ impl Project {
     /// (1.46e-11 is exactly 2^-36, one ULP at 7.9e4 m; 4.66e-9 is five ULPs at
     /// 4.2e6 m), which is the shape the argument above predicts. The worst case
     /// the app can produce is therefore ~5e-9 m, and it was measured PAST the
-    /// georeference ceiling (the horizon run reached 1.8e7 m because section
+    /// georeference ceiling (the horizon run reached 1.8e7 m because line
     /// offsets stack on top of the inter-datum distance).
     ///
     /// 1e-6 m is a micrometre: two decades and a bit above that worst case, four
@@ -1582,10 +1643,10 @@ impl Project {
     /// `core/state/fuzz_undo_tests.rs`), three decades BELOW this gate, so a
     /// difference anywhere in `(0, OFFSET_DUST_M)` is one the oracle WOULD report.
     /// It never has to, because that band is unreachable rather than merely
-    /// unlikely: [`Self::write_section_offset`] is the single writer and it removes
+    /// unlikely: [`Self::write_line_offset`] is the single writer and it removes
     /// the key instead of writing a value inside the band, and
-    /// [`Self::normalize_section_offsets`] drops any a legacy file carried, so no
-    /// state the fuzzer can reach holds a `section_offsets` value under the gate at
+    /// [`Self::normalize_line_offsets`] drops any a legacy file carried, so no
+    /// state the fuzzer can reach holds a `line_offsets` value under the gate at
     /// all. Two compared states can therefore only disagree inside the band via the
     /// STRADDLE below - a TRUE offset landing within one float residue (~5e-9 m,
     /// the worst measured above) of the gate boundary itself, so one route writes
@@ -1600,7 +1661,7 @@ impl Project {
     /// renormalisation moved them four decades, the residue moved with them, and
     /// `CLOSURE_SHAPES=1` seed 18 then found the consequence: two cascades over
     /// the same geometry, seeded differently, landed on either side of the gate,
-    /// so one wrote a picometre `section_offsets` key and the other wrote none.
+    /// so one wrote a picometre `line_offsets` key and the other wrote none.
     /// A key is structural, so the two states stopped comparing equal.
     ///
     /// That is the failure mode to watch for, and it is a STRADDLE rather than a
@@ -1613,54 +1674,51 @@ impl Project {
     /// applied when a value is written, never a tolerance on a comparison.
     pub const OFFSET_DUST_M: f64 = 1e-6;
 
-    /// Per-section cumulative LOCAL `(x, y)` for every station index
-    /// (`0..=shots.len()`), before section/station offsets are applied. Built
+    /// Per-line cumulative LOCAL `(x, y)` for every station index
+    /// (`0..=shots.len()`), before line/station offsets are applied. Built
     /// once so callers that look up many stations - the alignment check and the
-    /// offset solver - avoid re-walking a section's shots on every lookup. This
+    /// offset solver - avoid re-walking a line's shots on every lookup. This
     /// is what keeps those operations `O(shots + merges)` instead of the
     /// `O(merges × depth)` that made the per-mutation alignment check too costly.
     /// Resolve a stored, position-independent [`StationKey`] to a transient
-    /// positional [`StationRef`] against the CURRENT section structure.
-    /// `None` if the section is gone or the anchoring shot was deleted (which is
+    /// positional [`StationRef`] against the CURRENT line structure.
+    /// `None` if the line is gone or the anchoring shot was deleted (which is
     /// exactly the "dangling reference" an integrity check should surface).
     ///
     /// This is the read side of the stable-identity boundary: cross-references are
     /// stored as `StationKey`, and the solver/IPC resolve them to a positional
     /// `StationRef` here. `O(shots)` per call - callers that resolve many keys for
-    /// the same section should hoist the lookup.
+    /// the same line should hoist the lookup.
     pub fn resolve_key(&self, key: &StationKey) -> Option<StationRef> {
-        let section = self.get_section(key.section_id)?;
+        let line = self.get_line(key.line_id)?;
         let index = match &key.anchor {
-            StationAnchor::SectionStart => 0,
+            StationAnchor::LineStart => 0,
             StationAnchor::AfterShot(uuid) => {
                 // O(1) via the shot-UUID index when warm. The index re-check
                 // makes a stale/absent entry harmless: it falls back to the
                 // authoritative linear scan, so the cache can never resolve to the
                 // wrong station and never needs eager invalidation for safety.
-                if let Some(&i) = self.shot_uuid_index.get(&(key.section_id, uuid.clone())) {
-                    if section
-                        .shots
-                        .get(i as usize)
-                        .and_then(|s| s.uuid.as_deref())
+                if let Some(&i) = self.shot_uuid_index.get(&(key.line_id, uuid.clone())) {
+                    if line.shots.get(i as usize).and_then(|s| s.uuid.as_deref())
                         == Some(uuid.as_str())
                     {
-                        return Some(StationRef::new(key.section_id, i + 1));
+                        return Some(StationRef::new(key.line_id, i + 1));
                     }
                 }
-                let pos = section
+                let pos = line
                     .shots
                     .iter()
                     .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
                 (pos + 1) as u32
             }
             StationAnchor::Index(i) => {
-                if *i as usize > section.shots.len() {
+                if *i as usize > line.shots.len() {
                     return None;
                 }
                 *i
             }
         };
-        Some(StationRef::new(key.section_id, index))
+        Some(StationRef::new(key.line_id, index))
     }
 
     /// True if the stored key resolves to exactly `sr` (the sound way to ask "is
@@ -1671,31 +1729,31 @@ impl Project {
     }
 
     /// Build the stored [`StationKey`] for a transient positional [`StationRef`].
-    /// `None` if the section is gone, the index is out of range, or the anchoring
+    /// `None` if the line is gone, the index is out of range, or the anchoring
     /// shot has no UUID (shouldn't happen after the load-time mint). Station 0
-    /// anchors to `SectionStart`; station `i` to `AfterShot(uuid of shot i-1)`.
+    /// anchors to `LineStart`; station `i` to `AfterShot(uuid of shot i-1)`.
     pub fn key_for_ref(&self, sr: StationRef) -> Option<StationKey> {
-        let section = self.get_section(sr.section_id)?;
+        let line = self.get_line(sr.line_id)?;
         let anchor = if sr.station_index == 0 {
-            StationAnchor::SectionStart
+            StationAnchor::LineStart
         } else {
-            let shot = section.shots.get((sr.station_index - 1) as usize)?;
+            let shot = line.shots.get((sr.station_index - 1) as usize)?;
             StationAnchor::AfterShot(shot.uuid.clone()?)
         };
-        Some(StationKey::new(sr.section_id, anchor))
+        Some(StationKey::new(sr.line_id, anchor))
     }
 
     /// Resolve a stored key to a positional ref for a **non-persistence display
     /// payload only**, falling back to station 0 if the anchor no longer resolves
     /// (a dangling ref). NEVER use this on a save/wire path: collapsing a dangling
-    /// key to `(section, 0)` writes a phantom station-0 relationship and can
-    /// collide on the `(section_id, station_index)` PRIMARY KEY. Persistence and
+    /// key to `(line, 0)` writes a phantom station-0 relationship and can
+    /// collide on the `(line_id, station_index)` PRIMARY KEY. Persistence and
     /// wire encoders use [`resolve_key`] and skip what doesn't resolve. The one
     /// legitimate caller is the delete-shot impact preview, where an endpoint may
     /// intentionally be the station being removed.
     pub(crate) fn key_to_ref_lossy(&self, key: &StationKey) -> StationRef {
         self.resolve_key(key)
-            .unwrap_or_else(|| StationRef::new(key.section_id, 0))
+            .unwrap_or_else(|| StationRef::new(key.line_id, 0))
     }
 
     /// Positional wire form of a stored merge, or `None` if either endpoint
@@ -1754,7 +1812,7 @@ impl Project {
     }
 
     /// Re-anchor every stored cross-reference from a transitional positional form
-    /// (`Index`) to the stable `AfterShot(uuid)` / `SectionStart` form, now that
+    /// (`Index`) to the stable `AfterShot(uuid)` / `LineStart` form, now that
     /// shots (with UUIDs) are present. Run on load so a v6 file's positional refs
     /// open with stable identity and no `Index` anchor survives into the live model.
     pub fn reanchor_station_refs(&mut self) {
@@ -1786,38 +1844,38 @@ impl Project {
         );
     }
 
-    fn section_local_coords(&self) -> HashMap<SectionId, Vec<(f64, f64)>> {
-        let mut map = HashMap::with_capacity(self.sections.len());
-        for section in &self.sections {
-            let mut coords = Vec::with_capacity(section.shots.len() + 1);
+    fn line_local_coords(&self) -> HashMap<LineId, Vec<(f64, f64)>> {
+        let mut map = HashMap::with_capacity(self.lines.len());
+        for line in &self.lines {
+            let mut coords = Vec::with_capacity(line.shots.len() + 1);
             let (mut x, mut y) = (0.0_f64, 0.0_f64);
             coords.push((x, y));
-            let azimuth_reference = self.azimuth_reference_for(section);
-            for shot in &section.shots {
+            let azimuth_reference = self.azimuth_reference_for(line);
+            for shot in &line.shots {
                 let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let horizontal = shot.horizontal_length();
                 x += horizontal * azimuth_rad.sin();
                 y += horizontal * azimuth_rad.cos();
                 coords.push((x, y));
             }
-            map.insert(section.id, coords);
+            map.insert(line.id, coords);
         }
         map
     }
 
-    /// World `(x, y)` of a station using a [`Self::section_local_coords`] map:
-    /// section offset + cumulative local position + optional station offset.
+    /// World `(x, y)` of a station using a [`Self::line_local_coords`] map:
+    /// line offset + cumulative local position + optional station offset.
     /// Matches the `x`/`y` of [`Self::compute_station_raw_coords`] in `O(1)`.
     fn station_world_xy(
         &self,
         sr: StationRef,
-        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        local: &HashMap<LineId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
     ) -> Option<(f64, f64)> {
-        let &(lx, ly) = local.get(&sr.section_id)?.get(sr.station_index as usize)?;
+        let &(lx, ly) = local.get(&sr.line_id)?.get(sr.station_index as usize)?;
         let (ox, oy) = self
-            .section_offsets
-            .get(&sr.section_id)
+            .line_offsets
+            .get(&sr.line_id)
             .copied()
             .unwrap_or((0.0, 0.0));
         let (mut x, mut y) = (lx + ox, ly + oy);
@@ -1844,7 +1902,7 @@ impl Project {
 
     /// Per-station manual offset for a single positional ref. Found by resolving
     /// each stored key to its positional ref - sound for ANY anchor kind
-    /// (canonical `AfterShot`/`SectionStart` after reanchor, or transitional
+    /// (canonical `AfterShot`/`LineStart` after reanchor, or transitional
     /// `Index` straight off a raw load), unlike building a canonical key (which
     /// would never match an `Index` entry). `None` when there is no nudge (the
     /// common case - short-circuits before touching the map).
@@ -1894,6 +1952,13 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod station_names_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
+mod station_identity_tests;
+
+#[cfg(test)]
+mod station_naming_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]

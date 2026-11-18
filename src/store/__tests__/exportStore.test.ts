@@ -30,7 +30,7 @@ describe('exportStore', () => {
       color_mode: 'none',
       show_station_labels: false,
       show_station_names: false,
-      show_section_names: false,
+      show_line_names: false,
       show_station_comments: false,
       show_shot_comments: false,
       show_shot_data: false,
@@ -86,7 +86,7 @@ describe('exportStore', () => {
       dirty();
       // Same call `projectStore.loadProject` / `createProject` make, and the same
       // funnel `useGasPlanStore.getState().reset()` already rides on.
-      useUIStore.getState().applyDisplaySettings({ ...DISPLAY_DEFAULTS, geometryMode: 'measured' });
+      useUIStore.getState().applyDisplaySettings({ ...DISPLAY_DEFAULTS, geometryMode: 'measured', hiddenSections: [] });
       expectDefaults();
     });
   });

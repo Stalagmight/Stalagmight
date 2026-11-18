@@ -1,21 +1,21 @@
-//! The least-squares anchor of a component across Combine Sections and Split
-//! Section Here (`project/gauge.rs`): over every pairing, every combination of
-//! reverse parities, every order the sections were created in (which decides
-//! the lowest id, and so which section anchors the component), either kept
-//! section, and a captured or uncaptured gauge, the closure-adjusted position
+//! The least-squares anchor of a component across Combine Lines and Split
+//! Line Here (`project/gauge.rs`): over every pairing, every combination of
+//! reverse parities, every order the lines were created in (which decides
+//! the lowest id, and so which line anchors the component), either kept
+//! line, and a captured or uncaptured gauge, the closure-adjusted position
 //! of every station is the same after the edit as before.
 //!
 //! Stations are matched by their MEASURED position, which both edits keep for
-//! every station: a combine renumbers the kept section's stations and moves
-//! the other section's into it, a split duplicates the cut station, so a
+//! every station: a combine renumbers the kept line's stations and moves
+//! the other line's into it, a split duplicates the cut station, so a
 //! station's reference is not its identity across the edit. The few stations
 //! that share a measured position are merged (one node in the adjustment), so
 //! every match must agree.
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    ClosureStrategy, CombinePick, CombineSectionsOptions, LoopClosure, Project, SectionData,
-    SectionId, ShotData, SplitSectionOptions, SplitSide, StationRef,
+    ClosureStrategy, CombineLinesOptions, CombinePick, LineData, LineId, LoopClosure, Project,
+    ShotData, SplitLineOptions, SplitSide, StationRef,
 };
 
 use super::gauge::gauge_pair_for_station;
@@ -29,9 +29,9 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some(name.to_string()),
             shots,
             ..Default::default()
@@ -45,9 +45,9 @@ fn raw(project: &Project, at: StationRef) -> (f64, f64) {
 }
 
 /// Move `id` so its station `index` sits on `target`.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = raw(project, StationRef::new(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
 /// An unaligned, least-squares closure between `a` and `b`.
@@ -119,7 +119,7 @@ enum Role {
     Third,
 }
 
-/// The creation orders of the three sections: the first created has the
+/// The creation orders of the three lines: the first created has the
 /// lowest id and anchors the component.
 const ORDERS: [[Role; 3]; 6] = [
     [Role::Kept, Role::Other, Role::Third],
@@ -132,7 +132,7 @@ const ORDERS: [[Role; 3]; 6] = [
 
 /// One combine shape: K (two shots east from the origin) and O (three shots)
 /// merged end to end, `o_at_k_end` choosing K's physical end or start for the
-/// join and `o_start_joins` O's start or end; a third section T merged at K's
+/// join and `o_start_joins` O's start or end; a third line T merged at K's
 /// other end, or at the join itself (`t_at_join`, a junction), closes a loop
 /// onto K's middle station 1 m short. Then each of K and O is reversed when
 /// asked, which keeps every station where it is.
@@ -141,7 +141,7 @@ fn combine_shape(
     o_at_k_end: bool,
     o_start_joins: bool,
     reverse: (bool, bool),
-) -> (Project, SectionId, SectionId) {
+) -> (Project, LineId, LineId) {
     combine_shape_with(order, o_at_k_end, o_start_joins, reverse, false).0
 }
 
@@ -151,7 +151,7 @@ fn combine_shape_with(
     o_start_joins: bool,
     reverse: (bool, bool),
     t_at_join: bool,
-) -> ((Project, SectionId, SectionId), SectionId) {
+) -> ((Project, LineId, LineId), LineId) {
     let mut project = Project::new("Matrix".to_string(), None);
     let mut ids = [0; 3];
     for role in order {
@@ -190,16 +190,16 @@ fn combine_shape_with(
         .unwrap();
     close(&mut project, StationRef::new(t, 3), StationRef::new(k, 1));
     if reverse.0 {
-        assert!(project.reverse_section(k, false));
+        assert!(project.reverse_line(k, false));
     }
     if reverse.1 {
-        assert!(project.reverse_section(o, false));
+        assert!(project.reverse_line(o, false));
     }
     ((project, k, o), t)
 }
 
-fn combine_options() -> CombineSectionsOptions {
-    CombineSectionsOptions {
+fn combine_options() -> CombineLinesOptions {
+    CombineLinesOptions {
         name: "Joined".to_string(),
         color: "#abcdef".to_string(),
         swap_lr: false,
@@ -211,10 +211,10 @@ fn combine_options() -> CombineSectionsOptions {
 
 /// Combine never moves the closure-adjusted survey: over every pairing and
 /// parity, every creation order (so the anchor is K's, O's or a third
-/// section's, including a third section with an id between the two), either
-/// section kept, gauges captured by a save or not, and the third section
+/// line's, including a third line with an id between the two), either
+/// line kept, gauges captured by a save or not, and the third line
 /// hanging off K's far end or merged at the join itself (a junction, where it
-/// stays as a branch). The third section's record parities never change.
+/// stays as a branch). The third line's record parities never change.
 #[test]
 fn combine_keeps_every_adjusted_station_in_place() {
     let mut cases = 0;
@@ -250,7 +250,7 @@ fn combine_keeps_every_adjusted_station_in_place() {
                             let t_parities = record_parities(&project, t);
 
                             project
-                                .combine_sections(kept, other, &combine_options())
+                                .combine_lines(kept, other, &combine_options())
                                 .unwrap_or_else(|e| panic!("{what}: {e}"));
                             assert_eq!(record_parities(&project, t), t_parities, "{what}");
 
@@ -273,13 +273,12 @@ fn combine_keeps_every_adjusted_station_in_place() {
     assert_eq!(cases, 768);
 }
 
-/// The record parity of every shot of `section`, in order.
-fn record_parities(project: &Project, section: SectionId) -> Vec<bool> {
-    let section = project.get_section(section).unwrap();
-    section
-        .shots
+/// The record parity of every shot of `line`, in order.
+fn record_parities(project: &Project, line: LineId) -> Vec<bool> {
+    let line = project.get_line(line).unwrap();
+    line.shots
         .iter()
-        .map(|shot| project.shot_record_parity(section, shot.uuid.as_deref()))
+        .map(|shot| project.shot_record_parity(line, shot.uuid.as_deref()))
         .collect()
 }
 
@@ -292,7 +291,7 @@ fn split_shape(
     cut: u32,
     gauge: Option<u32>,
     reversed: bool,
-) -> (Project, SectionId, u32) {
+) -> (Project, LineId, u32) {
     let mut project = Project::new("Matrix".to_string(), None);
     let s_shots = (0..4).map(|_| shot(90.0, 10.0)).collect::<Vec<_>>();
     let x_shots = vec![
@@ -314,13 +313,13 @@ fn split_shape(
         .unwrap();
     close(&mut project, StationRef::new(x, 3), StationRef::new(s, 4));
     if let Some(gauge) = gauge {
-        let section = project.get_section_mut(s).unwrap();
-        let (shot, neighbour) = gauge_pair_for_station(section, gauge as usize).unwrap();
-        section.gauge_shot_uuid = Some(shot);
-        section.gauge_neighbour_uuid = neighbour;
+        let line = project.get_line_mut(s).unwrap();
+        let (shot, neighbour) = gauge_pair_for_station(line, gauge as usize).unwrap();
+        line.gauge_shot_uuid = Some(shot);
+        line.gauge_neighbour_uuid = neighbour;
     }
     let cut = if reversed {
-        assert!(project.reverse_section(s, false));
+        assert!(project.reverse_line(s, false));
         4 - cut
     } else {
         cut
@@ -331,7 +330,7 @@ fn split_shape(
 /// Split never moves the closure-adjusted survey when the halves stay one
 /// component (X is merged at the cut, so both copies of the cut station are
 /// merged to it): over every mid-station cut, every gauge station of the cut
-/// section (and an uncaptured gauge), either orientation, and either section
+/// line (and an uncaptured gauge), either orientation, and either line
 /// created first.
 #[test]
 fn split_keeps_every_adjusted_station_in_place() {
@@ -348,7 +347,7 @@ fn split_keeps_every_adjusted_station_in_place() {
                     let before = positions(&project);
                     let anchor = project.adjustment_anchor_for_tests(s).unwrap();
                     let anchored_at = raw(&project, anchor);
-                    let options = SplitSectionOptions {
+                    let options = SplitLineOptions {
                         name_a: "S-A".to_string(),
                         name_b: "S-B".to_string(),
                         color_a: "#111111".to_string(),
@@ -358,7 +357,7 @@ fn split_keeps_every_adjusted_station_in_place() {
                     };
 
                     project
-                        .split_section_at_station(s, at, &options)
+                        .split_line_at_station(s, at, &options)
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
 
                     let (worst, unmatched) = worst_shift(&before, &positions(&project));
@@ -379,7 +378,7 @@ fn split_keeps_every_adjusted_station_in_place() {
 }
 
 /// A held gauge names its station by shots, so it follows the station through
-/// a later reverse of the section that holds it, and a later combine that
+/// a later reverse of the line that holds it, and a later combine that
 /// moves it again; and a held gauge whose shot is gone is pruned.
 #[test]
 fn a_held_gauge_follows_its_station_and_a_dangling_one_is_pruned() {
@@ -389,7 +388,7 @@ fn a_held_gauge_follows_its_station_and_a_dangling_one_is_pruned() {
         true,
         (false, false),
     );
-    project.combine_sections(k, o, &combine_options()).unwrap();
+    project.combine_lines(k, o, &combine_options()).unwrap();
     assert_eq!(
         project.held_gauges.len(),
         1,
@@ -398,7 +397,7 @@ fn a_held_gauge_follows_its_station_and_a_dangling_one_is_pruned() {
     let held_at = raw(&project, project.adjustment_anchor_for_tests(k).unwrap());
     let before = positions(&project);
 
-    assert!(project.reverse_section(k, false));
+    assert!(project.reverse_line(k, false));
     let now = raw(&project, project.adjustment_anchor_for_tests(k).unwrap());
     assert!((now.0 - held_at.0).hypot(now.1 - held_at.1) < 1e-9);
     let (worst, unmatched) = worst_shift(&before, &positions(&project));
@@ -411,7 +410,7 @@ fn a_held_gauge_follows_its_station_and_a_dangling_one_is_pruned() {
     // Drop the shots the entry names: it names nothing and is pruned.
     let held = project.held_gauges[0].clone();
     project
-        .get_section_mut(k)
+        .get_line_mut(k)
         .unwrap()
         .shots
         .retain(|s| s.uuid.as_deref() != Some(&held.shot));

@@ -25,7 +25,7 @@ const RIG: DpvRig = {
   range_reserve_fraction: 0.1,
 };
 
-const OK = { success: true, error: null, warnings: [], section_ids: [] };
+const OK = { success: true, error: null, warnings: [], line_ids: [] };
 
 beforeEach(async () => {
   // Drain a previous test's queue into its own mock before installing a fresh one.

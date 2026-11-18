@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{SectionId, ShotId, StationRef};
+use crate::{LineId, ShotId, StationRef};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
@@ -26,7 +26,7 @@ pub enum WarningSeverity {
 /// A warning row hangs off a shot, and an Ignore is keyed by (shot, code), so
 /// each fix needs a (shot, code) pair of its own: a fix on station `i > 0`
 /// sits on the shot that ARRIVES at it (`i - 1`) under this code; a fix on a
-/// section's first station, which no shot arrives at, sits on the shot that
+/// line's first station, which no shot arrives at, sits on the shot that
 /// LEAVES it (shot 0) under [`DATUM_GPS_GAP_START`]. Station 1's fix uses
 /// shot 0 too, and the codes keep the two Ignores apart.
 ///
@@ -34,7 +34,7 @@ pub enum WarningSeverity {
 /// merge-connected group are valid since #741.)
 pub const DATUM_GPS_GAP: &str = "datum_gps_gap";
 
-/// [`DATUM_GPS_GAP`] for a fix on a section's first station (station 0). Same
+/// [`DATUM_GPS_GAP`] for a fix on a line's first station (station 0). Same
 /// check and message; only the Ignore key differs.
 pub const DATUM_GPS_GAP_START: &str = "datum_gps_gap_start";
 
@@ -135,7 +135,7 @@ pub fn warning_is_ignorable(code: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct ProjectWarning {
-    pub section_id: SectionId,
+    pub line_id: LineId,
     pub shot_id: ShotId,
     pub shot_index: usize,
     pub code: String,
@@ -151,7 +151,7 @@ pub struct ProjectWarning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub shot_uuid: Option<String>,
-    /// For `datum_gps_gap` only: the `station_index` (within `section_id`) of
+    /// For `datum_gps_gap` only: the `station_index` (within `line_id`) of
     /// the GPS-fix datum this row is about. Lets the Resolve view offer "Go to
     /// station" without re-deriving the ambiguous station-to-shot mapping.
     #[serde(default, skip_serializing_if = "Option::is_none")]

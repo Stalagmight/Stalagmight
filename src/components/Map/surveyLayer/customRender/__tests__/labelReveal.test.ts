@@ -61,8 +61,8 @@ function desc(kind: LabelKind, over: Partial<LabelDescriptor> = {}): LabelDescri
 }
 
 describe('labelPriority', () => {
-  it('orders section > errors past a threshold > first station > station > minor errors > shot > comments', () => {
-    expect(labelPriority(LABEL_KIND.SECTION_NAME, false)).toBe(0);
+  it('orders line > errors past a threshold > first station > station > minor errors > shot > comments', () => {
+    expect(labelPriority(LABEL_KIND.LINE_NAME, false)).toBe(0);
     expect(labelPriority(LABEL_KIND.SHOT_ERROR, false, 1)).toBe(1);
     expect(labelPriority(LABEL_KIND.CLOSURE_ERROR, false, 2.5)).toBe(1);
     expect(labelPriority(LABEL_KIND.STATION_LABEL, true)).toBe(2);
@@ -86,26 +86,26 @@ describe('computeRevealZooms decimation-admission fold', () => {
     expect(Array.from(reveal)).toEqual([14, 16, 18]);
   });
 
-  it('a first-in-section station reveals at its minzoom regardless of ordinal', () => {
-    const descs = [desc(LABEL_KIND.STATION_LABEL, { anchorX: 0, ordinal: 7, flags: LABEL_FLAG.FIRST_IN_SECTION })];
+  it('a first-in-line station reveals at its minzoom regardless of ordinal', () => {
+    const descs = [desc(LABEL_KIND.STATION_LABEL, { anchorX: 0, ordinal: 7, flags: LABEL_FLAG.FIRST_IN_LINE })];
     expect(computeRevealZooms(descs, [UNIT_EXT], input())[0]).toBe(14);
   });
 });
 
 describe('computeRevealZooms priority (coincident labels)', () => {
-  it('a section name reveals; a coincident shot is pushed past the horizon (never)', () => {
+  it('a line name reveals; a coincident shot is pushed past the horizon (never)', () => {
     // Same anchor → boxes overlap at every zoom (0 separation), so only the
-    // higher-priority section can ever reveal.
-    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), desc(LABEL_KIND.SECTION_NAME)];
+    // higher-priority line can ever reveal.
+    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), desc(LABEL_KIND.LINE_NAME)];
     const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
-    expect(reveal[1]).toBe(10); // section at its minzoom
+    expect(reveal[1]).toBe(10); // line at its minzoom
     expect(reveal[0]).toBe(REVEAL_NEVER); // coincident shot never clears
   });
 
-  it('a first-in-section station beats a coincident ordinary station', () => {
+  it('a first-in-line station beats a coincident ordinary station', () => {
     const descs = [
       desc(LABEL_KIND.STATION_LABEL, { ordinal: 2 }), // ordinary (tier 1, admit 16)
-      desc(LABEL_KIND.STATION_LABEL, { ordinal: 7, flags: LABEL_FLAG.FIRST_IN_SECTION }), // admit 14, priority 1
+      desc(LABEL_KIND.STATION_LABEL, { ordinal: 7, flags: LABEL_FLAG.FIRST_IN_LINE }), // admit 14, priority 1
     ];
     const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
     expect(reveal[1]).toBe(14);
@@ -150,17 +150,17 @@ describe('computeRevealZooms determinism', () => {
 describe('computeRevealZooms candidate filter (matches the shader gates)', () => {
   it('a toggled-off kind is NOT contested - it reveals at its floor and blocks nobody', () => {
     // Shot toggled off: it is emitted at its admission floor (so a later toggle-on
-    // shows it without a rebuild) and does not cull the coincident section.
-    const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
+    // shows it without a rebuild) and does not cull the coincident line.
+    const descs = [desc(LABEL_KIND.LINE_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
     const kindVisible = [false, true, true, true, true]; // shot off
     const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ kindVisible }));
-    expect(reveal[0]).toBe(10); // section still reveals at its minzoom
+    expect(reveal[0]).toBe(10); // line still reveals at its minzoom
     expect(reveal[1]).toBe(14); // shot emitted uncontested at its floor
   });
 
   it('reference/all-reference labels are not contested when both virtual kinds are hidden', () => {
     const descs = [
-      desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE }),
+      desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_REFERENCE }),
       desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.REFERENCE, ordinal: 0 }),
     ];
     const reveal = computeRevealZooms(
@@ -228,30 +228,30 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
   });
 
   it('an empty (whitespace) label never reveals - no ink, never emitted', () => {
-    const descs = [desc(LABEL_KIND.SECTION_NAME)];
+    const descs = [desc(LABEL_KIND.LINE_NAME)];
     expect(computeRevealZooms(descs, [null], input())[0]).toBe(REVEAL_NEVER);
   });
 });
 
 describe('computeRevealZooms comment overlap-exempt (C1)', () => {
   it('exempt comment kinds reveal uncontested at their minzoom, blocking nobody', () => {
-    // A shot comment coincident (0 separation) with a section name is normally
+    // A shot comment coincident (0 separation) with a line name is normally
     // culled - lowest priority, always overlapping. Overlap-exempt: it reveals at
-    // its floor (comment minzoom 14) and the section is unaffected.
-    const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_COMMENT)];
+    // its floor (comment minzoom 14) and the line is unaffected.
+    const descs = [desc(LABEL_KIND.LINE_NAME), desc(LABEL_KIND.SHOT_COMMENT)];
     const culled = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
-    expect(culled[1]).toBe(REVEAL_NEVER); // normally culled by the coincident section
+    expect(culled[1]).toBe(REVEAL_NEVER); // normally culled by the coincident line
     const exempt = computeRevealZooms(
       descs, [UNIT_EXT, UNIT_EXT], input({ commentOverlapExempt: true }),
     );
-    expect(exempt[0]).toBe(10); // section unchanged (its minzoom)
+    expect(exempt[0]).toBe(10); // line unchanged (its minzoom)
     expect(exempt[1]).toBe(14); // comment now revealed uncontested at its floor
   });
 
   it('exempts ONLY comment kinds - a coincident non-comment label still collides', () => {
-    // A shot LABEL coincident with a section name stays culled even with the
+    // A shot LABEL coincident with a line name stays culled even with the
     // exemption on: the flag must not touch non-comment kinds.
-    const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
+    const descs = [desc(LABEL_KIND.LINE_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
     const reveal = computeRevealZooms(
       descs, [UNIT_EXT, UNIT_EXT], input({ commentOverlapExempt: true }),
     );
@@ -344,7 +344,7 @@ describe('computeRevealZooms MONOTONICITY (randomized zoom sweep)', () => {
   it('for a fixed build the visible set only GROWS with zoom and never overlaps', () => {
     const rnd = lcg(0xc0ffee);
     const kinds: LabelKind[] = [
-      LABEL_KIND.SECTION_NAME,
+      LABEL_KIND.LINE_NAME,
       LABEL_KIND.STATION_LABEL,
       LABEL_KIND.SHOT_LABEL,
       LABEL_KIND.STATION_COMMENT,
@@ -359,8 +359,8 @@ describe('computeRevealZooms MONOTONICITY (randomized zoom sweep)', () => {
         anchorX: rnd() * 0.0008,
         anchorY: rnd() * 0.0008,
         ordinal: Math.floor(rnd() * 40),
-        flags: rnd() < 0.15 ? LABEL_FLAG.FIRST_IN_SECTION : 0,
-        sectionId: i,
+        flags: rnd() < 0.15 ? LABEL_FLAG.FIRST_IN_LINE : 0,
+        lineId: i,
       };
       // A distinct stable id per label (viewport-independent), set on the field
       // that matches the kind - avoids passing `undefined` under exactOptionalPropertyTypes.
@@ -404,7 +404,7 @@ describe('labelVirtualRank', () => {
 
   it('ranks real 0, jump 1, reference 2 from the shot kind bits', () => {
     expect(rank(0)).toBe(VIRTUAL_RANK_REAL);
-    expect(rank(LABEL_FLAG.FIRST_IN_SECTION)).toBe(VIRTUAL_RANK_REAL);
+    expect(rank(LABEL_FLAG.FIRST_IN_LINE)).toBe(VIRTUAL_RANK_REAL);
     expect(rank(LABEL_FLAG.JUMP)).toBe(VIRTUAL_RANK_JUMP);
     expect(rank(LABEL_FLAG.REFERENCE)).toBe(VIRTUAL_RANK_REFERENCE);
   });
@@ -417,7 +417,7 @@ describe('labelVirtualRank', () => {
   });
 
   it('matches the station marker rank (draw order + pick) for every kind mask', () => {
-    // A station's label and its marker must agree on who wins where sections
+    // A station's label and its marker must agree on who wins where lines
     // meet. Flags from the mask exactly as `buildLabelDescriptors` stamps them.
     for (const mask of [0, 1, 2, 3]) {
       const flags =
@@ -454,19 +454,19 @@ describe('computeRevealZooms real line first (coincident labels)', () => {
     }
   });
 
-  it('an all-reference section name yields to a coincident real station label', () => {
-    // Kind priority alone would put the section name (priority 0, z10) first.
+  it('an all-reference line name yields to a coincident real station label', () => {
+    // Kind priority alone would put the line name (priority 0, z10) first.
     const descs = [
-      desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, sectionId: 5 }),
-      desc(LABEL_KIND.STATION_LABEL, { ordinal: 3, flags: LABEL_FLAG.FIRST_IN_SECTION, stationGlobal: 3 }),
+      desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, lineId: 5 }),
+      desc(LABEL_KIND.STATION_LABEL, { ordinal: 3, flags: LABEL_FLAG.FIRST_IN_LINE, stationGlobal: 3 }),
     ];
     const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
     expect(reveal[1]).toBe(14);
     expect(reveal[0]).toBe(REVEAL_NEVER);
   });
 
-  it('a real section name still beats a coincident real shot (kind priority inside a rank)', () => {
-    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), desc(LABEL_KIND.SECTION_NAME)];
+  it('a real line name still beats a coincident real shot (kind priority inside a rank)', () => {
+    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), desc(LABEL_KIND.LINE_NAME)];
     const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
     expect(reveal[1]).toBe(10);
     expect(reveal[0]).toBe(REVEAL_NEVER);
@@ -529,7 +529,7 @@ describe('computeRevealZooms reserves the slots of real labels that reveal later
 function randomMixedLabels(seed: number, count: number): { descs: LabelDescriptor[]; exts: ExtentEm[] } {
   const rnd = lcg(seed);
   const kinds: LabelKind[] = [
-    LABEL_KIND.SECTION_NAME,
+    LABEL_KIND.LINE_NAME,
     LABEL_KIND.STATION_LABEL,
     LABEL_KIND.SHOT_LABEL,
     LABEL_KIND.STATION_COMMENT,
@@ -544,16 +544,16 @@ function randomMixedLabels(seed: number, count: number): { descs: LabelDescripto
     const onShot = kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.SHOT_COMMENT;
     const bits = onShot ? shotBits : stationBits;
     let flags = bits[Math.floor(rnd() * bits.length)]!;
-    if (kind === LABEL_KIND.STATION_LABEL && rnd() < 0.15) flags |= LABEL_FLAG.FIRST_IN_SECTION;
+    if (kind === LABEL_KIND.STATION_LABEL && rnd() < 0.15) flags |= LABEL_FLAG.FIRST_IN_LINE;
     const over: Partial<LabelDescriptor> = {
       anchorX: rnd() * 0.0008,
       anchorY: rnd() * 0.0008,
       ordinal: kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.STATION_LABEL ? Math.floor(rnd() * 40) : 0,
       flags,
-      sectionId: i,
+      lineId: i,
     };
     if (onShot) over.shotGlobal = i;
-    else if (kind !== LABEL_KIND.SECTION_NAME) over.stationGlobal = i;
+    else if (kind !== LABEL_KIND.LINE_NAME) over.stationGlobal = i;
     descs.push(desc(kind, over));
     exts.push({ minX: 0, maxX: 1 + rnd() * 3, minY: 0, maxY: 1 });
   }
@@ -627,35 +627,35 @@ describe('computeRevealZooms real line first (randomized properties)', () => {
   });
 });
 
-describe('computeRevealZooms reserved labels (section-only build below the label band)', () => {
+describe('computeRevealZooms reserved labels (line-only build below the label band)', () => {
   const reservedStation = (flags = 0) =>
     desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, flags, stationGlobal: 4 });
-  const sectionOnly = (names: LabelDescriptor[], reserved: LabelDescriptor[]) =>
+  const lineOnly = (names: LabelDescriptor[], reserved: LabelDescriptor[]) =>
     computeRevealZooms(
       names,
       names.map(() => UNIT_EXT),
       input({ buildZoom: 12, reserved: { descriptors: reserved, extents: reserved.map(() => UNIT_EXT) } }),
     );
 
-  it('a virtual section name leaves free the slot of a real station label built only from z13.5', () => {
-    const jumpName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+  it('a virtual line name leaves free the slot of a real station label built only from z13.5', () => {
+    const jumpName = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: 2 });
     // Not reserved: the name shows from z10 (and would vanish at the full build).
-    expect(sectionOnly([jumpName], [])[0]).toBe(10);
+    expect(lineOnly([jumpName], [])[0]).toBe(10);
     // Reserved: hidden here, as it is in the full build.
-    expect(sectionOnly([jumpName], [reservedStation()])[0]).toBe(REVEAL_NEVER);
+    expect(lineOnly([jumpName], [reservedStation()])[0]).toBe(REVEAL_NEVER);
     expect(computeRevealZooms([jumpName, reservedStation()], [UNIT_EXT, UNIT_EXT], input({ buildZoom: 14 }))[0])
       .toBe(REVEAL_NEVER);
   });
 
   it('a reservation blocks only worse-rank labels, and only while its kind is shown', () => {
-    const realName = desc(LABEL_KIND.SECTION_NAME, { sectionId: 1 });
-    const jumpName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
-    const refName = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, sectionId: 3 });
+    const realName = desc(LABEL_KIND.LINE_NAME, { lineId: 1 });
+    const jumpName = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: 2 });
+    const refName = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_REFERENCE, lineId: 3 });
     // Real names never yield to a reserved station label (a full build places them first).
-    expect(sectionOnly([realName], [reservedStation()])[0]).toBe(10);
+    expect(lineOnly([realName], [reservedStation()])[0]).toBe(10);
     // A jump station label outranks a reference name, not a jump one.
-    expect(sectionOnly([refName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(REVEAL_NEVER);
-    expect(sectionOnly([jumpName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(10);
+    expect(lineOnly([refName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(REVEAL_NEVER);
+    expect(lineOnly([jumpName], [reservedStation(LABEL_FLAG.ALL_JUMP)])[0]).toBe(10);
     // Station labels toggled off: nothing to leave free.
     const off = computeRevealZooms([jumpName], [UNIT_EXT], input({
       buildZoom: 12,
@@ -666,16 +666,16 @@ describe('computeRevealZooms reserved labels (section-only build below the label
   });
 
   it('a name held back by a reservation keeps its slot, so no other name shows only to vanish', () => {
-    // Q (first-in-section) and R share an anchor; R's box is wider, so R never
+    // Q (first-in-line) and R share an anchor; R's box is wider, so R never
     // clears Q and a full build never shows it. V2 overlaps R but not Q; V1
     // overlaps V2 but neither station. Full build: V2 shows (R never does) and
     // V1 never clears V2. Below the band R is only a reservation, so V2 is held
     // back - and without keeping its slot V1 would show there, then vanish.
     const ext = (minX: number, maxX: number, minY: number, maxY: number): ExtentEm => ({ minX, maxX, minY, maxY });
-    const q = desc(LABEL_KIND.STATION_LABEL, { ordinal: 0, flags: LABEL_FLAG.FIRST_IN_SECTION, stationGlobal: 0 });
+    const q = desc(LABEL_KIND.STATION_LABEL, { ordinal: 0, flags: LABEL_FLAG.FIRST_IN_LINE, stationGlobal: 0 });
     const r = desc(LABEL_KIND.STATION_LABEL, { ordinal: 4, stationGlobal: 4 });
-    const v2 = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 1 });
-    const v1 = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    const v2 = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: 1 });
+    const v1 = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: 2 });
     const exts = { q: ext(0, 1, 0, 1), r: ext(0, 6, 0, 1), v2: ext(4, 5, 0.5, 1.7), v1: ext(4.5, 5.5, 1.2, 2.2) };
 
     const full = computeRevealZooms([v2, v1, q, r], [exts.v2, exts.v1, exts.q, exts.r], input({ buildZoom: 14 }));
@@ -695,7 +695,7 @@ describe('computeRevealZooms reserved labels (section-only build below the label
     // build: R shows, J never does, so K shows and X never does. Below the
     // band J is held (R is only a reservation); K, held back by J alone, must
     // be held as well - were it simply hidden, X would show and then vanish.
-    const name = (id: number) => desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: id });
+    const name = (id: number) => desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: id });
     const [j, k, x] = [name(1), name(2), name(3)];
     const ext = (minX: number, maxX: number): ExtentEm => ({ minX, maxX, minY: 1.2, maxY: 2.2 });
     const exts = [ext(0, 2), ext(1.5, 3.5), ext(3, 5)];
@@ -715,7 +715,7 @@ describe('computeRevealZooms reserved labels (section-only build below the label
 
   it('a name shown below the band is still shown by the full build (randomized)', () => {
     // Names spread across the screen, each with real and virtual station / shot
-    // labels clustered around it - the shape a jump section tied in at a real
+    // labels clustered around it - the shape a jump line tied in at a real
     // station has. Real pixel scale: 512 px per world unit at z0.
     const wps12 = 512 * 2 ** 12;
     let virtualShownBelow = 0;
@@ -732,7 +732,7 @@ describe('computeRevealZooms reserved labels (section-only build below the label
         // ~0..900 px apart at z12; cluster members within ~40 px at z14.
         const ax = (rnd() * 900) / wps12;
         const ay = (rnd() * 600) / wps12;
-        names.push(desc(LABEL_KIND.SECTION_NAME, { anchorX: ax, anchorY: ay, flags: nameBits[i % 3]!, sectionId: i }));
+        names.push(desc(LABEL_KIND.LINE_NAME, { anchorX: ax, anchorY: ay, flags: nameBits[i % 3]!, lineId: i }));
         const members = 1 + Math.floor(rnd() * 4);
         for (let k = 0; k < members; k++) {
           const shot = rnd() < 0.5;
@@ -774,14 +774,14 @@ describe('computeRevealZooms reserved labels (section-only build below the label
 
 /** Em extents shaped like `labelLayout.ts` places each kind: a shot label and a
  *  comment hang below their anchor, a station label sits up-right of it, a
- *  section name above it - so boxes are OFFSET from their anchors. */
+ *  line name above it - so boxes are OFFSET from their anchors. */
 function layoutExtent(kind: LabelKind, widthEm: number): ExtentEm {
   switch (kind) {
     case LABEL_KIND.SHOT_LABEL:
       return { minX: -widthEm / 2, maxX: widthEm / 2, minY: -1.5, maxY: -0.5 };
     case LABEL_KIND.STATION_LABEL:
       return { minX: 0.8, maxX: 0.8 + widthEm, minY: 0.8, maxY: 1.8 };
-    case LABEL_KIND.SECTION_NAME:
+    case LABEL_KIND.LINE_NAME:
       return { minX: -widthEm / 2, maxX: widthEm / 2, minY: 1.2, maxY: 2.2 };
     default:
       return { minX: -widthEm / 2, maxX: widthEm / 2, minY: -2.5, maxY: -1.5 };
@@ -794,10 +794,10 @@ describe('computeRevealZooms with boxes offset from their anchors', () => {
     // z14) north, hangs below its own - the two boxes face each other. Clear at
     // z10, they overlap around z15-16 and clear again above. Unrelated real
     // labels far away must not change that (a one-level overlap test did).
-    const jump = desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_JUMP, sectionId: 9 });
+    const jump = desc(LABEL_KIND.LINE_NAME, { flags: LABEL_FLAG.ALL_JUMP, lineId: 9 });
     const real = desc(LABEL_KIND.SHOT_LABEL, { anchorY: -10, ordinal: 0, shotGlobal: 1 });
     const far = (i: number) => desc(LABEL_KIND.SHOT_LABEL, { anchorX: 5000 + i * 500, ordinal: 0, shotGlobal: 10 + i });
-    const ext = { jump: layoutExtent(LABEL_KIND.SECTION_NAME, 4), shot: layoutExtent(LABEL_KIND.SHOT_LABEL, 4) };
+    const ext = { jump: layoutExtent(LABEL_KIND.LINE_NAME, 4), shot: layoutExtent(LABEL_KIND.SHOT_LABEL, 4) };
     const opts = input({ buildZoom: 14, worldPixelScale: 1, slack: 8 });
     const alone = computeRevealZooms([jump, real], [ext.jump, ext.shot], opts);
     const withFar = computeRevealZooms(
@@ -839,7 +839,7 @@ describe('computeRevealZooms with boxes offset from their anchors', () => {
     for (const seed of [21, 22, 23, 0xabc]) {
       const rnd = lcg(seed);
       const kinds: LabelKind[] = [
-        LABEL_KIND.SECTION_NAME, LABEL_KIND.STATION_LABEL, LABEL_KIND.SHOT_LABEL,
+        LABEL_KIND.LINE_NAME, LABEL_KIND.STATION_LABEL, LABEL_KIND.SHOT_LABEL,
         LABEL_KIND.STATION_COMMENT, LABEL_KIND.SHOT_COMMENT,
       ];
       const shotBits = [0, 0, LABEL_FLAG.JUMP, LABEL_FLAG.REFERENCE];
@@ -855,10 +855,10 @@ describe('computeRevealZooms with boxes offset from their anchors', () => {
           anchorY: rnd() * 0.0008,
           ordinal: kind === LABEL_KIND.SHOT_LABEL || kind === LABEL_KIND.STATION_LABEL ? Math.floor(rnd() * 40) : 0,
           flags: bits[Math.floor(rnd() * bits.length)]!,
-          sectionId: i,
+          lineId: i,
         };
         if (onShot) over.shotGlobal = i;
-        else if (kind !== LABEL_KIND.SECTION_NAME) over.stationGlobal = i;
+        else if (kind !== LABEL_KIND.LINE_NAME) over.stationGlobal = i;
         descs.push(desc(kind, over));
         exts.push(layoutExtent(kind, 1 + rnd() * 5));
       }
@@ -892,14 +892,14 @@ describe('computeRevealZooms with boxes offset from their anchors', () => {
   });
 });
 
-describe('computeRevealZooms held-back names (section-only build)', () => {
+describe('computeRevealZooms held-back names (line-only build)', () => {
   it('a name held back only by a real label - not a reservation - still shows once clear', () => {
-    // A real section name holds the jump name back until they clear; an
+    // A real line name holds the jump name back until they clear; an
     // unrelated reservation far away must not turn that into "hidden".
-    const realName = desc(LABEL_KIND.SECTION_NAME, { sectionId: 1 });
-    const jumpName = desc(LABEL_KIND.SECTION_NAME, { anchorX: 200, flags: LABEL_FLAG.ALL_JUMP, sectionId: 2 });
+    const realName = desc(LABEL_KIND.LINE_NAME, { lineId: 1 });
+    const jumpName = desc(LABEL_KIND.LINE_NAME, { anchorX: 200, flags: LABEL_FLAG.ALL_JUMP, lineId: 2 });
     const farStation = desc(LABEL_KIND.STATION_LABEL, { anchorX: 90000, ordinal: 4, stationGlobal: 4 });
-    const ext = layoutExtent(LABEL_KIND.SECTION_NAME, 4);
+    const ext = layoutExtent(LABEL_KIND.LINE_NAME, 4);
     const run = (reserved: LabelDescriptor[]) =>
       computeRevealZooms([realName, jumpName], [ext, ext], input({
         buildZoom: 12, worldPixelScale: 0.25, slack: 10,
@@ -946,16 +946,16 @@ describe('computeRevealZooms Errors labels', () => {
     expect(reveal[0]).toBe(14);
   });
 
-  it('past a threshold it beats a coincident station label; a minor one yields; section names beat both', () => {
+  it('past a threshold it beats a coincident station label; a minor one yields; line names beat both', () => {
     const vsStation = computeRevealZooms(
-      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(1.2)],
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_LINE }), err(1.2)],
       [UNIT_EXT, UNIT_EXT],
       input(),
     );
     expect(vsStation[1]).toBe(14);
     expect(vsStation[0]).toBe(REVEAL_NEVER);
     const minor = computeRevealZooms(
-      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_SECTION }), err(0.1)],
+      [desc(LABEL_KIND.STATION_LABEL, { flags: LABEL_FLAG.FIRST_IN_LINE }), err(0.1)],
       [UNIT_EXT, UNIT_EXT],
       input(),
     );
@@ -965,9 +965,9 @@ describe('computeRevealZooms Errors labels', () => {
     const vsShot = computeRevealZooms([desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 }), err(0.1)], [UNIT_EXT, UNIT_EXT], input());
     expect(vsShot[1]).toBe(14);
     expect(vsShot[0]).toBe(REVEAL_NEVER);
-    const vsSection = computeRevealZooms([desc(LABEL_KIND.SECTION_NAME), err(3)], [UNIT_EXT, UNIT_EXT], input());
-    expect(vsSection[0]).toBe(10);
-    expect(vsSection[1]).toBe(REVEAL_NEVER);
+    const vsLine = computeRevealZooms([desc(LABEL_KIND.LINE_NAME), err(3)], [UNIT_EXT, UNIT_EXT], input());
+    expect(vsLine[0]).toBe(10);
+    expect(vsLine[1]).toBe(REVEAL_NEVER);
   });
 
   it('a blocked error label keeps a weaker error and a station label out of its spot', () => {
@@ -976,10 +976,10 @@ describe('computeRevealZooms Errors labels', () => {
     // station label at 20 px overlap A but clear the name: neither may take A's
     // spot. The ladder ends at z18 (slack 0), the only step where B clears.
     const px = (v: number) => v / 1e6;
-    const name = desc(LABEL_KIND.SECTION_NAME, { anchorX: 0 });
+    const name = desc(LABEL_KIND.LINE_NAME, { anchorX: 0 });
     const a = err(3, { anchorX: px(10), shotGlobal: 1 });
     const b = err(1.5, { anchorX: px(20), shotGlobal: 2 });
-    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: px(20), stationGlobal: 3, flags: LABEL_FLAG.FIRST_IN_SECTION });
+    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: px(20), stationGlobal: 3, flags: LABEL_FLAG.FIRST_IN_LINE });
     const exts = [UNIT_EXT, UNIT_EXT, UNIT_EXT, UNIT_EXT];
     const reveal = computeRevealZooms([name, a, b, station], exts, input({ slack: 0 }));
     expect(reveal[0]).toBe(10);
@@ -993,7 +993,7 @@ describe('computeRevealZooms Errors labels', () => {
 
   it('a toggled-off Errors kind reserves nothing', () => {
     const a = err(3, { anchorX: 0 });
-    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: 0, flags: LABEL_FLAG.FIRST_IN_SECTION });
+    const station = desc(LABEL_KIND.STATION_LABEL, { anchorX: 0, flags: LABEL_FLAG.FIRST_IN_LINE });
     const off = [true, true, true, true, true, false, true];
     const reveal = computeRevealZooms([a, station], [UNIT_EXT, UNIT_EXT], input({ kindVisible: off }));
     expect(reveal[1]).toBe(14);
@@ -1007,7 +1007,7 @@ describe('computeRevealZooms Errors labels', () => {
       LABEL_KIND.CLOSURE_ERROR,
       LABEL_KIND.STATION_LABEL,
       LABEL_KIND.SHOT_LABEL,
-      LABEL_KIND.SECTION_NAME,
+      LABEL_KIND.LINE_NAME,
     ];
     const descs: LabelDescriptor[] = [];
     const exts: ExtentEm[] = [];
@@ -1017,7 +1017,7 @@ describe('computeRevealZooms Errors labels', () => {
         anchorX: rnd() * 0.0008,
         anchorY: rnd() * 0.0008,
         ordinal: Math.floor(rnd() * 40),
-        sectionId: i,
+        lineId: i,
       };
       if (kind === LABEL_KIND.SHOT_ERROR || kind === LABEL_KIND.CLOSURE_ERROR) {
         over.score = Math.round(rnd() * 300) / 100;

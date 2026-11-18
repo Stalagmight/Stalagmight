@@ -29,7 +29,7 @@ export function useZeroDatumPreview(
   const [preview, setPreview] = useState<ZeroDatumPreview | null>(null);
   const requestSeq = useRef(0);
 
-  const sectionId = stationRef?.section_id;
+  const lineId = stationRef?.line_id;
   const stationIndex = stationRef?.station_index;
   const latitude = coordinates?.latitude;
   const longitude = coordinates?.longitude;
@@ -39,11 +39,11 @@ export function useZeroDatumPreview(
     const seq = ++requestSeq.current;
     // Whatever was shown answered other inputs: never leave it up.
     setPreview(null);
-    if (!enabled || sectionId === undefined || stationIndex === undefined) return;
+    if (!enabled || lineId === undefined || stationIndex === undefined) return;
     if (latitude === undefined || longitude === undefined) return;
 
     const timer = setTimeout(() => {
-      const ref = { section_id: sectionId, station_index: stationIndex };
+      const ref = { line_id: lineId, station_index: stationIndex };
       const gps = { latitude, longitude, depth_reference: depthReference ?? 0 };
       previewZeroDatum(ref, gps)
         .then((answer) => {
@@ -64,7 +64,7 @@ export function useZeroDatumPreview(
       // Unmount or new inputs: a reply still in flight is stale.
       requestSeq.current++;
     };
-  }, [enabled, sectionId, stationIndex, latitude, longitude, depthReference, projectKey]);
+  }, [enabled, lineId, stationIndex, latitude, longitude, depthReference, projectKey]);
 
   return preview;
 }

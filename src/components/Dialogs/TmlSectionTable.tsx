@@ -1,10 +1,10 @@
 /**
- * The Ariane import's section list, with a checkbox per row (#425).
+ * The Ariane import's line list, with a checkbox per row (#425).
  *
  * Its own component so `TmlImportDialog` stays readable now that it also hosts a
  * map column and a placement step. The selection SHAPE mirrors
  * `WallsImportDialog`'s (a `Set<number>` of file indices in the UI, sent as
- * `number[] | null`), so the two importers' section filters behave the same way.
+ * `number[] | null`), so the two importers' line filters behave the same way.
  */
 import { useTranslation } from 'react-i18next';
 import type { TmlFile } from '../../types/commands';
@@ -57,11 +57,11 @@ function DateText({ text }: { text: string }) {
 export interface TmlSectionTableProps {
   tmlFile: TmlFile;
   includeExcluded: boolean;
-  /** Indices (into `tmlFile.sections`) the user has kept. */
+  /** Indices (into `tmlFile.lines`) the user has kept. */
   selected: ReadonlySet<number>;
   onToggle: (index: number) => void;
   onToggleAll: () => void;
-  /** Indices that will be placed at the origin because the section they hang
+  /** Indices that will be placed at the origin because the line they hang
    *  off is not selected - flagged inline, where the cause is. */
   reanchored: ReadonlySet<number>;
   disabled: boolean;
@@ -78,7 +78,7 @@ export function TmlSectionTable({
 }: TmlSectionTableProps) {
   const { t } = useTranslation();
   const allSelected =
-    tmlFile.sections.length > 0 && tmlFile.sections.every((_, i) => selected.has(i));
+    tmlFile.lines.length > 0 && tmlFile.lines.every((_, i) => selected.has(i));
 
   return (
     <div className="space-y-1">
@@ -87,7 +87,7 @@ export function TmlSectionTable({
         <span data-testid="tml-selected-count">
           {t('dialogs.tmlImport.selectedCount', {
             selected: selected.size,
-            total: tmlFile.sections.length,
+            total: tmlFile.lines.length,
           })}
         </span>
       </div>
@@ -112,13 +112,13 @@ export function TmlSectionTable({
               <th className="px-2 py-1.5 w-[38%]">{t('credit.surveyors')}</th>
               <th className="px-2 py-1.5 w-[24%]">{t('credit.explorers')}</th>
               <th className="px-2 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
-              {/* No colour column: the swatch rides in the Section cell, so the
+              {/* No colour column: the swatch rides in the Line cell, so the
                   people and date columns have the panel's width to themselves. */}
             </tr>
           </thead>
           <tbody>
-            {tmlFile.sections.map((section, i) => {
-              const credit = tmlSectionCredit(section, includeExcluded);
+            {tmlFile.lines.map((line, i) => {
+              const credit = tmlSectionCredit(line, includeExcluded);
               return (
               <tr
                 key={i}
@@ -131,19 +131,19 @@ export function TmlSectionTable({
                     checked={selected.has(i)}
                     disabled={disabled}
                     onChange={() => onToggle(i)}
-                    aria-label={t('dialogs.tmlImport.importSectionLabel', { name: section.name })}
+                    aria-label={t('dialogs.tmlImport.importSectionLabel', { name: line.name })}
                     data-testid={`tml-section-${i}`}
                   />
                 </td>
                 <td className="px-2 py-1.5">
                   <span
                     className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm align-baseline"
-                    style={{ backgroundColor: section.color }}
+                    style={{ backgroundColor: line.color }}
                     title={t('dialogs.tmlImport.table.color')}
                     data-testid={`tml-section-${i}-color`}
                   />
-                  {section.name}
-                  {section.is_branch_split && (
+                  {line.name}
+                  {line.is_branch_split && (
                     <span className="ml-1 text-xs text-text-tertiary">
                       {t('dialogs.tmlImport.table.branch')}
                     </span>
@@ -157,17 +157,17 @@ export function TmlSectionTable({
                     </span>
                   )}
                 </td>
-                <td className="px-2 py-1.5">{importableShots(section, includeExcluded).length}</td>
+                <td className="px-2 py-1.5">{importableShots(line, includeExcluded).length}</td>
                 <td className="px-2 py-1">
                   <PeopleCell
-                    label={t('dialogs.tmlImport.table.surveyorsOf', { name: section.name })}
+                    label={t('dialogs.tmlImport.table.surveyorsOf', { name: line.name })}
                     people={credit.surveyors}
                     testId={`tml-section-${i}-surveyors`}
                   />
                 </td>
                 <td className="px-2 py-1">
                   <PeopleCell
-                    label={t('dialogs.tmlImport.table.explorersOf', { name: section.name })}
+                    label={t('dialogs.tmlImport.table.explorersOf', { name: line.name })}
                     people={credit.explorers}
                     testId={`tml-section-${i}-explorers`}
                   />

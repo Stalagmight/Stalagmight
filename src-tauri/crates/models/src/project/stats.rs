@@ -17,11 +17,11 @@ impl Project {
         let mut first_survey_date = None;
         let mut last_survey_date = None;
 
-        for section in &self.sections {
-            let section_stats = section.stats();
-            shot_count += section_stats.shot_count;
-            total_length += section_stats.total_length;
-            for date in section.shots.iter().filter_map(|s| s.credit().date) {
+        for line in &self.lines {
+            let line_stats = line.stats();
+            shot_count += line_stats.shot_count;
+            total_length += line_stats.total_length;
+            for date in line.shots.iter().filter_map(|s| s.credit().date) {
                 first_survey_date =
                     Some(first_survey_date.map_or(date, |d: chrono::NaiveDate| d.min(date)));
                 last_survey_date =
@@ -29,14 +29,14 @@ impl Project {
             }
         }
 
-        // Station count = shots + 1 per section (first station)
-        let station_count = shot_count + self.sections.len();
+        // Station count = shots + 1 per line (first station)
+        let station_count = shot_count + self.lines.len();
 
         // Loop count = number of detected loop closures
         let loop_count = self.loop_closures.len();
 
         ProjectStats {
-            section_count: self.sections.len(),
+            line_count: self.lines.len(),
             shot_count,
             total_length,
             min_depth: 0.0, // Calculated separately with stations
@@ -52,7 +52,7 @@ impl Project {
     /// Absolute depth range `(min, max)` over the computed stations.
     ///
     /// Station z is ABSOLUTE - the average of the surrounding shots'
-    /// `depth_out`/`depth_in` (`compute_station_depth`) - never a per-section
+    /// `depth_out`/`depth_in` (`compute_station_depth`) - never a per-line
     /// delta walk seeded at 0, which is what the project stats used to report
     /// and what disagreed with every depth the UI shows (#481). Empty input is
     /// `(0.0, 0.0)`, matching the frontend's own fallback.
@@ -89,7 +89,7 @@ impl Project {
             location: self.location.clone(),
             file_path,
             modified_at: self.modified_at,
-            section_count: stats.section_count,
+            line_count: stats.line_count,
             total_length: stats.total_length,
             station_count: stats.station_count,
             gps_center,

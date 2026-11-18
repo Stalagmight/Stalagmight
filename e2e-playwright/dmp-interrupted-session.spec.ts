@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { setupMockedPage, createProject, createLineViaStore } from './helpers/app';
 
 async function openDmpNewImportDialog(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -19,7 +19,7 @@ async function openDmpNewImportDialog(page: Page): Promise<void> {
 
     const dmpFile = {
       version: 5,
-      sections: [
+      lines: [
         {
           name: 'Unanchored Segment',
           direction: 'in',
@@ -85,7 +85,7 @@ async function openDmpNewImportDialog(page: Page): Promise<void> {
       defaultExplorers: [],
       defaultDate: null,
       fileHash: 'mock_dmp_hash',
-      sectionHashes: ['hash-unanchored', 'hash-anchor'],
+      lineHashes: ['hash-unanchored', 'hash-anchor'],
     };
 
     e2e.uiStore.getState().openDialog('dmp-import-new', {
@@ -130,8 +130,8 @@ test.describe('DMP Interrupted Session', () => {
       });
     });
 
-    await createSectionViaStore(page, {
-      name: 'Anchor Section',
+    await createLineViaStore(page, {
+      name: 'Anchor Line',
       shots: [
         {
           azimuth_in: 40,
@@ -157,11 +157,11 @@ test.describe('DMP Interrupted Session', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 1,
-          importSectionName: 'Anchor Candidate',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 1,
+          importLineName: 'Anchor Candidate',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -218,11 +218,11 @@ test.describe('DMP Interrupted Session', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 1,
-          importSectionName: 'Anchor Candidate',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 1,
+          importLineName: 'Anchor Candidate',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
         {
@@ -233,11 +233,11 @@ test.describe('DMP Interrupted Session', () => {
           direction: 'forward',
           isPartial: false,
           confidence: 'high',
-          existingSectionName: 'Anchor Section',
-          importSectionIndex: 0,
-          importSectionName: 'Unanchored Segment',
+          existingLineName: 'Anchor Line',
+          importLineIndex: 0,
+          importLineName: 'Unanchored Segment',
           targetType: 'existing',
-          existingSectionId: 1,
+          existingLineId: 1,
           targetImportIndex: null,
         },
       ]);
@@ -257,11 +257,11 @@ test.describe('DMP Interrupted Session', () => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
             projectStore?: {
-              getState: () => { project: { sections: unknown[] } | null };
+              getState: () => { project: { lines: unknown[] } | null };
             };
           };
         }).__E2E_TEST__;
-        return stores?.projectStore?.getState().project?.sections.length ?? 0;
+        return stores?.projectStore?.getState().project?.lines.length ?? 0;
       })
     ).toBe(2);
   });

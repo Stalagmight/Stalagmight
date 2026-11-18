@@ -10,10 +10,10 @@ name: E2E Smoke
 # separate WDIO legacy suite. Blocklist style; safe because `master` is unprotected (#122).
 on:
   push:
-    branches: [master]
+    branches: [master, 'release/**']
     paths-ignore: ['**/*.md', 'docs/**', 'e2e/agent/**', 'src-tauri/**']
   pull_request:
-    branches: [master]
+    branches: [master, 'release/**']
     paths-ignore: ['**/*.md', 'docs/**', 'e2e/agent/**', 'src-tauri/**']
 
 concurrency:

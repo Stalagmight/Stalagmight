@@ -92,7 +92,7 @@ export type NavigationAction =
   | 'zoom'
   | 'zoom-in'
   | 'zoom-out'
-  | 'zoom-to-section';
+  | 'zoom-to-line';
 
 /** Canonical panel names - parsed by registry exhaustiveness tests. */
 export type PanelName =
@@ -102,7 +102,7 @@ export type PanelName =
 
 /** Canonical selection types - parsed by registry exhaustiveness tests. */
 export type SelectionType =
-  | 'section'
+  | 'line'
   | 'shot'
   | 'station';
 
@@ -136,15 +136,17 @@ export type SourceName =
 
 /** Commands that push to the undo stack. */
 const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
-  'create_section', 'update_section', 'delete_section', 'reverse_section', 'move_section', 'move_segment',
+  'create_line', 'update_line', 'delete_line', 'reverse_line', 'move_line', 'move_segment',
   'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind', 'split_shot_at_distance', 'edit_shot_credit',
   'merge_stations', 'unmerge_stations', 'unmerge_station_pair',
-  'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'move_comment', 'move_station',
+  'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'set_station_name', 'move_comment', 'move_station',
   'create_loop_closure', 'remove_loop_closure',
-  'create_section_and_merge', 'delete_shot_and_split', 'split_section', 'combine_sections', 'delete_last_shot_and_section',
+  'create_line_and_merge', 'delete_shot_and_split', 'split_line', 'combine_lines', 'delete_last_shot_and_line',
   'delete_shot_range_split', 'delete_shot_range_shift',
-  'import_sections', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
+  'import_lines', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
   'execute_gpx_import', 'add_project_file', 'execute_batch',
+  'create_cave_section', 'update_cave_section', 'delete_cave_section', 'move_lines_to_cave_section',
+  'apply_cave_section_color',
 ]);
 
 /**

@@ -52,7 +52,7 @@ const profileField = (): GasReachField => ({
   route_profile: [
     {
       route_index: 0,
-      station_ref: { section_id: 1, station_index: 0 },
+      station_ref: { line_id: 1, station_index: 0 },
       distance_m: 0,
       depth_m: 0,
       gas_l: 0,
@@ -61,7 +61,7 @@ const profileField = (): GasReachField => ({
     },
     {
       route_index: 1,
-      station_ref: { section_id: 1, station_index: 1 },
+      station_ref: { line_id: 1, station_index: 1 },
       distance_m: 100,
       depth_m: 10,
       gas_l: 50,
@@ -70,7 +70,7 @@ const profileField = (): GasReachField => ({
     },
     {
       route_index: 0,
-      station_ref: { section_id: 1, station_index: 0 },
+      station_ref: { line_id: 1, station_index: 0 },
       distance_m: 200,
       depth_m: 0,
       gas_l: 80,

@@ -4,7 +4,7 @@ import { dispatchMapPointer } from './controls';
 
 export interface MapFeatureClickRequest {
   featureType: 'shot' | 'station';
-  sectionId: number;
+  lineId: number;
   shotId?: number;
   stationIndex?: number;
   button?: 'left' | 'right';
@@ -14,7 +14,7 @@ export interface MapFeatureClickRequest {
 
 export interface ResolvedMapFeatureClick {
   featureType: 'shot' | 'station';
-  sectionId: number;
+  lineId: number;
   shotId?: number;
   stationIndex?: number;
   lngLat: [number, number];
@@ -30,9 +30,9 @@ export interface ResolvedMapFeatureClick {
 
 interface MapSelection {
   type?: string;
-  sectionId?: number;
+  lineId?: number;
   shotId?: number;
-  stationRef?: { section_id?: number; station_index?: number };
+  stationRef?: { line_id?: number; station_index?: number };
 }
 
 interface MapPostClickState {
@@ -41,7 +41,7 @@ interface MapPostClickState {
 }
 
 function validateRequest(request: MapFeatureClickRequest): void {
-  if (!Number.isInteger(request.sectionId)) throw new Error('map_feature_click needs an integer sectionId');
+  if (!Number.isInteger(request.lineId)) throw new Error('map_feature_click needs an integer lineId');
   if (request.featureType === 'shot' && !Number.isInteger(request.shotId)) {
     throw new Error('map_feature_click for a shot needs an integer shotId');
   }
@@ -52,11 +52,11 @@ function validateRequest(request: MapFeatureClickRequest): void {
 
 function selectionMatches(request: MapFeatureClickRequest, selection: MapSelection | null): boolean {
   if (request.featureType === 'shot') {
-    return selection?.type === 'shot' && selection.sectionId === request.sectionId && selection.shotId === request.shotId;
+    return selection?.type === 'shot' && selection.lineId === request.lineId && selection.shotId === request.shotId;
   }
   return (
     selection?.type === 'station' &&
-    selection.stationRef?.section_id === request.sectionId &&
+    selection.stationRef?.line_id === request.lineId &&
     selection.stationRef?.station_index === request.stationIndex
   );
 }
@@ -106,7 +106,7 @@ export async function mapFeatureClick(
       };
       const finish = (lngLat, canvasPoint, clearancePx) => ({
         featureType: request.featureType,
-        sectionId: request.sectionId,
+        lineId: request.lineId,
         ...(request.featureType === 'shot' ? { shotId: request.shotId } : { stationIndex: request.stationIndex }),
         lngLat,
         canvasPoint: { x: Math.round(canvasPoint.x), y: Math.round(canvasPoint.y) },
@@ -118,7 +118,7 @@ export async function mapFeatureClick(
 
       if (request.featureType === 'station') {
         const station = geometry.stations.find(
-          (item) => item.sectionId === request.sectionId && item.stationIndex === request.stationIndex,
+          (item) => item.lineId === request.lineId && item.stationIndex === request.stationIndex,
         );
         if (!station) throw new Error('station feature not found or not visible');
         const point = project(station.lngLat);
@@ -129,13 +129,13 @@ export async function mapFeatureClick(
       }
 
       const shot = geometry.shots.find(
-        (item) => item.sectionId === request.sectionId && item.shotId === request.shotId,
+        (item) => item.lineId === request.lineId && item.shotId === request.shotId,
       );
       if (!shot) throw new Error('shot feature not found or not visible');
       const from = project(shot.from);
       const to = project(shot.to);
       const otherSegments = geometry.shots
-        .filter((item) => item.sectionId !== request.sectionId || item.shotId !== request.shotId)
+        .filter((item) => item.lineId !== request.lineId || item.shotId !== request.shotId)
         .map((item) => ({ from: project(item.from), to: project(item.to) }));
       const stationPoints = geometry.stations.map((item) => project(item.lngLat));
       const candidates = [0.125, 0.25, 0.5, 0.75, 0.875]
@@ -201,7 +201,7 @@ export async function mapFeatureClick(
     if (!selectionMatches(request, postClick.selection)) {
       throw new Error(
         `map_feature_click selected ${JSON.stringify(postClick.selection)} instead of ${request.featureType} ` +
-          `${request.sectionId}:${request.featureType === 'shot' ? request.shotId : request.stationIndex}`,
+          `${request.lineId}:${request.featureType === 'shot' ? request.shotId : request.stationIndex}`,
       );
     }
   }

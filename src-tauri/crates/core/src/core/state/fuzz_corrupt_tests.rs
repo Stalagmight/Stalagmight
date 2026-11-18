@@ -11,11 +11,11 @@
 //!
 //! | kind | what it does | the load must |
 //! |---|---|---|
-//! | `section-count` | the delta's recorded source section count +/- 1 | refuse it (fit, or `check_shape` for -1) - or keep it and step exactly, which it cannot |
-//! | `edit-id` | a section Edit run names another section id | refuse it (fit) |
-//! | `copy-past-end` | a shot Copy run starts past the end of its source section | refuse it (fit) |
-//! | `repeated-keep` | a section Keep run appears twice | refuse it (`check_shape`: a section read twice) |
-//! | `keep-past-end` | a section Keep run shifted past the source's end | refuse it (`check_shape`) |
+//! | `line-count` | the delta's recorded source line count +/- 1 | refuse it (fit, or `check_shape` for -1) - or keep it and step exactly, which it cannot |
+//! | `edit-id` | a line Edit run names another line id | refuse it (fit) |
+//! | `copy-past-end` | a shot Copy run starts past the end of its source line | refuse it (fit) |
+//! | `repeated-keep` | a line Keep run appears twice | refuse it (`check_shape`: a line read twice) |
+//! | `keep-past-end` | a line Keep run shifted past the source's end | refuse it (`check_shape`) |
 //! | `arr-length` | a positional array edit records another source length | refuse it, since every step through it refuses |
 //! | `bag-absent-del` | a bag edit removes a value no state holds | KEEP it and step exactly: removing an absent value is skipped by design |
 //! | `healed-member-del` | the delta deletes `validation`, which it did not edit | KEEP it and step exactly: the restore carries the live value back (the `healed` re-read path) |
@@ -52,7 +52,7 @@ pub(super) struct Corruption {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    SectionCount,
+    LineCount,
     EditId,
     CopyPastEnd,
     RepeatedKeep,
@@ -66,7 +66,7 @@ enum Kind {
 }
 
 const KINDS: [Kind; 11] = [
-    Kind::SectionCount,
+    Kind::LineCount,
     Kind::EditId,
     Kind::CopyPastEnd,
     Kind::RepeatedKeep,
@@ -82,7 +82,7 @@ const KINDS: [Kind; 11] = [
 impl Kind {
     const fn name(self) -> &'static str {
         match self {
-            Self::SectionCount => "section-count",
+            Self::LineCount => "line-count",
             Self::EditId => "edit-id",
             Self::CopyPastEnd => "copy-past-end",
             Self::RepeatedKeep => "repeated-keep",
@@ -278,11 +278,11 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
         return false;
     };
     match kind {
-        Kind::SectionCount => {
-            let Some(Value::Array(sections)) = delta.get_mut("s") else {
+        Kind::LineCount => {
+            let Some(Value::Array(lines)) = delta.get_mut("s") else {
                 return false;
             };
-            let Some(count) = sections.first().and_then(Value::as_u64) else {
+            let Some(count) = lines.first().and_then(Value::as_u64) else {
                 return false;
             };
             let next = if count == 0 || aux.chance(50) {
@@ -290,14 +290,14 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
             } else {
                 count - 1
             };
-            sections[0] = Value::from(next);
+            lines[0] = Value::from(next);
             true
         }
-        Kind::EditId => pick_section_run(delta, "e", aux).is_some_and(|run| {
+        Kind::EditId => pick_line_run(delta, "e", aux).is_some_and(|run| {
             let Some(id) = run.get("id").and_then(Value::as_u64) else {
                 return false;
             };
-            // Ids are unique, so any other id names a different section - or none.
+            // Ids are unique, so any other id names a different line - or none.
             run.insert("id".to_string(), Value::from(id + 1 + aux.below(7) as u64));
             true
         }),
@@ -312,7 +312,7 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
             true
         }
         Kind::RepeatedKeep => {
-            let Some(runs) = section_runs(delta) else {
+            let Some(runs) = line_runs(delta) else {
                 return false;
             };
             let keeps: Vec<usize> = runs
@@ -337,7 +337,7 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
             let Some(count) = count else {
                 return false;
             };
-            let Some(runs) = section_runs(delta) else {
+            let Some(runs) = line_runs(delta) else {
                 return false;
             };
             let keeps: Vec<usize> = runs
@@ -351,7 +351,7 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
             }
             let at = keeps[aux.below(keeps.len())];
             let (_, len) = keep_of(&runs[at]).unwrap_or((0, 1));
-            // One past the end: the last section it reads is the source's count.
+            // One past the end: the last line it reads is the source's count.
             let shifted = (count + 1).saturating_sub(len);
             runs[at] = serde_json::json!({ "k": [shifted, len] });
             true
@@ -423,24 +423,24 @@ fn mutate_json(row: &mut Value, kind: Kind, aux: &mut Rng) -> bool {
     }
 }
 
-/// The delta's section runs, `d["s"][1]`.
-fn section_runs(delta: &mut Map<String, Value>) -> Option<&mut Vec<Value>> {
+/// The delta's line runs, `d["s"][1]`.
+fn line_runs(delta: &mut Map<String, Value>) -> Option<&mut Vec<Value>> {
     delta.get_mut("s")?.get_mut(1)?.as_array_mut()
 }
 
-/// `(at, len)` of a section Keep run, `{"k": [at, len]}`.
+/// `(at, len)` of a line Keep run, `{"k": [at, len]}`.
 fn keep_of(run: &Value) -> Option<(u64, u64)> {
     let pair = run.get("k")?.as_array()?;
     Some((pair.first()?.as_u64()?, pair.get(1)?.as_u64()?))
 }
 
-/// One section run of shape `{tag: {...}}`, drawn from those there are.
-fn pick_section_run<'a>(
+/// One line run of shape `{tag: {...}}`, drawn from those there are.
+fn pick_line_run<'a>(
     delta: &'a mut Map<String, Value>,
     tag: &str,
     aux: &mut Rng,
 ) -> Option<&'a mut Map<String, Value>> {
-    let runs = section_runs(delta)?;
+    let runs = line_runs(delta)?;
     let matching: Vec<usize> = runs
         .iter()
         .enumerate()
@@ -455,10 +455,10 @@ fn pick_section_run<'a>(
 }
 
 /// Every shot Copy run with at least one shot, `{"c": {...}}`, inside the
-/// section Edit and New runs.
+/// line Edit and New runs.
 fn shot_copies(delta: &mut Map<String, Value>) -> Vec<&mut Map<String, Value>> {
     let mut out = Vec::new();
-    let Some(runs) = section_runs(delta) else {
+    let Some(runs) = line_runs(delta) else {
         return out;
     };
     for run in runs.iter_mut() {
@@ -501,7 +501,7 @@ fn is_bag(edit: &Value) -> bool {
 }
 
 /// Visit every `Edit` the delta holds, outermost first: the top-level member
-/// edits, each section Edit run's member edits, each shot copy's edits, and
+/// edits, each line Edit run's member edits, each shot copy's edits, and
 /// everything nested in an object or array edit. Literal values (`{"s": v}`, a
 /// New run's members, literal shots) are not edits and are not entered.
 fn for_each_edit(delta: &mut Map<String, Value>, visit: &mut dyn FnMut(&mut Value)) {
@@ -510,7 +510,7 @@ fn for_each_edit(delta: &mut Map<String, Value>, visit: &mut dyn FnMut(&mut Valu
             walk_edit(edit, visit);
         }
     }
-    let Some(runs) = section_runs(delta) else {
+    let Some(runs) = line_runs(delta) else {
         return;
     };
     for run in runs.iter_mut() {
@@ -596,13 +596,14 @@ fn a_damaged_gzip_row_drops_the_whole_history() {
     for name in ["a", "b", "c"] {
         assert!(
             state
-                .execute(Command::CreateSection {
+                .execute(Command::CreateLine {
                     name: Some(name.to_string()),
                     surveyor: None,
                     date: None,
                     color: "#3388FF".to_string(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 })
                 .success
         );

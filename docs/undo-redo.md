@@ -27,25 +27,26 @@ Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configur
 
 Commands go through a two-phase capture during execution:
 
-1. **`generate_undo_data()` - before execution**: Captures "before" state. For `CreateSection` this returns `UndoData::None` since the ID doesn't exist yet; `CreateShot` returns a `CreatedShotSnapshot` STUB instead, because its `previous_offsets` can only be read before the insert. For updates it snapshots previous field values. For deletes it snapshots the entity.
+1. **`generate_undo_data()` - before execution**: Captures "before" state. For `CreateLine` this returns `UndoData::None` since the ID doesn't exist yet; `CreateShot` returns a `CreatedShotSnapshot` STUB instead, because its `previous_offsets` can only be read before the insert. For updates it snapshots previous field values. For deletes it snapshots the entity.
 
-2. **`finalize_undo_data()` - after execution**: Fills in data that only exists post-execution. For `CreateSection`/`CreateShot`, this captures the assigned ID and full snapshot. For `CreateLoopClosure`, this grabs the closure object from the project.
+2. **`finalize_undo_data()` - after execution**: Fills in data that only exists post-execution. For `CreateLine`/`CreateShot`, this captures the assigned ID and full snapshot. For `CreateLoopClosure`, this grabs the closure object from the project.
 
 ## UndoData Variants
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
-| `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
-| `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
-| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
+| `InverseCommand` | SetStationComment, SetStationName (the inverse renames back to the name the station had) | Execute the inverse command | Execute the original command |
+| `PreviousValues` | UpdateShot, SetShotKind, UpdateLineMetadata | Parse JSON, apply old values, then put the recorded `line_offsets` back (see below) | Execute the original command |
+| `CreatedLineSnapshot` | CreateLine | Delete the line | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `line_offsets` back (see below) | Restore from snapshot (preserves original ID, and the created station's Station ID and name from `created_station`) |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
-| `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | A CAPTURE shape only: Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Section Here and Combine Sections (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) capture one, and `UndoData::compact` stores it as a `Delta` before it is pushed | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `SegmentMoveInfo` | MoveSegment | Restore line offsets directly | Reapply offset to affected lines |
+| `ProjectSnapshotPair` | A CAPTURE shape only: Batch, DeleteLine, DeleteShot, ReverseLine, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Line Here and Combine Lines (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) capture one, and `UndoData::compact` stores it as a `Delta` before it is pushed | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `Delta` | Every entry captured as a `ProjectSnapshotPair` (see [Compact entries](#compact-entries-deltas-instead-of-snapshots)) | Apply the delta to the live project, restore the result, re-encode the way back | The same, the other way |
-| `ShotCredits` | EditShotCredit, and an UpdateSectionMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a section edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateSectionMetadata: execute the original command |
-| `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
+| `ShotCredits` | EditShotCredit, and an UpdateLineMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a line edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateLineMetadata: execute the original command |
+| `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same line, shot and closure ids |
+| `CaveSections` | the Section commands (#327): Create/Update/Delete CaveSection, MoveLinesToCaveSection, ApplyCaveSectionColor | Restore the recorded `before`: the whole Section list and id counter, and the membership and colour of each line the command changed (a line no longer present is skipped) | Restore the recorded `after` the same way - never a re-execution, so a re-created Section keeps its id |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ## Compact entries: deltas instead of snapshots
@@ -62,20 +63,26 @@ states (`core/undo/delta.rs`, `delta/*.rs`).
 A `ProjectDelta` turns one serialized project (its SOURCE) into another (its TARGET),
 in the project's own JSON shape:
 
-- the top-level members other than `sections`, member by member (`Edit`: a changed
+- the top-level members other than `lines`, member by member (`Edit`: a changed
   offset key, an added merge, a new datum). The members whose order carries no meaning
-  (`station_offsets`, `station_comments`, `station_names`, `counter_parity_shots`) are
-  edited as bags - elements to remove by value and to add - so a load that prunes an
-  unrelated element (`counter_parity_shots` is pruned on load) cannot misalign them. A
-  short list (datums, held gauges) is replaced whole. A long positional list records
-  its length, and an edit whose source has another length REFUSES rather than keeping
-  the wrong elements;
-- the sections as runs over the source's sections: a run of untouched sections is two
+  (`station_offsets`, `station_comments`, `station_names`, `station_ids`,
+  `counter_parity_shots`) are edited as bags - elements to remove by value and to add -
+  so a load that prunes an unrelated element (`counter_parity_shots` is pruned on load)
+  cannot misalign them. In the four station-keyed bags a `[station key, value]` pair
+  whose key names a station of its state (the source for a removal, the target for an
+  addition) is written as `(line id, station index, value)` and its key rebuilt from
+  that state's shots on apply (`delta/stations.rs`): every station has a name and a
+  Station ID, so a reverse, a delete or a split moves one pair per station, and spelled
+  out with its uuid each pair cost more than the shot it sits on. A key that names no
+  station stays literal. A short list (datums, held gauges) is replaced whole. A long
+  positional list records its length, and an edit whose source has another length
+  REFUSES rather than keeping the wrong elements;
+- the lines as runs over the source's lines: a run of untouched lines is two
   numbers;
-- a touched section's shots as runs over the source's SHOTS, matched by uuid in any
-  source section and in either direction, so a split, a combine or a reverse - which
+- a touched line's shots as runs over the source's SHOTS, matched by uuid in any
+  source line and in either direction, so a split, a combine or a reverse - which
   move or reorder shots without changing them - costs a few numbers per run. A
-  reversed run may replay Reverse Section's own per-shot transform
+  reversed run may replay Reverse Line's own per-shot transform
   (`models::reversed_azimuths`, shared with `reverse_shots`), leaving only the
   residuals. Shots the delta carries literally (a deleted shot on the undo side) are
   written as key-once tables.
@@ -95,8 +102,8 @@ of the self-refreshing wall below: the next step starts from exactly the state t
 one installed, so undo and redo stay exact inverses whatever undo-less change (a save's
 heals) happened in between.
 
-The engine works on the serialized TEXT (`Doc`): an untouched section stays a borrowed
-slice of the live project's JSON, matched by `memcmp`, and only the sections a delta
+The engine works on the serialized TEXT (`Doc`): an untouched line stays a borrowed
+slice of the live project's JSON, matched by `memcmp`, and only the lines a delta
 touches are parsed. On a 20,000-shot survey a step through a compact entry takes about
 what the snapshot restore took (32-39 ms against 29-30 ms in release).
 
@@ -104,24 +111,27 @@ what the snapshot restore took (32-39 ms against 29-30 ms in release).
 
 - **Shot ids.** The loader renumbers every shot, so after a reopen a shot the delta
   carries literally can carry an id a renumbered live shot holds. A copied shot keeps
-  its live id; a literal whose id is taken takes a fresh one from its section's
+  its live id; a literal whose id is taken takes a fresh one from its line's
   allocator, and every allocator is raised past every id in its window, as the
-  project's section allocator is raised past every section. In a session that has not
+  project's line allocator is raised past every line. In a session that has not
   reloaded nothing collides and nothing changes.
 - **Gauge pairs.** A snapshot restore carried a save's gauge pair onto a restored
-  section only when that section held the shots it names (`reapply_heals_after_restore`).
+  line only when that line held the shots it names (`reapply_heals_after_restore`).
   A delta keeps every member it does not edit, so the step applies the same rule to the
-  sections it rebuilt whose source held no pair (`SectionRun::Edit { ungauged }`), and
+  lines it rebuilt whose source held no pair (`LineRun::Edit { ungauged }`), and
   hands the restore the pairs it takes away as the `edited` set the pair arm reads from
   the half it leaves.
-- **The history preview.** Delete Section and Remove Zero Datum previews read their
-  `before` state; the entry records those facts once, at capture (`BeforePreview`).
+- **The history preview.** Delete Line and Remove Zero Datum previews, a Delete
+  Line's label once the line is gone (`Delete line "Main"`), and a Batch's
+  preview rows for the lines it deleted read their `before` state; the entry
+  records those facts once, at capture (`BeforePreview`: the line's name and shot
+  count, the datum's GPS, the deleted lines' names).
 
 ### The load's uuid remap walks a holder view
 
 A snapshot half was a whole recorded state; a delta is not. `uuid_remap.rs` therefore
 walks each stack from the live project outwards with a `HolderWalk`
-(`core/undo/history_walk.rs`) - shot uuids by section, nothing else - stepped through
+(`core/undo/history_walk.rs`) - shot uuids by line, nothing else - stepped through
 every entry the way undo or redo steps the project (`ProjectDelta::step_holders`). A
 reinstall is judged against the state it replays into (#732), each state a delta
 records is folded in like a snapshot half (its ids, its repeats), and a COPIED shot
@@ -134,17 +144,17 @@ A persisted delta is read back from the `.stalx`, so it is untrusted input.
 `ProjectDelta::check_shape` (`core/undo/delta/shape.rs`) refuses one that breaks a rule
 the encoder keeps by construction:
 
-- the section runs read each source section at most once, within the source count the
+- the line runs read each source line at most once, within the source count the
   delta records;
-- the shot copies take each source shot at most once, and never out of a section whose
+- the shot copies take each source shot at most once, and never out of a line whose
   shots stay where they are (kept, or edited without its shots rebuilt) - the encoder's
   `ShotPool` writes a second match of a shared uuid literally instead;
 - every positional array edit walks its source forwards, each element at most once;
-- a new section's id fits the section-id bound.
+- a new line's id fits the line-id bound (`MAX_LINE_ID`).
 
 Together they bound an apply: it never builds more than its source holds plus the
 literals the delta carries. Without them a row of a few kilobytes that keeps the same
-sections over and over grows the project on every step - and the load's holder walk
+lines over and over grows the project on every step - and the load's holder walk
 steps through every entry at open, before any click. The check runs when a row is read
 (a row that fails is unreadable, so the history is dropped), before every apply, before
 every walk step, and after every encode.
@@ -161,23 +171,34 @@ discarded-history banner says which: an earlier version's history "was not kept"
 damaged one "could not be read". An older build that opens a file saved by this one
 cannot parse the envelope, so it skips every row and sees an empty history.
 
+The envelope is written in the on-disk vocabulary like every other undo row
+([Persistence](#persistence)): `write_undo_data` runs `models::disk_names::to_disk` over
+all of it, so a delta's member names and literal values cross the boundary exactly as a
+snapshot half's do (`lines` as `sections`, `line_offsets` as `section_offsets`, a
+station key's `line_id` as `section_id`), and `parse_undo_data` translates the whole row
+back before `check_shape` or any step reads it. The engine itself only ever sees the
+names this build serializes a project with. A shot table's column headers are string
+values, which the translation never touches, in either direction.
+
 ### The size gate
 
 `core/state/undo_size_gate_tests.rs` runs every undoable action kind once on a
 synthetic 5,000- and a 20,000-shot survey (tree-merged lines, loop closures, a datum,
 an unmerged island) and fails if any entry - on the undo stack, and again on the redo
 stack once undone - is more than 1% of the saved `.stalx`. Actions that bring whole-file
-data in (Add `.stalx`, an import, Merge Projects) are exempt. Run it with
-`STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the table; the largest entries are a shot
-edit that moves a big subtree's offsets (0.33%) and a section delete, which is the
-deleted section itself.
+data in (Add `.stalx`, an import, Merge Projects) are exempt; the station-name,
+Station ID and Section commands are measured with the rest. Run it with
+`STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the table; on the 5,000-shot survey the
+largest entries are a New Line snapped onto a station and into a Section (0.76%, the
+new line itself) and a line delete (0.73%, the deleted line with its stations' names
+and Station IDs).
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
 
 `Shot::id` is regenerated on every load - the reader renumbers each shot to
-`section_id * FEATURE_ID_STRIDE + sequence_order`
+`line_id * FEATURE_ID_STRIDE + sequence_order`
 (`persistence/sqlite/read.rs`) - while undo entries are persisted and reloaded
-as opaque JSON with no remapping, and `Section::take_shot_id` hands out ids from
+as opaque JSON with no remapping, and `Line::take_shot_id` hands out ids from
 that same space. So a persisted id does not miss after a reopen, it **collides**
 with whatever shot now occupies the slot (issue #413, findings 8 and 12: the
 undo deleted or edited the WRONG shot), or runs past the renumbered range and
@@ -201,7 +222,7 @@ The rules the restore paths follow:
   old persisted JSON still loads - no schema bump).
 - **A recorded uuid that no longer resolves is a loud failure**, never a
   fall-back to the id: the id is exactly the thing that cannot be trusted.
-- **A redo of `CreatedShotSnapshot` refuses to insert a uuid the section already
+- **A redo of `CreatedShotSnapshot` refuses to insert a uuid the line already
   holds** - two shots with one uuid is a corrupt project, and the next save's
   `ensure_unique_shot_uuids` would silently re-mint one of them (finding 16).
   The recorded in-session id is likewise only forced onto the recreated shot
@@ -225,15 +246,15 @@ Three entries used to rebuild rather than restore, and lost something each time.
 All three fixes are additive `#[serde(default)]` fields, so old persisted JSON
 still loads and falls back to the previous behaviour - no schema bump.
 
-- **`CreatedSectionSnapshot` carries a `SectionIdentity`** next to its
-  `SectionData`: the shots' uuids, the section's `reverse_parity` and the two
-  least-squares gauge anchors. `SectionData` is the CREATE shape and holds none
-  of them, so a redo used to run `Section::new` and mint a fresh uuid per shot -
-  dangling every `StationKey::AfterShot` anchor onto the section, exactly what
-  `CreatedShotSnapshot`'s `uuid` field exists to prevent. `Section::restore_with_identity`
+- **`CreatedLineSnapshot` carries a `LineIdentity`** next to its
+  `LineData`: the shots' uuids, the line's `reverse_parity` and the two
+  least-squares gauge anchors. `LineData` is the CREATE shape and holds none
+  of them, so a redo used to run `Line::new` and mint a fresh uuid per shot -
+  dangling every `StationKey::AfterShot` anchor onto the line, exactly what
+  `CreatedShotSnapshot`'s `uuid` field exists to prevent. `Line::restore_with_identity`
   applies the recorded identity; a legacy entry with no `identity` mints as
-  before. The undo REFRESHES that identity from the live section immediately
-  before it deletes it, because a save can heal the section (see the next
+  before. The undo REFRESHES that identity from the live line immediately
+  before it deletes it, because a save can heal the line (see the next
   section) after the entry was pushed.
 - **`RemoveZeroDatum` records a whole `ProjectSnapshotPair`**, not the
   `ZeroDatumInfo` its sibling `SetZeroDatum` still records. Removing a GPS anchor
@@ -260,8 +281,8 @@ still loads and falls back to the previous behaviour - no schema bump.
 ### A restored snapshot is re-healed to the standard a save leaves (#413, finding 11)
 
 `save_project` mutates the live project with **no undo entry of its own** - it
-mints missing shot uuids, re-mints within-section duplicates, captures the
-least-squares gauge pair, drops orphan `section_offsets` and sanitizes non-finite
+mints missing shot uuids, re-mints within-line duplicates, captures the
+least-squares gauge pair, drops orphan `line_offsets` and sanitizes non-finite
 values (`apply_save_heals`, `core/state/project_io.rs`). A `ProjectSnapshotPair`
 captured BEFORE that save holds the pre-heal project in both halves, so restoring
 one used to revert the heal as a side effect of an unrelated undo - which made
@@ -279,11 +300,11 @@ is on the function.
 ### A loaded history follows the load's shot UUID heal
 
 Shot UUIDs are unique across the whole project, but a file saved before that
-can hold one id in several sections (the same Ariane file imported twice, a
-merge of two copies). The load keeps the id in the lowest section and renames
+can hold one id in several lines (the same Ariane file imported twice, a
+merge of two copies). The load keeps the id in the lowest line and renames
 the others to a derived id (`Project::make_shot_uuids_project_unique`,
 `reminted_shot_uuid`). The persisted history was recorded against the OLD ids:
-left alone, an entry addressing `(section, old id)` would no longer find its
+left alone, an entry addressing `(line, old id)` would no longer find its
 shot and be dropped, and a snapshot restored from it would put the repeat back.
 
 So both load paths call `UndoStack::reconcile_with_loaded_project` right after
@@ -292,16 +313,16 @@ So both load paths call `UndoStack::reconcile_with_loaded_project` right after
 The map (`history_remap`):
 
 1. reuses what the live heal did, verbatim;
-2. leaves an id that is live in its section alone;
-3. maps an id to its derived replacement when that is what the section holds,
+2. leaves an id that is live in its line alone;
+3. maps an id to its derived replacement when that is what the line holds,
    live or elsewhere in the history (history saved against an older heal);
-4. renames an id its section must YIELD to a derived id stepped past every id in
-   use. A section yields when another section holds the same id in the SAME
-   recorded state - one project snapshot, or the sections one entry reinstalls
-   (an Add, a re-created or deleted section) together with the project that
+4. renames an id its line must YIELD to a derived id stepped past every id in
+   use. A line yields when another line holds the same id in the SAME
+   recorded state - one project snapshot, or the lines one entry reinstalls
+   (an Add, a re-created or deleted line) together with the project that
    entry replays into - and keeps it: the one holding the id live, else the
    lowest. This is what covers a copy only the history still holds (a deleted
-   section an undo would bring back);
+   line an undo would bring back);
 5. leaves everything else alone.
 
 The project a reinstalling entry replays into is the live one only when no
@@ -309,12 +330,12 @@ whole-project snapshot lies between them. Otherwise it is the nearest such
 snapshot's state - the `before` an undo restores, or the `after` a redo
 restores - because stepping through that entry replaces the whole project first
 (`HistoryIds::order_reinstalls`). Comparing against the live project instead
-gave a new id to every shot a combine or split had moved out of a section that
+gave a new id to every shot a combine or split had moved out of a line that
 an older entry created or added, on the first undo after a reopen (#732).
 
 Rule 4 asks about one recorded state at a time on purpose. A split moves shots,
-ids and all, from one section to a new one (and Combine Sections moves them back
-into another), so the history holds each moved id in two sections - but never at
+ids and all, from one line to a new one (and Combine Lines moves them back
+into another), so the history holds each moved id in two lines - but never at
 the same time. Across the whole history that
 looks like a repeat; within any one state it is not, and renaming it would hand
 the shots new ids every time a project with a split in its history is opened.
@@ -323,11 +344,11 @@ The visitor is an exhaustive `match` over `UndoData`: a new variant that carries
 a shot id has to say how it is translated, or the build fails. Where a variant
 keeps one shot's id twice it rewrites both (`Shot::with_uuid` lets
 `shot_data.uuid` win over the recorded `uuid`; `restore_with_identity` lets
-`identity.shot_uuids` win over `section_data`). Project snapshots are rewritten
+`identity.shot_uuids` win over `line_data`). Project snapshots are rewritten
 as `serde_json::Value`, never round-tripped through `Project`:
 `restore_snapshot_into` recognises a legacy blob by the keys it LACKS
 (`"validation":`, `"surface_elevation":`), and a typed round trip would add them.
-A light probe (section ids and shot ids only) reads each snapshot once; when
+A light probe (line ids and shot ids only) reads each snapshot once; when
 nothing needs renaming - every history without repeats - the translation stops
 there and leaves the history byte for byte. Byte totals are recounted after a
 rewrite.
@@ -338,17 +359,17 @@ and nothing on this path marks the project dirty. The next save persists the
 translated history.
 
 One case translates differently across a reload than it would have within the
-session: delete a section holding id X, then import a file carrying X (the door
-sees no live holder, so the new section keeps X), then reload. The deleted
-section exists only in the history now, so it is the one renamed, and undoing
+session: delete a line holding id X, then import a file carrying X (the door
+sees no live holder, so the new line keeps X), then reload. The deleted
+line exists only in the history now, so it is the one renamed, and undoing
 back to it restores it with the derived id instead of X. Its references are
 translated with it, so nothing dangles; only the id differs from what it had
 before the reload.
 
-An undo of an integrity Repair that healed a cross-section repeat restores the
+An undo of an integrity Repair that healed a cross-line repeat restores the
 repeat verbatim, like every Repair undo (`undo_of_duplicate_uuid_repair_restores_the_duplicates`
-and its cross-section twin). The save does not re-heal it (its uuid heal stays
-in-section); the next load does, with the same rule. While that state is open,
+and its cross-line twin). The save does not re-heal it (its uuid heal stays
+within a line); the next load does, with the same rule. While that state is open,
 the project counts as already critical, so the integrity guard - which refuses
 only NEWLY introduced corruption - refuses no further edit until the repeat is
 gone: the same as after undoing any other Repair.
@@ -356,13 +377,13 @@ gone: the same as after undoing any other Repair.
 ### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
 
 The carry-forward above repairs the half being **restored**, and it can only do so
-where the restored project and the live one hold **the same section** - it copies
-anchors from a live section with the restored one's id. A pair whose two halves
-disagree about whether a section EXISTS has no such counterpart: a `Batch`
-containing `CreateSection`, `execute_delete_shot_range_split`'s re-created tail,
-any delete-and-recreate. Undo restores a `before` in which the section is absent,
+where the restored project and the live one hold **the same line** - it copies
+anchors from a live line with the restored one's id. A pair whose two halves
+disagree about whether a line EXISTS has no such counterpart: a `Batch`
+containing `CreateLine`, `execute_delete_shot_range_split`'s re-created tail,
+any delete-and-recreate. Undo restores a `before` in which the line is absent,
 and the redo then restores an `after` recorded before the save that minted the
-section's gauge pair - so the state at that depth still depended on the route.
+line's gauge pair - so the state at that depth still depended on the route.
 
 So `undo_inner` and `redo_inner` both call
 `AppState::refresh_snapshot_pair_counterpart` (`core/state/undo.rs`) before
@@ -370,8 +391,8 @@ stepping through a pair. A pair is a wall - nothing above it survives the step -
 so at that moment the live project **is** the side being left behind: `after` when
 undoing, `before` when redoing. Re-recording that side from the live project makes
 undo and redo of a pair exact inverses of each other **by construction**, whatever
-undo-less change happened since the entry was pushed. `refresh_created_section_identity`
-does the same thing one variant over, for `CreatedSectionSnapshot`.
+undo-less change happened since the entry was pushed. `refresh_created_line_identity`
+does the same thing one variant over, for `CreatedLineSnapshot`.
 
 The two are complementary and both are kept: the refresh fixes the half being
 LEFT, the carry-forward fixes the half being RESTORED (and is also on the path of
@@ -380,19 +401,20 @@ is one project serialization per snapshot-pair history move - not a new cost cla
 since recording a pair already serializes the project twice and restoring one
 already deserializes it.
 
-### A dust-zero `section_offsets` entry is unrepresentable (#413, finding 27)
+### A dust-zero `line_offsets` entry is unrepresentable (#413, finding 27)
 
-`section_offsets` holds a key only for a section that is **actually displaced**,
+`Project.line_offsets` (the `section_offsets` table on disk) holds a key only for
+a line that is **actually displaced**,
 and "not displaced" has exactly one spelling: the key is absent. A value within
 `Project::OFFSET_DUST_M` (a micrometre) of the origin in both components is not a
 position, so it is never stored - in memory or on disk, by any writer, computed or
-restored. The invariant is stated on `Project::write_section_offset`, which is the
+restored. The invariant is stated on `Project::write_line_offset`, which is the
 one write point everything routes through, and enforced on maps this app did not
-write by `Project::normalize_section_offsets`.
+write by `Project::normalize_line_offsets`.
 
 It has to be an invariant rather than a per-writer rule because no rule local to a
-write can satisfy both identities the app owes. `MoveSection(+d)` followed by
-`MoveSection(-d)` must leave the map it found, and a writer sees only its own
+write can satisfy both identities the app owes. `MoveLine(+d)` followed by
+`MoveLine(-d)` must leave the map it found, and a writer sees only its own
 arguments:
 
 - from an **absent** key, `(0 + d) - d` lands a femtometre off zero and the key
@@ -419,7 +441,7 @@ Two boundaries enforce it on input this app did not produce:
   app cannot otherwise reach.
 
 Nothing observable changes when a row is dropped: every consumer reads the map
-through `Project::section_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+through `Project::line_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
 an absent key and an all-zero one are the same geometry, the same coordinates and
 the same drawn position. The **file-format gate is unaffected** for the same reason
 it always was: the app never writes a dust-zero row, so a save-load-save cycle on a
@@ -434,7 +456,7 @@ corpus measured when coordinates were metre-scale - and #469's frame
 renormalisation (`Project::renormalize_frame`) legitimately moved them onto the
 inter-datum distance, so the residue moved with them and started landing on both
 sides of the gate. Two cascades over the same geometry, seeded differently, then
-disagreed about whether a section HAS a key, which is structural rather than
+disagreed about whether a line HAS a key, which is structural rather than
 numeric: `CLOSURE_SHAPES=1` seed 18 in `fuzz_undo_tests.rs`.
 
 Re-measured with every gate site instrumented, the residue is one to five ULPs of
@@ -455,7 +477,7 @@ oracle.
 Two undo arms re-derive the offsets their inverse recomputes, and both carry the
 pre-command offsets of every key the command CHANGED and hand them back verbatim
 afterwards. The capture reads the whole map before the command
-(`Project::capture_all_section_offsets`); `UndoData::keep_changed_offsets` cuts it to
+(`Project::capture_all_line_offsets`); `UndoData::keep_changed_offsets` cuts it to
 the keys whose bits the command changed before the entry is pushed (every
 `previous_offsets` map is cut the same way). Every OTHER key is pinned to its live value
 after the inverse runs (`AppState::restore_offsets_pinning_the_rest`): a key the command
@@ -467,11 +489,11 @@ re-derivation moved it:
   `update_shot`, whose `realign_after_shot_edit` re-derives the group's offsets.
   Captured only for a geometry edit, which is the only one that realigns.
 - `UndoData::CreatedShotSnapshot { previous_offsets }` - the undo removes the shot,
-  and a mid-section removal pays the section's offset back by the segment it took
+  and a mid-line removal pays the line's offset back by the segment it took
   out.
 
 The invariant closes the **presence** question, not the **value** one. The realign
-recomputes an offset from section-local coordinates and is self-correcting, but the
+recomputes an offset from line-local coordinates and is self-correcting, but the
 removal above genuinely accumulates: it computes `(v + d) - d`, which is not `v` in
 IEEE. One cycle of that drift is below every oracle's tolerance, which is exactly
 why no fuzz survey reaches it, and it is the shape the horizon mode watches
@@ -486,7 +508,7 @@ reproduces the recorded post-command map.
 #### `ZeroDatumInfo` captures the WHOLE project, not a connected set (#469, item 1)
 
 `UndoData::ZeroDatumInfo { previous_offsets }` is the one capture whose scope is
-not a connectivity question, and it takes `Project::capture_all_section_offsets`
+not a connectivity question, and it takes `Project::capture_all_line_offsets`
 rather than the merge group its two siblings above take.
 
 Local `(0, 0)` MEANS the FRAME datum's GPS - the first entry of `zero_datums` that
@@ -523,7 +545,7 @@ the gate below is a no-op on top of it.
 
 Otherwise the renormalisation runs only in the FORWARD epilogue (`execute()`,
 `execute_batch`, `repair_open_project_integrity`, and the delete/split, Split
-Section Here and Combine Sections entry points that bypass `execute()`), never in
+Line Here and Combine Lines entry points that bypass `execute()`), never in
 `reconcile_geometry` - which
 `undo()`/`redo()` share - and never in the loader. Every command that can reach it
 records either a `ProjectSnapshotPair` or this widened map, so no inverse
@@ -538,13 +560,13 @@ all, and a first datum that re-frames the survey records every one.
 #### The one derived field an inverse RE-DERIVES: `is_aligned` (#469, item 2)
 
 `reconcile_geometry` runs on every history move as well as every forward command,
-and it now re-derives two things rather than one: the section offsets
+and it now re-derives two things rather than one: the line offsets
 (`realign_merges`) and every snap-to-merge closure's alignment claim
 (`Project::remeasure_closure_alignment`). The claim is swept on BOTH sides of the
 realign - before, because an aligned closure is an EDGE the offset cascade
 traverses, so the flags are an INPUT to the solve and must be a function of the
 geometry rather than of the route taken to it; after, because the realign can move
-a section, which changes the very gaps the claim is measured from. No undo arm
+a line, which changes the very gaps the claim is measured from. No undo arm
 captures `is_aligned` at all, and none needs to.
 
 That looks like the opposite of the rule above, and it is not, because the claim is
@@ -586,20 +608,20 @@ USER delete is refused exactly as before.
 It also picks the right inverse per insert shape, because `remove_shot_with_rewire`
 is not the inverse of one of them:
 
-- **Append into an EMPTY section** (both recorded anchors absent, position 0, and
-  still the section's sole shot) -> `Project::remove_appended_first_shot`
+- **Append into an EMPTY line** (both recorded anchors absent, position 0, and
+  still the line's sole shot) -> `Project::remove_appended_first_shot`
   (`models/project/shots.rs`). `remove_shot_with_rewire`'s `pos == 0` branch
   answers the user's delete-the-first-shot question - station 0 goes away,
-  station 1 becomes the new section start, refs keyed to station 0 are dropped
-  and `adjust_section_offset` slides the section so the survivors keep their
-  world positions. With exactly one shot there is no survivor: the section slid
+  station 1 becomes the new line start, refs keyed to station 0 are dropped
+  and `adjust_line_offset` slides the line so the survivors keep their
+  world positions. With exactly one shot there is no survivor: the line slid
   by the shot vector while the offset-neutral `Project::add_shot` gave nothing
   back, and the redo re-appended offset-neutrally, so every cycle slid it again
   (the RATCHET). The station the append CREATED is station 1, `AfterShot(uuid)`;
-  that is what the inverse removes, leaving `section_offsets` and station 0's
+  that is what the inverse removes, leaving `line_offsets` and station 0's
   merges, datums and comments untouched.
 - **Everything else** -> `remove_shot_with_rewire`, which already mirrors the
-  insert exactly: an append into a non-empty section leaves no station beyond the
+  insert exactly: an append into a non-empty line leaves no station beyond the
   deletion point, so `anchored_sides_of_edit` sees no anchored tail and
   compensates nothing; a mid-chain insert and a prepend are undone by the same
   offset arithmetic that made them.
@@ -610,10 +632,10 @@ is not the inverse of one of them:
 
 ## Structural edits outside `execute()` (split, combine)
 
-Delete-and-split, Split Section Here (`command_split_section.rs`) and Combine
-Sections (`command_combine_sections.rs`) are `AppState` methods, not `Command`
+Delete-and-split, Split Line Here (`command_split_line.rs`) and Combine
+Lines (`command_combine_lines.rs`) are `AppState` methods, not `Command`
 variants, because one user action is several model steps (Split may insert a
-station first; Combine may reverse the other section first). Each follows the
+station first; Combine may reverse the other line first). Each follows the
 same recipe: take the command lock, call `guard_mutation`, check everything that
 can refuse BEFORE the before-snapshot (so a refusal pushes no entry and changes
 nothing), take the frame-datum key, mutate, roll back to the snapshot on an
@@ -622,9 +644,9 @@ frame datum changed), `reconcile_geometry`, and push ONE
 `ProjectSnapshotPair`.
 
 The pushed `Command` is only a label: a `Batch` that names the operation in the
-history dropdown. It must never contain a `ReverseSection`, even when Combine
-reversed the other section: undo/redo derive `reversed_sections` (the frontend's
-pin mirroring) from the command, and the reversed section no longer exists after
+history dropdown. It must never contain a `ReverseLine`, even when Combine
+reversed the other line: undo/redo derive `reversed_lines` (the frontend's
+pin mirroring) from the command, and the reversed line no longer exists after
 a combine.
 
 ## Batch Commands
@@ -648,36 +670,37 @@ history, and that step records only what the add brought - never a
 `ProjectSnapshotPair`, whose size would grow with the cave being added INTO:
 
 - **What is recorded** (`AddedContent`, `core/undo/added_content.rs`): the
-  added `Section`s whole (ids, shot uuids, parity, gauge pair), every merge,
-  closure, datum, comment, station name and section/station offset that names
+  added `Line`s whole (ids, shot uuids, parity, gauge pair), every merge,
+  closure, datum, comment, station name and line/station offset that names
   them, the
+  Sections it appended (#327; the added lines name them), the
   dedup hashes the add put in (not ones the project already held), the ignored
   warnings it carried, `(before, after)` of `surface_elevation` and `location`
   (the two project fields the shared append can set), and `(before, after)` of
-  any PRE-EXISTING section offset that moved across the command (normally none:
+  any PRE-EXISTING line offset that moved across the command (normally none:
   the add places only what it copied).
 - **Two phases**, like `CreatedShotSnapshot`: `generate_undo_data` returns a stub
-  holding only a baseline (`next_section_id`, offsets, hash sets, the two
+  holding only a baseline (`next_line_id`, offsets, hash sets, the two
   fields); `finalize_undo_data` measures the project the epilogue left against
   it. The baseline is `#[serde(skip)]` and never persisted.
-- **Undo** removes exactly the recorded sections and everything referencing
+- **Undo** removes exactly the recorded lines and everything referencing
   them, the recorded hashes, and puts the two fields and any moved offset back.
   The id allocators are left alone, so within a session nothing later reuses
   an id the redo needs. That holds only within a session: a reload derives
-  `next_section_id` from the highest section id on disk (max + 1), so after
+  `next_line_id` from the highest line id on disk (max + 1), so after
   undo, save and reopen a later command can take an id the redo needs - and
-  the redo then refuses it rather than create two sections with one id. It is
-  SELF-REFRESHING, like `CreatedSectionSnapshot`: the
+  the redo then refuses it rather than create two lines with one id. It is
+  SELF-REFRESHING, like `CreatedLineSnapshot`: the
   content is re-read from the live project right before the removal, so a save
   heal applied since the push comes back on redo instead of being reverted.
 - **Redo** reinstalls the recorded content verbatim - it never re-reads the
   file, which may have changed or gone. It refuses (nothing changed) if a
-  recorded section id is already taken, or if the record names a section twice
-  or past `MAX_SECTION_ID` (the entry is persisted, so it is read back like any
+  recorded line id is already taken, or if the record names a line twice
+  or past `MAX_LINE_ID` (the entry is persisted, so it is read back like any
   other input).
 - **Placement is not part of the step**: a source with a datum lands at its
   GPS position. One without a datum stays floating, and the orphan-placement
-  dialog offers it spots on any anchored section, the open project's own
+  dialog offers it spots on any anchored line, the open project's own
   included (`Project::suggest_orphan_placements`). Accepting one runs
   ordinary edits (`MergeStations`, `SetShotKind`, and with the "interpolate"
   or "import data" overlap modes `UpdateShot` on the target's shots). Each is
@@ -686,12 +709,12 @@ history, and that step records only what the add brought - never a
   `path` is `#[serde(skip)]`; only the sanitized file name (the history label)
   is serialized. A reloaded entry has an empty path, which nothing reads.
 - **Ignored warnings** live in the open file's `resolved_warnings` table, which
-  has a foreign key on `sections(id)` - and an added section is not in that
+  has a foreign key on `sections(id)` (the lines table) - and an added line is not in that
   table until the next save. So the carried ignores wait in
   `AppState::pending_ignores`, are honored by `compute_project_warnings`
   meanwhile, are written by the next save's carry-over, and are cleared with
   every project-slot commit. Undo drops the pending ones; rows a save already
-  wrote stay on disk, inert (their sections are gone) and dropped by the next
+  wrote stay on disk, inert (their lines are gone) and dropped by the next
   save, so a close without saving leaves the file consistent.
 
 ## Non-Undoable Commands
@@ -700,15 +723,25 @@ These are never pushed to the undo stack: `OpenProject`, `SaveProject`, `ClosePr
 
 ## Shot ID Display Positions
 
-Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they're plain sequential integers (0, 1, 2...).
+Shot IDs are internal and opaque. After database reload they follow the formula `line_id * 100_000 + sequence_order` (0-indexed). Before first save they're plain sequential integers (0, 1, 2...).
 
-The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means section 13, 5th shot - not the raw internal ID.
+The `shot_display_position(shot_id, line_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means line 13, 5th shot - not the raw internal ID.
 
 ## Persistence
 
 Undo and redo stacks are serialized to the SQLite database synchronously on project save and restored on project open.
 
 - Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`
+- The JSON keeps the names from before the Section -> Line rename:
+  `UndoStack::serialize_entry` and `deserialize_entry` (`core/undo/persistence.rs`) go
+  through `models::disk_names`, so a `CreateLine`
+  command is written with the tag `create_section`, a `CreatedLineSnapshot` under the key
+  `CreatedSectionSnapshot`, and `line_id` / `line_offsets` as `section_id` /
+  `section_offsets` - the whole `{"v2": ...}` envelope, a compact entry's member names
+  and literals included (see [Compact entries](#persisted-rows-and-older-histories)).
+  The command rows stay readable by an older build; the payloads do not, by design
+  (an older build cannot parse the envelope and sees an empty history). See
+  [Saving: Persisted names](saving.md#persisted-names-lines-are-sections-on-disk)
 - Only the last N entries are persisted (configurable limit), except in the hybrid mode below
 - Persistence is synchronous to avoid race conditions with concurrent readers
 - Serialization failures are logged but don't block the save
@@ -829,7 +862,7 @@ Two things survive the write and die on the read. Both are open on
 found by the entry-content oracle in `fuzz_undo_tests.rs`, which compares the
 `UndoHistoryItem` rows before a save against the ones after the reload:
 
-- **A cleared section field (finding 5, command side).** `SectionUpdates` has
+- **A cleared line field (finding 5, command side).** `LineUpdates` has
   the `double_option` treatment `ShotUpdates` got in v7 on neither `name`,
   `surveyor` nor `date`, so `Some(None)` ("clear it") and `None` ("leave it
   alone") both serialize to `null` and both read back as `None`. The persisted
@@ -890,8 +923,8 @@ and the benefit are local.
 commit) replaces the entry-count window rather than joining it. Count is the wrong unit
 here: an entry is as large as what its command changed - a few hundred bytes for most,
 the deleted data for a delete, the whole added file for an Add or an import - so a fixed
-count says nothing about bytes. (Before compact entries, every Delete shot, Delete section,
-Reverse section and Batch stored two whole-project snapshots, ~3.5 MB on a 5,000-shot
+count says nothing about bytes. (Before compact entries, every Delete shot, Delete line,
+Reverse line and Batch stored two whole-project snapshots, ~3.5 MB on a 5,000-shot
 project, and the budget held about 8 of them.) The newest entry is always kept even if it
 alone exceeds the budget. Trims log once with a count.
 
@@ -1082,6 +1115,38 @@ refused exactly when there is no edit session, including right after Take remote
 whose reload carries no claim. A Restore that loads a revision's undo history keeps
 its edit session by carrying the claim through the swap; a View carries none.
 
+## Station identity across undo and redo
+
+Every station has a name and a Station ID (SPEC 4.2), and undo/redo must give
+them back exactly - an undone delete restores the same id and name, a redone
+insert re-creates the station with the id and name it had.
+
+- **The epilogue.** `AppState::settle_station_identities`
+  (`Project::ensure_station_identities`) runs after every successful mutating
+  command BEFORE its undo entry is finalized, on the after-snapshot of every
+  command that records a snapshot pair (`capture_after_snapshot_or_rollback`),
+  and after every undo/redo step (single and `undo_to`/`redo_to`). So the entry
+  records the state with the new station's id in it, and a step never leaves a
+  station without one. It never changes a station that has a valid id and name.
+- **Snapshot-captured entries** (stored as compact deltas) carry
+  `station_names`, `station_ids` and `next_station_id` in the project serde, so
+  they restore exactly; the counter goes back with the recorded state
+  (allocation is monotonic within one timeline). `station_names` and
+  `station_ids` are edited as bags (see [Compact entries](#what-a-delta-holds)),
+  so the step does not depend on the order their pairs serialize in. A restored
+  state without Station IDs adopts the live ids of the stations it shares
+  (`adopt_station_identities`); that adoption, like the Section counter kept at
+  its live value, is reported as a heal, so the step records its way back from
+  the project it really installed.
+- **Targeted entries** record what they would otherwise lose (all additive,
+  `serde(default)`, no schema bump): `CreatedShotSnapshot.created_station`
+  (the created station's id and name; the created station is the new start for
+  a prepend, the station after the shot otherwise), `CreatedLineSnapshot`'s
+  `LineIdentity.station_ids` / `station_names` (per station index), and
+  `AddedProjectContent.station_ids`. An id another station holds by the time of
+  the redo is left to the epilogue, which keeps ids unique. Undo of these leaves
+  `next_station_id` alone, like the other allocators.
+
 ## History UI
 
 SpeleoDB revision inspection and restore/revert live in the left workspace History
@@ -1103,7 +1168,7 @@ and the editing lock.
   `PreviousValues` via `update_shot`, `CreatedShotSnapshot` via
   `remove_created_shot` - read the live offsets at the moment they run); skipping
   it altogether was #413's finding 7, where a jump kept the drift
-  `reconcile_geometry`'s `realign_merges` heals and left sections metres from
+  `reconcile_geometry`'s `realign_merges` heals and left lines metres from
   where Ctrl+Z the same number of times leaves them
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
@@ -1119,9 +1184,47 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 - **Old value only** (removed): `Field: ~~value~~` (strikethrough)
 - **Batch sub-commands**: Description as gray header, details on indented line below
 
-### Section Name Resolution
+### Name Resolution
 
-Section names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current section names, not the names at the time of the merge. This is intentional - the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
+Labels and previews never show the positional ids (`line:index`, shot ids):
+lines, stations and shots are named the way the user reads them -
+`Update shot Main Line: 4 → 5`, `Merge stations Main Line / 0 and Side / 1`,
+`Delete line "Main Line"` (`core/undo/history_names.rs`). The names are resolved
+at **display time**, not execution time, from a `NameBook` read off the project
+for just the lines the listed entries address: hovering a "Merge stations" entry
+shows the current names. This is intentional - the preview answers "what is this
+referring to now?". A deleted line's label reads its name from the entry's
+`before` snapshot, and a station rename is labelled with the name the station
+had (from the inverse). A shot is named only through the uuid its entry
+recorded (`PreviousValues::shot_uuid`, so an Update Shot or Set Shot Kind reads
+`Update shot Main Line: 4 → 5`); a command without one names the shot's line
+(`Delete shot in line "Main Line"`), because the in-session shot id the command
+carries is renumbered by a reload and could then name another shot. A name that
+cannot be resolved falls back to the wording without the handle (`Delete shot`,
+`-` in a preview row), never to the number. The fuzz oracle that pins an
+entry's label per depth (`expect_entry_prints`) therefore pins the entry's own
+`Command::description()`, not the displayed text.
+
+**Batch labels.** An entry recorded as one `Command::Batch` carries its label in
+the batch (`label`, an additive `#[serde(default, skip_serializing_if)]` key of
+the persisted `command_json`), worded once, **at record time**, with the names
+the project holds then (`core/undo/history_batch.rs`). A composite edit records
+placeholder sub-commands that only sketch it, and what it is named by is not in
+them (the station an Insert Station made has a name only the after-state knows;
+a shot id is renumbered by a reload), so each recorder words its own:
+`Insert station Main Line / 4a`, `Combine lines "Main Line" and "Downstream"`,
+`Create line "Side Passage" at Main Line / Junction` (a New Line snapped onto a
+station), `Split line "Main Line" at 5`, `Delete shot 4 → 5 and split line
+"Main Line"`, `Delete 3 shots (1 → 4) from line "Side"`, `Delete line "Stub"
+with its last shot`, `Import 5 lines ("A", "B", "C" and 2 more)`. A batch the
+frontend sends (`execute_batch`: a data-table paste, Reverse Lines, a move
+snapped onto a station) is summarized from its sub-commands with the names they
+have before it runs (`history_batch::summarize`: `Update 2 shots in line
+"Main"`, `Reverse lines "Main" and "Side"`, `Merge stations ...`). The label is
+`Command::description()`, so it holds through undo, redo, a save and a reopen;
+an entry written before labels existed keeps `Batch of N commands`. A batch's
+preview lists its first 8 sub-commands (then `+N more`), a line the batch
+deleted named from the entry's `before` snapshot.
 
 ### Preview Data Generation (`core/undo/history_view.rs`)
 
@@ -1137,7 +1240,7 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`), the rules every delta keeps (`shape.rs`) |
+| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`), the rules every delta keeps (`shape.rs`), station-keyed pairs as positions (`stations.rs`) |
 | `src-tauri/crates/core/src/core/state/undo_delta.rs` | `step_through_delta`: one step through a compact entry |
 | `src-tauri/crates/core/src/core/undo/history_walk.rs` | `HolderWalk`: shot ownership in every recorded state, for the load's uuid remap |
 | `src-tauri/crates/core/src/core/state/undo_size_gate_tests.rs` | The 1% size gate on 5k- and 20k-shot surveys |
@@ -1155,6 +1258,9 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
+| `src-tauri/crates/core/src/core/undo/history_names.rs` | `NameBook`, the named history labels (`describe`, `describe_entry`) |
+| `src-tauri/crates/core/src/core/undo/history_batch.rs` | The record-time labels of composite edits and frontend batches (`Command::Batch::label`) |
+| `src-tauri/crates/core/src/core/undo/created_station.rs` | `CreatedStation`: the id and name a redone `CreateShot` gives its station back |
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
 | `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Frontend dropdown + preview popup |
 | `src-tauri/crates/models/src/shot.rs` | `shot_display_position()` helper |

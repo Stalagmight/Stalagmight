@@ -75,13 +75,13 @@ interface UndoHistoryDropdownProps {
 /** Map command types to icon components (matching toolbar icon style) */
 function getCommandIcon(commandType: string): ReactNode {
   switch (commandType) {
-    case 'create_section':
+    case 'create_line':
       return <PlusIcon size={14} />;
     case 'update_shot':
-    case 'update_section_metadata':
+    case 'update_line_metadata':
     case 'edit_shot_credit':
       return <PencilIcon size={14} />;
-    case 'delete_section':
+    case 'delete_line':
     case 'delete_shot':
       return <TrashIcon size={14} />;
     case 'merge_stations':
@@ -94,7 +94,7 @@ function getCommandIcon(commandType: string): ReactNode {
       return <TargetIcon size={14} />;
     case 'remove_zero_datum':
       return <CircleIcon size={14} />;
-    case 'move_section':
+    case 'move_line':
     case 'move_segment':
     case 'move_station':
       return commandType === 'move_segment' ? <MoveHorizontalIcon size={14} /> : <MoveAllIcon size={14} />;

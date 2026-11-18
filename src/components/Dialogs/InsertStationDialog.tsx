@@ -7,6 +7,7 @@ import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 
 /** Clamp a 0..1 fraction; `projectParamOnSegment` already clamps, this is belt
  *  and braces against a NaN or an out-of-range value reaching the arithmetic. */
@@ -30,11 +31,14 @@ function formatPercent(pct: number): string {
 export default function InsertStationDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
   const { splitShotAtDistance } = useProjectStore();
+  const labels = useIdentityLabels();
 
-  const sectionId = dialogData.sectionId as number | undefined;
+  const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const shotLength = (dialogData.shotLength as number | undefined) ?? 0;
-  const sectionName = dialogData.sectionName as string | undefined;
+  const lineName = lineId !== undefined ? labels.lineName(lineId) : undefined;
+  // `4 → 5`: the line is in the title.
+  const shotLabel = lineId !== undefined && shotId !== undefined ? labels.shot(lineId, shotId) : null;
   /**
    * Where along the shot the map right-click landed, 0..1 from the from-station.
    * Only present for a map context menu; the data-table menu has no position on
@@ -63,7 +67,7 @@ export default function InsertStationDialog() {
     setDistance(prefill === null ? '' : formatMeters(prefill));
     setPercent(prefill === null ? '' : formatPercent((prefill / shotLength) * 100));
     setError(null);
-  }, [sectionId, shotId, alongT, shotLength]);
+  }, [lineId, shotId, alongT, shotLength]);
 
   /** Distance typed (or prefilled): the percentage follows. */
   const handleDistanceChange = (raw: string) => {
@@ -105,7 +109,7 @@ export default function InsertStationDialog() {
   const isDirty = distance.trim().length > 0 && distance !== prefilledDistance;
 
   const handleConfirm = async () => {
-    if (isLoading || sectionId === undefined || shotId === undefined || !isValid) return;
+    if (isLoading || lineId === undefined || shotId === undefined || !isValid) return;
 
     // Read-only self-check at confirm time: a split has NO server backstop for
     // the local closure-adjusted / Plan / Export case (see useEditingBlocked's
@@ -121,21 +125,21 @@ export default function InsertStationDialog() {
     setError(null);
 
     try {
-      const result = await splitShotAtDistance(sectionId, shotId, parsedDistance);
+      const result = await splitShotAtDistance(lineId, shotId, parsedDistance);
       if (result.success) {
         // Re-derive the new station's index from the REFRESHED store state
         // rather than a pre-await snapshot (#59 fix D): the tail keeps its
         // shot id, and its post-split index IS the new station's index
-        // (station i sits between shots i-1 and i). If the section/shot is
+        // (station i sits between shots i-1 and i). If the line/shot is
         // gone by the time the split resolves (project switched, or a racing
         // mutation), skip the selection and just close.
         const refreshedProject = useProjectStore.getState().project;
-        const section = refreshedProject?.sections.find((s) => s.id === sectionId);
-        const newStationIndex = section?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
+        const line = refreshedProject?.lines.find((s) => s.id === lineId);
+        const newStationIndex = line?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
         if (newStationIndex >= 0) {
           setSelection({
             type: 'station',
-            stationRef: { section_id: sectionId, station_index: newStationIndex },
+            stationRef: { line_id: lineId, station_index: newStationIndex },
           });
         }
         trackDialogComplete('insert-station');
@@ -154,7 +158,7 @@ export default function InsertStationDialog() {
 
   return (
     <DialogWrapper
-      title={sectionName ? `Insert Station in ${sectionName}` : 'Insert Station'}
+      title={lineName ? `Insert Station in ${lineName}` : 'Insert Station'}
       onClose={handleClose}
       size="md"
       isDirty={isDirty}
@@ -163,7 +167,9 @@ export default function InsertStationDialog() {
     >
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Splits the shot into two, adding a station at the given distance from its start.
+          {shotLabel
+            ? `Splits the shot ${shotLabel} into two, adding a station at the given distance from its start.`
+            : 'Splits the shot into two, adding a station at the given distance from its start.'}
         </p>
 
         {error && (

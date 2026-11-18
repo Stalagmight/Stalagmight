@@ -1,4 +1,4 @@
-//! Combine Sections across loops (`combine_plan.rs`): two ends tied by a loop
+//! Combine Lines across loops (`combine_plan.rs`): two ends tied by a loop
 //! closure join with a shift, the ties in the way become loop closures, and
 //! the side a zero datum holds stays put. Then a randomised sweep over small
 //! cave networks with merged branches, snapped and recorded loops and zero
@@ -9,10 +9,10 @@ use std::collections::{HashMap, HashSet};
 
 use super::closure_dedupe::{ClosureDedupes, CLOSURE_DEDUPES};
 use crate::{
-    ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombinePick,
-    CombineRemovedClosure, CombineRemovedKind, CombineSectionsOptions, GpsCoordinates,
-    KeptMovesReason, LoopClosure, Project, SectionData, SectionEnd, SectionId, ShotData,
-    StationRef, TornTieKind, TornTieReason,
+    ClosureStrategy, CombineCandidate, CombineJoinEnds, CombineJoinKind, CombineLinesOptions,
+    CombinePick, CombineRemovedClosure, CombineRemovedKind, GpsCoordinates, KeptMovesReason,
+    LineData, LineEnd, LineId, LoopClosure, Project, ShotData, StationRef, TornTieKind,
+    TornTieReason,
 };
 
 pub(super) fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -24,9 +24,9 @@ pub(super) fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-pub(super) fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> SectionId {
+pub(super) fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             name: Some(name.to_string()),
             color: "#123456".to_string(),
             shots,
@@ -35,8 +35,8 @@ pub(super) fn add(project: &mut Project, name: &str, shots: Vec<ShotData>) -> Se
         .id
 }
 
-pub(super) fn options(join: Option<CombineJoinEnds>) -> CombineSectionsOptions {
-    CombineSectionsOptions {
+pub(super) fn options(join: Option<CombineJoinEnds>) -> CombineLinesOptions {
+    CombineLinesOptions {
         name: "Joined".to_string(),
         color: "#abcdef".to_string(),
         swap_lr: true,
@@ -56,13 +56,13 @@ pub(super) fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
 }
 
 /// Move `id` so its station `index` sits exactly on `target`.
-fn place(project: &mut Project, id: SectionId, index: u32, target: (f64, f64)) {
+fn place(project: &mut Project, id: LineId, index: u32, target: (f64, f64)) {
     let now = xy(project, StationRef::new(id, index));
-    project.adjust_section_offset(id, target.0 - now.0, target.1 - now.1);
+    project.adjust_line_offset(id, target.0 - now.0, target.1 - now.1);
 }
 
-fn stations(project: &Project, id: SectionId) -> Vec<(f64, f64)> {
-    let n = project.get_section(id).unwrap().shots.len() as u32;
+fn stations(project: &Project, id: LineId) -> Vec<(f64, f64)> {
+    let n = project.get_line(id).unwrap().shots.len() as u32;
     (0..=n)
         .map(|i| xy(project, StationRef::new(id, i)))
         .collect()
@@ -81,17 +81,17 @@ fn resolved(project: &Project, a: &crate::StationKey, b: &crate::StationKey) -> 
         project.resolve_key(a).unwrap(),
         project.resolve_key(b).unwrap(),
     ];
-    ends.sort_by_key(|r| (r.section_id, r.station_index));
+    ends.sort_by_key(|r| (r.line_id, r.station_index));
     ends
 }
 
 /// K runs 10 m east; O runs 9.6 m west and its END is merged to K's start,
 /// so O's start sits 0.4 m short of K's end, where a loop closure ties them.
-fn two_section_loop() -> (Project, SectionId, SectionId) {
+fn two_line_loop() -> (Project, LineId, LineId) {
     let mut project = Project::new("Loop".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let o = add(&mut project, "O", vec![shot(270.0, 9.6)]);
-    project.set_section_offset(k, (100.0, -40.0));
+    project.set_line_offset(k, (100.0, -40.0));
     project
         .merge_stations(StationRef::new(k, 0), StationRef::new(o, 1))
         .unwrap();
@@ -109,8 +109,8 @@ fn two_section_loop() -> (Project, SectionId, SectionId) {
 /// moves O 0.4 m east onto K's end, the merge at K's start becomes the loop
 /// closure, and K does not move.
 #[test]
-fn two_sections_in_a_loop_combine_at_the_closure() {
-    let (mut project, k, o) = two_section_loop();
+fn two_lines_in_a_loop_combine_at_the_closure() {
+    let (mut project, k, o) = two_line_loop();
     let at_end = project.combine_candidates(StationRef::new(k, 1));
     assert_eq!(at_end.len(), 1);
     let candidate = &at_end[0];
@@ -118,26 +118,26 @@ fn two_sections_in_a_loop_combine_at_the_closure() {
     assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
     assert!(!candidate.merged);
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moving_section, Some(o));
-    assert_eq!(plan.moved_sections, vec![o]);
+    assert_eq!(plan.moving_line, Some(o));
+    assert_eq!(plan.moved_lines, vec![o]);
     assert!((plan.shift_m - 0.4).abs() < 1e-9, "{}", plan.shift_m);
     assert_eq!(plan.torn_ties.len(), 1);
     assert_eq!(plan.torn_ties[0].kind, TornTieKind::Merge);
 
-    // The two-section query prefers the merge at K's start instead.
-    let pair = project.combine_candidate_for_sections(k, o).unwrap();
+    // The two-line query prefers the merge at K's start instead.
+    let pair = project.combine_candidate_for_lines(k, o).unwrap();
     assert_eq!(pair.join_kind, CombineJoinKind::Merged);
     assert!(pair.plan_keeping_a.torn_ties.is_empty());
 
     let k_before = stations(&project, k);
     let o_before = stations(&project, o);
     project
-        .combine_sections(
+        .combine_lines(
             k,
             o,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             })),
         )
         .unwrap();
@@ -170,15 +170,15 @@ fn two_sections_in_a_loop_combine_at_the_closure() {
 /// stays where it was (reported after #726: the anchor moved 0.400 m).
 #[test]
 fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
-    let (mut project, k, o) = two_section_loop();
+    let (mut project, k, o) = two_line_loop();
     let anchor = project.adjustment_anchor_for_tests(k).unwrap();
-    assert_eq!(anchor.section_id, k, "setup: the lower id holds the gauge");
+    assert_eq!(anchor.line_id, k, "setup: the lower id holds the gauge");
     let candidate = project.combine_candidates(StationRef::new(k, 1)).remove(0);
     // Keeping K (the lower id): O moves, as before.
-    assert_eq!(candidate.plan_keeping_a.moving_section, Some(o));
+    assert_eq!(candidate.plan_keeping_a.moving_line, Some(o));
     assert_eq!(candidate.plan_keeping_a.kept_moves_because, None);
     // Keeping O: K holds the anchor, so O (the kept one) moves.
-    assert_eq!(candidate.plan_keeping_b.moving_section, Some(o));
+    assert_eq!(candidate.plan_keeping_b.moving_line, Some(o));
     assert_eq!(
         candidate.plan_keeping_b.kept_moves_because,
         Some(KeptMovesReason::AdjustmentAnchor)
@@ -186,12 +186,12 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
     let was = adjusted(&project);
     let anchor_at = was[&anchor];
     project
-        .combine_sections(
+        .combine_lines(
             o,
             k,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::Start,
-                other: SectionEnd::End,
+                kept: LineEnd::Start,
+                other: LineEnd::End,
             })),
         )
         .unwrap();
@@ -205,7 +205,7 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
         dist(anchor_at, anchor_now)
     );
     for (at, p) in &was {
-        let home = if at.section_id == k {
+        let home = if at.line_id == k {
             StationRef::new(o, at.station_index)
         } else {
             StationRef::new(o, at.station_index + 1)
@@ -218,16 +218,16 @@ fn a_closure_join_moves_the_side_without_the_adjustment_anchor() {
 }
 
 /// Which side moves follows the closure-adjusted view's anchor only where
-/// that view solves the joined survey. Two sections tied only by a closure
+/// that view solves the joined survey. Two lines tied only by a closure
 /// the solve does not take (a legacy proportional one; merge, close the loop,
-/// unmerge) are shown as measured: the other section moves, whichever is
+/// unmerge) are shown as measured: the other line moves, whichever is
 /// kept. Tied by a Batch closure, or by a legacy one in a loop whose merge
 /// the combine turns into a Batch closure, the kept side moves when the
 /// other holds the anchor.
 #[test]
 fn the_anchor_counts_only_where_the_closure_adjusted_view_solves() {
     let plans = |strategy: ClosureStrategy, unmerge: bool| {
-        let (mut project, k, o) = two_section_loop();
+        let (mut project, k, o) = two_line_loop();
         project.loop_closures[0].strategy = strategy;
         if unmerge {
             let (done, removed) =
@@ -240,22 +240,18 @@ fn the_anchor_counts_only_where_the_closure_adjusted_view_solves() {
             candidate.plan_keeping_b.shift_m > 0.001,
             "setup: the ends are apart"
         );
-        assert_eq!(candidate.plan_keeping_a.moving_section, Some(o));
+        assert_eq!(candidate.plan_keeping_a.moving_line, Some(o));
         (candidate.plan_keeping_b, k, o)
     };
     let (legacy_alone, k, _) = plans(ClosureStrategy::ProportionalByLength, true);
-    assert_eq!(legacy_alone.moving_section, Some(k));
+    assert_eq!(legacy_alone.moving_line, Some(k));
     assert_eq!(legacy_alone.kept_moves_because, None);
     for (strategy, unmerge) in [
         (ClosureStrategy::Batch, true),
         (ClosureStrategy::ProportionalByLength, false),
     ] {
         let (plan, _, o) = plans(strategy, unmerge);
-        assert_eq!(
-            plan.moving_section,
-            Some(o),
-            "{strategy:?} unmerged {unmerge}"
-        );
+        assert_eq!(plan.moving_line, Some(o), "{strategy:?} unmerged {unmerge}");
         assert_eq!(
             plan.kept_moves_because,
             Some(KeptMovesReason::AdjustmentAnchor),
@@ -264,9 +260,9 @@ fn the_anchor_counts_only_where_the_closure_adjusted_view_solves() {
     }
 }
 
-/// A section that ends at the point with both ends: its end snapped there
+/// A line that ends at the point with both ends: its end snapped there
 /// (side by side), its start across a loop closure 1.4 m away. The station
-/// menu offers the pair once, joined side by side (the way the two-section
+/// menu offers the pair once, joined side by side (the way the two-line
 /// query prefers), never the closure join that would move it 1.4 m.
 #[test]
 fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
@@ -319,7 +315,7 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
     let both_ends: Vec<_> = project
         .combine_candidates(StationRef::new(k, 1))
         .into_iter()
-        .filter(|c| c.section_a == l || c.section_b == l)
+        .filter(|c| c.line_a == l || c.line_b == l)
         .map(|c| c.join_kind)
         .collect();
     assert_eq!(
@@ -328,9 +324,9 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
         "setup: L meets K's end once"
     );
     let at_point = project.combine_candidates_at_point(StationRef::new(k, 1));
-    let pairs: Vec<(SectionId, SectionId, CombineJoinKind)> = at_point
+    let pairs: Vec<(LineId, LineId, CombineJoinKind)> = at_point
         .iter()
-        .map(|c| (c.section_a, c.section_b, c.join_kind))
+        .map(|c| (c.line_a, c.line_b, c.join_kind))
         .collect();
     // K with Far (merged here), K with L (side by side here, not across the
     // closure), Far with L (side by side here). Not Far with L joined at their
@@ -345,7 +341,7 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
     );
     assert!(at_point
         .iter()
-        .all(|c| c.plan_keeping_a.moving_section.is_none()));
+        .all(|c| c.plan_keeping_a.moving_line.is_none()));
 }
 
 /// K east, X north from K's end, O from X's end back toward K's start,
@@ -353,7 +349,7 @@ fn a_pair_meeting_twice_at_a_station_is_offered_once_by_its_best_join() {
 /// closure tears the merge between O and X (the one nearest O), moves only
 /// O, and leaves K and X where they were.
 #[test]
-fn a_three_section_loop_tears_the_merge_nearest_the_moving_section() {
+fn a_three_line_loop_tears_the_merge_nearest_the_moving_line() {
     let mut project = Project::new("Three".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let x = add(&mut project, "X", vec![shot(0.0, 10.0)]);
@@ -380,7 +376,7 @@ fn a_three_section_loop_tears_the_merge_nearest_the_moving_section() {
     assert_eq!(candidate.blocked_reason, None);
     assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moved_sections, vec![o]);
+    assert_eq!(plan.moved_lines, vec![o]);
     assert!((plan.shift_m - 0.5).abs() < 1e-9);
     let torn: Vec<_> = plan
         .torn_ties
@@ -391,12 +387,12 @@ fn a_three_section_loop_tears_the_merge_nearest_the_moving_section() {
 
     let (k_before, x_before) = (stations(&project, k), stations(&project, x));
     project
-        .combine_sections(
+        .combine_lines(
             k,
             o,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::Start,
-                other: SectionEnd::End,
+                kept: LineEnd::Start,
+                other: LineEnd::End,
             })),
         )
         .unwrap();
@@ -413,32 +409,32 @@ fn a_three_section_loop_tears_the_merge_nearest_the_moving_section() {
     assert!(project.check_structural_integrity().is_empty());
 }
 
-/// A zero datum on the other section holds it: the kept section's side
+/// A zero datum on the other line holds it: the kept line's side
 /// moves instead, and the datum station stays exactly where it was.
 #[test]
-fn a_zero_datum_on_the_other_section_moves_the_kept_side() {
-    let (mut project, k, o) = two_section_loop();
+fn a_zero_datum_on_the_other_line_moves_the_kept_side() {
+    let (mut project, k, o) = two_line_loop();
     project
         .set_zero_datum(StationRef::new(o, 0), gps())
         .unwrap();
     let datum_at = xy(&project, StationRef::new(o, 0));
     let candidate = project.combine_candidates(StationRef::new(k, 1)).remove(0);
     assert_eq!(candidate.blocked_reason, None);
-    assert_eq!(candidate.plan_keeping_a.moving_section, Some(k));
+    assert_eq!(candidate.plan_keeping_a.moving_line, Some(k));
     assert_eq!(
         candidate.plan_keeping_a.kept_moves_because,
         Some(KeptMovesReason::ZeroDatum)
     );
-    assert_eq!(candidate.plan_keeping_b.moving_section, Some(k));
+    assert_eq!(candidate.plan_keeping_b.moving_line, Some(k));
     assert_eq!(candidate.plan_keeping_b.kept_moves_because, None);
 
     project
-        .combine_sections(
+        .combine_lines(
             k,
             o,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             })),
         )
         .unwrap();
@@ -452,8 +448,8 @@ fn a_zero_datum_on_the_other_section_moves_the_kept_side() {
     assert!(dist(xy(&project, now), datum_at) < 1e-9);
 }
 
-/// Two anchored groups, each merged to one of the two sections, tied only
-/// by a closure between the sections' ends: the other section tears off
+/// Two anchored groups, each merged to one of the two lines, tied only
+/// by a closure between the lines' ends: the other line tears off
 /// its datum side and moves alone; the torn merge stays a closure (it ties
 /// two anchored groups), and a reload changes nothing.
 #[test]
@@ -495,7 +491,7 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
     let candidate = project.combine_candidates(StationRef::new(k, 1)).remove(0);
     assert_eq!(candidate.blocked_reason, None);
     let plan = &candidate.plan_keeping_a;
-    assert_eq!(plan.moved_sections, vec![o]);
+    assert_eq!(plan.moved_lines, vec![o]);
     assert_eq!(plan.torn_ties.len(), 1);
     assert_eq!(
         plan.torn_ties[0].reason,
@@ -504,12 +500,12 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
     );
     let (a_before, b_before) = (stations(&project, a), stations(&project, b));
     project
-        .combine_sections(
+        .combine_lines(
             k,
             o,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             })),
         )
         .unwrap();
@@ -527,7 +523,7 @@ fn both_sides_held_tear_the_merge_to_the_moving_sides_datum() {
 }
 
 /// A snapped closure between the two ends (aligned, a few mm apart) is a
-/// closure join: it goes, and the other section moves the few mm.
+/// closure join: it goes, and the other line moves the few mm.
 #[test]
 fn a_snapped_closure_at_the_join_joins_and_goes() {
     let mut project = Project::new("Snapped".to_string(), None);
@@ -560,12 +556,12 @@ fn a_snapped_closure_at_the_join_joins_and_goes() {
     assert_eq!(candidate.blocked_reason, None);
     assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
     project
-        .combine_sections(
+        .combine_lines(
             k,
             o,
             &options(Some(CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             })),
         )
         .unwrap();
@@ -608,20 +604,20 @@ fn random_shots(rng: &mut Rng) -> Vec<ShotData> {
 
 pub(super) fn every_station(project: &Project) -> Vec<StationRef> {
     project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
         .collect()
 }
 
-/// A small network: a tree of merged sections, one or two loops back onto
+/// A small network: a tree of merged lines, one or two loops back onto
 /// it (snapped exactly, or recorded with a misclosure), sometimes a zero
 /// datum, and sometimes a second anchored network tied on by a closure.
 pub(super) fn network(seed: u64) -> Project {
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let mut project = Project::new(format!("Net {seed}"), None);
     let first = add(&mut project, "S0", random_shots(&mut rng));
-    project.set_section_offset(first, (rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)));
+    project.set_line_offset(first, (rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)));
     for i in 1..3 + rng.below(4) {
         let all = every_station(&project);
         let host = all[rng.below(all.len())];
@@ -629,7 +625,7 @@ pub(super) fn network(seed: u64) -> Project {
         let index = if rng.below(2) == 0 {
             0
         } else {
-            project.get_section(s).unwrap().shots.len() as u32
+            project.get_line(s).unwrap().shots.len() as u32
         };
         let at = xy(&project, host);
         place(&mut project, s, index, at);
@@ -640,7 +636,7 @@ pub(super) fn network(seed: u64) -> Project {
         let (p, q) = (all[rng.below(all.len())], all[rng.below(all.len())]);
         let (pp, qq) = (xy(&project, p), xy(&project, q));
         let length = dist(pp, qq);
-        if length < 1.0 || p.section_id == q.section_id {
+        if length < 1.0 || p.line_id == q.line_id {
             continue;
         }
         let azimuth = (qq.0 - pp.0)
@@ -671,9 +667,9 @@ pub(super) fn network(seed: u64) -> Project {
     }
     if rng.below(3) == 0 {
         // A second network, anchored on its own, tied on by a closure between
-        // a section end of each.
+        // a line end of each.
         let t = add(&mut project, "T", random_shots(&mut rng));
-        project.set_section_offset(t, (rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)));
+        project.set_line_offset(t, (rng.range(-50.0, 50.0), rng.range(-50.0, 50.0)));
         project.zero_datums.push(crate::ZeroDatum {
             station_ref: project.key_for_ref(StationRef::new(t, 0)).unwrap(),
             gps: gps(),
@@ -681,7 +677,7 @@ pub(super) fn network(seed: u64) -> Project {
             entrance: None,
         });
         let ends: Vec<StationRef> = project
-            .sections
+            .lines
             .iter()
             .filter(|s| s.id != t)
             .flat_map(|s| {
@@ -692,10 +688,10 @@ pub(super) fn network(seed: u64) -> Project {
             })
             .collect();
         let main = ends[rng.below(ends.len())];
-        if !project.section_has_zero_datum(main.section_id) {
+        if !project.line_has_zero_datum(main.line_id) {
             let _ = project.set_zero_datum(main, gps());
         }
-        let t_end = StationRef::new(t, project.get_section(t).unwrap().shots.len() as u32);
+        let t_end = StationRef::new(t, project.get_line(t).unwrap().shots.len() as u32);
         let _ = project.create_loop_closure(main, t_end, ClosureStrategy::Batch);
     }
     project.redrive_offsets_after_load();
@@ -776,7 +772,7 @@ fn positions(project: &Project) -> HashMap<StationRef, (f64, f64)> {
 }
 
 /// Union-find root of `x` in `forest`.
-fn root(forest: &mut HashMap<SectionId, SectionId>, x: SectionId) -> SectionId {
+fn root(forest: &mut HashMap<LineId, LineId>, x: LineId) -> LineId {
     let parent = *forest.get(&x).unwrap_or(&x);
     if parent == x {
         x
@@ -792,21 +788,21 @@ pub(super) fn check_combined(
     before: &Project,
     after: &Project,
     candidate: &CombineCandidate,
-    kept: SectionId,
+    kept: LineId,
     what: &str,
     mute: &[String],
 ) {
-    let other = if kept == candidate.section_a {
-        candidate.section_b
+    let other = if kept == candidate.line_a {
+        candidate.line_b
     } else {
-        candidate.section_a
+        candidate.line_a
     };
-    let plan = if kept == candidate.section_a {
+    let plan = if kept == candidate.line_a {
         &candidate.plan_keeping_a
     } else {
         &candidate.plan_keeping_b
     };
-    let kept_end = if kept == candidate.section_a {
+    let kept_end = if kept == candidate.line_a {
         candidate.end_a
     } else {
         candidate.end_b
@@ -814,14 +810,14 @@ pub(super) fn check_combined(
     // The plan says why exactly when the kept side is the one that moves.
     assert_eq!(
         plan.kept_moves_because.is_some(),
-        plan.moving_section == Some(kept),
-        "{what}: kept_moves_because {:?} with moving section {:?}",
+        plan.moving_line == Some(kept),
+        "{what}: kept_moves_because {:?} with moving line {:?}",
         plan.kept_moves_because,
-        plan.moving_section
+        plan.moving_line
     );
     let old = positions(before);
-    let moved: HashSet<SectionId> = plan.moved_sections.iter().copied().collect();
-    let (k_join, o_join) = if candidate.section_a == kept {
+    let moved: HashSet<LineId> = plan.moved_lines.iter().copied().collect();
+    let (k_join, o_join) = if candidate.line_a == kept {
         (candidate.station_a, candidate.station_b)
     } else {
         (candidate.station_b, candidate.station_a)
@@ -836,10 +832,10 @@ pub(super) fn check_combined(
         let (p, h) = (old[&at], hand(at));
         (p.0 - h.0, p.1 - h.1)
     };
-    // The shift: the chain gap (the combined section hangs the other
-    // section's stations off the kept join station's chain), toward the side
+    // The shift: the chain gap (the combined line hangs the other
+    // line's stations off the kept join station's chain), toward the side
     // that stays.
-    let shift = plan.moving_section.map_or((0.0, 0.0), |m| {
+    let shift = plan.moving_line.map_or((0.0, 0.0), |m| {
         let (k, o) = (chain(k_join), chain(o_join));
         if m == kept {
             (o.0 - k.0, o.1 - k.1)
@@ -852,15 +848,15 @@ pub(super) fn check_combined(
         "{what}: shift {shift:?} vs {}",
         plan.shift_m
     );
-    let nk = before.get_section(kept).unwrap().shots.len() as u32;
-    let no = before.get_section(other).unwrap().shots.len() as u32;
-    let offset = if kept_end == SectionEnd::End { 0 } else { no };
+    let nk = before.get_line(kept).unwrap().shots.len() as u32;
+    let no = before.get_line(other).unwrap().shots.len() as u32;
+    let offset = if kept_end == LineEnd::End { 0 } else { no };
     // The join station whose hand move the joined station does not keep (the
     // moving side's, the other's when nothing moves) IS the joined station
     // after: with two different hand moves it lands there by the gap as
     // shown, not by its side's shift, and on a join that is not merged what
     // is merged at it moves with it (#755).
-    let dropped_at = if plan.moving_section == Some(kept) {
+    let dropped_at = if plan.moving_line == Some(kept) {
         k_join
     } else {
         o_join
@@ -871,15 +867,15 @@ pub(super) fn check_combined(
         let (now, was) = (xy(after, joined_station), old[&dropped_at]);
         (now.0 - was.0, now.1 - was.1)
     };
-    let joined: HashSet<SectionId> = plan
+    let joined: HashSet<LineId> = plan
         .moved_with_joined_station
         .iter()
-        .flat_map(|j| j.sections.iter().copied())
+        .flat_map(|j| j.lines.iter().copied())
         .collect();
     if let Some(j) = &plan.moved_with_joined_station {
         assert!(
             carried && !candidate.merged,
-            "{what}: sections move with the joined station: {j:?}"
+            "{what}: lines move with the joined station: {j:?}"
         );
         assert_eq!(j.station, dropped_at, "{what}");
         assert!(
@@ -888,21 +884,21 @@ pub(super) fn check_combined(
             j.shift_m
         );
     }
-    // Third sections: moved by the shift, with the joined station, or not at
+    // Third lines: moved by the shift, with the joined station, or not at
     // all.
-    for section in &after.sections {
-        if section.id == kept {
+    for line in &after.lines {
+        if line.id == kept {
             continue;
         }
-        let d = if moved.contains(&section.id) {
+        let d = if moved.contains(&line.id) {
             shift
-        } else if joined.contains(&section.id) {
+        } else if joined.contains(&line.id) {
             toward
         } else {
             (0.0, 0.0)
         };
-        for i in 0..=section.shots.len() as u32 {
-            let at = StationRef::new(section.id, i);
+        for i in 0..=line.shots.len() as u32 {
+            let at = StationRef::new(line.id, i);
             let want = old[&at];
             assert!(
                 dist(xy(after, at), (want.0 + d.0, want.1 + d.1)) < 1e-6,
@@ -910,7 +906,7 @@ pub(super) fn check_combined(
             );
         }
     }
-    // The combined section: the kept stations shifted only if the kept side
+    // The combined line: the kept stations shifted only if the kept side
     // moved, the other's onto the kept chain.
     let combined = stations(after, kept);
     assert_eq!(combined.len() as u32, nk + no + 1, "{what}");
@@ -938,17 +934,17 @@ pub(super) fn check_combined(
     // A plan that moves nothing leaves only float dust at the join (#740:
     // a side-by-side residual moves a side, and the plan says which), at
     // most `OFFSET_DUST_M` in each axis.
-    let tolerance = if plan.moving_section.is_none() {
+    let tolerance = if plan.moving_line.is_none() {
         2.0 * Project::OFFSET_DUST_M
     } else {
         1e-6
     };
-    let other_end = if kept == candidate.section_a {
+    let other_end = if kept == candidate.line_a {
         candidate.end_b
     } else {
         candidate.end_a
     };
-    // Where the other section's station i lands: after the kept stations on
+    // Where the other line's station i lands: after the kept stations on
     // an append, before them on a prepend, counted backwards when reversed.
     let reversed = kept_end == other_end;
     for i in 0..=no {
@@ -958,7 +954,7 @@ pub(super) fn check_combined(
         let was = old[&StationRef::new(other, i)];
         let want = (was.0 + o_shift.0, was.1 + o_shift.1);
         let along = if reversed { no - i } else { i };
-        let index = if kept_end == SectionEnd::End {
+        let index = if kept_end == LineEnd::End {
             nk + along
         } else {
             along
@@ -971,8 +967,8 @@ pub(super) fn check_combined(
     for id in &joined {
         assert!(!before.carries_zero_datum(*id), "{what}: moved a datum");
     }
-    // No moved section carries a zero datum.
-    for id in &plan.moved_sections {
+    // No moved line carries a zero datum.
+    for id in &plan.moved_lines {
         assert!(!before.carries_zero_datum(*id), "{what}: moved a datum");
     }
     // The closure-adjusted view (Plan, Export) stays put: what it holds the
@@ -1050,13 +1046,13 @@ pub(super) fn check_combined(
             .into_iter()
             .map(|c| c.closure_id)
             .collect();
-        let component = view.get_connected_section_ids(kept);
+        let component = view.get_connected_line_ids(kept);
         view.component_has_eligible_closure(&component, &skipped)
             || view.component_has_gps_fix(&component)
     };
     let fixed_join = if dropped_at == k_join { o_join } else { k_join };
     if carried {
-        let component = tied.get_connected_section_ids(kept);
+        let component = tied.get_connected_line_ids(kept);
         let held = tied.adjustment_anchor_of(&component);
         // Where the view really solves the survey, the side holding that
         // station stays and keeps its hand move: dropping it would shift
@@ -1087,7 +1083,7 @@ pub(super) fn check_combined(
             let now = xy(&tied, at);
             if dist(was, now) > 0.0 {
                 for id in &component {
-                    tied.adjust_section_offset(*id, was.0 - now.0, was.1 - now.1);
+                    tied.adjust_line_offset(*id, was.0 - now.0, was.1 - now.1);
                 }
             }
         }
@@ -1152,11 +1148,11 @@ pub(super) fn check_combined(
             }
         }
     }
-    // Where each station of the two sections is in the combined one.
+    // Where each station of the two lines is in the combined one.
     let home = |at: StationRef| -> StationRef {
-        if at.section_id == kept {
+        if at.line_id == kept {
             StationRef::new(kept, at.station_index + offset)
-        } else if at.section_id == other {
+        } else if at.line_id == other {
             let along = if reversed {
                 no - at.station_index
             } else {
@@ -1164,7 +1160,7 @@ pub(super) fn check_combined(
             };
             StationRef::new(
                 kept,
-                if kept_end == SectionEnd::End {
+                if kept_end == LineEnd::End {
                     nk + along
                 } else {
                     along
@@ -1192,7 +1188,7 @@ pub(super) fn check_combined(
         !was_ok || now_ok,
         "{what}: the closure-adjusted view solved before the combine and fails after it"
     );
-    if before.get_connected_section_ids(kept).contains(&other) && was_ok && now_ok {
+    if before.get_connected_line_ids(kept).contains(&other) && was_ok && now_ok {
         // The plan keeps the station the view holds the survey at only
         // where the view really solves it (snaps not counted): where it
         // does not, the app shows the measured geometry, which the checks
@@ -1205,7 +1201,7 @@ pub(super) fn check_combined(
         // its chain's move (the "before" view gave it the kept hand move
         // already). Nothing else may move, and where the view really solves
         // the survey, nothing may.
-        let component = tied.get_connected_section_ids(kept);
+        let component = tied.get_connected_line_ids(kept);
         let follows = match tied.adjustment_anchor_of(&component) {
             Some(at) if !(solved(before) || solved(after)) => {
                 let (was, now) = (xy(&tied, at), xy(after, home(at)));
@@ -1216,9 +1212,9 @@ pub(super) fn check_combined(
                         toward.0 - (fixed.0 - dropped.0),
                         toward.1 - (fixed.1 - dropped.1),
                     )
-                } else if moved.contains(&at.section_id) {
+                } else if moved.contains(&at.line_id) {
                     shift
-                } else if joined.contains(&at.section_id) {
+                } else if joined.contains(&at.line_id) {
                     toward
                 } else {
                     (0.0, 0.0)
@@ -1237,7 +1233,7 @@ pub(super) fn check_combined(
             .iter()
             .filter(|(_, h)| h.0 != 0.0 || h.1 != 0.0)
             .filter_map(|(key, _)| tied.resolve_key(key))
-            .any(|at| component.contains(&at.section_id));
+            .any(|at| component.contains(&at.line_id));
         if hand_moved {
             HAND_MOVED_VIEWS.with(|counts| {
                 let (n, c) = counts.get();
@@ -1249,7 +1245,7 @@ pub(super) fn check_combined(
             let Some(q) = now.get(&home(*at)) else {
                 continue;
             };
-            let d = if component.contains(&at.section_id) {
+            let d = if component.contains(&at.line_id) {
                 follows
             } else {
                 (0.0, 0.0)
@@ -1267,15 +1263,15 @@ pub(super) fn check_combined(
 
 /// The reason the plan gives each torn tie holds after the combine, which
 /// is what the dialog says of it. One torn for a loop closes one through the
-/// combined section: its two ends share a merge component (an end on the
-/// other section is on the kept one now). One torn for a zero datum tears
+/// combined line: its two ends share a merge component (an end on the
+/// other line is on the kept one now). One torn for a zero datum tears
 /// on a shift, and the dialog names its end that does not move as held and
-/// "staying where it is": exactly one end is off `moved_sections`, on a
-/// third section (so its id holds) that shares no merge component with the
-/// combined section (a tear that did would close a loop), and its part (what the
-/// rigid ties hold it to after the combine, up to the combined section)
-/// carries a zero datum and holds no section that moves. The part may still
-/// reach the combined section through the side that stays, by a snapped
+/// "staying where it is": exactly one end is off `moved_lines`, on a
+/// third line (so its id holds) that shares no merge component with the
+/// combined line (a tear that did would close a loop), and its part (what the
+/// rigid ties hold it to after the combine, up to the combined line)
+/// carries a zero datum and holds no line that moves. The part may still
+/// reach the combined line through the side that stays, by a snapped
 /// closure the shift leaves alone. A snap a moving side tears into a part a
 /// datum merge is torn from is torn for the datum, not for a loop (#756).
 /// One torn because the joined station moves (#736) is a snap at one of the
@@ -1284,15 +1280,15 @@ pub(super) fn check_combined(
 fn check_torn_reasons(
     after: &Project,
     plan: &crate::CombinePlan,
-    (kept, other): (SectionId, SectionId),
+    (kept, other): (LineId, LineId),
     join: [StationRef; 2],
     home: &dyn Fn(StationRef) -> StationRef,
     what: &str,
 ) {
-    let rigid: Vec<(SectionId, SectionId)> = after
+    let rigid: Vec<(LineId, LineId)> = after
         .rigid_ties()
         .into_iter()
-        .map(|t| (t.a.section_id, t.b.section_id))
+        .map(|t| (t.a.line_id, t.b.line_id))
         .filter(|(x, y)| x != y)
         .collect();
     for tie in &plan.torn_ties {
@@ -1314,40 +1310,32 @@ fn check_torn_reasons(
             continue;
         }
         if tie.reason != TornTieReason::ZeroDatum {
-            let home = |s: SectionId| if s == other { kept } else { s };
-            let (a, b) = (
-                home(tie.station_a.section_id),
-                home(tie.station_b.section_id),
-            );
+            let home = |s: LineId| if s == other { kept } else { s };
+            let (a, b) = (home(tie.station_a.line_id), home(tie.station_b.line_id));
             assert!(
-                after.get_merged_section_ids(a).contains(&b),
+                after.get_merged_line_ids(a).contains(&b),
                 "{what}: {tie:?} is torn for a loop and closes none"
             );
             continue;
         }
-        assert!(
-            plan.moving_section.is_some(),
-            "{what}: {tie:?} with no move"
-        );
+        assert!(plan.moving_line.is_some(), "{what}: {tie:?} with no move");
         let staying: Vec<StationRef> = [tie.station_a, tie.station_b]
             .into_iter()
-            .filter(|at| !plan.moved_sections.contains(&at.section_id))
+            .filter(|at| !plan.moved_lines.contains(&at.line_id))
             .collect();
         let [held] = staying[..] else {
             panic!("{what}: {tie:?} has {} ends that stay", staying.len());
         };
         assert!(
-            held.section_id != kept && held.section_id != other,
-            "{what}: {tie:?} is held on a combined section"
+            held.line_id != kept && held.line_id != other,
+            "{what}: {tie:?} is held on a combined line"
         );
         assert!(
-            !after
-                .get_merged_section_ids(held.section_id)
-                .contains(&kept),
+            !after.get_merged_line_ids(held.line_id).contains(&kept),
             "{what}: {tie:?} is torn for a zero datum and closes a loop"
         );
-        let mut part = HashSet::from([held.section_id]);
-        let mut queue = vec![held.section_id];
+        let mut part = HashSet::from([held.line_id]);
+        let mut queue = vec![held.line_id];
         while let Some(at) = queue.pop() {
             if at == kept {
                 continue;
@@ -1367,8 +1355,8 @@ fn check_torn_reasons(
         }
         part.remove(&kept);
         assert!(
-            !part.iter().any(|s| plan.moved_sections.contains(s)),
-            "{what}: {tie:?} leaves the held part rigidly tied to a section that moves"
+            !part.iter().any(|s| plan.moved_lines.contains(s)),
+            "{what}: {tie:?} leaves the held part rigidly tied to a line that moves"
         );
         assert!(
             part.iter().any(|s| after.carries_zero_datum(*s)),
@@ -1385,26 +1373,26 @@ fn check_torn_reasons(
 /// a `Batch` closure, except the ones the plan lists as removed across one
 /// shot. A dedupe that kept a legacy or snapped closure over the eligible one
 /// on the same two stations fails here, whether or not the anchor rule read
-/// it. `home` maps a station of the two sections to the combined one.
+/// it. `home` maps a station of the two lines to the combined one.
 fn check_eligible_ties_kept(
     before: &Project,
     after: &Project,
     candidate: &CombineCandidate,
-    kept: SectionId,
+    kept: LineId,
     home: &dyn Fn(StationRef) -> StationRef,
     what: &str,
 ) {
-    let (plan, other, join_k, join_o) = if kept == candidate.section_a {
+    let (plan, other, join_k, join_o) = if kept == candidate.line_a {
         (
             &candidate.plan_keeping_a,
-            candidate.section_b,
+            candidate.line_b,
             candidate.station_a,
             candidate.station_b,
         )
     } else {
         (
             &candidate.plan_keeping_b,
-            candidate.section_a,
+            candidate.line_a,
             candidate.station_b,
             candidate.station_a,
         )
@@ -1425,7 +1413,7 @@ fn check_eligible_ties_kept(
         merged,
     };
     let ordered = |a: StationRef, b: StationRef| {
-        let key = |s: StationRef| (s.section_id, s.station_index);
+        let key = |s: StationRef| (s.line_id, s.station_index);
         if key(a) <= key(b) {
             (a, b)
         } else {
@@ -1658,7 +1646,7 @@ pub(super) fn check_removed_across_one_shot(
     // asserts it too), so the command's epilogue changes none: the knots the
     // checks above read are the ones the app keeps.
     assert!(
-        super::combine_sections::REALIGNED_AS_PLANNED.with(std::cell::Cell::get),
+        super::combine_lines::REALIGNED_AS_PLANNED.with(std::cell::Cell::get),
         "{what}: the combine changed alignment flags its plan did not predict"
     );
     count_realignments(before, after, plan);
@@ -1674,7 +1662,7 @@ pub(super) fn check_removed_across_one_shot(
 /// What every edit leaves, whatever it was: a clean integrity report, merges
 /// on one point and forming a forest (a rigid loop is a closure's job), no
 /// closure between merged stations and no snapped closure inside one
-/// section, and a project a reload neither re-ties nor moves.
+/// line, and a project a reload neither re-ties nor moves.
 fn check_structure(after: &Project, what: &str) {
     check_structure_muting(after, what, &[]);
 }
@@ -1686,10 +1674,10 @@ fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
     let violations = after.check_structural_integrity();
     assert!(violations.is_empty(), "{what}: {violations:?}");
     after.debug_assert_merge_alignment(what);
-    // Merges are rigid: sections and the points merges make (a merge group)
+    // Merges are rigid: lines and the points merges make (a merge group)
     // must form a forest. Redundant merges inside one group (a split copies a
     // junction's merges to both halves) tie one point to itself and are
-    // fine; a cycle through two points, or a section at one point twice, is
+    // fine; a cycle through two points, or a line at one point twice, is
     // a rigid loop, which is a closure's job.
     let mut points: HashMap<StationRef, StationRef> = HashMap::new();
     fn point(points: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
@@ -1708,30 +1696,27 @@ fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
             after.resolve_key(&merge.station_a).unwrap(),
             after.resolve_key(&merge.station_b).unwrap(),
         );
-        assert_ne!(
-            a.section_id, b.section_id,
-            "{what}: a merge inside one section"
-        );
+        assert_ne!(a.line_id, b.line_id, "{what}: a merge inside one line");
         let (ra, rb) = (point(&mut points, a), point(&mut points, b));
         if ra != rb {
             points.insert(ra, rb);
         }
         merged.extend([a, b]);
     }
-    // Node ids: a section as itself, a point as section id + 1_000_000 + n.
-    let mut point_ids: HashMap<StationRef, SectionId> = HashMap::new();
-    let mut forest: HashMap<SectionId, SectionId> = HashMap::new();
+    // Node ids: a line as itself, a point as line id + 1_000_000 + n.
+    let mut point_ids: HashMap<StationRef, LineId> = HashMap::new();
+    let mut forest: HashMap<LineId, LineId> = HashMap::new();
     let mut stations: Vec<StationRef> = merged.into_iter().collect();
-    stations.sort_by_key(|at| (at.section_id, at.station_index));
+    stations.sort_by_key(|at| (at.line_id, at.station_index));
     for at in stations {
         let p = point(&mut points, at);
-        let next = 1_000_000 + point_ids.len() as SectionId;
+        let next = 1_000_000 + point_ids.len() as LineId;
         let node = *point_ids.entry(p).or_insert(next);
-        let (ra, rb) = (root(&mut forest, at.section_id), root(&mut forest, node));
+        let (ra, rb) = (root(&mut forest, at.line_id), root(&mut forest, node));
         assert_ne!(ra, rb, "{what}: merges close a loop");
         forest.insert(ra, rb);
     }
-    // Merged stations are one point (#740: a combine that re-hung a section
+    // Merged stations are one point (#740: a combine that re-hung a line
     // by a residual left what was merged to it that far away), to the dust
     // the offset solve leaves in each axis.
     for merge in &after.station_merges {
@@ -1755,8 +1740,8 @@ fn check_structure_muting(after: &Project, what: &str, mute: &[String]) {
         );
         if closure.is_aligned {
             assert_ne!(
-                a.section_id, b.section_id,
-                "{what}: a snapped closure inside the combined section"
+                a.line_id, b.line_id,
+                "{what}: a snapped closure inside the combined line"
             );
         }
     }
@@ -1802,7 +1787,7 @@ fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
         .flat_map(|m| [m.station_a.clone(), m.station_b.clone()])
         .filter_map(|key| project.resolve_key(&key))
         .collect();
-    merged.sort_by_key(|at| (at.section_id, at.station_index));
+    merged.sort_by_key(|at| (at.line_id, at.station_index));
     merged.dedup();
     let group = |x: StationRef| -> Vec<StationRef> {
         let mut g: Vec<StationRef> = merged
@@ -1834,8 +1819,8 @@ fn check_no_merge_folds_a_closure(project: &Project, what: &str) -> usize {
                     continue;
                 }
                 assert!(
-                    project.placement_datum_index(x.section_id).is_some()
-                        && project.placement_datum_index(y.section_id).is_some(),
+                    project.placement_datum_index(x.line_id).is_some()
+                        && project.placement_datum_index(y.line_id).is_some(),
                     "{what}: merge_stations({x:?}, {y:?}) merged the two ends of closure {} \
                      ({a:?} - {b:?}) between pieces that are not both placed",
                     closure.id
@@ -1882,16 +1867,16 @@ fn merge_stations_never_leaves_a_closure_between_merged_stations() {
         let mut rng = Rng(seed.wrapping_mul(0x94D0_49BB_1331_11EB) | 1);
         let mut project = network(seed);
         tried += check_no_merge_folds_a_closure(&project, &format!("seed {seed}"));
-        let long: Vec<SectionId> = project
-            .sections
+        let long: Vec<LineId> = project
+            .lines
             .iter()
             .filter(|s| s.shots.len() >= 2)
             .map(|s| s.id)
             .collect();
         if let Some(&id) = long.get(rng.below(long.len())) {
-            let shots = project.get_section(id).unwrap().shots.len();
+            let shots = project.get_line(id).unwrap().shots.len();
             let at = 1 + rng.below(shots - 1) as u32;
-            let options = crate::SplitSectionOptions {
+            let options = crate::SplitLineOptions {
                 name_a: format!("S{id}a"),
                 name_b: format!("S{id}b"),
                 color_a: "#123456".to_string(),
@@ -1899,7 +1884,7 @@ fn merge_stations_never_leaves_a_closure_between_merged_stations() {
                 comment_side: crate::SplitSide::A,
                 datum_side: crate::SplitSide::A,
             };
-            if project.split_section_at_station(id, at, &options).is_ok() {
+            if project.split_line_at_station(id, at, &options).is_ok() {
                 project.sweep_orphan_closures();
                 tried += check_no_merge_folds_a_closure(
                     &project,
@@ -1929,17 +1914,17 @@ struct SweepStats {
     replaced_kinds: HashSet<String>,
     /// Combines that moved a side by a residual within the tolerance (#740);
     /// of those, the ones that moved the kept side, that moved attached
-    /// sections along, and that turned a tie into a loop closure.
+    /// lines along, and that turned a tie into a loop closure.
     residual_moved: usize,
     residual_kept_moved: usize,
     residual_with_branches: usize,
     residual_torn: usize,
     /// Combines joining at two stations moved by hand by different amounts
-    /// (#755); of those, the ones whose join stations had sections merged to
+    /// (#755); of those, the ones whose join stations had lines merged to
     /// them.
     hand_moved: usize,
     hand_moved_with_branches: usize,
-    /// Plans that move sections with the joined station (#755), and the
+    /// Plans that move lines with the joined station (#755), and the
     /// snaps between those and the rest of their side the plans tear.
     joined_moved: usize,
     apart_torn: usize,
@@ -1952,7 +1937,7 @@ struct SweepStats {
 /// ends a fraction of a millimetre apart, or merged ends whose chain
 /// positions differ (#740)?
 fn moves_a_residual(plan: &crate::CombinePlan) -> bool {
-    plan.moving_section.is_some() && plan.shift_m <= super::combine_candidate::COMBINE_TOLERANCE_M
+    plan.moving_line.is_some() && plan.shift_m <= super::combine_candidate::COMBINE_TOLERANCE_M
 }
 
 /// Start counting this thread's closure dedupes (#749) from zero.
@@ -2049,10 +2034,10 @@ fn closure_dedupes_report() -> String {
 }
 
 /// Every combine the station menu offers in `project`, keeping either
-/// section, each run on a copy and checked against every invariant.
+/// line, each run on a copy and checked against every invariant.
 fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
     let ends: Vec<StationRef> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| {
             [
@@ -2071,16 +2056,16 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 continue;
             }
             stats.kinds.insert(format!("{:?}", candidate.join_kind));
-            for kept in [candidate.section_a, candidate.section_b] {
-                let (kept_end, other_end, other) = if kept == candidate.section_a {
-                    (candidate.end_a, candidate.end_b, candidate.section_b)
+            for kept in [candidate.line_a, candidate.line_b] {
+                let (kept_end, other_end, other) = if kept == candidate.line_a {
+                    (candidate.end_a, candidate.end_b, candidate.line_b)
                 } else {
-                    (candidate.end_b, candidate.end_a, candidate.section_a)
+                    (candidate.end_b, candidate.end_a, candidate.line_a)
                 };
                 let what = format!("seed {seed} {end:?} keep {kept} other {other}");
                 let mut after = project.clone();
                 let outcome = after
-                    .combine_sections_reporting(
+                    .combine_lines_reporting(
                         kept,
                         other,
                         &options(Some(CombineJoinEnds {
@@ -2090,7 +2075,7 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                     )
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
                 let removed = outcome.removed_across_one_shot;
-                let plan = if kept == candidate.section_a {
+                let plan = if kept == candidate.line_a {
                     &candidate.plan_keeping_a
                 } else {
                     &candidate.plan_keeping_b
@@ -2106,12 +2091,12 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                     .extend(removed.iter().map(|r| format!("{:?}", r.kind)));
                 stats.torn += plan.torn_ties.len();
                 stats.shifted += usize::from(plan.shift_m > 0.1);
-                stats.kept_moved += usize::from(plan.moving_section == Some(kept));
-                stats.with_branches += usize::from(plan.moved_sections.len() > 1);
+                stats.kept_moved += usize::from(plan.moving_line == Some(kept));
+                stats.with_branches += usize::from(plan.moved_lines.len() > 1);
                 if moves_a_residual(plan) {
                     stats.residual_moved += 1;
-                    stats.residual_kept_moved += usize::from(plan.moving_section == Some(kept));
-                    stats.residual_with_branches += usize::from(plan.moved_sections.len() > 1);
+                    stats.residual_kept_moved += usize::from(plan.moving_line == Some(kept));
+                    stats.residual_with_branches += usize::from(plan.moved_lines.len() > 1);
                     stats.residual_torn += usize::from(!plan.torn_ties.is_empty());
                 }
                 let hand = |at| project.station_offset_for_ref(at).unwrap_or_default();
@@ -2121,8 +2106,8 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
                 }
                 stats.joined_moved += usize::from(plan.moved_with_joined_station.is_some());
                 if let Some(joined) = &plan.moved_with_joined_station {
-                    let carried = |at: &StationRef| joined.sections.contains(&at.section_id);
-                    let side = |at: &StationRef| plan.moved_sections.contains(&at.section_id);
+                    let carried = |at: &StationRef| joined.lines.contains(&at.line_id);
+                    let side = |at: &StationRef| plan.moved_lines.contains(&at.line_id);
                     stats.apart_torn += plan
                         .torn_ties
                         .iter()
@@ -2149,7 +2134,7 @@ fn combine_every_offered(project: &Project, seed: u64, stats: &mut SweepStats) {
 }
 
 /// Every combine the station menu offers in random networks, keeping either
-/// section: refused only for two zero datums, and every invariant holds.
+/// line: refused only for two zero datums, and every invariant holds.
 ///
 /// `STALAGMIGHT_COMBINE_SEEDS` (default 120) seeds from
 /// `STALAGMIGHT_COMBINE_FIRST_SEED` (default 0): a long campaign runs
@@ -2186,7 +2171,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     eprintln!(
         "combine sweep seeds {first}..{}: {combined} combines, {torn} torn ties, {dropped} \
          ties removed across one shot, {shifted} shifted, {kept_moved} kept side moved, \
-         {with_branches} moved with attached sections, {residual_moved} moved by a residual \
+         {with_branches} moved with attached lines, {residual_moved} moved by a residual \
          within the tolerance (#740), {replaced} closures replaced (#749, {replaced_kinds:?}), \
          {datum_snaps_moved} snaps a moving side tore for a zero datum (#756); {}",
         first + seeds,
@@ -2194,7 +2179,7 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
     );
     // The sweep reaches what it is for (seeds 0..120: 6176 combines, 2342
     // torn ties, 1032 shifts, 292 with the kept side moving, 235 moving
-    // attached sections; master at #747 gives the same; 88 snaps a moving
+    // attached lines; master at #747 gives the same; 88 snaps a moving
     // side tore for a zero datum, #756). Not asked of a handful of seeds (a
     // rerun of one).
     if seeds < 50 {
@@ -2208,19 +2193,16 @@ fn every_offered_combine_in_random_networks_keeps_the_invariants() {
         "no moving side ever tore a snap for a zero datum"
     );
     assert!(kept_moved > 0, "the kept side never moved");
-    assert!(
-        with_branches > 0,
-        "nothing ever moved with the moving section"
-    );
+    assert!(with_branches > 0, "nothing ever moved with the moving line");
     for kind in ["Merged", "CoLocated", "Closure"] {
         assert!(kinds.contains(kind), "no {kind} join in {kinds:?}");
     }
 }
 
-/// `network(seed)` with the #746 shape added at a random section end P: a
-/// passage X of one or two shots merged at P, a section O from X's far end,
+/// `network(seed)` with the #746 shape added at a random line end P: a
+/// passage X of one or two shots merged at P, a line O from X's far end,
 /// and a closure between P and O's start (a legacy one the solve does not
-/// take, or an ordinary one), so the station menu offers P's section and O
+/// take, or an ordinary one), so the station menu offers P's line and O
 /// as a closure join that closes by a shift. X's far end is merged to O's
 /// start, or O hangs off the network by a one-shot connector C from its far
 /// end (so no tie to O is its only one, which a reload would make a merge,
@@ -2231,7 +2213,7 @@ pub(super) fn passage_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD6E8_FEB8_6659_FD93) | 1);
     let ends: Vec<StationRef> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| {
             [
@@ -2243,10 +2225,10 @@ pub(super) fn passage_network(seed: u64) -> Project {
     let p = ends[rng.below(ends.len())];
     // Where C may land: P's own merge component (another one can carry a
     // zero datum of its own, and one merge component holds one).
-    let component = project.get_merged_section_ids(p.section_id);
+    let component = project.get_merged_line_ids(p.line_id);
     let all: Vec<StationRef> = every_station(&project)
         .into_iter()
-        .filter(|at| component.contains(&at.section_id))
+        .filter(|at| component.contains(&at.line_id))
         .collect();
     let x_shots = 1 + rng.below(2);
     let passage: Vec<ShotData> = (0..x_shots)
@@ -2267,7 +2249,7 @@ pub(super) fn passage_network(seed: u64) -> Project {
     if x_to_o == 0 {
         let _ = project.merge_stations(x_end, o_start);
     } else {
-        let o_end = StationRef::new(o, project.get_section(o).unwrap().shots.len() as u32);
+        let o_end = StationRef::new(o, project.get_line(o).unwrap().shots.len() as u32);
         let q = all[rng.below(all.len())];
         let (from, to) = (xy(&project, o_end), xy(&project, q));
         if dist(from, to) >= 0.5 {
@@ -2302,8 +2284,8 @@ pub(super) fn passage_network(seed: u64) -> Project {
 }
 
 /// #746 on random surveys: every combine the station menu offers around a
-/// one-shot (or two-shot) passage between two section ends tied by a closure,
-/// keeping either section, checked like the network sweep - and the ties the
+/// one-shot (or two-shot) passage between two line ends tied by a closure,
+/// keeping either line, checked like the network sweep - and the ties the
 /// combine leaves across one shot (a torn merge, a snap made ordinary, an
 /// ordinary closure the join puts there) are removed, exactly as the plan
 /// named them.
@@ -2351,10 +2333,10 @@ fn every_offered_combine_around_a_passage_keeps_the_invariants() {
     }
 }
 
-/// `network(seed)` with a section O planted side by side with a random
-/// section end P (#740): one of O's ends sits a random residual within the
+/// `network(seed)` with a line O planted side by side with a random
+/// line end P (#740): one of O's ends sits a random residual within the
 /// tolerance (0.02 to 0.95 mm, any direction) from P, unmerged, so the
-/// station menu offers P's section and O as a co-located join whose combine
+/// station menu offers P's line and O as a co-located join whose combine
 /// moves a side by that residual. O carries a branch B merged at its far end
 /// (what is merged to the moving side must follow it), or is tied back into
 /// P's merge component by a one-shot connector C from its far end (the
@@ -2365,7 +2347,7 @@ pub(super) fn side_by_side_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0x8CB9_2BA7_2F3D_8DD7) | 1);
     let ends: Vec<StationRef> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| {
             [
@@ -2376,7 +2358,7 @@ pub(super) fn side_by_side_network(seed: u64) -> Project {
         .collect();
     let p = ends[rng.below(ends.len())];
     let o = add(&mut project, "O", random_shots(&mut rng));
-    let o_shots = project.get_section(o).unwrap().shots.len() as u32;
+    let o_shots = project.get_line(o).unwrap().shots.len() as u32;
     let (near, far) = if rng.below(2) == 0 {
         (0, o_shots)
     } else {
@@ -2406,10 +2388,10 @@ pub(super) fn side_by_side_network(seed: u64) -> Project {
             StationRef::new(b, 1)
         }
         1 => {
-            let component = project.get_merged_section_ids(p.section_id);
+            let component = project.get_merged_line_ids(p.line_id);
             let all: Vec<StationRef> = every_station(&project)
                 .into_iter()
-                .filter(|at| component.contains(&at.section_id))
+                .filter(|at| component.contains(&at.line_id))
                 .collect();
             let q = all[rng.below(all.len())];
             let (from, to) = (xy(&project, far), xy(&project, q));
@@ -2429,7 +2411,7 @@ pub(super) fn side_by_side_network(seed: u64) -> Project {
     };
     // Held where it is (`set_zero_datum` would move O's side onto the GPS
     // position, and with it the residual), as `network` holds T.
-    if rng.below(4) == 0 && !project.section_has_zero_datum(held.section_id) {
+    if rng.below(4) == 0 && !project.line_has_zero_datum(held.line_id) {
         if let Some(station_ref) = project.key_for_ref(held) {
             project.zero_datums.push(crate::ZeroDatum {
                 station_ref,
@@ -2444,10 +2426,10 @@ pub(super) fn side_by_side_network(seed: u64) -> Project {
 }
 
 /// #740 on random surveys: every combine the station menu offers in
-/// [`side_by_side_network`], keeping either section, checked like the
+/// [`side_by_side_network`], keeping either line, checked like the
 /// network sweep. The plan carries the residual like a shift (the side the
 /// anchor rule picks moves, with what is merged to it), and nothing the
-/// combine leaves moves on a reload. The other sweeps place their sections
+/// combine leaves moves on a reload. The other sweeps place their lines
 /// exactly, so their default seeds reach no such residual.
 ///
 /// `STALAGMIGHT_COMBINE_RESIDUAL_SEEDS` (default 40) seeds from
@@ -2470,7 +2452,7 @@ fn every_offered_combine_beside_a_side_by_side_pair_keeps_the_invariants() {
     eprintln!(
         "combine side-by-side sweep seeds {first}..{}: {} combines, {} torn ties, {} moved by a \
          residual within the tolerance (#740): {} of them the kept side, {} with attached \
-         sections, {} tearing a tie; {} snaps a moving side tore for a zero datum (#756); {}",
+         lines, {} tearing a tie; {} snaps a moving side tore for a zero datum (#756); {}",
         first + seeds,
         stats.combined,
         stats.torn,
@@ -2520,7 +2502,7 @@ fn plant_hand_move(project: &mut Project, at: StationRef, hand: (f64, f64, f64))
     }
 }
 
-/// `network(seed)` with a section O joined at a random section end P whose
+/// `network(seed)` with a line O joined at a random line end P whose
 /// join stations were moved by hand (#755): a manual station offset on P, on
 /// O's near end, on both (different, or the same as a split leaves them),
 /// from a fraction of a millimetre to half a metre, sometimes in depth too.
@@ -2533,7 +2515,7 @@ fn hand_moved_network(seed: u64) -> Project {
     let mut project = network(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD6E8_FEB8_6659_FD93) | 1);
     let ends: Vec<StationRef> = project
-        .sections
+        .lines
         .iter()
         .flat_map(|s| {
             [
@@ -2562,7 +2544,7 @@ fn hand_moved_network(seed: u64) -> Project {
         project.redrive_offsets_after_load();
     }
     let o = add(&mut project, "O", random_shots(&mut rng));
-    let o_shots = project.get_section(o).unwrap().shots.len() as u32;
+    let o_shots = project.get_line(o).unwrap().shots.len() as u32;
     let (near, far) = if rng.below(2) == 0 {
         (StationRef::new(o, 0), StationRef::new(o, o_shots))
     } else {
@@ -2603,7 +2585,7 @@ fn hand_moved_network(seed: u64) -> Project {
     // the joined station is then snapped to its side too, a snap the combine
     // tears as the two move apart.
     if rng.below(3) == 0 {
-        let from = StationRef::new(t, project.get_section(t).unwrap().shots.len() as u32);
+        let from = StationRef::new(t, project.get_line(t).unwrap().shots.len() as u32);
         let (a, b) = (xy(&project, from), xy(&project, far));
         if dist(a, b) >= 0.5 {
             let azimuth = (b.0 - a.0).atan2(b.1 - a.1).to_degrees().rem_euclid(360.0);
@@ -2628,8 +2610,8 @@ fn hand_moved_network(seed: u64) -> Project {
     // between them join two held surveys into one merge group with two
     // datums, which is #754's, not this sweep's.
     if rng.below(4) == 0
-        && !project.rigid_group_has_datum(held.section_id)
-        && !project.rigid_group_has_datum(p.section_id)
+        && !project.rigid_group_has_datum(held.line_id)
+        && !project.rigid_group_has_datum(p.line_id)
     {
         if let Some(station_ref) = project.key_for_ref(held) {
             project.zero_datums.push(crate::ZeroDatum {
@@ -2645,7 +2627,7 @@ fn hand_moved_network(seed: u64) -> Project {
 }
 
 /// #755 on random surveys: every combine the station menu offers in
-/// [`hand_moved_network`], keeping either section, checked like the network
+/// [`hand_moved_network`], keeping either line, checked like the network
 /// sweep: the side that moves goes by the chain gap with what is merged to
 /// it, the join station whose hand move the joined station does not keep
 /// lands on it with what is merged there, merged stations stay one point,
@@ -2670,8 +2652,8 @@ fn every_offered_combine_at_a_hand_moved_join_keeps_the_invariants() {
     }
     eprintln!(
         "combine hand-moved sweep seeds {first}..{}: {} combines, {} at two join stations \
-         moved by hand by different amounts (#755), {} of them with sections merged at the \
-         join, {} moving sections with the joined station ({} snaps torn between those and \
+         moved by hand by different amounts (#755), {} of them with lines merged at the \
+         join, {} moving lines with the joined station ({} snaps torn between those and \
          their side), {} torn ties, {} moved by a residual within the tolerance, {} kept side \
          moved, {} closure-adjusted views compared with a hand move in the solved survey \
          (#759; {} of them at join stations moved by hand by different amounts); {}",
@@ -2698,7 +2680,7 @@ fn every_offered_combine_at_a_hand_moved_join_keeps_the_invariants() {
     );
     assert!(
         stats.hand_moved_with_branches > 0,
-        "no hand-moved join ever had a section merged to it"
+        "no hand-moved join ever had a line merged to it"
     );
     assert!(
         stats.joined_moved > 0,
@@ -2752,7 +2734,7 @@ fn chains_beside_a_side_by_side_pair_keep_the_invariants() {
 }
 
 /// Random chains of edits on random networks: combines (any pair the station
-/// menu offers, either section kept), Split Section Here at a random station,
+/// menu offers, either line kept), Split Line Here at a random station,
 /// and reverses, each step checked like the single-combine sweep (a combine
 /// against every combine invariant, the closure-adjusted view included; a
 /// split or reverse against the structure), so an edit is also tested on
@@ -2832,7 +2814,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
             match rng.below(5) {
                 0..=2 => {
                     let ends: Vec<StationRef> = project
-                        .sections
+                        .lines
                         .iter()
                         .flat_map(|s| {
                             [
@@ -2853,16 +2835,16 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     let keep_a = rng.below(2) == 0;
                     let (kept, kept_end, other, other_end) = if keep_a {
                         (
-                            candidate.section_a,
+                            candidate.line_a,
                             candidate.end_a,
-                            candidate.section_b,
+                            candidate.line_b,
                             candidate.end_b,
                         )
                     } else {
                         (
-                            candidate.section_b,
+                            candidate.line_b,
                             candidate.end_b,
-                            candidate.section_a,
+                            candidate.line_a,
                             candidate.end_a,
                         )
                     };
@@ -2870,7 +2852,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     let what = what(&op, &trail);
                     let mut after = project.clone();
                     let outcome = after
-                        .combine_sections_reporting(
+                        .combine_lines_reporting(
                             kept,
                             other,
                             &options(Some(CombineJoinEnds {
@@ -2901,8 +2883,8 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     combines += 1;
                 }
                 3 => {
-                    let long: Vec<SectionId> = project
-                        .sections
+                    let long: Vec<LineId> = project
+                        .lines
                         .iter()
                         .filter(|s| s.shots.len() >= 2)
                         .map(|s| s.id)
@@ -2911,11 +2893,11 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                         continue;
                     }
                     let id = long[rng.below(long.len())];
-                    let shots = project.get_section(id).unwrap().shots.len();
+                    let shots = project.get_line(id).unwrap().shots.len();
                     let at = 1 + rng.below(shots - 1) as u32;
                     let op = format!("split({id} at {at})");
                     let what = what(&op, &trail);
-                    let options = crate::SplitSectionOptions {
+                    let options = crate::SplitLineOptions {
                         name_a: format!("S{id}a"),
                         name_b: format!("S{id}b"),
                         color_a: "#123456".to_string(),
@@ -2924,7 +2906,7 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                         datum_side: crate::SplitSide::A,
                     };
                     let mut after = project.clone();
-                    if after.split_section_at_station(id, at, &options).is_err() {
+                    if after.split_line_at_station(id, at, &options).is_err() {
                         continue;
                     }
                     // What the split command runs next: a closure across the
@@ -2942,19 +2924,19 @@ fn combine_chains(make: fn(u64) -> Project, env_prefix: &str, label: &str) -> Ch
                     splits += 1;
                 }
                 _ => {
-                    let ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+                    let ids: Vec<LineId> = project.lines.iter().map(|s| s.id).collect();
                     let id = ids[rng.below(ids.len())];
                     let op = format!("reverse({id})");
                     let what = what(&op, &trail);
                     let mut after = project.clone();
-                    if !after.reverse_section(id, rng.below(2) == 0) {
+                    if !after.reverse_line(id, rng.below(2) == 0) {
                         continue;
                     }
                     // A reverse moves no station.
-                    let n = after.get_section(id).unwrap().shots.len() as u32;
+                    let n = after.get_line(id).unwrap().shots.len() as u32;
                     let was = positions(&project);
                     for (at, p) in positions(&after) {
-                        let before_at = if at.section_id == id {
+                        let before_at = if at.line_id == id {
                             StationRef::new(id, n - at.station_index)
                         } else {
                             at
@@ -3029,7 +3011,7 @@ fn the_sweep_removes_exactly_the_closures_between_merged_stations() {
                 .flat_map(|m| [m.station_a.clone(), m.station_b.clone()])
                 .filter_map(|key| project.resolve_key(&key))
                 .collect();
-            merged.sort_by_key(|at| (at.section_id, at.station_index));
+            merged.sort_by_key(|at| (at.line_id, at.station_index));
             merged.dedup();
             let x = all[rng.below(all.len())];
             let Some(&m) = merged.get(rng.below(merged.len())) else {
@@ -3062,16 +3044,16 @@ fn the_sweep_removes_exactly_the_closures_between_merged_stations() {
             }
         }
         if rng.below(4) > 0 {
-            let long: Vec<SectionId> = project
-                .sections
+            let long: Vec<LineId> = project
+                .lines
                 .iter()
                 .filter(|s| s.shots.len() >= 2)
                 .map(|s| s.id)
                 .collect();
             if let Some(&id) = long.get(rng.below(long.len())) {
-                let shots = project.get_section(id).unwrap().shots.len();
+                let shots = project.get_line(id).unwrap().shots.len();
                 let at = 1 + rng.below(shots - 1) as u32;
-                let options = crate::SplitSectionOptions {
+                let options = crate::SplitLineOptions {
                     name_a: format!("S{id}a"),
                     name_b: format!("S{id}b"),
                     color_a: "#123456".to_string(),
@@ -3079,7 +3061,7 @@ fn the_sweep_removes_exactly_the_closures_between_merged_stations() {
                     comment_side: crate::SplitSide::A,
                     datum_side: crate::SplitSide::A,
                 };
-                if project.split_section_at_station(id, at, &options).is_ok() {
+                if project.split_line_at_station(id, at, &options).is_ok() {
                     trail.push(format!("split({id} at {at})"));
                 }
             }
@@ -3169,7 +3151,7 @@ enum PinnedFor {
     /// closure still ties to the side that stays.
     HeldBesideASnap,
     /// #736: a combine re-closes a torn snap where it would tie the combined
-    /// section to itself, and tears it into an ordinary closure.
+    /// line to itself, and tears it into an ordinary closure.
     ReclosedSnap,
     /// #736: the last combine re-closes a torn snap across its two sides and
     /// removes the closure that leaves across one shot.
@@ -3210,7 +3192,7 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[(PinnedFor, &str)] = &[
     // The last combine moves the kept 4 off 8, which a datum holds, and 8
     // still reaches 3 (the side that stays) through a snapped closure 9-6
     // the shift leaves alone: the torn merge's held part stays rigidly tied
-    // to the combined section, which `check_torn_reasons` refused before.
+    // to the combined line, which `check_torn_reasons` refused before.
     (
         PinnedFor::HeldBesideASnap,
         "2221790;split(1 at 1);combine(8:Start, 5:Start);reverse(4);combine(4:Start, 2:End);\
@@ -3219,7 +3201,7 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[(PinnedFor, &str)] = &[
     ),
     // #736: combine(9:End, 7:Start) moves 7 by 2.15 m, onto the torn snap
     // 7:3-9:3, which the command's epilogue then snapped inside the combined
-    // section (on master too); the next combine's check caught it.
+    // line (on master too); the next combine's check caught it.
     (
         PinnedFor::ReclosedSnap,
         "p631820;split(2 at 2);reverse(4);combine(3:End, 4:End);combine(6:Start, 1:Start);\
@@ -3236,7 +3218,7 @@ const CHAINS_THE_CAMPAIGNS_FAILED_ON: &[(PinnedFor, &str)] = &[
          combine(3:End, 5:Start);combine(3:Start, 4:End)",
     ),
     // #736: a hand-moved merged join moves the kept side by 4.8 cm, onto the
-    // torn snap 3:1-1:1 between the two sections (on master too).
+    // torn snap 3:1-1:1 between the two lines (on master too).
     (PinnedFor::ReclosedSnap, "h600374;combine(3:Start, 1:Start)"),
 ];
 
@@ -3366,9 +3348,9 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
     };
     let end = |s: &str| {
         if s.trim() == "End" {
-            SectionEnd::End
+            LineEnd::End
         } else {
-            SectionEnd::Start
+            LineEnd::Start
         }
     };
     for op in parts {
@@ -3381,13 +3363,13 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
             let (k, o) = rest.split_once(", ").unwrap();
             let (k, ke) = k.split_once(':').unwrap();
             let (o, oe) = o.split_once(':').unwrap();
-            let (k, o): (SectionId, SectionId) = (k.parse().unwrap(), o.parse().unwrap());
+            let (k, o): (LineId, LineId) = (k.parse().unwrap(), o.parse().unwrap());
             let join = CombineJoinEnds {
                 kept: end(ke),
                 other: end(oe),
             };
             let c = project.combine_candidate_joining(k, o, Some(join)).unwrap();
-            let plan = if c.section_a == k {
+            let plan = if c.line_a == k {
                 &c.plan_keeping_a
             } else {
                 &c.plan_keeping_b
@@ -3397,7 +3379,7 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
             }
             let mut after = project.clone();
             let outcome = after
-                .combine_sections_reporting(k, o, &options(Some(join)))
+                .combine_lines_reporting(k, o, &options(Some(join)))
                 .unwrap();
             if verbose {
                 eprintln!(
@@ -3443,8 +3425,8 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
             project = after;
         } else if let Some(rest) = op.strip_prefix("split(") {
             let (id, at) = rest.trim_end_matches(')').split_once(" at ").unwrap();
-            let id: SectionId = id.parse().unwrap();
-            let opts = crate::SplitSectionOptions {
+            let id: LineId = id.parse().unwrap();
+            let opts = crate::SplitLineOptions {
                 name_a: format!("S{id}a"),
                 name_b: format!("S{id}b"),
                 color_a: "#123456".into(),
@@ -3453,12 +3435,12 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
                 datum_side: crate::SplitSide::A,
             };
             project
-                .split_section_at_station(id, at.parse().unwrap(), &opts)
+                .split_line_at_station(id, at.parse().unwrap(), &opts)
                 .unwrap();
             project.convert_orphan_closures_to_merges();
             settle_like_the_epilogue(&mut project);
         } else if let Some(rest) = op.strip_prefix("reverse(") {
-            project.reverse_section(rest.trim_end_matches(')').parse().unwrap(), true);
+            project.reverse_line(rest.trim_end_matches(')').parse().unwrap(), true);
             settle_like_the_epilogue(&mut project);
         }
     }
@@ -3467,13 +3449,8 @@ fn replay_chain(spec: &str, verbose: bool) -> ChainReplay {
 
 /// What [`replay_chain`] prints before a combine: the plan, the anchor, the
 /// datums, every merge and closure, and the held gauges.
-fn print_chain_step(
-    project: &Project,
-    c: &CombineCandidate,
-    plan: &crate::CombinePlan,
-    k: SectionId,
-) {
-    let comp = project.get_connected_section_ids(k);
+fn print_chain_step(project: &Project, c: &CombineCandidate, plan: &crate::CombinePlan, k: LineId) {
+    let comp = project.get_connected_line_ids(k);
     eprintln!(
         "  kind {:?} plan {:?} anchor {:?} datums {:?}",
         c.join_kind,
@@ -3523,7 +3500,7 @@ enum XToO {
 /// closure join that closes by a 0.4 m shift, and nothing else in the survey
 /// is solved: whether the closure-adjusted view solves the joined survey
 /// depends only on the tie the combine turns into a closure.
-fn passage_join(x_shots: u32, x_to_o: XToO) -> (Project, SectionId, SectionId) {
+fn passage_join(x_shots: u32, x_to_o: XToO) -> (Project, LineId, LineId) {
     let mut project = Project::new("Passage".to_string(), None);
     let k = add(&mut project, "K", vec![shot(90.0, 10.0)]);
     let x_path = if x_shots == 1 {
@@ -3586,19 +3563,19 @@ fn passage_join(x_shots: u32, x_to_o: XToO) -> (Project, SectionId, SectionId) {
 /// does on the combined project) and the plan the station menu offered.
 fn combine_at_the_join(
     project: &Project,
-    k: SectionId,
-    o: SectionId,
+    k: LineId,
+    o: LineId,
     keep_o: bool,
 ) -> (crate::CombinePlan, bool, Project) {
     let Some(candidate) = project
         .combine_candidates(StationRef::new(k, 1))
         .into_iter()
-        .find(|c| [c.section_a, c.section_b] == [k, o] || [c.section_a, c.section_b] == [o, k])
+        .find(|c| [c.line_a, c.line_b] == [k, o] || [c.line_a, c.line_b] == [o, k])
     else {
         panic!("the menu offers K and O");
     };
     assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
-    let keeping_k = candidate.section_a == k;
+    let keeping_k = candidate.line_a == k;
     let plan = if keep_o == keeping_k {
         candidate.plan_keeping_b
     } else {
@@ -3610,8 +3587,8 @@ fn combine_at_the_join(
             o,
             k,
             CombineJoinEnds {
-                kept: SectionEnd::Start,
-                other: SectionEnd::End,
+                kept: LineEnd::Start,
+                other: LineEnd::End,
             },
         )
     } else {
@@ -3619,14 +3596,14 @@ fn combine_at_the_join(
             k,
             o,
             CombineJoinEnds {
-                kept: SectionEnd::End,
-                other: SectionEnd::Start,
+                kept: LineEnd::End,
+                other: LineEnd::Start,
             },
         )
     };
     let mut combined = project.clone();
     let removed = combined
-        .combine_sections(kept, other, &options(Some(join)))
+        .combine_lines(kept, other, &options(Some(join)))
         .unwrap();
     assert_eq!(
         plan.closures_removed_across_one_shot
@@ -3649,7 +3626,7 @@ fn combine_at_the_join(
 ///
 /// - (a) X one shot, merged to O: the torn merge becomes a closure between the
 ///   two ends of X's one shot, which the solve skips - the view shows the
-///   joined survey measured, so the plain rule holds (the other section moves);
+///   joined survey measured, so the plain rule holds (the other line moves);
 /// - (b) X one shot, snapped to O: the snapped closure the combine makes
 ///   ordinary also spans X's one shot - same verdict;
 /// - controls: X two shots, merged or snapped - the closure closes a real loop,
@@ -3675,13 +3652,13 @@ fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
         let what = format!("X {x_shots} shot(s), {x_to_o:?}");
         let (project, k, o) = passage_join(x_shots, x_to_o);
         assert_eq!(
-            project.adjustment_anchor_for_tests(k).map(|a| a.section_id),
+            project.adjustment_anchor_for_tests(k).map(|a| a.line_id),
             Some(k),
             "{what}: setup: K (the lowest id) holds the anchor"
         );
         // Keeping K: O moves whatever the view does (K holds the anchor).
         let (plan, _, _) = combine_at_the_join(&project, k, o, false);
-        assert_eq!(plan.moving_section, Some(o), "{what}");
+        assert_eq!(plan.moving_line, Some(o), "{what}");
         assert_eq!(plan.kept_moves_because, None, "{what}");
         // Keeping O: the anchor rule moves O only where the view solves.
         let (plan, solves, combined) = combine_at_the_join(&project, k, o, true);
@@ -3694,7 +3671,7 @@ fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
             "{what}: the plan names the closure the combine removes (#746)"
         );
         if solves {
-            assert_eq!(plan.moving_section, Some(o), "{what}");
+            assert_eq!(plan.moving_line, Some(o), "{what}");
             assert_eq!(
                 plan.kept_moves_because,
                 Some(KeptMovesReason::AdjustmentAnchor),
@@ -3702,9 +3679,9 @@ fn the_anchor_rule_follows_the_solve_of_the_closure_the_combine_makes() {
             );
         } else {
             assert_eq!(
-                plan.moving_section,
+                plan.moving_line,
                 Some(k),
-                "{what}: the view shows the joined survey measured, so the other section moves"
+                "{what}: the view shows the joined survey measured, so the other line moves"
             );
             assert_eq!(plan.kept_moves_because, None, "{what}");
         }
@@ -3768,7 +3745,7 @@ fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjuste
     let (skipped, k, o) = build(Some(1));
     let (control, ..) = build(Some(2));
     let (without, ..) = build(None);
-    let component = skipped.get_connected_section_ids(k);
+    let component = skipped.get_connected_line_ids(k);
     assert_eq!(component, HashSet::from([k, o]));
     assert_eq!(skipped.closures_across_one_shot().len(), 1, "setup");
     assert!(control.closures_across_one_shot().is_empty(), "setup");
@@ -3777,7 +3754,7 @@ fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjuste
     let anchor = skipped.adjustment_anchor_of(&component);
     assert_eq!(anchor, control.adjustment_anchor_of(&component));
     assert_eq!(anchor, without.adjustment_anchor_of(&component));
-    assert_eq!(anchor.map(|a| a.section_id), Some(k));
+    assert_eq!(anchor.map(|a| a.line_id), Some(k));
 
     // The solve plans no anchor where its only closure is skipped.
     assert!(skipped.adjustment_anchors_for_tests().is_empty());
@@ -3791,10 +3768,10 @@ fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjuste
         let candidate = project
             .combine_candidates(StationRef::new(k, 3))
             .into_iter()
-            .find(|c| c.section_a == o || c.section_b == o)
+            .find(|c| c.line_a == o || c.line_b == o)
             .unwrap();
         assert_eq!(candidate.join_kind, CombineJoinKind::Closure);
-        if candidate.section_a == o {
+        if candidate.line_a == o {
             candidate.plan_keeping_a
         } else {
             candidate.plan_keeping_b
@@ -3803,14 +3780,14 @@ fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjuste
     let plain = keeping_o(&skipped);
     assert!(plain.shift_m > 0.39, "setup: the join closes by a shift");
     assert_eq!(
-        plain.moving_section,
+        plain.moving_line,
         Some(k),
-        "not adjusted: the other section moves"
+        "not adjusted: the other line moves"
     );
     assert_eq!(plain.kept_moves_because, None);
     let held = keeping_o(&control);
     assert_eq!(
-        held.moving_section,
+        held.moving_line,
         Some(o),
         "adjusted: K holds the anchor, O moves"
     );
@@ -3822,10 +3799,10 @@ fn a_component_whose_only_closure_is_skipped_keeps_its_anchor_but_is_not_adjuste
 
 // ---- Combine removes the closures it leaves across one shot (#746) ------------
 
-/// The section named `name`.
-fn named(project: &Project, name: &str) -> SectionId {
+/// The line named `name`.
+fn named(project: &Project, name: &str) -> LineId {
     project
-        .sections
+        .lines
         .iter()
         .find(|s| s.name.as_deref() == Some(name))
         .map(|s| s.id)
@@ -3835,7 +3812,7 @@ fn named(project: &Project, name: &str) -> SectionId {
 /// A removed tie's two stations, in a fixed order, with its kind.
 fn removed_pair(removed: &CombineRemovedClosure) -> ([StationRef; 2], CombineRemovedKind) {
     let mut pair = [removed.station_a, removed.station_b];
-    pair.sort_by_key(|s| (s.section_id, s.station_index));
+    pair.sort_by_key(|s| (s.line_id, s.station_index));
     (pair, removed.kind)
 }
 
@@ -3873,7 +3850,7 @@ fn removed_in_passage(
 /// tears between X and the joined stations (a merge torn, or a snapped
 /// closure made ordinary) becomes a loop closure between the two ends of X's
 /// one shot. The combine removes it in the same edit, as Delete with shift
-/// does (#737), whichever section is kept, and the plan the station menu
+/// does (#737), whichever line is kept, and the plan the station menu
 /// offered names it (by its stations before the combine, with what it was)
 /// and does not also list it as torn. `combine_at_the_join` checks the plan
 /// names exactly what the combine removed. In the controls (X two shots) the
@@ -3989,7 +3966,7 @@ fn a_closure_already_across_one_shot_is_left_alone() {
 /// there. A `Batch` closure ties K's middle station to O's start. Combined,
 /// O's start is K's end, so the closure spans K's last shot: the combine
 /// removes it and the plan names it (as a loop closure, by its stations
-/// before the combine), while the merge that would tie the combined section
+/// before the combine), while the merge that would tie the combined line
 /// to itself tears into a closure around a real loop, which stays. Control:
 /// the closure to O's second station spans two shots once joined, and stays.
 #[test]
@@ -4031,9 +4008,7 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
                 .combine_candidates_at_point(StationRef::new(k, 2))
                 .into_iter()
                 .find(|c| {
-                    c.section_a != c.section_b
-                        && [k, o].contains(&c.section_a)
-                        && [k, o].contains(&c.section_b)
+                    c.line_a != c.line_b && [k, o].contains(&c.line_a) && [k, o].contains(&c.line_b)
                 })
             else {
                 panic!("{what}: the menu offers K and O");
@@ -4045,8 +4020,8 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
                     o,
                     k,
                     CombineJoinEnds {
-                        kept: SectionEnd::Start,
-                        other: SectionEnd::End,
+                        kept: LineEnd::Start,
+                        other: LineEnd::End,
                     },
                 )
             } else {
@@ -4054,19 +4029,19 @@ fn a_closure_the_join_puts_across_one_shot_is_removed() {
                     k,
                     o,
                     CombineJoinEnds {
-                        kept: SectionEnd::End,
-                        other: SectionEnd::Start,
+                        kept: LineEnd::End,
+                        other: LineEnd::Start,
                     },
                 )
             };
-            let plan = if candidate.section_a == kept {
+            let plan = if candidate.line_a == kept {
                 &candidate.plan_keeping_a
             } else {
                 &candidate.plan_keeping_b
             };
             let mut combined = project.clone();
             let removed = combined
-                .combine_sections(kept, other, &options(Some(join)))
+                .combine_lines(kept, other, &options(Some(join)))
                 .unwrap();
             assert_eq!(
                 plan.closures_removed_across_one_shot

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -9,31 +9,21 @@ import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import type { BatchCommand } from '../../types/commands';
 import type { MergeDatumShift } from '../../types/ipc/MergeDatumShift';
 import { formatDatumMetres } from '../../utils/zeroDatumPreview';
 
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { mergeStations, executeBatch, project } = useProjectStore();
+  const { mergeStations, executeBatch } = useProjectStore();
+  const labels = useIdentityLabels();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Get section names
-  const sectionAName = useMemo(() => {
-    if (!stationA) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationA.section_id)?.name ?? `Section ${stationA.section_id}`;
-  }, [stationA, project]);
-
-  const sectionBName = useMemo(() => {
-    if (!stationB) return 'Unknown';
-    return project?.sections.find((s) => s.id === stationB.section_id)?.name ?? `Section ${stationB.section_id}`;
-  }, [stationB, project]);
 
   // Optional callbacks from snap-to-merge drag flow
   const onBeforeConfirm = dialogData.onBeforeConfirm as (() => Promise<void>) | undefined;
@@ -95,15 +85,13 @@ export default function MergeDialog() {
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionAName}</EntityBlob>
+              <EntityBlob entity="station">{labels.station(stationA, true)}</EntityBlob>
             </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
             <span className="inline-flex items-center gap-1.5">
-              <EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob>
-              <EntityBlob entity="section">{sectionBName}</EntityBlob>
+              <EntityBlob entity="station">{labels.station(stationB, true)}</EntityBlob>
             </span>
           </div>
         </div>
@@ -135,12 +123,11 @@ export default function MergeDialog() {
  *  which piece moves, how far, and that its datum becomes a GPS fix. */
 function DatumShiftNotice({ shift, afterMove }: { shift: MergeDatumShift; afterMove: boolean }) {
   const { t } = useTranslation();
-  const { project } = useProjectStore();
-  const nameOf = (id: number) => project?.sections.find((s) => s.id === id)?.name ?? `Section ${id}`;
-  const [first, ...rest] = shift.moving_section_ids;
-  const firstName = first === undefined ? '' : nameOf(first);
+  const labels = useIdentityLabels();
+  const [first, ...rest] = shift.moving_line_ids;
+  const firstName = first === undefined ? '' : labels.lineName(first);
   const piece = rest.length === 0 ? firstName : t('dialogs.mergeStations.pieceMore', { name: firstName, count: rest.length });
-  const station = formatStationId(shift.datum_station.section_id, shift.datum_station.station_index);
+  const station = labels.station(shift.datum_station, true);
   return (
     <p className="p-2 rounded bg-warning-10 text-warning-text text-sm" data-testid="merge-datum-shift">
       {afterMove

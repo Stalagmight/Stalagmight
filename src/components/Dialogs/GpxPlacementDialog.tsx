@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import {
@@ -9,18 +10,19 @@ import {
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
-import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
-import { sectionColorPalette } from '../../utils/colors';
+import type { GpxFile, GpxLinePlacement } from '../../types/commands';
+import { lineColorPalette } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
 
 /**
  * Step 2 dialog for GPX import.
  *
- * Shows track/route sections that need placement configuration.
- * Each section can be configured with a zero datum station.
+ * Shows track/route lines that need placement configuration.
+ * Each line can be configured with a zero datum station.
  * Waypoints are always auto-placed as zero datums and don't appear here.
  */
 export default function GpxPlacementDialog() {
+  const { t } = useTranslation();
   const { executeGpxImport } = useProjectStore();
   const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } =
     useUIStore();
@@ -35,22 +37,22 @@ export default function GpxPlacementDialog() {
 
   const [isImporting, setIsImporting] = useState(false);
 
-  // Number of waypoint sections that come before track/route sections in the backend index
-  const waypointSectionOffset = importWaypoints ? gpxFile.waypoints.length : 0;
+  // Number of waypoint lines that come before track/route lines in the backend index
+  const waypointLineOffset = importWaypoints ? gpxFile.waypoints.length : 0;
 
-  // Build list of sections that need placement config, with GPS point data for building placements
-  const sections = useMemo(() => {
+  // Build list of lines that need placement config, with GPS point data for building placements
+  const lines = useMemo(() => {
     const result: Array<{
       type: 'track' | 'route';
       name: string;
       pointCount: number;
-      /** Backend section index (accounts for waypoint sections) */
+      /** Backend line index (accounts for waypoint lines) */
       backendIndex: number;
       /** GPS coordinates per point for building zero datum placements */
       points: Array<{ latitude: number; longitude: number }>;
     }> = [];
 
-    let idx = waypointSectionOffset;
+    let idx = waypointLineOffset;
 
     if (importTracks) {
       gpxFile.tracks.forEach((trk, ti) => {
@@ -86,19 +88,19 @@ export default function GpxPlacementDialog() {
     }
 
     return result;
-  }, [gpxFile, importTracks, importRoutes, waypointSectionOffset]);
+  }, [gpxFile, importTracks, importRoutes, waypointLineOffset]);
 
-  // Per-section zero datum station index (0 = first station)
+  // Per-line zero datum station index (0 = first station)
   const [zeroDatumIndices, setZeroDatumIndices] = useState<Record<number, number>>(() => {
     const initial: Record<number, number> = {};
-    sections.forEach((_, i) => {
+    lines.forEach((_, i) => {
       initial[i] = 0;
     });
     return initial;
   });
 
-  const handleZeroDatumChange = useCallback((sectionIdx: number, stationIdx: number) => {
-    setZeroDatumIndices((prev) => ({ ...prev, [sectionIdx]: stationIdx }));
+  const handleZeroDatumChange = useCallback((lineIdx: number, stationIdx: number) => {
+    setZeroDatumIndices((prev) => ({ ...prev, [lineIdx]: stationIdx }));
   }, []);
 
   const handleBack = () => {
@@ -112,9 +114,9 @@ export default function GpxPlacementDialog() {
   const handleImport = async () => {
     setIsImporting(true);
 
-    // Build GpxSectionPlacement objects with proper ImportPlacement zero_datum
-    const palette = sectionColorPalette(resolvedTheme);
-    const placements: GpxSectionPlacement[] = sections.map((sec, i) => {
+    // Build GpxLinePlacement objects with proper ImportPlacement zero_datum
+    const palette = lineColorPalette(resolvedTheme);
+    const placements: GpxLinePlacement[] = lines.map((sec, i) => {
       const stationIdx = zeroDatumIndices[i] ?? 0;
       const point = sec.points[stationIdx] ?? sec.points[0];
       const coords = point
@@ -122,7 +124,7 @@ export default function GpxPlacementDialog() {
         : { latitude: 0, longitude: 0, depth_reference: 0 };
 
       return {
-        section_index: sec.backendIndex,
+        line_index: sec.backendIndex,
         placement: {
           type: 'zero_datum' as const,
           coordinates: coords,
@@ -168,23 +170,23 @@ export default function GpxPlacementDialog() {
     <DialogWrapper title="GPX Import - Placement" onClose={closeDialog} size="lg" data-testid="gpx-placement-dialog">
       <div className="space-y-4">
         <div className="text-sm text-text-secondary">
-          Configure zero datum placement for each track/route section.
+          Configure zero datum placement for each track/route line.
           The selected station will be geo-referenced using its GPS coordinates.
         </div>
 
-        {/* Section list */}
+        {/* Line list */}
         <div className="max-h-80 overflow-y-auto border border-border rounded">
           <table className="w-full text-sm">
             <thead className="bg-surface-alt sticky top-0">
               <tr className="text-left text-text-tertiary text-xs">
-                <th className="px-3 py-1.5">Section</th>
+                <th className="px-3 py-1.5">Line</th>
                 <th className="px-3 py-1.5">Type</th>
                 <th className="px-3 py-1.5">Points</th>
                 <th className="px-3 py-1.5">Zero Datum Station</th>
               </tr>
             </thead>
             <tbody>
-              {sections.map((sec, i) => (
+              {lines.map((sec, i) => (
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{sec.name}</td>
                   <td className="px-3 py-1.5 capitalize text-text-secondary">{sec.type}</td>
@@ -194,10 +196,20 @@ export default function GpxPlacementDialog() {
                       value={String(zeroDatumIndices[i] ?? 0)}
                       data-testid={`gpx-placement-zero-datum-${i}`}
                       onChange={(v) => handleZeroDatumChange(i, parseInt(v, 10))}
-                      options={Array.from({ length: sec.pointCount }, (_, si) => ({
-                        value: String(si),
-                        label: `Station ${si}${si === 0 ? ' (first)' : si === sec.pointCount - 1 ? ' (last)' : ''}`,
-                      }))}
+                      // A GPX import names no station, so each is seeded with
+                      // its index as text (SPEC 4.2): `Station 3` is its name.
+                      options={Array.from({ length: sec.pointCount }, (_, si) => {
+                        const station = t('dialogs.dmpNewImport.manualPlacing.stationNamed', { name: String(si) });
+                        return {
+                          value: String(si),
+                          label:
+                            si === 0
+                              ? t('dialogs.gpxSelection.stationFirst', { station })
+                              : si === sec.pointCount - 1
+                                ? t('dialogs.gpxSelection.stationLast', { station })
+                                : station,
+                        };
+                      })}
                       size="sm"
                       aria-label={`Zero datum station for ${sec.name}`}
                     />
@@ -208,9 +220,9 @@ export default function GpxPlacementDialog() {
           </table>
         </div>
 
-        {sections.length === 0 && (
+        {lines.length === 0 && (
           <div className="text-sm text-text-secondary text-center py-4">
-            No track or route sections to configure.
+            No track or route lines to configure.
           </div>
         )}
 

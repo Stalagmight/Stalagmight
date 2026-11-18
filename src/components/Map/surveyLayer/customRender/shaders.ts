@@ -177,12 +177,12 @@ void main() {
   vec2 dir = (segLen > 0.0001) ? (segPx / segLen) : vec2(1.0, 0.0);
   vec2 normal = vec2(-dir.y, dir.x);
   vec4 base = (a_endpoint < 0.5) ? pa : pb;
-  // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
+  // Line emphasis level carried in a_highlight: 2 = hover, 1 = selection,
   // 0 = none. Widen highlighted shots by the CONFIGURED width ratios (default
   // hover_width/width = 4/2 = 2x, selection_width/width = 3/2 = 1.5x), passed as
   // uniforms so map.shot.hover_width / selection_width config drive them (C2).
-  // Segment-hover (Move Segment), single-section hover, and panel-row hover all
-  // resolve to level 2; section selection to level 1. When a section is both
+  // Segment-hover (Move Segment), single-line hover, and panel-row hover all
+  // resolve to level 2; line selection to level 1. When a line is both
   // hovered and selected the controller merges to level 2 (hover wins), matching
   // the stock paint case order (hover before selected). The fragment recomputes
   // its outset from the same multiplier so the AA feather scales with the line.
@@ -305,7 +305,7 @@ void main() {
     return;
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
-  // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
+  // Line emphasis level carried in a_highlight: 2 = hover, 1 = selection,
   // 0 = none. Enlarge highlighted stations to the CONFIGURED radius ratios
   // (default hover_radius/radius = 6/4 = 1.5x, selection_radius/radius = 5/4 =
   // 1.25x), passed as uniforms so map.station.hover_radius / selection_radius

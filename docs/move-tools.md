@@ -8,7 +8,7 @@ Developer reference for the three move tools: **Move Station**, **Move Shot**, a
 |------|----------|-------|------------|
 | Move Station | T | Single station | Station + co-located stations (merged/aligned-closure) |
 | Move Shot | G | One shot | Both endpoints + all co-located stations |
-| Move Segment | V | Entire branch | All sections connected via merges/aligned-closures |
+| Move Segment | V | Entire branch | All lines connected via merges/aligned-closures |
 
 All three share the same drag preview engine and Ctrl+drag panning. They differ in scope and hover behavior.
 
@@ -38,21 +38,21 @@ Click a shot to begin dragging it. Both endpoints move rigidly together, along w
 
 ## Move Segment
 
-Click any station or shot in a section to drag the entire connected branch. Connected sections (via merges/aligned closures) move together as a rigid unit.
+Click any station or shot in a line to drag the entire connected branch. Connected lines (via merges/aligned closures) move together as a rigid unit.
 
-**Hover**: Both stations and shots get hover. Hovering highlights the full connected segment (all connected sections).
+**Hover**: Both stations and shots get hover. Hovering highlights the full connected segment (all connected lines).
 
 **Drag flow**:
-1. Click on station/shot &rarr; `handleMoveDragStart` &rarr; anchored section guards
-2. Async `getConnectedSectionIds(sectionId)` IPC call fetches connected sections
-3. Connected sections filtered to exclude anchored ones
-4. `beginDragPreview(connectedSet)` creates temp layers with section inclusion filters
+1. Click on station/shot &rarr; `handleMoveDragStart` &rarr; anchored line guards
+2. Async `getConnectedLineIds(lineId)` IPC call fetches connected lines
+3. Connected lines filtered to exclude anchored ones
+4. `beginDragPreview(connectedSet)` creates temp layers with line inclusion filters
 5. Per-mousemove: `updateDragPreview(dx, dy)` updates *-translate on all temp layers (GPU uniform, no GeoJSON rebuild)
-6. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): `commitDragPreview()` + a single `moveSegment()` backend call with the grabbed section id (the backend expands it to the whole rigid connected group)
+6. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): `commitDragPreview()` + a single `moveSegment()` backend call with the grabbed line id (the backend expands it to the whole rigid connected group)
 
-### Anchored Sections
+### Anchored Lines
 
-Sections that cannot be moved (e.g., externally constrained). Fetched from backend when Move Segment tool activates via `getAnchoredSectionIds()`. Drag is blocked until the fetch completes (`anchoredIdsLoaded` guard). Anchored sections appear dimmed (0.25 opacity via `feature-state: anchored`) and show no pointer cursor on hover.
+Lines that cannot be moved (e.g., externally constrained). Fetched from backend when Move Segment tool activates via `getAnchoredLineIds()`. Drag is blocked until the fetch completes (`anchoredIdsLoaded` guard). Anchored lines appear dimmed (0.25 opacity via `feature-state: anchored`) and show no pointer cursor on hover.
 
 ### Snap-to-Merge
 
@@ -65,13 +65,13 @@ During station or segment drag, the user can drop onto another station to merge 
 
 ### Segment Hover Resolution
 
-When hovering in Move Segment mode, the connected section IDs are resolved asynchronously. A debounce (150ms) prevents flicker when transitioning between features. The `segmentHoverTokenRef` system discards stale async results (the drag path has its own `segmentDragTokenRef`).
+When hovering in Move Segment mode, the connected line IDs are resolved asynchronously. A debounce (150ms) prevents flicker when transitioning between features. The `segmentHoverTokenRef` system discards stale async results (the drag path has its own `segmentDragTokenRef`).
 
 ---
 
 ## Immovable Stations
 
-A station is immovable if it is a zero-datum or transitively reachable from one via merges and **aligned** loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
+A station is immovable if it is a zero-datum or transitively reachable from one via merges and **aligned** loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"lineId:stationIndex"` keys.
 
 "Zero datum" here means EVERY datum, placement datum and GPS fix alike (#741). A GPS fix
 station is immovable like any datum station, although a fix never places raw geometry:
@@ -247,9 +247,9 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 |-------|----------|---------|
 | `snapMergeDialogPendingRef` | `handleMoveDragStart` | Block drag start while merge dialog is open after snap-to-merge |
 | `anchoredIdsLoaded` | `handleMoveDragStart` | Block segment drag until anchored IDs fetched from backend |
-| `anchoredSectionIds.has()` | `handleMoveDragStart` | Silent no-op for clicks on anchored sections |
+| `anchoredLineIds.has()` | `handleMoveDragStart` | Silent no-op for clicks on anchored lines |
 | `immovableStationKeys.has()` | `handleMoveDragStart` | Block station/shot drag on immovable stations |
-| `segmentDragTokenRef` | Connected section fetch | Discard stale async results if drag cancelled or restarted |
+| `segmentDragTokenRef` | Connected line fetch | Discard stale async results if drag cancelled or restarted |
 | `customPanActiveRef` | Click capture handler | Block DOM click events during Ctrl+drag cooldown |
 | Movement threshold (1mm) | `handleMoveDragEnd` | Distinguish click from drag; skip backend call for sub-millimeter moves |
 
@@ -262,4 +262,4 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `src/components/Map/MapCanvas.tsx` | Drag state management, Ctrl+drag panning, immovable/anchored computation, snap-to-merge detection |
 | `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, cursor management |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
-| `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |
+| `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost line preview GeoJSON (`buildGhostFeatures`) |

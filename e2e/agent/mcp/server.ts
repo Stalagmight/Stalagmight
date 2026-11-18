@@ -827,7 +827,7 @@ define(
   'Resolve a visible custom-WebGL shot or station by domain identity, prefer it across overlaps, and prove the map processed this click.',
   {
     featureType: z.enum(['shot', 'station']),
-    sectionId: z.number().int(),
+    lineId: z.number().int(),
     shotId: z.number().int().optional(),
     stationIndex: z.number().int().optional(),
     button: z.enum(['left', 'right']).optional(),
@@ -844,7 +844,7 @@ define(
             result: {
               clicked: true,
               featureType: resolved.featureType,
-              sectionId: resolved.sectionId,
+              lineId: resolved.lineId,
               shotId: resolved.shotId,
               stationIndex: resolved.stationIndex,
               interactionVerified: resolved.interactionVerified,

@@ -50,10 +50,10 @@ describe('Left workspace', () => {
     expect(screen.getByRole('tab', { name: 'Sections' })).toHaveAttribute('aria-selected', 'true');
   });
   it('exits fullscreen without clearing selection', () => {
-    useUIStore.setState({ dataTableFullScreen: true, selection: { type: 'section', sectionId: 42 } });
+    useUIStore.setState({ dataTableFullScreen: true, selection: { type: 'line', lineId: 42 } });
     act(() => useUIStore.getState().openSpeleoWorkspace());
     expect(useUIStore.getState().dataTableFullScreen).toBe(false);
-    expect(useUIStore.getState().selection).toEqual({ type: 'section', sectionId: 42 });
+    expect(useUIStore.getState().selection).toEqual({ type: 'line', lineId: 42 });
   });
 });
 

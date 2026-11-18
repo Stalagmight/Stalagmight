@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { ExpandIcon, ShrinkIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
-import type { Shot, SectionData, ShotData } from '../../types/project';
+import type { Shot, LineData, ShotData } from '../../types/project';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 import {
@@ -31,16 +31,16 @@ import {
   normalizeAngleFamilies,
   reorderForAngleMode,
   summarizeSubmit,
-} from './newSectionRows';
+} from './newLineRows';
 import {
   AZIMUTH_AVG_KEY,
-  buildNewSectionShotColumns,
-  DEFAULT_NEW_SECTION_HIDDEN_COLUMNS,
+  buildNewLineShotColumns,
+  DEFAULT_NEW_LINE_HIDDEN_COLUMNS,
   MISSING_PROBLEM_COLUMNS,
   PITCH_AVG_KEY,
-} from './newSectionShotColumns';
-import { useNewSectionViewPersistence } from './useNewSectionViewPersistence';
-import { getNextSectionColor } from '../../utils/colors';
+} from './newLineShotColumns';
+import { useNewLineViewPersistence } from './useNewLineViewPersistence';
+import { getNextLineColor } from '../../utils/colors';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useGridLabels } from '../../hooks/useGridLabels';
@@ -51,8 +51,15 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { CreditPeopleFields } from '../common/CreditFields';
 import { OptionalDateInput } from '../common/OptionalDateInput';
-import { listPeopleProps, type CreditLists } from '../common/SectionMetadataForm';
+import { listPeopleProps, type CreditLists } from '../common/LineMetadataForm';
 import { personKey } from '../../utils/people';
+import {
+  isLineNameRefusal,
+  lineNameProblem,
+  lineNameProblemMessage,
+  nextFreeLineName,
+} from '../../utils/nameValidation';
+import { liveSectionId, NewLineSectionSelect } from './NewLineSectionSelect';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -72,30 +79,46 @@ interface SavedFormState {
   /** Continues the monotonic key counter, so restored rows can never collide
    *  with rows added afterwards. */
   nextKey: number;
+  /** The Section (#327) the line goes into; null for none. */
+  caveSectionId?: number | null;
 }
 
 export default function ImportDialog() {
   const { t } = useTranslation();
   const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast, lastUsedCredit, setLastUsedCredit } =
     useUIStore();
-  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
+  const { createLine, createLineAndMerge, moveLine, project } = useProjectStore();
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
   const gridLabels = useGridLabels('dataTable.shotNoun');
   const numberLocale = getNumberFormatLocale();
 
-  // Restore form state when reopening after placement cancel
-  const saved = dialogData as { savedFormState?: SavedFormState } | undefined;
+  // Restore form state when reopening after placement cancel, or after the
+  // backend refused the line (`submitError`: another window or an undo took
+  // the name while the line was being placed).
+  const saved = dialogData as { savedFormState?: SavedFormState; submitError?: string } | undefined;
   const restored = saved?.savedFormState;
 
-  // Form state
-  const [name, setName] = useState<string>(restored?.name ?? '');
+  // Form state. A line must have a name, unique in the project: a new one
+  // starts as the first free `Line N`.
+  const [initialName] = useState<string>(() => restored?.name ?? nextFreeLineName(project?.lines));
+  const [name, setName] = useState<string>(initialName);
+  const [submitError, setSubmitError] = useState<string | null>(saved?.submitError ?? null);
+  const nameProblem = lineNameProblem(name, project?.lines);
+  // Checked here first; a refusal the backend still made is shown in the same place.
+  const nameError = nameProblem
+    ? lineNameProblemMessage(nameProblem, name)
+    : submitError && isLineNameRefusal(submitError)
+      ? submitError
+      : null;
   // Surveyors / explorers of every shot entered here, prefilled with the ones
-  // the last section of this session was created or imported with.
+  // the last line of this session was created or imported with.
   const [initialPeople] = useState<CreditLists>(() => restored?.people ?? lastUsedCredit);
   const [people, setPeople] = useState<CreditLists>(initialPeople);
   const [peopleTyping, setPeopleTyping] = useState(false);
   const [date, setDate] = useState<string>(restored?.date ?? '');
+  // The Section the new line goes into (#327), none by default.
+  const [caveSectionId, setCaveSectionId] = useState<number | null>(restored?.caveSectionId ?? null);
 
   // Row keys are handed out from a monotonic counter and NEVER reused: the grid
   // keys per-cell state (missing-cell marks) by row identity, so a recycled key
@@ -107,25 +130,25 @@ export default function ImportDialog() {
   );
 
   // Get next available color
-  const usedColors = project?.sections.map((s) => s.color) ?? [];
+  const usedColors = project?.lines.map((s) => s.color) ?? [];
   const [color, setColor] = useState<string>(
-    restored?.color ?? getNextSectionColor(usedColors, resolvedTheme)
+    restored?.color ?? getNextLineColor(usedColors, resolvedTheme)
   );
 
   // --- Grid layout (persisted under its own config keys) --------------------
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(
-    () => new Set(DEFAULT_NEW_SECTION_HIDDEN_COLUMNS)
+    () => new Set(DEFAULT_NEW_LINE_HIDDEN_COLUMNS)
   );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const viewSetters = useMemo(
     () => ({ setColumnOrder, setHiddenColumns, setColumnWidths }),
     []
   );
-  useNewSectionViewPersistence(
+  useNewLineViewPersistence(
     { columnOrder, hiddenColumns, columnWidths },
     viewSetters,
-    DEFAULT_NEW_SECTION_HIDDEN_COLUMNS
+    DEFAULT_NEW_LINE_HIDDEN_COLUMNS
   );
   // Normalized on the way to the grid: a set stored before these columns existed
   // can leave an average AND its legs visible at once. The stored value stays the
@@ -217,7 +240,7 @@ export default function ImportDialog() {
       if (droppedPastCap > 0) {
         showToast(
           t('newSection.pasteCapped', { count: droppedPastCap }),
-          TOAST_KEYS.NEW_SECTION_PASTE_CAP,
+          TOAST_KEYS.NEW_LINE_PASTE_CAP,
           'error'
         );
       }
@@ -241,7 +264,7 @@ export default function ImportDialog() {
 
   const columns = useMemo(
     () =>
-      buildNewSectionShotColumns({
+      buildNewLineShotColumns({
         t,
         precision,
         readOnly: editingBlocked,
@@ -296,7 +319,7 @@ export default function ImportDialog() {
       if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
       if (parts.length > 0) {
         const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
-        showToast(parts.join(' \u00b7 '), TOAST_KEYS.NEW_SECTION_PASTE, kind);
+        showToast(parts.join(' \u00b7 '), TOAST_KEYS.NEW_LINE_PASTE, kind);
       }
     },
     [t, showToast]
@@ -388,17 +411,29 @@ export default function ImportDialog() {
   );
 
   const submit = useMemo(() => summarizeSubmit(drafts), [drafts]);
-  const submitAllowed = canSubmit(submit) && !editingBlocked;
+  const submitAllowed = canSubmit(submit) && !editingBlocked && nameError === null;
+  const blocker = editingBlocked
+    ? t('newSection.readOnly')
+    : submit.incompleteRows.length > 0
+      ? t('newSection.incomplete', {
+          count: submit.incompleteRows.length,
+          rows: submit.incompleteRows.join(', '),
+        })
+      : submit.completeCount === 0
+        ? t('newSection.empty')
+        : submitError && !isLineNameRefusal(submitError)
+          ? submitError
+          : '';
 
   const handleSubmit = () => {
     if (!submitAllowed) return;
-    // The people and date go on every shot (a section holds none of its own).
+    // The people and date go on every shot (a line holds none of its own).
     const credit =
       people.surveyors.length > 0 || people.explorers.length > 0 || date !== ''
         ? { surveyors: people.surveyors, explorers: people.explorers, date: date || null }
         : null;
-    const sectionData: SectionData = {
-      name: name || null,
+    const lineData: LineData = {
+      name: name.trim(),
       surveyor: null,
       date: null,
       color,
@@ -416,23 +451,33 @@ export default function ImportDialog() {
       color,
       drafts,
       nextKey: keyCounterRef.current,
+      caveSectionId,
     };
 
     // Close dialog and enter placement mode
     trackDialogComplete('import');
     closeDialog();
     startPlacementMode(
-      sectionData,
+      lineData,
       0, // align station 0 to cursor
-      // onComplete: create section, merge if snapped or move to position
+      // onComplete: create line, merge if snapped or move to position
       async (result: PlacementResult) => {
-        if (result.snappedToStation) {
-          await createSectionAndMerge(sectionData, 0, result.snappedToStation, 'Move');
-        } else {
-          const cmdResult = await createSection(sectionData);
-          if (cmdResult.success && cmdResult.section_id != null) {
-            await moveSection(cmdResult.section_id, result.position);
-          }
+        // The Section as it stands now: it may have gone while placing.
+        const section = liveSectionId(caveSectionId);
+        // One undo step either way, the Section included.
+        const cmdResult = result.snappedToStation
+          ? await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move', section)
+          : await createLine(lineData, section);
+        if (!cmdResult.success) {
+          // Refused (the name was taken meanwhile): back to the form, with why.
+          openDialog('import', {
+            savedFormState: formState,
+            submitError: cmdResult.error ?? t('editGate.commandFailed'),
+          });
+          return;
+        }
+        if (!result.snappedToStation && cmdResult.line_id != null) {
+          await moveLine(cmdResult.line_id, result.position);
         }
       },
       // onCancel: reopen dialog with saved form state
@@ -451,7 +496,7 @@ export default function ImportDialog() {
     (role) => people[role].map(personKey).join('\n') !== initialPeople[role].map(personKey).join('\n')
   );
   const isDirty =
-    name !== '' || peopleChanged || peopleTyping || date !== '' || drafts.some((d) => !isBlankDraft(d));
+    name !== initialName || peopleChanged || peopleTyping || date !== '' || drafts.some((d) => !isBlankDraft(d));
   const peopleProps = listPeopleProps(
     people,
     (role, next) => setPeople((prev) => ({ ...prev, [role]: next(prev[role]) })),
@@ -465,24 +510,35 @@ export default function ImportDialog() {
       size={expanded ? 'fullscreen' : '2xl'}
       overflow={expanded ? 'hidden' : 'auto'}
       isDirty={isDirty}
-      data-testid="import-section-dialog"
+      data-testid="import-line-dialog"
     >
       <div className={`flex flex-col gap-4 ${expanded ? 'h-full' : ''}`}>
         {/* Metadata */}
         <div className="shrink-0 space-y-3">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-text-secondary mb-1">
+              <label className="block text-sm text-text-secondary mb-1" htmlFor="new-line-name">
                 {t('newSection.labels.name')}
               </label>
               <input
+                id="new-line-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setSubmitError(null);
+                }}
                 className="w-full"
                 placeholder={t('newSection.placeholders.name')}
-                data-testid="section-name-input"
+                aria-invalid={nameError !== null}
+                {...(nameError ? { 'aria-describedby': 'new-line-name-error' } : {})}
+                data-testid="line-name-input"
               />
+              {nameError && (
+                <p id="new-line-name-error" className="mt-1 text-sm text-error" data-testid="line-name-error">
+                  {nameError}
+                </p>
+              )}
             </div>
             <div className="flex gap-4">
               <div className="min-w-0 flex-1">
@@ -495,7 +551,7 @@ export default function ImportDialog() {
                   onClear={() => setDate('')}
                   label={t('credit.dateLabel')}
                   inputClassName="w-full"
-                  testId="import-section-date-input"
+                  testId="import-line-date-input"
                 />
               </div>
               <div className="w-24 shrink-0">
@@ -507,16 +563,19 @@ export default function ImportDialog() {
                   value={color}
                   onChange={(e) => setColor(e.target.value)}
                   className="w-full h-9"
-                  data-testid="import-section-color-input"
+                  data-testid="import-line-color-input"
                 />
               </div>
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 empty:hidden">
+            <NewLineSectionSelect value={caveSectionId} onChange={setCaveSectionId} disabled={editingBlocked} />
           </div>
           <CreditPeopleFields
             {...peopleProps}
             layout="columns"
             disabled={editingBlocked}
-            testIdPrefix="import-section"
+            testIdPrefix="import-line"
           />
         </div>
 
@@ -527,19 +586,19 @@ export default function ImportDialog() {
           className={`flex flex-col overflow-hidden rounded border border-border ${
             expanded ? 'min-h-0 flex-1' : ''
           }`}
-          data-testid="import-section-grid"
+          data-testid="import-line-grid"
         >
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-1">
             <span className="text-sm font-medium">{t('newSection.shots')}</span>
             <div className="flex items-center gap-2">
-              {/* No warnings / section-id / shot-id rows: this section does not
+              {/* No warnings / line-id / shot-id rows: this line does not
                   exist yet, so the grid has none of those columns to toggle. */}
               <ShotColumnsMenu
                 hidden={hiddenColumns}
                 onToggle={toggleCols}
-                testIdPrefix="new-section-"
-                buttonTestId="new-section-columns-menu"
-                dropdownTestId="new-section-columns-dropdown"
+                testIdPrefix="new-line-"
+                buttonTestId="new-line-columns-menu"
+                dropdownTestId="new-line-columns-dropdown"
                 angleModes={{
                   azimuth: { mode: azimuthMode, onPick: (m) => setAngleMode('azimuth', m) },
                   inclination: {
@@ -554,7 +613,7 @@ export default function ImportDialog() {
                 className="text-text-secondary hover:text-text"
                 title={expanded ? t('newSection.collapse') : t('newSection.expand')}
                 aria-label={expanded ? t('newSection.collapse') : t('newSection.expand')}
-                data-testid="import-section-expand"
+                data-testid="import-line-expand"
               >
                 {expanded ? <ShrinkIcon size={14} /> : <ExpandIcon size={14} />}
               </button>
@@ -576,7 +635,7 @@ export default function ImportDialog() {
             onPasteReport={onPasteReport}
             cellClassName={cellClassName}
             labels={gridLabels}
-            testIdPrefix="new-section"
+            testIdPrefix="new-line"
             hiddenColumns={hiddenColumnList}
             columnOrder={columnOrder}
             onColumnOrderChange={setColumnOrder}
@@ -601,27 +660,19 @@ export default function ImportDialog() {
 
         {/* Actions */}
         <div className="flex shrink-0 items-center justify-between gap-4 border-t border-border pt-4">
-          <p className="text-sm text-error" data-testid="import-section-blocker">
-            {editingBlocked
-              ? t('newSection.readOnly')
-              : submit.incompleteRows.length > 0
-                ? t('newSection.incomplete', {
-                    count: submit.incompleteRows.length,
-                    rows: submit.incompleteRows.join(', '),
-                  })
-                : submit.completeCount === 0
-                  ? t('newSection.empty')
-                  : ''}
+          <p className="text-sm text-error" data-testid="import-line-blocker">
+            {blocker}
           </p>
           <div className="flex gap-2">
-            <Button onClick={closeDialog} data-testid="import-section-cancel">
+            <Button onClick={closeDialog} data-testid="import-line-cancel">
               {t('common.actions.cancel')}
             </Button>
             <Button
               variant="primary"
               onClick={handleSubmit}
               disabled={!submitAllowed}
-              data-testid="import-section-create"
+              title={nameError ?? (blocker || undefined)}
+              data-testid="import-line-create"
             >
               {t('newSection.create')}
             </Button>

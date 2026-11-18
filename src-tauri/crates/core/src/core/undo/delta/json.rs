@@ -156,7 +156,12 @@ pub(super) fn diff_bag(from: &[Value], to: &[Value]) -> Edit {
         .filter(|(_, hit)| !**hit)
         .map(|((j, value), _)| (j, value.clone()))
         .collect();
-    Edit::Bag { del, add }
+    Edit::Bag {
+        del,
+        add,
+        station_del: Vec::new(),
+        station_add: Vec::new(),
+    }
 }
 
 pub(super) fn diff_members(
@@ -371,7 +376,14 @@ pub(super) fn apply_edit(from: &Value, edit: &Edit) -> Result<Value, DeltaError>
             )),
             _ => Err("an array edit met a value that is not an array".to_string()),
         },
-        Edit::Bag { del, add } => match from {
+        Edit::Bag {
+            station_del,
+            station_add,
+            ..
+        } if !station_del.is_empty() || !station_add.is_empty() => Err(
+            "a station-keyed bag edit is applied with the states its positions name".to_string(),
+        ),
+        Edit::Bag { del, add, .. } => match from {
             Value::Array(items) => Ok(Value::Array(apply_bag(items, del, add))),
             _ => Err("a bag edit met a value that is not an array".to_string()),
         },
@@ -511,9 +523,19 @@ pub(super) fn edit_values_mut(edit: &mut Edit, f: &mut dyn FnMut(&mut Value) -> 
             }
             changed
         }
-        Edit::Bag { del, add } => {
+        Edit::Bag {
+            del,
+            add,
+            station_del,
+            station_add,
+        } => {
             let mut changed = false;
-            for value in del.iter_mut().chain(add.iter_mut().map(|(_, v)| v)) {
+            for value in del
+                .iter_mut()
+                .chain(add.iter_mut().map(|(_, v)| v))
+                .chain(station_del.iter_mut().map(|(_, _, v)| v))
+                .chain(station_add.iter_mut().map(|(_, _, _, v)| v))
+            {
                 changed |= f(value);
             }
             changed

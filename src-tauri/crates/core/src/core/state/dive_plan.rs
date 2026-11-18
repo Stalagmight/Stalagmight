@@ -16,8 +16,8 @@ use super::AppState;
 use crate::config::GasConfig;
 use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
-    PlanSegment, Project, Section, StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, Line, MarkedPoint, PlanAnchorSet,
+    PlanSegment, Project, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -50,7 +50,7 @@ pub const MAX_SEGMENTS: usize = MAX_WAYPOINTS + 1;
 const MAX_MARKED_POINTS: usize = 500;
 
 /// Upper bound on ONE call to the anchor-translation pair (#310), which unlike every sibling list
-/// had no bound at all. Each entry costs a section scan under the project mutex - the same lock the
+/// had no bound at all. Each entry costs a line scan under the project mutex - the same lock the
 /// map, the data table and every mutation contend for - so an unbounded batch is a lock-hold
 /// amplifier, not merely slow.
 ///
@@ -136,7 +136,7 @@ fn default_persisted_diver() -> Diver {
 /// same physical station across survey edits. Not an IPC type (no `TS` derive); the wire
 /// form stays `StationRef`. Serde-default tolerant like the IPC snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedDivePlanSnapshot {
+pub(super) struct PersistedDivePlanSnapshot {
     #[serde(default)]
     origin: Option<StoredAnchor>,
     #[serde(default)]
@@ -197,17 +197,17 @@ fn terminal_length_matches(saved_bits: u64, shot_length: f64) -> bool {
 /// Describe the station at `r` by its neighbouring shots.
 fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
     let r = r?;
-    let section = project.get_section(r.section_id)?;
+    let line = project.get_line(r.line_id)?;
     let i = r.station_index as usize;
-    if i > section.shots.len() {
+    if i > line.shots.len() {
         return None;
     }
     // Station `i` is bounded by the shot before it and the shot after it; either is absent at
-    // the ends of the section. A SHOT-LESS section - a GPX waypoint imports as exactly one, a
+    // the ends of the line. A SHOT-LESS line - a GPX waypoint imports as exactly one, a
     // single station with no shots at all - has neither, and that is not an error: `None` on
-    // both sides is a complete description of "the only station this section has".
-    let before = i.checked_sub(1).and_then(|p| section.shots.get(p));
-    let after = section.shots.get(i);
+    // both sides is a complete description of "the only station this line has".
+    let before = i.checked_sub(1).and_then(|p| line.shots.get(p));
+    let after = line.shots.get(i);
     let a = before.and_then(|s| s.uuid.clone());
     let b = after.and_then(|s| s.uuid.clone());
     if before.is_some() && a.is_none() {
@@ -218,20 +218,20 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
     }
     // A terminal station has exactly one neighbour; record its length so a later split of that
     // shot is detectable (see `terminal_shot_length_bits`). An interior station is placed by the
-    // pair and needs no such guard; a shot-less section has no neighbour at all.
+    // pair and needs no such guard; a shot-less line has no neighbour at all.
     let terminal_shot_length_bits = match (before, after) {
         (Some(shot), None) | (None, Some(shot)) => Some(shot.length.to_bits()),
         _ => None,
     };
-    // The neighbours' own RECORD parities, not the section's: a combine can put
-    // shots of two orientations in one section, and an undo can take them back
+    // The neighbours' own RECORD parities, not the line's: a combine can put
+    // shots of two orientations in one line, and an undo can take them back
     // out (see `Project::counter_parity_shots`).
-    let parity = project.shot_record_parity(section, a.as_deref().or(b.as_deref()));
+    let parity = project.shot_record_parity(line, a.as_deref().or(b.as_deref()));
     let parity_b = b
         .as_deref()
-        .map(|b| project.shot_record_parity(section, Some(b)));
+        .map(|b| project.shot_record_parity(line, Some(b)));
     Some(StoredAnchor::Pair(PlanAnchor {
-        section_id: r.section_id,
+        line_id: r.line_id,
         a,
         b,
         // `a` is the shot BEFORE the station, so the station is on its "after" side.
@@ -250,16 +250,16 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
 ///    their current positions. Survives a reverse (both move together), shots inserted between
 ///    them, and a split of either (they simply stop being adjacent; the side is unchanged).
 /// 2. **One neighbour present** - a terminal station, or one whose partner was deleted. Take the
-///    saved side, flipped when the section's parity says a reverse happened since. Position is
+///    saved side, flipped when the line's parity says a reverse happened since. Position is
 ///    NOT consulted: an earlier version inferred the side from "is `a` at an end of the
-///    section", which reads the same after a reverse as after a delete-then-append and so was
+///    line", which reads the same after a reverse as after a delete-then-append and so was
 ///    wrong for one of them whichever way it guessed.
 ///
 /// Splitting the shot a terminal anchor names FAILS SAFE rather than guessing. The split gives
 /// the new half a fresh UUID and keeps the old one on the shortened tail, so afterwards no shot
 /// in the file has that station as an endpoint - nothing is left to anchor to, and any answer
 /// would silently land on the split point. `terminal_shot_length_bits` detects it (the tail is
-/// necessarily shorter, and the station is no longer at an end of the section) and the reference
+/// necessarily shorter, and the station is no longer at an end of the line) and the reference
 /// is reported STALE, so the UI can ask the diver to re-pin it.
 fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Option<StationRef> {
     let resolved = resolve_stored(project, anchor);
@@ -269,37 +269,36 @@ fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Opt
     resolved
 }
 
-/// The section `anchor`'s shots live in now: its recorded section while that
-/// still holds one of them (or the anchor names none, a shot-less section),
-/// else the first section that does. Shot uuids are project-unique; a Split
-/// Section Here moves the shots past the cut into a new section, Combine
-/// Sections moves the other section's shots into the kept one, and an undo of
+/// The line `anchor`'s shots live in now: its recorded line while that
+/// still holds one of them (or the anchor names none, a shot-less line),
+/// else the first line that does. Shot uuids are project-unique; a Split
+/// Line Here moves the shots past the cut into a new line, Combine
+/// Lines moves the other line's shots into the kept one, and an undo of
 /// either moves them back.
-fn anchor_section<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<&'p Section> {
-    let holds = |section: &Section| {
+fn anchor_line<'p>(project: &'p Project, anchor: &PlanAnchor) -> Option<&'p Line> {
+    let holds = |line: &Line| {
         [&anchor.a, &anchor.b]
             .into_iter()
-            .any(|uuid| PlanAnchor::position_of(project, section, uuid).is_some())
+            .any(|uuid| PlanAnchor::position_of(project, line, uuid).is_some())
     };
-    let recorded = project.get_section(anchor.section_id);
-    if let Some(section) = recorded {
-        if (anchor.a.is_none() && anchor.b.is_none()) || holds(section) {
-            return Some(section);
+    let recorded = project.get_line(anchor.line_id);
+    if let Some(line) = recorded {
+        if (anchor.a.is_none() && anchor.b.is_none()) || holds(line) {
+            return Some(line);
         }
     }
-    project.sections.iter().find(|s| holds(s)).or(recorded)
+    project.lines.iter().find(|s| holds(s)).or(recorded)
 }
 
 fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
-    let section = anchor_section(project, anchor)?;
-    let n = section.shots.len();
-    let pa = PlanAnchor::position_of(project, section, &anchor.a);
-    let pb = PlanAnchor::position_of(project, section, &anchor.b);
+    let line = anchor_line(project, anchor)?;
+    let n = line.shots.len();
+    let pa = PlanAnchor::position_of(project, line, &anchor.a);
+    let pb = PlanAnchor::position_of(project, line, &anchor.b);
     // A reverse of the neighbour's RECORD since this anchor was written flips
     // what "after" means. Read per neighbour: the record parity follows the
-    // shot, whichever section holds it now.
-    let record_parity =
-        |uuid: &Option<String>| project.shot_record_parity(section, uuid.as_deref());
+    // shot, whichever line holds it now.
+    let record_parity = |uuid: &Option<String>| project.shot_record_parity(line, uuid.as_deref());
     let flipped_a = anchor.parity != record_parity(&anchor.a);
     let flipped_b = anchor.parity_b.unwrap_or(anchor.parity) != record_parity(&anchor.b);
     let index = match (pa, pb) {
@@ -321,7 +320,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
                 p + 1
             }
         }
-        // Recorded with no neighbours at all: a shot-less section's single station, which needs
+        // Recorded with no neighbours at all: a shot-less line's single station, which needs
         // none. Distinguished from "both neighbours were DELETED" by the stored anchor rather
         // than by the lookup, since a missing uuid and a missing shot both come back as `None`.
         (None, None) if anchor.a.is_none() && anchor.b.is_none() => 0,
@@ -332,7 +331,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
         return None;
     }
     // Fail SAFE on the one shape the pair cannot survive. If a terminal anchor's station is no
-    // longer at an end of the section, the section was extended past it OR its shot was split -
+    // longer at an end of the line, the line was extended past it OR its shot was split -
     // and only the split changes that shot's length. A split leaves nothing in the file naming
     // this station, so resolving would silently land on the split point; report it stale
     // instead and let the UI ask for a re-pin.
@@ -341,14 +340,14 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
         if !still_terminal {
             let moved = pa
                 .or(pb)
-                .and_then(|p| section.shots.get(p))
+                .and_then(|p| line.shots.get(p))
                 .is_none_or(|shot| !terminal_length_matches(saved_bits, shot.length));
             if moved {
                 return None;
             }
         }
     }
-    Some(StationRef::new(section.id, index as u32))
+    Some(StationRef::new(line.id, index as u32))
 }
 
 /// Place a stored station, whichever form it was written in.
@@ -362,10 +361,9 @@ fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef
             let StationAnchor::AfterShot(old) = &key.anchor else {
                 return None;
             };
-            let after = |id: &str| {
-                StationKey::new(key.section_id, StationAnchor::AfterShot(id.to_string()))
-            };
-            let live = crate::models::live_shot_uuid_for_stored(key.section_id, old, |id| {
+            let after =
+                |id: &str| StationKey::new(key.line_id, StationAnchor::AfterShot(id.to_string()));
+            let live = crate::models::live_shot_uuid_for_stored(key.line_id, old, |id| {
                 project.resolve_key(&after(id)).is_some()
             })?;
             project.resolve_key(&after(&live))
@@ -674,8 +672,10 @@ impl AppState {
             .get(id)
             .map_err(|e| format!("Could not read the dive plan: {e}"))?
             .ok_or_else(|| "That dive plan no longer exists.".to_string())?;
-        let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&row.snapshot_json)
-            .map_err(|e| format!("Could not parse the dive plan: {e}"))?;
+        // The sidecar keeps the pre-rename names; see `disk_names`.
+        let persisted: PersistedDivePlanSnapshot =
+            crate::models::disk_names::from_disk_str(&row.snapshot_json)
+                .map_err(|e| format!("Could not parse the dive plan: {e}"))?;
         let (snapshot, anchors, stale_ref_count) = self.resolve_persisted(persisted)?;
         Ok(DivePlan {
             meta: to_meta(row.meta),
@@ -768,7 +768,7 @@ impl AppState {
         // Canonicalize positional refs to stable keys against the live project BEFORE
         // writing, so the plan survives later survey edits (#2).
         let persisted = self.to_persisted(&snapshot)?;
-        let json = serde_json::to_string(&persisted)
+        let json = crate::models::disk_names::to_disk_string(&persisted)
             .map_err(|e| format!("Could not serialize the dive plan: {e}"))?;
         let store =
             PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
@@ -984,7 +984,7 @@ mod tests {
         reason = "tests build from known-valid literals; a failed unwrap should fail the test"
     )]
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{LineData, ShotData};
     use tempfile::TempDir;
 
     fn make_shot() -> ShotData {
@@ -994,12 +994,12 @@ mod tests {
         }
     }
 
-    /// A one-section project with 3 shots (stations 0..=3) and minted shot UUIDs so
+    /// A one-line project with 3 shots (stations 0..=3) and minted shot UUIDs so
     /// `key_for_ref` can anchor to `AfterShot(uuid)`.
     fn project_3_shots() -> (Project, u32) {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![make_shot(), make_shot(), make_shot()],
                 ..Default::default()
             })
@@ -1008,13 +1008,13 @@ mod tests {
         (project, sec)
     }
 
-    /// A one-section project with 6 shots (stations 0..=6), for the #317 segment-merge test:
+    /// A one-line project with 6 shots (stations 0..=6), for the #317 segment-merge test:
     /// it needs headroom for an origin, three way points, and an endpoint - five distinct
     /// stations - without any of them coinciding.
     fn project_6_shots() -> (Project, u32) {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     make_shot(),
                     make_shot(),
@@ -1212,7 +1212,7 @@ mod tests {
         assert!(start.a.is_none() && start.b.is_some());
         let end = pair(StationRef::new(sec, 3)).expect("pair anchor");
         assert!(end.a.is_some() && end.b.is_none());
-        // A ref into a non-existent section cannot be anchored.
+        // A ref into a non-existent line cannot be anchored.
         assert!(to_anchor(&project, Some(StationRef::new(sec + 99, 1))).is_none());
     }
 
@@ -1230,7 +1230,7 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
-    /// THE point of the pair form (#24): a reverse renumbers every station in the section, and
+    /// THE point of the pair form (#24): a reverse renumbers every station in the line, and
     /// every stored reference must come back naming the SAME physical station - because it does
     /// not name a position or a side, it names the two shots the station sits between, and a
     /// reverse does not change what a station sits between.
@@ -1241,7 +1241,7 @@ mod tests {
             .map(|i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap())
             .collect();
 
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
 
         let mut stale = 0;
         // Station i becomes station N - i, and each anchor must follow it there.
@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     /// Extending a passage is routine, and must not disturb a saved route. The far end of the
-    /// section stops being terminal, so this exercises the pair falling back to the saved side.
+    /// line stops being terminal, so this exercises the pair falling back to the saved side.
     #[test]
     fn anchors_survive_a_shot_appended_to_the_end() {
         let (mut project, sec) = project_3_shots();
@@ -1269,7 +1269,7 @@ mod tests {
         assert_eq!(
             from_anchor(&project, &end, &mut stale),
             Some(StationRef::new(sec, 3)),
-            "the old far end is still station 3; the section simply continues past it"
+            "the old far end is still station 3; the line simply continues past it"
         );
         assert_eq!(
             from_anchor(&project, &mid, &mut stale),
@@ -1285,11 +1285,11 @@ mod tests {
     fn an_interior_anchor_survives_a_split_between_its_neighbours() {
         let (mut project, sec) = project_3_shots();
         let mid = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
-        let shot_id = project.get_section(sec).unwrap().shots[1].id;
+        let shot_id = project.get_line(sec).unwrap().shots[1].id;
 
-        let before = project.get_section(sec).unwrap().shots.len();
+        let before = project.get_line(sec).unwrap().shots.len();
         project.split_shot_at_distance(sec, shot_id, 0.5).unwrap();
-        assert_eq!(project.get_section(sec).unwrap().shots.len(), before + 1);
+        assert_eq!(project.get_line(sec).unwrap().shots.len(), before + 1);
 
         let mut stale = 0;
         assert_eq!(
@@ -1300,21 +1300,21 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
-    /// Split Section Here moves the shots past the cut into a new section, so an
-    /// anchor recorded against the old section id must follow its shots there.
+    /// Split Line Here moves the shots past the cut into a new line, so an
+    /// anchor recorded against the old line id must follow its shots there.
     /// The split station itself stays the first half's end.
     #[test]
-    fn anchors_past_a_section_split_resolve_in_the_second_half() {
+    fn anchors_past_a_line_split_resolve_in_the_second_half() {
         let (mut project, sec) = project_n_shots(5);
         let anchors: Vec<_> = (0..=5)
             .map(|i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap())
             .collect();
 
         let second = project
-            .split_section_at_station(
+            .split_line_at_station(
                 sec,
                 2,
-                &crate::models::SplitSectionOptions {
+                &crate::models::SplitLineOptions {
                     name_a: "A".to_string(),
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
@@ -1342,15 +1342,15 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
-    /// Two sections K (2 shots) and O (3 shots) merged so that `kept_end` of
+    /// Two lines K (2 shots) and O (3 shots) merged so that `kept_end` of
     /// K meets `other_end` of O, each reversed first when asked.
     fn combine_fixture(
-        kept_end: crate::models::SectionEnd,
-        other_end: crate::models::SectionEnd,
+        kept_end: crate::models::LineEnd,
+        other_end: crate::models::LineEnd,
         reverse_k: bool,
         reverse_o: bool,
     ) -> (Project, u32, u32) {
-        use crate::models::{SectionData, SectionEnd, ShotData};
+        use crate::models::{LineData, LineEnd, ShotData};
         let shot = |azimuth: f64, length: f64| ShotData {
             azimuth_in: azimuth,
             azimuth_out: azimuth,
@@ -1360,7 +1360,7 @@ mod tests {
         let mut project = Project::new("Pins".to_string(), None);
         let mut add = |shots: Vec<ShotData>| {
             project
-                .add_section(SectionData {
+                .add_line(LineData {
                     shots,
                     ..Default::default()
                 })
@@ -1369,14 +1369,14 @@ mod tests {
         let k = add(vec![shot(90.0, 10.0), shot(80.0, 5.0)]);
         let o = add(vec![shot(0.0, 4.0), shot(300.0, 6.0), shot(270.0, 3.0)]);
         if reverse_k {
-            assert!(project.reverse_section(k, false));
+            assert!(project.reverse_line(k, false));
         }
         if reverse_o {
-            assert!(project.reverse_section(o, false));
+            assert!(project.reverse_line(o, false));
         }
         let index = |p: &Project, id, end| match end {
-            SectionEnd::Start => 0,
-            SectionEnd::End => p.get_section(id).unwrap().shots.len() as u32,
+            LineEnd::Start => 0,
+            LineEnd::End => p.get_line(id).unwrap().shots.len() as u32,
         };
         let join_k = StationRef::new(k, index(&project, k, kept_end));
         let join_o = StationRef::new(o, index(&project, o, other_end));
@@ -1384,15 +1384,15 @@ mod tests {
         (project, k, o)
     }
 
-    /// [`combine_fixture`] with a third section B (two shots) merged at the
+    /// [`combine_fixture`] with a third line B (two shots) merged at the
     /// join: a junction, where B stays attached to the joined station.
     fn combine_fixture_with_branch(
-        kept_end: crate::models::SectionEnd,
-        other_end: crate::models::SectionEnd,
+        kept_end: crate::models::LineEnd,
+        other_end: crate::models::LineEnd,
         reverse_k: bool,
         reverse_o: bool,
     ) -> (Project, u32, u32, u32) {
-        use crate::models::{SectionData, SectionEnd, ShotData};
+        use crate::models::{LineData, LineEnd, ShotData};
         let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
         let shot = |azimuth: f64| ShotData {
             azimuth_in: azimuth,
@@ -1401,7 +1401,7 @@ mod tests {
             ..Default::default()
         };
         let b = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![shot(200.0), shot(160.0)],
                 ..Default::default()
             })
@@ -1409,16 +1409,16 @@ mod tests {
         let join = StationRef::new(
             k,
             match kept_end {
-                SectionEnd::Start => 0,
-                SectionEnd::End => project.get_section(k).unwrap().shots.len() as u32,
+                LineEnd::Start => 0,
+                LineEnd::End => project.get_line(k).unwrap().shots.len() as u32,
             },
         );
         project.merge_stations(join, StationRef::new(b, 0)).unwrap();
         (project, k, o, b)
     }
 
-    fn combine_options() -> crate::models::CombineSectionsOptions {
-        crate::models::CombineSectionsOptions {
+    fn combine_options() -> crate::models::CombineLinesOptions {
+        crate::models::CombineLinesOptions {
             name: "K".to_string(),
             color: "#123456".to_string(),
             swap_lr: false,
@@ -1433,14 +1433,9 @@ mod tests {
         (c.x, c.y)
     }
 
-    /// Every pairing and every combination of the two sections' parities.
-    fn every_combine_shape() -> Vec<(
-        crate::models::SectionEnd,
-        crate::models::SectionEnd,
-        bool,
-        bool,
-    )> {
-        use crate::models::SectionEnd::{End, Start};
+    /// Every pairing and every combination of the two lines' parities.
+    fn every_combine_shape() -> Vec<(crate::models::LineEnd, crate::models::LineEnd, bool, bool)> {
+        use crate::models::LineEnd::{End, Start};
         let mut out = Vec::new();
         for kept_end in [Start, End] {
             for other_end in [Start, End] {
@@ -1470,14 +1465,14 @@ mod tests {
         assert_eq!(stale, 0, "{what}");
     }
 
-    /// Combine Sections moves the other section's shots into the kept one,
+    /// Combine Lines moves the other line's shots into the kept one,
     /// reversing them when the two meet end to end or start to start. Every
-    /// pin, on either section and at every station including the two section
+    /// pin, on either line and at every station including the two line
     /// ends (which a pin names by ONE neighbour and a parity-corrected side),
     /// must land on the same physical station, for every pairing and every
-    /// combination of the two sections' reverse parities.
+    /// combination of the two lines' reverse parities.
     #[test]
-    fn pins_on_both_sections_survive_a_combine() {
+    fn pins_on_both_lines_survive_a_combine() {
         for (kept_end, other_end, reverse_k, reverse_o) in every_combine_shape() {
             let what = format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
             let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
@@ -1487,7 +1482,7 @@ mod tests {
                 .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
                 .collect();
 
-            project.combine_sections(k, o, &combine_options()).unwrap();
+            project.combine_lines(k, o, &combine_options()).unwrap();
 
             assert_pins_land(&project, &pins, &what);
         }
@@ -1495,7 +1490,7 @@ mod tests {
 
     /// The other way round: pins captured AFTER a combine (the plan store
     /// recaptures every anchor whenever a pin moves) must still land after the
-    /// combine is undone, which restores the two sections, un-reversed, with
+    /// combine is undone, which restores the two lines, un-reversed, with
     /// their own parities. The undo restores the project snapshot taken before
     /// the combine, which `before` is. The reported case: K(1 shot) and O(2
     /// shots) end to end, O reversed by the combine, the pin at O's original
@@ -1506,7 +1501,7 @@ mod tests {
             let what = format!("{kept_end:?}-{other_end:?} reversed {reverse_k}/{reverse_o}");
             let (mut project, k, o) = combine_fixture(kept_end, other_end, reverse_k, reverse_o);
             let before = project.clone();
-            project.combine_sections(k, o, &combine_options()).unwrap();
+            project.combine_lines(k, o, &combine_options()).unwrap();
             let pins: Vec<(StoredAnchor, (f64, f64))> = (0..=5)
                 .map(|i| StationRef::new(k, i))
                 .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
@@ -1518,7 +1513,7 @@ mod tests {
         }
     }
 
-    /// The same two directions at a junction: a third section B merged at the
+    /// The same two directions at a junction: a third line B merged at the
     /// join stays attached as a branch, and every pin on K, O and B lands on
     /// its station across the combine, and pins captured after it across the
     /// undo and the redo, for every pairing and parity.
@@ -1535,7 +1530,7 @@ mod tests {
                 .map(|r| (to_anchor(&project, Some(r)).unwrap(), raw_xy(&project, r)))
                 .collect();
 
-            project.combine_sections(k, o, &combine_options()).unwrap();
+            project.combine_lines(k, o, &combine_options()).unwrap();
             assert_pins_land(&project, &pins, &format!("combine: {what}"));
 
             let after: Vec<(StoredAnchor, (f64, f64))> = (0..=5)
@@ -1553,7 +1548,7 @@ mod tests {
     #[test]
     fn the_plan_stores_anchors_after_a_combine_survive_the_undo() {
         use crate::core::Command;
-        use crate::models::SectionEnd::End;
+        use crate::models::LineEnd::End;
         let (project, k, o) = combine_fixture(End, End, false, false);
         let state = AppState::new().unwrap();
         state.execute(Command::CreateProject {
@@ -1561,7 +1556,7 @@ mod tests {
             location: None,
         });
         state.set_project_for_tests(project);
-        let result = state.execute_combine_sections(k, o, combine_options());
+        let result = state.execute_combine_lines(k, o, combine_options());
         assert!(result.success, "{:?}", result.error);
         let combined = state.get_project_state().unwrap();
         let refs: Vec<StationRef> = (0..=5).map(|i| StationRef::new(k, i)).collect();
@@ -1588,11 +1583,11 @@ mod tests {
         }
     }
 
-    /// A 5-shot section, reversed when asked, loaded into an `AppState`, with
+    /// A 5-shot line, reversed when asked, loaded into an `AppState`, with
     /// every station's pin captured and its raw position.
     fn delete_split_fixture(reversed: bool) -> (AppState, u32, Vec<(StoredAnchor, (f64, f64))>) {
         use crate::core::Command;
-        use crate::models::{SectionData, ShotData};
+        use crate::models::{LineData, ShotData};
         let shot = |azimuth: f64, length: f64| ShotData {
             azimuth_in: azimuth,
             azimuth_out: azimuth,
@@ -1601,7 +1596,7 @@ mod tests {
         };
         let mut project = Project::new("Pins".to_string(), None);
         let id = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![
                     shot(90.0, 10.0),
                     shot(80.0, 5.0),
@@ -1613,7 +1608,7 @@ mod tests {
             })
             .id;
         if reversed {
-            assert!(project.reverse_section(id, false));
+            assert!(project.reverse_line(id, false));
         }
         let pins = (0..=5)
             .map(|i| StationRef::new(id, i))
@@ -1653,18 +1648,18 @@ mod tests {
         landed
     }
 
-    /// Delete-and-split builds section B fresh. A reversed section's B must
+    /// Delete-and-split builds line B fresh. A reversed line's B must
     /// keep its reverse parity, or every pin placed by one neighbour in it -
     /// its terminal station, and the station at the deleted shot's far end -
     /// lands one station off.
     #[test]
-    fn pins_survive_a_delete_and_split_of_a_reversed_section() {
+    fn pins_survive_a_delete_and_split_of_a_reversed_line() {
         for reversed in [false, true] {
             let (state, id, pins) = delete_split_fixture(reversed);
             let shot_id = state
                 .get_project_state()
                 .unwrap()
-                .get_section(id)
+                .get_line(id)
                 .unwrap()
                 .shots[2]
                 .id;
@@ -1679,13 +1674,13 @@ mod tests {
 
     /// The same for the range path.
     #[test]
-    fn pins_survive_a_range_delete_and_split_of_a_reversed_section() {
+    fn pins_survive_a_range_delete_and_split_of_a_reversed_line() {
         for reversed in [false, true] {
             let (state, id, pins) = delete_split_fixture(reversed);
             let shots = state
                 .get_project_state()
                 .unwrap()
-                .get_section(id)
+                .get_line(id)
                 .unwrap()
                 .shots
                 .clone();
@@ -1706,8 +1701,8 @@ mod tests {
     /// The frontend anchors its positional refs (the plan pins, and the
     /// distance-gradient origin) through `plan_anchors_for_refs` before an
     /// edit and places them again through `plan_refs_for_anchors` after it.
-    /// Across a Split Section Here, its undo and its redo, every station of the
-    /// cut section - the split station and the ones that move to the second
+    /// Across a Split Line Here, its undo and its redo, every station of the
+    /// cut line - the split station and the ones that move to the second
     /// half included - must land on the same physical station each time.
     #[test]
     fn anchors_survive_a_split_its_undo_and_its_redo() {
@@ -1736,10 +1731,10 @@ mod tests {
                 }
             };
 
-            let split = state.execute_split_section(
+            let split = state.execute_split_line(
                 id,
                 crate::models::SplitAt::Station { station_index: 2 },
-                crate::models::SplitSectionOptions {
+                crate::models::SplitLineOptions {
                     name_a: "A".to_string(),
                     name_b: "B".to_string(),
                     color_a: "#111111".to_string(),
@@ -1757,11 +1752,11 @@ mod tests {
         }
     }
 
-    /// Build a section of `n` shots and return `(project, section_id)`.
+    /// Build a line of `n` shots and return `(project, line_id)`.
     fn project_n_shots(n: usize) -> (Project, u32) {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: (0..n).map(|_| make_shot()).collect(),
                 ..Default::default()
             })
@@ -1773,7 +1768,7 @@ mod tests {
     /// A terminal anchor must survive a reverse IN BOTH DIRECTIONS.
     ///
     /// It has one neighbour and so cannot be placed by the pair; the side comes from the saved
-    /// `after_a`, which a reverse flips. Comparing the section's parity against the saved one is
+    /// `after_a`, which a reverse flips. Comparing the line's parity against the saved one is
     /// what corrects it.
     #[test]
     fn terminal_anchors_survive_a_reverse_both_ways() {
@@ -1782,7 +1777,7 @@ mod tests {
         let end = to_anchor(&project, Some(StationRef::new(sec, 3))).unwrap();
         let mut stale = 0;
 
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
         assert_eq!(
             from_anchor(&project, &start, &mut stale),
             Some(StationRef::new(sec, 3)),
@@ -1794,7 +1789,7 @@ mod tests {
         );
 
         // ...and back again.
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
         assert_eq!(
             from_anchor(&project, &start, &mut stale),
             Some(StationRef::new(sec, 0))
@@ -1815,7 +1810,7 @@ mod tests {
         let (mut project, sec) = project_n_shots(2);
         let end = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
 
-        let head = project.get_section(sec).unwrap().shots[0].id;
+        let head = project.get_line(sec).unwrap().shots[0].id;
         project.remove_shot(sec, head).unwrap();
         project.add_shot(sec, make_shot()).unwrap();
 
@@ -1834,7 +1829,7 @@ mod tests {
         let (mut project, sec) = project_n_shots(2);
         let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
 
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project
             .insert_shot_before(sec, first, make_shot(), None, None)
             .unwrap();
@@ -1853,7 +1848,7 @@ mod tests {
     /// The split keeps the original UUID on the shortened tail, so afterwards no shot in the
     /// file has that station as an endpoint - nothing can name it, and any answer would be a
     /// guess that silently lands on the split point. The recorded length is what detects it:
-    /// the tail is necessarily shorter, and the station is no longer at an end of the section.
+    /// the tail is necessarily shorter, and the station is no longer at an end of the line.
     /// The reference is reported STALE so the UI can ask for a re-pin, which is a warning the
     /// diver can act on rather than a route quietly re-priced against the wrong station.
     #[test]
@@ -1861,7 +1856,7 @@ mod tests {
         let (mut project, sec) = project_n_shots(2);
         let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
 
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project.split_shot_at_distance(sec, first, 0.5).unwrap();
 
         let mut stale = 0;
@@ -1881,7 +1876,7 @@ mod tests {
         let (mut project, sec) = project_n_shots(2);
         let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
 
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project
             .insert_shot_before(sec, first, make_shot(), None, None)
             .unwrap();
@@ -1895,18 +1890,18 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
-    /// A shot-less section is one station and no shots - what a GPX waypoint imports as. It has
+    /// A shot-less line is one station and no shots - what a GPX waypoint imports as. It has
     /// no neighbours to be named by, and that is a complete description rather than a failure.
     ///
-    /// The old `SectionKey::SectionStart` form persisted it fine, so anchoring it as
+    /// The old `LineKey::LineStart` form persisted it fine, so anchoring it as
     /// unresolvable would have meant a plan SILENTLY dropping an origin or endpoint on a
     /// waypoint, and outright refusing a way point or marked point on one - losing data purely
     /// by being saved after an upgrade.
     #[test]
-    fn a_shot_less_section_anchors_its_only_station() {
+    fn a_shot_less_line_anchors_its_only_station() {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: Vec::new(),
                 ..Default::default()
             })
@@ -1925,10 +1920,10 @@ mod tests {
     /// ...and it round-trips through a whole persisted plan, which is the path that used to
     /// drop it: the origin/endpoint null out silently and a way point on it is REFUSED.
     #[test]
-    fn a_plan_on_a_shot_less_section_round_trips() {
+    fn a_plan_on_a_shot_less_line_round_trips() {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: Vec::new(),
                 ..Default::default()
             })
@@ -1954,7 +1949,7 @@ mod tests {
 
         let persisted = state
             .to_persisted(&snapshot)
-            .expect("a way point on a shot-less section must not be refused");
+            .expect("a way point on a shot-less line must not be refused");
         let (back, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
         assert_eq!(back.origin, Some(only));
@@ -1963,17 +1958,17 @@ mod tests {
         assert_eq!(back.marked_points[0].station, only);
     }
 
-    /// A single-shot section has two ends that both touch the same one shot, so the pair cannot
-    /// tell them apart - but the section's parity can, and that is enough.
+    /// A single-shot line has two ends that both touch the same one shot, so the pair cannot
+    /// tell them apart - but the line's parity can, and that is enough.
     ///
     /// This used to be an accepted inaccuracy: with only a traversal-relative side recorded, a
     /// reverse flipped the meaning and nothing detected it. Recording the orientation alongside
     /// closes it, so the case now resolves correctly rather than being documented as wrong.
     #[test]
-    fn a_single_shot_sections_ends_survive_a_reverse() {
+    fn a_single_shot_lines_ends_survive_a_reverse() {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
-            .add_section(SectionData {
+            .add_line(LineData {
                 shots: vec![make_shot()],
                 ..Default::default()
             })
@@ -1992,8 +1987,8 @@ mod tests {
             Some(StationRef::new(sec, 1))
         );
 
-        // Reversing a one-shot section swaps its two stations, and both anchors follow.
-        assert!(project.reverse_section(sec, false));
+        // Reversing a one-shot line swaps its two stations, and both anchors follow.
+        assert!(project.reverse_line(sec, false));
         assert_eq!(
             from_anchor(&project, &start, &mut stale),
             Some(StationRef::new(sec, 1))
@@ -2013,7 +2008,7 @@ mod tests {
         // Station 2 = the boundary after shot index 1.
         let key = to_anchor(&project, Some(StationRef::new(sec, 2))).expect("stable anchor");
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
-        project.sections[0].shots.remove(0);
+        project.lines[0].shots.remove(0);
         let mut stale = 0;
         let resolved = from_anchor(&project, &key, &mut stale);
         assert_eq!(stale, 0);
@@ -2022,10 +2017,10 @@ mod tests {
     }
 
     #[test]
-    fn dangling_key_after_a_section_delete_is_nulled_and_counted() {
+    fn dangling_key_after_a_line_delete_is_nulled_and_counted() {
         let (mut project, sec) = project_3_shots();
         let key = to_anchor(&project, Some(StationRef::new(sec, 2))).expect("stable anchor");
-        project.sections.clear(); // the whole section (and its anchoring shot) is gone
+        project.lines.clear(); // the whole line (and its anchoring shot) is gone
         let mut stale = 0;
         assert_eq!(from_anchor(&project, &key, &mut stale), None);
         assert_eq!(stale, 1);
@@ -2076,13 +2071,13 @@ mod tests {
         };
 
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
-        project.sections[0].shots.remove(0);
+        project.lines[0].shots.remove(0);
         *state.project.lock().unwrap() = Some(project);
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
-        // The plan's ORIGIN was the section's first station, and deleting the first shot deletes
+        // The plan's ORIGIN was the line's first station, and deleting the first shot deletes
         // that station outright - so it is correctly reported gone rather than quietly re-bound.
-        // The old `SectionStart` form could not say that: it resolved to index 0 whatever now
+        // The old `LineStart` form could not say that: it resolved to index 0 whatever now
         // sat there, silently moving the dive's start one station down the passage. Exactly the
         // rebinding this test's own premise calls out.
         assert_eq!(stale, 1, "the origin's station no longer exists");
@@ -2110,7 +2105,7 @@ mod tests {
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
         *state.project.lock().unwrap() = Some(project);
 
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
@@ -2141,15 +2136,15 @@ mod tests {
             .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
             .unwrap();
 
-        let result = state.execute(crate::core::Command::ReverseSection {
-            section_id: sec,
+        let result = state.execute(crate::core::Command::ReverseLine {
+            line_id: sec,
             swap_left_right: false,
         });
         assert!(result.success, "{:?}", result.error);
         assert_eq!(
-            result.reversed_sections,
-            Some(vec![crate::core::ReversedSection {
-                section_id: sec,
+            result.reversed_lines,
+            Some(vec![crate::core::ReversedLine {
+                line_id: sec,
                 shot_count: 3,
             }])
         );
@@ -2170,9 +2165,9 @@ mod tests {
         let undone = state.undo();
         assert!(undone.success, "{:?}", undone.error);
         assert_eq!(
-            undone.reversed_sections,
-            Some(vec![crate::core::ReversedSection {
-                section_id: sec,
+            undone.reversed_lines,
+            Some(vec![crate::core::ReversedLine {
+                line_id: sec,
                 shot_count: 3,
             }])
         );
@@ -2196,7 +2191,7 @@ mod tests {
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
-        project.sections.clear(); // every anchoring shot is gone
+        project.lines.clear(); // every anchoring shot is gone
         *state.project.lock().unwrap() = Some(project);
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
@@ -2216,7 +2211,7 @@ mod tests {
         project.file_path = Some(temp.path().join("cave.stalx"));
         let state = AppState::new().unwrap();
 
-        // A way point on a section that is then deleted cannot be anchored at save time.
+        // A way point on a line that is then deleted cannot be anchored at save time.
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.waypoints = vec![StationRef::new(sec + 99, 1)];
         *state.project.lock().unwrap() = Some(project.clone());
@@ -2317,11 +2312,12 @@ mod tests {
     #[test]
     fn a_legacy_station_key_blob_still_resolves() {
         let (project, sec) = project_3_shots();
-        let uuid = project.get_section(sec).unwrap().shots[1]
+        let uuid = project.get_line(sec).unwrap().shots[1]
             .uuid
             .clone()
             .unwrap();
-        // Exactly the shape the old writer produced.
+        // Exactly the shape the old writer produced, in the sidecar's on-disk
+        // vocabulary (see `disk_names`).
         let json = serde_json::json!({
             "origin": { "section_id": sec, "anchor": "SectionStart" },
             "endpoint": { "section_id": sec, "anchor": { "AfterShot": uuid } },
@@ -2334,7 +2330,8 @@ mod tests {
         })
         .to_string();
 
-        let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
+        let persisted: PersistedDivePlanSnapshot =
+            crate::models::disk_names::from_disk_str(&json).unwrap();
         assert!(
             matches!(persisted.origin, Some(StoredAnchor::Legacy(_))),
             "a legacy row must be recognised as legacy, not silently read as an empty pair"
@@ -2464,8 +2461,8 @@ mod tests {
         // sits between and survives losing either one, so both of station 3's neighbours (shot
         // indices 2 and 3) have to go - the shape `resolve_anchor` reports as `(None, None)`.
         // Way points 0 and 2 keep at least one of their own neighbours and still place.
-        project.sections[0].shots.remove(3);
-        project.sections[0].shots.remove(2);
+        project.lines[0].shots.remove(3);
+        project.lines[0].shots.remove(2);
         *state.project.lock().unwrap() = Some(project);
         let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
@@ -2742,7 +2739,7 @@ mod tests {
         let anchor = anchors[0].clone().expect("station 2 anchors");
 
         // Delete shot 0: the physical station that was station 2 is now station 1.
-        project.sections[0].shots.remove(0);
+        project.lines[0].shots.remove(0);
         let state = state_with(project);
 
         let back = state.plan_refs_for_anchors(vec![anchor]).unwrap();
@@ -2765,7 +2762,7 @@ mod tests {
             .clone()
             .expect("station 2 anchors");
 
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project
             .insert_shot_before(sec, first, make_shot(), None, None)
             .unwrap();
@@ -2776,11 +2773,11 @@ mod tests {
         assert_ne!(back[0], Some(pinned));
     }
 
-    /// A reverse renumbers the whole section, and the terminal pins are the ones that need the
+    /// A reverse renumbers the whole line, and the terminal pins are the ones that need the
     /// parity correction (`after_a` alone is expressed in traversal terms, which a reverse
     /// flips). All four stations must come back naming the same physical spot.
     #[test]
-    fn anchored_pins_survive_a_section_reverse() {
+    fn anchored_pins_survive_a_line_reverse() {
         let (mut project, sec) = project_3_shots();
         let refs: Vec<_> = (0..=3).map(|i| StationRef::new(sec, i)).collect();
         let state = state_with(project.clone());
@@ -2792,7 +2789,7 @@ mod tests {
             .collect();
         assert_eq!(anchors.len(), 4);
 
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
         let state = state_with(project);
 
         let back = state.plan_refs_for_anchors(anchors).unwrap();
@@ -2821,8 +2818,8 @@ mod tests {
 
         // Station 2's neighbours are shot indices 1 and 2; remove the later one first so the
         // earlier index stays valid.
-        project.sections[0].shots.remove(2);
-        project.sections[0].shots.remove(1);
+        project.lines[0].shots.remove(2);
+        project.lines[0].shots.remove(1);
         let state = state_with(project);
 
         assert_eq!(
@@ -2845,8 +2842,8 @@ mod tests {
             ])
             .unwrap();
         assert!(anchors[0].is_some());
-        assert!(anchors[1].is_none(), "no such section");
-        assert!(anchors[2].is_none(), "no such station in that section");
+        assert!(anchors[1].is_none(), "no such line");
+        assert!(anchors[2].is_none(), "no such station in that line");
     }
 
     /// The anchors the load path already had in hand are handed out with the plan, so opening a
@@ -2927,8 +2924,8 @@ mod tests {
 
         // Strand the middle way point: station 3 sits between shot indices 2 and 3, and an anchor
         // survives losing either one, so both have to go.
-        project.sections[0].shots.remove(3);
-        project.sections[0].shots.remove(2);
+        project.lines[0].shots.remove(3);
+        project.lines[0].shots.remove(2);
         let state = state_with(project);
 
         let (resolved, anchors, stale) = state.resolve_persisted(persisted).unwrap();
@@ -2952,7 +2949,7 @@ mod tests {
     /// Serde must carry EVERY field of the untagged enum across the wire, not just the ones a
     /// default fixture happens to exercise.
     ///
-    /// The section is reversed first on purpose: on a virgin section `parity` is `false` and the
+    /// The line is reversed first on purpose: on a virgin line `parity` is `false` and the
     /// two terminal stations are the only ones with a length fingerprint, so a field that failed
     /// to serialize would round-trip to its default and look identical. Reversing sets `parity`
     /// true, and asserting the whole struct then actually pins it. (An earlier version of this
@@ -2960,9 +2957,9 @@ mod tests {
     #[test]
     fn an_anchor_survives_a_plain_serde_round_trip() {
         let (mut project, sec) = project_3_shots();
-        assert!(project.reverse_section(sec, false));
+        assert!(project.reverse_line(sec, false));
         assert!(
-            project.get_section(sec).unwrap().reverse_parity,
+            project.get_line(sec).unwrap().reverse_parity,
             "the fixture must actually carry a non-default parity"
         );
         let state = state_with(project);
@@ -2997,7 +2994,7 @@ mod tests {
     ///
     /// The hazard is `terminal_shot_length_bits`: a full 64-bit fingerprint that JavaScript
     /// cannot hold exactly. Comparing it bit-for-bit made a round-tripped terminal anchor report
-    /// STALE the moment its section was extended - the diver's pin vanishing with a "re-pin this"
+    /// STALE the moment its line was extended - the diver's pin vanishing with a "re-pin this"
     /// warning after an edit that never touched it. Comparing the decoded LENGTH within a
     /// tolerance is immune, and is a strictly better guard anyway: it detects a split, which
     /// changes the length by at least a centimetre.
@@ -3025,9 +3022,9 @@ mod tests {
         *field = serde_json::Value::from(mangled);
         let returned: StoredAnchor = serde_json::from_value(value).unwrap();
 
-        // Extend the section past the pinned station. This is the ONLY shape that reads the
+        // Extend the line past the pinned station. This is the ONLY shape that reads the
         // fingerprint at all, and it must resolve: nothing was split.
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project
             .insert_shot_before(sec, first, make_shot(), None, None)
             .unwrap();
@@ -3059,7 +3056,7 @@ mod tests {
         *field = serde_json::Value::from(mangled);
         let returned: StoredAnchor = serde_json::from_value(value).unwrap();
 
-        let first = project.get_section(sec).unwrap().shots[0].id;
+        let first = project.get_line(sec).unwrap().shots[0].id;
         project.split_shot_at_distance(sec, first, 0.5).unwrap();
         let state = state_with(project);
 
@@ -3079,7 +3076,7 @@ mod tests {
 
     /// Both anchor commands are bounded, like every other list a plan can hold.
     ///
-    /// They are the one pair that never had a cap, and each entry costs a section scan under the
+    /// They are the one pair that never had a cap, and each entry costs a line scan under the
     /// project mutex - the lock the map, the data table and every mutation contend for - so an
     /// unbounded batch holds that lock for as long as the caller cares to make it. The bound is
     /// derived from the plan's own caps and doubled for the live-plus-baseline pass the frontend

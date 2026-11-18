@@ -3,7 +3,7 @@
  * pill field ({@link CreditPeopleFields}) and the survey date
  * ({@link CreditDateInput}). The host owns the values and decides what an
  * edit means - a list in an import dialog, a pending edit of every shot in
- * Edit Section, an immediate edit in the Detail panel - so these only render
+ * Edit Line, an immediate edit in the Detail panel - so these only render
  * and report.
  *
  * People entered here are remembered for the autocomplete of every later
@@ -126,7 +126,7 @@ interface DraftDateInputProps {
 }
 
 /**
- * A native date input (the control New Section uses) that COMMITS only on
+ * A native date input (the control New Line uses) that COMMITS only on
  * Enter or leaving the field. A date input reports a value every time the
  * typed segments make a valid date, so typing 2026-04-11 over 2026-03-02 passes
  * through 2026-04-01; committing each of those wrote one undo step per segment.

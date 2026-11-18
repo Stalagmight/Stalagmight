@@ -383,11 +383,11 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 testId="metadata-modified"
               />
 
-              {/* Section Count */}
+              {/* Line Count */}
               <MetadataField
                 label={t('globalView.metadata.fields.sections')}
-                value={formatNumber(singleProject.section_count)}
-                testId="metadata-sections"
+                value={formatNumber(singleProject.line_count)}
+                testId="metadata-lines"
               />
 
               {/* Total Length */}

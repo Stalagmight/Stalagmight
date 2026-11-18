@@ -2,11 +2,11 @@
  * The dirty guard (#F9) originally checked only GPS text, the name field and
  * shot edits - three of the eight fields the confirm payload actually sends
  * (surveyors/explorers, date, color, direction and reverse are the other five, all live
- * in `SectionMetadataForm`). A stub that always reports "clean" on those five
+ * in `LineMetadataForm`). A stub that always reports "clean" on those five
  * would pass the main dirty-guard suite (it never touches them) but silently
  * drop a surveyor/date/color/direction/reverse edit on Cancel or Back - this
  * file is isolated from `ZeroDatumConfigDialog.test.tsx` specifically to
- * exercise them, with a minimal `SectionMetadataForm` stub instead of that
+ * exercise them, with a minimal `LineMetadataForm` stub instead of that
  * file's `() => null` one.
  *
  * `.tsx` so vitest runs it under jsdom.
@@ -28,7 +28,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
-vi.mock('../SectionPreview', () => ({ default: () => null }));
+vi.mock('../LinePreview', () => ({ default: () => null }));
 
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
@@ -52,9 +52,9 @@ vi.mock('../DialogWrapper', () => ({
 
 // Minimal stand-in: only the one control each test needs, wired to the real
 // callback props - everything else in the real form is irrelevant here.
-vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../common/SectionMetadataForm')>()),
-  SectionMetadataForm: ({
+vi.mock('../../common/LineMetadataForm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../common/LineMetadataForm')>()),
+  LineMetadataForm: ({
     people,
     date,
     color,
@@ -65,7 +65,7 @@ vi.mock('../../common/SectionMetadataForm', async (importOriginal) => ({
     onDirectionChange,
     onReverseChange,
   }: {
-    people: import('../../common/SectionMetadataForm').SectionPeopleProps;
+    people: import('../../common/LineMetadataForm').LinePeopleProps;
     date: string;
     color: string;
     direction?: string;
@@ -123,7 +123,7 @@ function dmpShot(): DmpShot {
 }
 
 function dmpFile(): DmpFile {
-  const section: DmpSection = {
+  const line: DmpSection = {
     version: 1,
     name: 'Anchor',
     direction: 'in',
@@ -131,7 +131,7 @@ function dmpFile(): DmpFile {
     shots: Array.from({ length: 2 }, dmpShot),
     content_hash: 'hash-anchor',
   };
-  return { version: 1, sections: [section] } as unknown as DmpFile;
+  return { version: 1, lines: [line] } as unknown as DmpFile;
 }
 
 const selectionConfig = {
@@ -146,7 +146,7 @@ function renderDialog() {
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
       selectionConfig={selectionConfig}
-      sectionIndex={0}
+      lineIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
       onBack={vi.fn()}

@@ -156,19 +156,19 @@ async function main(): Promise<void> {
     const featureIdentity = parseText(
       await call('eval', {
         script:
-          'const geometry = window.__stalagmight_geometry__?.(); const station = geometry?.stations?.[0]; const shot = geometry?.shots?.[0]; return station && shot ? { sectionId: station.sectionId, stationIndex: station.stationIndex, shotId: shot.shotId, center: station.lngLat } : null;',
+          'const geometry = window.__stalagmight_geometry__?.(); const station = geometry?.stations?.[0]; const shot = geometry?.shots?.[0]; return station && shot ? { lineId: station.lineId, stationIndex: station.stationIndex, shotId: shot.shotId, center: station.lngLat } : null;',
       }),
-    ) as { value?: { sectionId?: number; stationIndex?: number; shotId?: number; center?: [number, number] } };
+    ) as { value?: { lineId?: number; stationIndex?: number; shotId?: number; center?: [number, number] } };
     const feature = featureIdentity?.value;
     if (feature?.center) {
       await call('map_view', { set: { center: feature.center, zoom: 20, bearing: 0 } });
       await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
     }
-    const semanticClick = feature?.sectionId != null && feature.stationIndex != null
+    const semanticClick = feature?.lineId != null && feature.stationIndex != null
       ? parseText(
           await call('map_feature_click', {
             featureType: 'station',
-            sectionId: feature.sectionId,
+            lineId: feature.lineId,
             stationIndex: feature.stationIndex,
           }),
         ) as { clicked?: boolean; selectionVerified?: boolean }
@@ -178,11 +178,11 @@ async function main(): Promise<void> {
       semanticClick?.clicked === true && semanticClick.selectionVerified === true,
       semanticClick ?? featureIdentity,
     );
-    const semanticShotClick = feature?.sectionId != null && feature.shotId != null
+    const semanticShotClick = feature?.lineId != null && feature.shotId != null
       ? parseText(
           await call('map_feature_click', {
             featureType: 'shot',
-            sectionId: feature.sectionId,
+            lineId: feature.lineId,
             shotId: feature.shotId,
           }),
         ) as { clicked?: boolean; selectionVerified?: boolean }
@@ -201,8 +201,8 @@ async function main(): Promise<void> {
           const project = e2e.projectStore.getState().project;
           const surface = map.getCanvas();
           const target = map.unproject([surface.clientWidth * 0.65, surface.clientHeight * 0.65]).toArray();
-          const sectionData = {
-            name: 'MCP Placement Section', surveyor: null, date: null, color: '#4ecdc4', direction: null, quality: 1,
+          const lineData = {
+            name: 'MCP Placement Line', surveyor: null, date: null, color: '#4ecdc4', direction: null, quality: 1,
             shots: [{
               azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: 0, depth_out: 0,
               pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
@@ -210,11 +210,11 @@ async function main(): Promise<void> {
             }],
           };
           delete window.__MCP_PLACEMENT_RESULT__;
-          e2e.uiStore.getState().startPlacementMode(sectionData, 0, async (result) => {
-            const created = await e2e.projectStore.getState().createSection(sectionData);
+          e2e.uiStore.getState().startPlacementMode(lineData, 0, async (result) => {
+            const created = await e2e.projectStore.getState().createLine(lineData);
             window.__MCP_PLACEMENT_RESULT__ = { created, result };
           });
-          return { before: project.sections.length, target };
+          return { before: project.lines.length, target };
         `,
       }),
     ) as { value?: { before?: number; target?: [number, number] } };
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
             const e2e = window.__E2E_TEST__;
             const marker = window.__MCP_PLACEMENT_RESULT__;
             return {
-              count: e2e.projectStore.getState().project.sections.length,
+              count: e2e.projectStore.getState().project.lines.length,
               placementActive: e2e.uiStore.getState().placementMode !== null,
               completed: Boolean(marker?.result?.position),
               success: marker?.created?.success === true,
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     check(
-      'map_click completes active section placement through the map surface',
+      'map_click completes active line placement through the map surface',
       placementClick?.clicked === true &&
         placementClick.interaction === 'placement' &&
         placementResult?.value?.placementActive === false &&

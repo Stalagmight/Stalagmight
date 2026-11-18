@@ -20,7 +20,7 @@ The DMP format is binary and contains:
 - Section metadata (name, surveyor, date)
 - Shot data (azimuth, length, depth, LRUD, pitch, comments)
 
-See `src-tauri/src/parsers/dmp.rs` for full format documentation.
+See `src-tauri/crates/parsers/src/parsers/dmp.rs` for full format documentation.
 
 ## Stalagmight Projects
 
@@ -33,4 +33,4 @@ agent harness's default `seed(mode: "fixture")` flow and stress scenarios.
 The real Tauri backend parses these files. Journeys and scenarios use direct paths to import.
 
 **Playwright (Mocked)**:
-The mock IPC layer returns simulated section data. These files are available for reference but mocks don't actually read them.
+The mock IPC layer returns simulated line data. These files are available for reference but mocks don't actually read them.

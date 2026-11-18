@@ -7,8 +7,8 @@ import type { RouteLeg } from '../../types/ipc/RouteLeg';
 // it only reads `field.route.length` and `field.waypoint_route_indices` - so every leg is
 // this one dummy, repeated, and every other GasReachField property is a neutral default.
 const DUMMY_LEG: RouteLeg = {
-  from: { section_id: 1, station_index: 0 },
-  to: { section_id: 1, station_index: 1 },
+  from: { line_id: 1, station_index: 0 },
+  to: { line_id: 1, station_index: 1 },
   is_jump: false,
 };
 

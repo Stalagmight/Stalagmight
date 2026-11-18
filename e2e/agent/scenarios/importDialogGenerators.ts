@@ -229,7 +229,7 @@ export const DATE_BOUNDARIES: readonly string[] = [
  * GPS strings the zero-datum parser has to survive.
  *
  * `'1e400'` is `Infinity` once parsed, `'-0'` is the negative zero that
- * `section_offsets`' dust rule turns on, `'91,181'` is out of range on both
+ * `line_offsets`' dust rule turns on, `'91,181'` is out of range on both
  * axes, and the RLO/PDF pair is a bidi override that reorders whatever a table
  * cell renders after it. The 512-character entry looks for a length clamp.
  *
@@ -355,7 +355,7 @@ export function malformedProbability(): number {
 /**
  * Share of well-formed `.dmp` draws built as a SUGGESTION-BEARING file.
  *
- * `suggestiveDmpSpec` is the only generated shape whose sections overlap each
+ * `suggestiveDmpSpec` is the only generated shape whose lines overlap each
  * other closely enough for `suggest_all_import_placements` to return anything,
  * and therefore the only one that reaches `wiz-suggest` at all without a corpus
  * or a tracked fixture - see that function's header for the measurement.
@@ -375,7 +375,7 @@ export const CORPUS_DRAW_P = 0.25;
  * `STALAGMIGHT_FUZZ_CORPUS_DRAW_P`.
  *
  * At 1.0 a run imports NOTHING but real files, which is the only way to fuzz
- * against survey data whose sections genuinely overlap without generating the
+ * against survey data whose lines genuinely overlap without generating the
  * overlap first. It is still a share and not a switch: with no corpus
  * configured, or with none of this run's enabled formats present in it, the draw
  * falls through to a generated file and counts `corpus:absent`, which is a
@@ -562,13 +562,13 @@ const STARTERS: Generator[] = [
 
 const DMP_SELECT: Generator[] = [
   {
-    name: 'dmp:toggle-section',
+    name: 'dmp:toggle-line',
     weight: 12,
     screens: ['dmp-select'],
     build: (env) => {
-      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'section-checkbox-'));
+      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'line-checkbox-'));
       if (index === null) return null;
-      const testid = `section-checkbox-${index}`;
+      const testid = `line-checkbox-${index}`;
       const want = env.ctx.rng() < 0.5;
       return check(testid, want, `set ${testid}=${want}`);
     },
@@ -629,7 +629,7 @@ const DMP_SELECT: Generator[] = [
      * The ONLY generator that deliberately targets a control the digest says is
      * NOT actionable.
      *
-     * `continue-button` is disabled while the duplicate-hash and section-hash
+     * `continue-button` is disabled while the duplicate-hash and line-hash
      * probes are still in flight, and that window is short and real. Clicking
      * into it asserts the disabled state is HONEST: a disabled control must not
      * advance the flow. The shell checks that inline (the screen must not have
@@ -942,19 +942,19 @@ const GPX: Generator[] = [
   {
     /**
      * The zero-datum picker for one track/route. Its options are the point
-     * indices of THAT section, which the digest cannot report for a dynamic id
+     * indices of THAT line, which the digest cannot report for a dynamic id
      * (it reads options only for the statically named selects), so the index is
-     * drawn blind and an option the section does not have is skipped-and-counted
+     * drawn blind and an option the line does not have is skipped-and-counted
      * like any other impossible move.
      */
     name: 'gpxp:zero-datum',
     weight: 10,
     screens: ['gpx-place'],
     build: (env) => {
-      const section = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'gpx-placement-zero-datum-'));
-      if (section === null) return null;
+      const line = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'gpx-placement-zero-datum-'));
+      if (line === null) return null;
       const point = env.ctx.randInt(0, 7);
-      return select(`gpx-placement-zero-datum-${section}`, String(point), `gpx section ${section} zero datum ${point}`);
+      return select(`gpx-placement-zero-datum-${line}`, String(point), `gpx line ${line} zero datum ${point}`);
     },
   },
   {
@@ -1081,13 +1081,13 @@ const EXPORT_MODAL: Generator[] = [
 
 const ZERO_DATUM: Generator[] = [
   {
-    name: 'zd:pick-section',
+    name: 'zd:pick-line',
     weight: 8,
     screens: ['zero-datum-select'],
     build: (env) => {
-      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'zero-datum-section-card-'));
+      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'zero-datum-line-card-'));
       if (index === null) return null;
-      return click(`zero-datum-section-card-${index}`, `zero datum on section ${index}`);
+      return click(`zero-datum-line-card-${index}`, `zero datum on line ${index}`);
     },
   },
   {
@@ -1186,9 +1186,9 @@ const ZERO_DATUM_CONFIG: Generator[] = [
     weight: 5,
     screens: ['zero-datum-config'],
     build: (env) => {
-      if (!actionable(env.digest, 'section-name-input')) return null;
+      if (!actionable(env.digest, 'line-name-input')) return null;
       const value = biasedText(() => env.ctx.rng(), env.fileSeq);
-      return type('section-name-input', value, `section name=${JSON.stringify(value.slice(0, 24))}`);
+      return type('line-name-input', value, `line name=${JSON.stringify(value.slice(0, 24))}`);
     },
   },
   {
@@ -1305,7 +1305,7 @@ const WIZARD_SUGGEST: Generator[] = [
   },
 ];
 
-/** Mid-import metadata edits, legal wherever a SectionMetadataForm is mounted. */
+/** Mid-import metadata edits, legal wherever a LineMetadataForm is mounted. */
 const METADATA_SCREENS: readonly ScreenId[] = ['zero-datum-config', 'wiz-suggest', 'wiz-manual'];
 
 const METADATA: Generator[] = [
@@ -1314,9 +1314,9 @@ const METADATA: Generator[] = [
     weight: 4,
     screens: ['wiz-suggest', 'wiz-manual'],
     build: (env) => {
-      if (!actionable(env.digest, 'section-name-input')) return null;
+      if (!actionable(env.digest, 'line-name-input')) return null;
       const value = biasedText(() => env.ctx.rng(), env.fileSeq);
-      return type('section-name-input', value, `name=${JSON.stringify(value.slice(0, 24))}`);
+      return type('line-name-input', value, `name=${JSON.stringify(value.slice(0, 24))}`);
     },
   },
   {
@@ -1324,9 +1324,9 @@ const METADATA: Generator[] = [
     weight: 3,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-surveyor-input')) return null;
+      if (!actionable(env.digest, 'line-surveyor-input')) return null;
       const value = biasedText(() => env.ctx.rng(), env.fileSeq);
-      return type('section-surveyor-input', value, `surveyor=${JSON.stringify(value.slice(0, 24))}`);
+      return type('line-surveyor-input', value, `surveyor=${JSON.stringify(value.slice(0, 24))}`);
     },
   },
   {
@@ -1334,9 +1334,9 @@ const METADATA: Generator[] = [
     weight: 3,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-date-input')) return null;
+      if (!actionable(env.digest, 'line-date-input')) return null;
       const value = pickFrom(() => env.ctx.rng(), DATE_BOUNDARIES) as string;
-      return type('section-date-input', value, `date=${JSON.stringify(value)}`);
+      return type('line-date-input', value, `date=${JSON.stringify(value)}`);
     },
   },
   {
@@ -1344,9 +1344,9 @@ const METADATA: Generator[] = [
     weight: 3,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-direction-select')) return null;
+      if (!actionable(env.digest, 'line-direction-select')) return null;
       const value = env.ctx.rng() < 0.5 ? 'in' : 'out';
-      return select('section-direction-select', value, `direction ${value}`);
+      return select('line-direction-select', value, `direction ${value}`);
     },
   },
   {
@@ -1354,9 +1354,9 @@ const METADATA: Generator[] = [
     weight: 2,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-quality-input')) return null;
+      if (!actionable(env.digest, 'line-quality-input')) return null;
       const value = String(env.ctx.randInt(-1, 6));
-      return type('section-quality-input', value, `quality=${value}`);
+      return type('line-quality-input', value, `quality=${value}`);
     },
   },
   {
@@ -1364,9 +1364,9 @@ const METADATA: Generator[] = [
     weight: 2,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-color-hex-input')) return null;
+      if (!actionable(env.digest, 'line-color-hex-input')) return null;
       const value = pickFrom(() => env.ctx.rng(), ['#000000', '#ffffff', 'not-a-colour', '#12345', '#ABCDEF']) as string;
-      return type('section-color-hex-input', value, `colour=${value}`);
+      return type('line-color-hex-input', value, `colour=${value}`);
     },
   },
   {
@@ -1374,9 +1374,9 @@ const METADATA: Generator[] = [
     weight: 5,
     screens: METADATA_SCREENS,
     build: (env) => {
-      if (!actionable(env.digest, 'section-reverse-checkbox')) return null;
+      if (!actionable(env.digest, 'line-reverse-checkbox')) return null;
       const want = env.ctx.rng() < 0.5;
-      return check('section-reverse-checkbox', want, `reverse=${want}`);
+      return check('line-reverse-checkbox', want, `reverse=${want}`);
     },
   },
 ];
@@ -1406,9 +1406,9 @@ const WIZARD_MANUAL: Generator[] = [
     screens: ['wiz-manual'],
     build: (env) => {
       const candidates = [
-        'from-existing-import-section-select',
+        'from-existing-import-line-select',
         'from-existing-import-station-select',
-        'from-existing-section-select',
+        'from-existing-line-select',
         'from-existing-station-select',
       ].filter((testid) => actionable(env.digest, testid));
       const testid = pickFrom(() => env.ctx.rng(), candidates);
@@ -1435,7 +1435,7 @@ const WIZARD_MANUAL: Generator[] = [
     weight: 6,
     screens: ['wiz-manual'],
     build: (env) => {
-      const candidates = ['manual-import-section-select', 'manual-import-station-select'].filter((testid) =>
+      const candidates = ['manual-import-line-select', 'manual-import-station-select'].filter((testid) =>
         actionable(env.digest, testid),
       );
       const testid = pickFrom(() => env.ctx.rng(), candidates);
@@ -1714,7 +1714,7 @@ const PLACEMENT: Generator[] = [
   // `placementMode` and RETURNS the state, leaving the caller to run
   // `onComplete`. `MapCanvas.handlePlacementConfirm` is its only caller and
   // bails when there is no `cursorPosition`, so calling it directly ABANDONS
-  // the placement - wizard already closed, early-imported sections committed,
+  // the placement - wizard already closed, early-imported lines committed,
   // completion handler never run. That is a state no user can reach, and the
   // flow oracles then fairly report residue for a flow that was neither
   // completed nor cancelled. A placement is driven the way a user drives it:
@@ -1796,7 +1796,7 @@ const TERMINALS: Generator[] = [
   {
     /**
      * The THIRD answer #394 gave the cancel overlay: close AND withdraw the
-     * sections the wizard already imported, in one batched undoable step.
+     * lines the wizard already imported, in one batched undoable step.
      *
      * The model carries the id and the escape path names it as something "the
      * walk reaches through the generators rather than while trying to leave" -
@@ -1805,7 +1805,7 @@ const TERMINALS: Generator[] = [
      * imported nothing.
      *
      * Weighted BELOW keep-and-close (8) deliberately, and not for taste: a
-     * withdrawal removes the very sections the post-import surfaces need, so a
+     * withdrawal removes the very lines the post-import surfaces need, so a
      * walk that withdrew every time it cancelled would starve the receipt, the
      * orphan dialog and the F1 undo roundtrip of the state they measure. Four is
      * enough to exercise the path often without owning the flow's ending.

@@ -2,7 +2,7 @@
  * export-tml-roundtrip: the release golden flow for TML export (#449 class -
  * "export discards the entire survey"). Export the live project to a temp
  * `.tml`, then parse the exported file back and hold it to the live project's
- * survey content: every section, every shot. The parse-back uses the app's own
+ * survey content: every line, every shot. The parse-back uses the app's own
  * parser over real IPC, so the journey exercises writer and reader against each
  * other on the real wire.
  */
@@ -18,15 +18,15 @@ export const exportTmlRoundtrip: Journey = {
     const { path: fixturePath } = await loadFixtureWithoutUndoHistory(ctx);
     await disableAutoSave(ctx);
 
-    const live = await ctx.eval<{ sections: number; shots: number }>(`
+    const live = await ctx.eval<{ lines: number; shots: number }>(`
       const p = window.__E2E_TEST__.projectStore.getState().project;
-      if (!p) return { sections: 0, shots: 0 };
-      const sections = (p.sections || []).length;
-      const shots = (p.sections || []).reduce((n, s) => n + ((s.shots || []).length), 0);
-      return { sections, shots };
+      if (!p) return { lines: 0, shots: 0 };
+      const lines = (p.lines || []).length;
+      const shots = (p.lines || []).reduce((n, s) => n + ((s.shots || []).length), 0);
+      return { lines, shots };
     `);
-    ctx.expect('project has survey data to export', live.sections > 0 && live.shots > 0,
-      `sections=${live.sections} shots=${live.shots}`);
+    ctx.expect('project has survey data to export', live.lines > 0 && live.shots > 0,
+      `lines=${live.lines} shots=${live.shots}`);
 
     const exportPath = path.join(path.dirname(fixturePath), 'journey-export.tml');
     // A reused session dir may hold a stale export; a leftover file must never
@@ -46,7 +46,7 @@ export const exportTmlRoundtrip: Journey = {
 
     const parsedRes = (await ctx.callAction('project', 'parseTml', [exportPath])) as {
       ok: boolean;
-      result?: { sections: { shots: { shot_type: string }[] }[] };
+      result?: { lines: { shots: { shot_type: string }[] }[] };
       error?: string;
     };
     ctx.expect('exported file parses back', parsedRes.ok && !!parsedRes.result,
@@ -58,13 +58,13 @@ export const exportTmlRoundtrip: Journey = {
     // importer filters them right back out. Counting them against live store
     // shots would red this journey on a closure-bearing project despite a
     // lossless export - compare survey shots only.
-    const roundSections = parsedRes.result.sections.length;
-    const roundShots = parsedRes.result.sections.reduce(
+    const roundLines = parsedRes.result.lines.length;
+    const roundShots = parsedRes.result.lines.reduce(
       (n, s) => n + s.shots.filter((shot) => shot.shot_type !== 'Closure').length,
       0,
     );
-    ctx.expect('every section survived the round-trip', roundSections === live.sections,
-      `exported ${roundSections}, live ${live.sections}`);
+    ctx.expect('every line survived the round-trip', roundLines === live.lines,
+      `exported ${roundLines}, live ${live.lines}`);
     ctx.expect('every shot survived the round-trip', roundShots === live.shots,
       `exported ${roundShots}, live ${live.shots}`);
   },

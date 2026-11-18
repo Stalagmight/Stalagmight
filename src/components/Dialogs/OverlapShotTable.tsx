@@ -98,7 +98,7 @@ export default function OverlapShotTable({
   const flag = (over: boolean) => (over ? 'text-warning-text font-medium' : '');
 
   return (
-    <div className="space-y-2" data-testid="overlap-shot-section">
+    <div className="space-y-2" data-testid="overlap-shot-line">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-xs font-medium text-text-secondary">
           {t('dialogs.orphanPlacement.repeat.heading', { count: rows.length })}

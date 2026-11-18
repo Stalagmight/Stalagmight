@@ -1,6 +1,6 @@
 /**
  * Step 1 of the MNemo import: the default Surveyors / Explorers for every
- * section are pill fields, prefilled with the people the last section was
+ * line are pill fields, prefilled with the people the last line was
  * created or imported with this session (`uiStore.lastUsedCredit`), handed to
  * the wizard as `defaultSurveyors` / `defaultExplorers`, and remembered again
  * on Continue.
@@ -50,7 +50,7 @@ const shot = {
 
 const dmpFile = {
   version: 6,
-  sections: [
+  lines: [
     { name: 'A', date: '2026-01-01T00:00:00', direction: 'in', shots: [shot, shot, shot], content_hash: 'h-a' },
   ],
 } as unknown as DmpFile;
@@ -68,7 +68,7 @@ describe('DmpSelectionDialog default people', () => {
     useProjectStore.setState({
       calculateFileHash: vi.fn(async () => 'hash'),
       checkDuplicateImport: vi.fn(async () => false),
-      checkSectionHashes: vi.fn(async (hashes: string[]) => hashes.map(() => false)),
+      checkLineHashes: vi.fn(async (hashes: string[]) => hashes.map(() => false)),
     } as never);
   });
 
@@ -91,7 +91,7 @@ describe('DmpSelectionDialog default people', () => {
 
   it('hands the pills to the wizard and remembers them on Continue', async () => {
     // Injection: drop the `setLastUsedCredit` call in handleContinue and the
-    // next import (and New Section) opens with nobody.
+    // next import (and New Line) opens with nobody.
     const user = userEvent.setup();
     const onContinue = renderDialog();
     await act(async () => {});

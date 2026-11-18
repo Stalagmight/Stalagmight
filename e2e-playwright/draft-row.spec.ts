@@ -2,10 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  seedProjectWithSections,
+  seedProjectWithLines,
   waitForMapReady,
   waitForNoDialogs,
-  type SectionSeed,
+  type LineSeed,
 } from './helpers/app';
 
 /**
@@ -25,9 +25,9 @@ import {
  * records its calls in __MOCK_CREATE_SHOT_CALLS__.
  */
 
-const sectionSeeds: SectionSeed[] = [
+const lineSeeds: LineSeed[] = [
   {
-    name: 'Draft Test Section',
+    name: 'Draft Test Line',
     direction: 'in',
     shots: [
       { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
@@ -48,7 +48,7 @@ interface ShotSnapshot {
 async function getShots(page: Page): Promise<ShotSnapshot[]> {
   return page.evaluate(() => {
     const e2e = (window as any).__E2E_TEST__;
-    const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
+    const shots = e2e?.projectStore.getState().project?.lines?.[0]?.shots ?? [];
     return shots.map((s: any) => ({
       id: s.id,
       length: s.length,
@@ -61,11 +61,11 @@ async function getShots(page: Page): Promise<ShotSnapshot[]> {
 
 async function getCreateShotCalls(
   page: Page,
-): Promise<Array<{ sectionId: number; afterShotId: number | null; beforeShotId: number | null }>> {
+): Promise<Array<{ lineId: number; afterShotId: number | null; beforeShotId: number | null }>> {
   return page.evaluate(() => {
     const calls = ((window as any).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<any>;
     return calls.map((c) => ({
-      sectionId: c?.sectionId ?? null,
+      lineId: c?.lineId ?? null,
       afterShotId: c?.afterShotId ?? null,
       beforeShotId: c?.beforeShotId ?? null,
     }));
@@ -76,7 +76,7 @@ async function getCreateShotCalls(
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // 3 shots + the end draft row (auto-selects first section)
+  // 3 shots + the end draft row (auto-selects first line)
   await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/, { timeout: 5000 });
 }
 
@@ -111,7 +111,7 @@ test.describe('Draft shot rows', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Draft Row Test');
-    await seedProjectWithSections(page, sectionSeeds);
+    await seedProjectWithLines(page, lineSeeds);
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     await openDataTable(page);

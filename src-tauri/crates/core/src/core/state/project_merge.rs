@@ -4,7 +4,7 @@ use super::project_source::{read_source_project, with_suffix, SQLITE_SIDECARS};
 use super::AppState;
 use crate::core::command::{sanitize_display_text, MAX_FILE_NAME_LEN};
 use crate::core::CommandResult;
-use crate::models::{Project, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID};
+use crate::models::{Project, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID};
 use crate::persistence::Database;
 use std::path::PathBuf;
 
@@ -30,7 +30,7 @@ pub(super) fn merge_source_label(path: &std::path::Path) -> String {
 
 impl AppState {
     /// Merge multiple projects into a new project file
-    /// This creates a NEW output file, appends all sections with renumbered IDs,
+    /// This creates a NEW output file, appends all lines with renumbered IDs,
     /// keeps all zero datums, and optionally archives the original files.
     pub(super) fn merge_projects(
         &self,
@@ -99,25 +99,25 @@ impl AppState {
         let mut merged_project = Project::new(output_name, None);
         merged_project.validation = self.get_config().validation;
 
-        // Section-id budget (#555), checked before a single section is appended.
-        // The append loop below calls `Project::add_section` once per source
-        // section, and `Section::new` computes `next_shot_id =
+        // Line-id budget (#555), checked before a single line is appended.
+        // The append loop below calls `Project::add_line` once per source
+        // line, and `Line::new` computes `next_shot_id =
         // id * FEATURE_ID_STRIDE` unchecked, so a combined count past the
-        // encode lands sections on ids whose shot encode leaves u32: a debug
+        // encode lands lines on ids whose shot encode leaves u32: a debug
         // panic (outright at that multiply from id 42_950 on) and a wrap that
         // aliases shot ids in release. The merged project is fresh (ids start
-        // at 0), but the sum is stated against its `next_section_id` all the
+        // at 0), but the sum is stated against its `next_line_id` all the
         // same so the check keeps holding if it ever stops being fresh. Refused
         // whole: a merge writes a NEW file, and half a merge is not a thing the
         // user asked for.
-        let incoming_sections: usize = source_projects.iter().map(|p| p.sections.len()).sum();
-        let spent_count = merged_project.next_section_id as usize;
-        if incoming_sections.saturating_add(spent_count) > MAX_SECTIONS_IN_ID_SPACE {
+        let incoming_lines: usize = source_projects.iter().map(|p| p.lines.len()).sum();
+        let spent_count = merged_project.next_line_id as usize;
+        if incoming_lines.saturating_add(spent_count) > MAX_LINES_IN_ID_SPACE {
             return CommandResult::failure(format!(
-                "Merge refused: the {} source projects hold {incoming_sections} sections \
-                 in total, which is past the limit of {MAX_SECTIONS_IN_ID_SPACE} sections \
-                 for one project. Shot ids encode as section_id * {FEATURE_ID_STRIDE} + \
-                 position in 32 bits, so section ids past {MAX_SECTION_ID} cannot hold \
+                "Merge refused: the {} source projects hold {incoming_lines} lines \
+                 in total, which is past the limit of {MAX_LINES_IN_ID_SPACE} lines \
+                 for one project. Shot ids encode as line_id * {FEATURE_ID_STRIDE} + \
+                 position in 32 bits, so line ids past {MAX_LINE_ID} cannot hold \
                  shots. No output file was written.",
                 source_projects.len()
             ));
@@ -156,7 +156,7 @@ impl AppState {
         // Reassign closure IDs to ensure uniqueness across merged sources
         merged_project.assign_closure_ids();
 
-        // Re-derive section offsets from the (now combined) merge/datum
+        // Re-derive line offsets from the (now combined) merge/datum
         // constraints so the merged output is geometrically consistent and any
         // drift in a source isn't laundered into the new file.
         merged_project.redrive_offsets_after_load();
@@ -203,7 +203,7 @@ impl AppState {
 
         tracing::info!(
             output = ?output_path,
-            section_count = merged_project.sections.len(),
+            line_count = merged_project.lines.len(),
             purpose = "combine projects into single file",
             "Projects merged successfully"
         );

@@ -203,7 +203,7 @@ impl DatumLayout {
     /// Untouched datums at either end of the lists pair as they stand, so
     /// only the few a command changed are aligned.
     ///
-    /// Key and GPS alone are not enough. Deleting a section's first shot drops
+    /// Key and GPS alone are not enough. Deleting a line's first shot drops
     /// the datum on its first station and re-anchors the next station's datum
     /// onto that key, and a GPS copied from another datum matches that datum
     /// too: either way the promoted datum would pass for the placement datum
@@ -429,8 +429,8 @@ impl Project {
         if dx.abs() <= Self::OFFSET_DUST_M && dy.abs() <= Self::OFFSET_DUST_M {
             return false;
         }
-        self.adjust_rigid_group_offsets(station_ref.section_id, dx, dy);
-        self.cascade_connection_offsets(&[station_ref.section_id]);
+        self.adjust_rigid_group_offsets(station_ref.line_id, dx, dy);
+        self.cascade_connection_offsets(&[station_ref.line_id]);
         info!(
             ?station_ref,
             delta_x = dx,

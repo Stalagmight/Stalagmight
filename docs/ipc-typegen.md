@@ -86,7 +86,7 @@ So `#[serde(skip_serializing_if = "Vec::is_empty")]` on a `Vec` field generates 
 **required** `Array<T>` while the wire omits the key. Nothing catches that: `tsc`
 believes the declaration, so every `payload.field.length` type-checks and throws
 at runtime, and the e2e IPC mock speaks the TS type, so the mocked tier cannot
-produce the omitted shape either. That combination crashed the zero-section
+produce the omitted shape either. That combination crashed the zero-line
 import receipt (#411, diagnosed as #441).
 
 **The rule.** A serde-omitted field has to pick one, and the choice is about who
@@ -99,8 +99,8 @@ pays for the bytes:
 
 The two live examples, one of each:
 
-- `CommandResult::section_ids` (`crates/core/src/core/command.rs`) dropped the
-  skip. One `"section_ids":[]` per command result is unmeasurable, and absence
+- `CommandResult::line_ids` (`crates/core/src/core/command.rs`) dropped the
+  skip. One `"line_ids":[]` per command result is unmeasurable, and absence
   and empty stated the same fact.
 - `Station::closures_with` (`crates/models/src/station.rs`) kept it and became
   `Option<Vec<ClosureRef>>` + `#[ts(optional)]`. That skip is paid per station on
@@ -130,7 +130,7 @@ Add the same pair when you add a serde-omitted field. In the Playwright IPC mock
 (`e2e-playwright/mocks/tauri-ipc.ts`) the same convention applies by hand: an
 omitted field is written **absent**, not present-and-empty (`closures_with` on
 the `get_project_state` stations), and an always-present one is written even when
-empty (`section_ids` on every `-> CommandResult` handler). Nothing enforces
+empty (`line_ids` on every `-> CommandResult` handler). Nothing enforces
 that - `pnpm test:mock-contract` checks only that the mock covers the command
 NAMES in `generate_handler!`, not the shape of what it returns - so a mock
 literal that drifts from the wire is caught by review, not by a gate.

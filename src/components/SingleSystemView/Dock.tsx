@@ -192,7 +192,7 @@ function DockComponent({
 
   // Let a sibling (the side bars) track this panel's edge live during its drag.
   // The cleanup clears the flag if this Dock unmounts mid-drag (project/view
-  // switch, fullscreen toggle, section-focus collapse): otherwise the parent's
+  // switch, fullscreen toggle, line-focus collapse): otherwise the parent's
   // sibling-resizing flag would stick true and permanently suspend the sibling
   // panels' open/close easing for the rest of the session.
   // Measure the overlay wrapper and the tab box so the tab anchors can be clamped

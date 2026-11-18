@@ -7,14 +7,14 @@ import type { VirtualShotMode } from '../types/project';
  * rows only when the user opts in - mirrors `convert_shots_to_shot_data`
  * (src-tauri/src/parsers/tml.rs).
  */
-export function importableShots(section: TmlSection, includeExcluded: boolean): TmlShot[] {
-  return section.shots.filter(
+export function importableShots(line: TmlSection, includeExcluded: boolean): TmlShot[] {
+  return line.shots.filter(
     (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
   );
 }
 
 export interface TmlImportStats {
-  totalSections: number;
+  totalLines: number;
   totalShots: number;
   virtualCount: number;
   /**
@@ -29,15 +29,15 @@ export interface TmlImportStats {
 }
 
 /**
- * Section/shot counts under the given toggles - the single source of truth for
+ * Line/shot counts under the given toggles - the single source of truth for
  * every screen that quotes a TML file's size, so the create-project promise and
  * the import dialog's own numbers cannot drift apart (#411).
  *
- * `selected` (#425) narrows every figure to the sections the user kept ticked;
+ * `selected` (#425) narrows every figure to the lines the user kept ticked;
  * `null` - what the pre-dialog screens pass, having no selection to speak of -
  * counts the whole file. Note `excludedCount` and `commentCount` narrow too:
  * they drive the dialog's two option toggles, which are pointless when the only
- * rows they would affect are in sections that are not being imported.
+ * rows they would affect are in lines that are not being imported.
  *
  * `virtualShotMode` decides which virtual shots count toward the length: a
  * Reference is left out of every survey length after import (#689), a Jump
@@ -50,7 +50,7 @@ export function computeTmlImportStats(
   selected: ReadonlySet<number> | null = null,
   virtualShotMode: VirtualShotMode = 'Auto'
 ): TmlImportStats {
-  let totalSections = 0;
+  let totalLines = 0;
   let totalShots = 0;
   let totalLength = 0;
   let minDepth = Infinity;
@@ -59,25 +59,25 @@ export function computeTmlImportStats(
   let commentCount = 0;
   let virtualCount = 0;
 
-  const kept = tmlFile.sections.filter((_, index) => selected === null || selected.has(index));
-  const imported = kept.flatMap((section) => importableShots(section, includeExcluded));
+  const kept = tmlFile.lines.filter((_, index) => selected === null || selected.has(index));
+  const imported = kept.flatMap((line) => importableShots(line, includeExcluded));
   const jumps =
     virtualShotMode === 'Auto'
-      ? jumpShots(imported, kept.flatMap((section) => section.shots.filter((shot) => shot.shot_type === 'Closure')))
+      ? jumpShots(imported, kept.flatMap((line) => line.shots.filter((shot) => shot.shot_type === 'Closure')))
       : null;
   const counts = (shot: TmlShot): boolean =>
     shot.shot_type !== 'Virtual' || virtualShotMode === 'AllJumps' || (jumps?.has(shot) ?? false);
 
-  for (const [index, section] of tmlFile.sections.entries()) {
+  for (const [index, line] of tmlFile.lines.entries()) {
     if (selected !== null && !selected.has(index)) continue;
-    // A section left with no shots by the toggles is dropped by the converter
+    // A line left with no shots by the toggles is dropped by the converter
     // ("no shots after filtering"), so it must not be counted as arriving.
-    let sectionShots = 0;
-    for (const shot of section.shots) {
+    let lineShots = 0;
+    for (const shot of line.shots) {
       if (shot.shot_type === 'Closure') continue;
       if (shot.excluded) excludedCount++;
       if (!includeExcluded && shot.excluded) continue;
-      sectionShots++;
+      lineShots++;
       totalShots++;
       if (counts(shot)) totalLength += shot.length;
       if (shot.depth < minDepth) minDepth = shot.depth;
@@ -85,11 +85,11 @@ export function computeTmlImportStats(
       if (shot.comment) commentCount++;
       if (shot.shot_type === 'Virtual') virtualCount++;
     }
-    if (sectionShots > 0) totalSections++;
+    if (lineShots > 0) totalLines++;
   }
 
   return {
-    totalSections,
+    totalLines,
     totalShots,
     virtualCount,
     totalLength: Math.round(totalLength * 10) / 10,
@@ -108,8 +108,8 @@ export function computeTmlImportStats(
  * virtual shots that reaches real survey at two or more distinct points -
  * through loop closures, which join two stations into one point - is a Jump;
  * any other run is a Reference. Evaluated on the file's own stations, its
- * Ariane ids (a section starts at its parent's station, so they connect the
- * way the imported sections are merged). An import into a project that
+ * Ariane ids (a line starts at its parent's station, so they connect the
+ * way the imported lines are merged). An import into a project that
  * already holds survey can reach more real points through it, so there this
  * can only undercount the Jumps.
  */

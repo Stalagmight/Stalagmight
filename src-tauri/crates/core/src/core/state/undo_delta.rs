@@ -11,7 +11,7 @@
 //! step is exact by construction - the delta form of the self-refreshing wall
 //! a snapshot pair was (`refresh_snapshot_pair_counterpart`).
 //!
-//! The delta works on the text ([`Doc`]): a section it does not touch is
+//! The delta works on the text ([`Doc`]): a line it does not touch is
 //! never parsed, so a step costs about what a snapshot restore costs.
 //!
 //! [`UndoData::Delta`]: crate::core::UndoData::Delta
@@ -20,8 +20,8 @@ use serde_json::Value;
 
 use super::project_io::RecordedGauges;
 use super::AppState;
-use crate::core::{CommandResult, Doc, ProjectDelta, SectionIds, SnapshotDelta};
-use crate::models::{Project, SectionId};
+use crate::core::{CommandResult, Doc, LineIds, ProjectDelta, SnapshotDelta};
+use crate::models::{LineId, Project};
 
 impl AppState {
     /// Step through `entry`: install the state on its other side and re-encode
@@ -44,7 +44,7 @@ impl AppState {
             Ok(doc) => doc,
             Err(e) => return CommandResult::failure(format!("Failed to read project: {e}")),
         };
-        let ids = SectionIds::of_project(live);
+        let ids = LineIds::of_project(live);
         let mut applied = match entry.delta.apply_doc(&live_doc, &ids) {
             Ok(applied) => applied,
             Err(e) => {
@@ -56,10 +56,10 @@ impl AppState {
                 return CommandResult::failure(format!("Failed to apply undo entry: {e}"));
             }
         };
-        // Only a rebuilt section can differ from the live project, so the
+        // Only a rebuilt line can differ from the live project, so the
         // gauge rules only ever have those to look at.
-        let mut built = applied.built_sections_mut();
-        drop_unresolvable_carried_gauges(&mut built, live, &entry.delta.ungauged_sections());
+        let mut built = applied.built_lines_mut();
+        drop_unresolvable_carried_gauges(&mut built, live, &entry.delta.ungauged_lines());
         let edited = gauges_the_step_removes(&built, live);
         drop(built);
         let other_doc = match applied.into_doc() {
@@ -128,30 +128,29 @@ impl AppState {
     }
 }
 
-fn section_id(section: &Value) -> Option<SectionId> {
-    SectionId::try_from(section.get("id")?.as_u64()?).ok()
+fn line_id(line: &Value) -> Option<LineId> {
+    LineId::try_from(line.get("id")?.as_u64()?).ok()
 }
 
-fn gauge_pair(section: &Value) -> Option<(String, Option<String>)> {
-    let shot = section.get("gauge_shot_uuid")?.as_str()?.to_string();
-    let neighbour = section
+fn gauge_pair(line: &Value) -> Option<(String, Option<String>)> {
+    let shot = line.get("gauge_shot_uuid")?.as_str()?.to_string();
+    let neighbour = line
         .get("gauge_neighbour_uuid")
         .and_then(Value::as_str)
         .map(str::to_string);
     Some((shot, neighbour))
 }
 
-fn live_gauge_pair(live: &Project, id: SectionId) -> Option<(String, Option<String>)> {
-    let section = live.get_section(id)?;
+fn live_gauge_pair(live: &Project, id: LineId) -> Option<(String, Option<String>)> {
+    let line = live.get_line(id)?;
     Some((
-        section.gauge_shot_uuid.clone()?,
-        section.gauge_neighbour_uuid.clone(),
+        line.gauge_shot_uuid.clone()?,
+        line.gauge_neighbour_uuid.clone(),
     ))
 }
 
-fn holds_shot(section: &Value, uuid: &str) -> bool {
-    section
-        .get("shots")
+fn holds_shot(line: &Value, uuid: &str) -> bool {
+    line.get("shots")
         .and_then(Value::as_array)
         .is_some_and(|shots| {
             shots
@@ -160,38 +159,34 @@ fn holds_shot(section: &Value, uuid: &str) -> bool {
         })
 }
 
-/// Clear, on a rebuilt section the delta lists as UNGAUGED
-/// ([`ProjectDelta::ungauged_sections`]), a gauge pair the step carried over
-/// from the live project that the section cannot resolve.
+/// Clear, on a rebuilt line the delta lists as UNGAUGED
+/// ([`ProjectDelta::ungauged_lines`]), a gauge pair the step carried over
+/// from the live project that the line cannot resolve.
 ///
 /// Such a pair is a save's capture, made after the entry was recorded: the
 /// side the delta was encoded from had no pair there, and the delta does not
 /// touch it. A snapshot restore carries a save's pair across only when the
-/// restored section holds the shots it names (`reapply_heals_after_restore`),
+/// restored line holds the shots it names (`reapply_heals_after_restore`),
 /// because a pair that does not resolve is no pin at all - and worse than none,
 /// since it stops the next save capturing one that does. A delta keeps every
 /// member it does not edit, so the same rule is applied here, to exactly the
-/// sections where the shots differ and a save could have made a pair.
-fn drop_unresolvable_carried_gauges(
-    built: &mut [&mut Value],
-    live: &Project,
-    ungauged: &[SectionId],
-) {
+/// lines where the shots differ and a save could have made a pair.
+fn drop_unresolvable_carried_gauges(built: &mut [&mut Value], live: &Project, ungauged: &[LineId]) {
     if ungauged.is_empty() {
         return;
     }
-    for section in built.iter_mut() {
-        let Some(id) = section_id(section).filter(|id| ungauged.contains(id)) else {
+    for line in built.iter_mut() {
+        let Some(id) = line_id(line).filter(|id| ungauged.contains(id)) else {
             continue;
         };
-        let Some((shot, neighbour)) = gauge_pair(section) else {
+        let Some((shot, neighbour)) = gauge_pair(line) else {
             continue;
         };
         let carried = live_gauge_pair(live, id) == Some((shot.clone(), neighbour.clone()));
-        let resolves = holds_shot(section, &shot)
-            && neighbour.as_deref().is_none_or(|n| holds_shot(section, n));
+        let resolves =
+            holds_shot(line, &shot) && neighbour.as_deref().is_none_or(|n| holds_shot(line, n));
         if carried && !resolves {
-            if let Value::Object(members) = &mut **section {
+            if let Value::Object(members) = &mut **line {
                 members.insert("gauge_shot_uuid".to_string(), Value::Null);
                 members.insert("gauge_neighbour_uuid".to_string(), Value::Null);
             }
@@ -199,7 +194,7 @@ fn drop_unresolvable_carried_gauges(
     }
 }
 
-/// The live project's gauge pairs on the rebuilt sections that hold NONE in
+/// The live project's gauge pairs on the rebuilt lines that hold NONE in
 /// the target: the pairs this step takes away. They are the edit's own (the
 /// delta writes the recorded absence back), so the restore's carry-forward
 /// must not copy them across - the `edited` set a snapshot pair reads from the
@@ -207,9 +202,9 @@ fn drop_unresolvable_carried_gauges(
 fn gauges_the_step_removes(built: &[&mut Value], live: &Project) -> RecordedGauges {
     built
         .iter()
-        .filter(|section| gauge_pair(section).is_none())
-        .filter_map(|section| {
-            let id = section_id(section)?;
+        .filter(|line| gauge_pair(line).is_none())
+        .filter_map(|line| {
+            let id = line_id(line)?;
             Some((id, live_gauge_pair(live, id)?))
         })
         .collect()

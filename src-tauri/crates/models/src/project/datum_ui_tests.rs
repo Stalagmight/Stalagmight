@@ -3,7 +3,7 @@
 //! Synthetic surveys only.
 
 use crate::{
-    local_to_gps, DatumRole, GpsCoordinates, Project, SectionData, SectionId, ShotData, StationRef,
+    local_to_gps, DatumRole, GpsCoordinates, LineData, LineId, Project, ShotData, StationRef,
 };
 
 const ORIGIN_LAT: f64 = 20.5;
@@ -19,8 +19,8 @@ fn gps_at(east: f64, north: f64) -> GpsCoordinates {
     GpsCoordinates::new(lat, lon, 0.0).unwrap()
 }
 
-/// A section of `count` shots of `length` metres due north.
-fn north_line(project: &mut Project, count: usize, length: f64) -> SectionId {
+/// A line of `count` shots of `length` metres due north.
+fn north_line(project: &mut Project, count: usize, length: f64) -> LineId {
     let shots = (0..count)
         .map(|_| ShotData {
             azimuth_in: 0.0,
@@ -30,7 +30,7 @@ fn north_line(project: &mut Project, count: usize, length: f64) -> SectionId {
         })
         .collect();
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
@@ -87,7 +87,7 @@ fn the_wire_datum_carries_the_backend_gap_for_a_fix_only() {
 
 /// Two separately placed pieces: A (the frame, datum A:0) runs 0..100 m
 /// north; B is placed by its own GPS so that B:0 sits 30 m east of A:2.
-fn two_placed_pieces() -> (Project, SectionId, SectionId) {
+fn two_placed_pieces() -> (Project, LineId, LineId) {
     let mut project = Project::new("TwoPieces".to_string(), None);
     let a = north_line(&mut project, 2, 50.0);
     let b = north_line(&mut project, 2, 50.0);
@@ -121,7 +121,7 @@ fn the_merge_preview_names_the_piece_that_moves_and_matches_the_real_merge() {
         let shift = project
             .merge_datum_shift(first, second)
             .expect("two placed pieces");
-        assert_eq!(shift.moving_section_ids, vec![b]);
+        assert_eq!(shift.moving_line_ids, vec![b]);
         assert_eq!(shift.datum_station, start_b);
         assert!(
             (shift.shift_m - 30.0).abs() < 0.01,

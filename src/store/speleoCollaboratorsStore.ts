@@ -55,7 +55,7 @@ export function collaboratorsKey(endpoint: string | null, email: string | null, 
  * A collaborator as a person. The server may not know a name; the email's
  * local part (before the `@`) then stands in for it, so the pill still says
  * who it is. Never the whole address: a person's NAME is what reaches the
- * legacy `sections.surveyor`, the Ariane export and the JSON export, which
+ * legacy `lines.surveyor`, the Ariane export and the JSON export, which
  * carry no emails. The email itself stays on the person.
  */
 export function collaboratorPerson(c: SpeleoCollaborator): Person {

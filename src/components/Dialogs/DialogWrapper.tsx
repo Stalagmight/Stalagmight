@@ -225,7 +225,7 @@ export function DialogWrapper({
       // container focus be upgraded. Without this guard the rAF yanked focus
       // mid-interaction: under jsdom's ~16ms rAF it fired in the middle of a
       // userEvent.type() and the keystrokes went to the stolen-focus target
-      // (#289, the SectionAdjustDialog flake).
+      // (#289, the LineAdjustDialog flake).
       const outer = dialogRef.current;
       const active = document.activeElement;
       if (outer && active instanceof HTMLElement && active !== outer && outer.contains(active)) {

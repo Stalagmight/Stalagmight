@@ -5,8 +5,8 @@
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    closure_across_one_shot_refusal, ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates,
-    LoopClosure, Project, SectionData, SectionId, ShotData, Station, StationRef,
+    ClosureAcrossOneShot, ClosureStrategy, GpsCoordinates, LineData, LineId, LoopClosure, Project,
+    ShotData, Station, StationRef,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -18,17 +18,17 @@ fn shot(azimuth: f64, length: f64) -> ShotData {
     }
 }
 
-fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+fn add(project: &mut Project, shots: Vec<ShotData>) -> LineId {
     project
-        .add_section(SectionData {
+        .add_line(LineData {
             shots,
             ..Default::default()
         })
         .id
 }
 
-fn st(section: SectionId, index: u32) -> StationRef {
-    StationRef::new(section, index)
+fn st(line: LineId, index: u32) -> StationRef {
+    StationRef::new(line, index)
 }
 
 /// Plant a closure directly, bypassing `create_loop_closure`'s refusal - the
@@ -68,7 +68,7 @@ fn gap(stations: &[Station], a: StationRef, b: StationRef) -> f64 {
 
 /// The issue's survey: A two shots east, B north/east/south, merged at their
 /// starts, with the far ends B:3 and A:2 0.5 m apart.
-fn issue_loop() -> (Project, SectionId, SectionId) {
+fn issue_loop() -> (Project, LineId, LineId) {
     let mut p = Project::new("737".to_string(), None);
     let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let b = add(
@@ -78,10 +78,13 @@ fn issue_loop() -> (Project, SectionId, SectionId) {
     p.merge_stations(st(a, 0), st(b, 0)).unwrap();
     p.create_loop_closure(st(b, 3), st(a, 2), ClosureStrategy::Batch)
         .unwrap();
+    // Named as the app holds them: lines `Line 1`, `Line 2`, stations by index.
+    p.ensure_station_identities();
     (p, a, b)
 }
 
-const SPANS_A1_A2: &str = "This closure would join the two ends of one shot (0:1 to 0:2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.";
+/// The refusal names the shot's two stations the way the user reads them.
+const SPANS_A1_A2: &str = "This closure would join the two ends of one shot (Line 1 / 1 to Line 1 / 2) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.";
 
 // ---- the helper -------------------------------------------------------------
 
@@ -217,7 +220,7 @@ fn a_closure_across_two_shots_is_a_real_loop() {
 fn a_closure_that_collapses_two_shots_reports_the_lowest() {
     // A:1 merged to B:1 and a real loop closure A:2-B:2 make two knots,
     // {A:1, B:1} and {A:2, B:2}. A closure joining them collapses BOTH shots
-    // A:1-A:2 and B:1-B:2; the lowest (section, shot) is the one reported.
+    // A:1-A:2 and B:1-B:2; the lowest (line, shot) is the one reported.
     let mut p = Project::new("two".to_string(), None);
     let a = add(&mut p, vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
     let b = add(&mut p, vec![shot(0.0, 10.0), shot(0.0, 10.0)]);
@@ -278,7 +281,7 @@ fn creation_refuses_a_closure_across_one_shot_for_every_strategy() {
     }
     assert_eq!(p.loop_closures.len(), 1, "nothing was created");
     assert_eq!(p.closure_spans_one_shot(st(a, 1), st(a, 2)), Some((a, 1)));
-    assert_eq!(closure_across_one_shot_refusal((a, 1)), SPANS_A1_A2);
+    assert_eq!(p.closure_across_one_shot_message((a, 1)), SPANS_A1_A2);
 }
 
 /// Positions of every station, keyed for comparison.
@@ -287,7 +290,7 @@ fn positions(stations: &[Station]) -> Vec<(StationRef, (f64, f64))> {
         .iter()
         .map(|s| (s.station_ref, (s.coordinates.x, s.coordinates.y)))
         .collect();
-    v.sort_by_key(|(r, _)| (r.section_id, r.station_index));
+    v.sort_by_key(|(r, _)| (r.line_id, r.station_index));
     v
 }
 
@@ -469,6 +472,7 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
             (st(b, 1), st(far, 1)), // valid loop
             (st(c, 1), st(far, 1)), // valid loop
         ];
+        p.ensure_station_identities();
         (p, pairs)
     }
     let (mut seq, pairs) = build();
@@ -493,7 +497,7 @@ fn batch_creation_refuses_the_same_pairs_with_the_same_messages() {
     );
     assert!(errs[4]
         .as_deref()
-        .is_some_and(|e| e.contains("one shot (2:0 to 2:1)")));
+        .is_some_and(|e| e.contains("one shot (Line 3 / 0 to Line 3 / 1)")));
     assert!(errs[5].is_none() && errs[6].is_none(), "{errs:?}");
     let ids = |p: &Project| {
         p.loop_closures
@@ -608,21 +612,21 @@ fn random_closures_never_fail_the_solve_and_match_the_solve_without_the_skipped_
     let mut saw_skipped = 0;
     for _case in 0..60 {
         let mut p = Project::new("fuzz".to_string(), None);
-        let mut sections = Vec::new();
+        let mut lines = Vec::new();
         for i in 0..(2 + next(3)) {
             let shots = (0..=next(4))
                 .map(|_| shot(next(360) as f64, 3.0 + next(10) as f64))
                 .collect();
             let id = add(&mut p, shots);
             if i > 0 {
-                let prev: SectionId = sections[next(sections.len() as u64) as usize];
-                let len = p.get_section(prev).unwrap().shots.len() as u64;
+                let prev: LineId = lines[next(lines.len() as u64) as usize];
+                let len = p.get_line(prev).unwrap().shots.len() as u64;
                 let _ = p.merge_stations(st(id, 0), st(prev, next(len + 1) as u32));
             }
-            sections.push(id);
+            lines.push(id);
         }
         let stations: Vec<StationRef> = p
-            .sections
+            .lines
             .iter()
             .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
             .collect();
@@ -675,8 +679,8 @@ fn random_closures_never_fail_the_solve_and_match_the_solve_without_the_skipped_
 #[test]
 fn a_closure_joining_two_datums_is_reported_as_a_failure_and_a_sibling_still_adjusts() {
     let mut p = Project::new("datums".to_string(), None);
-    // Component 1: two datum-anchored sections tied datum-to-datum by a closure,
-    // which creation allows ("both sections have fixed coordinates").
+    // Component 1: two datum-anchored lines tied datum-to-datum by a closure,
+    // which creation allows ("both lines have fixed coordinates").
     let x = add(&mut p, vec![shot(90.0, 10.0)]);
     let y = add(&mut p, vec![shot(0.0, 10.0)]);
     p.set_zero_datum(st(x, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
@@ -698,12 +702,12 @@ fn a_closure_joining_two_datums_is_reported_as_a_failure_and_a_sibling_still_adj
     let report = p.compute_adjusted_stations(&ClosureAdjustmentConfig::default());
     assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
     let failure = &report.failures[0];
-    assert_eq!(failure.section_ids, {
+    assert_eq!(failure.line_ids, {
         let mut v = vec![x, y];
         v.sort_unstable();
         v
     });
-    assert!(failure.section_ids.contains(&failure.anchor.section_id));
+    assert!(failure.line_ids.contains(&failure.anchor.line_id));
     assert_eq!(
         failure.error,
         "Multiple placement zero datums in a single constraint group"
@@ -731,7 +735,7 @@ fn a_closure_joining_two_datums_is_reported_as_a_failure_and_a_sibling_still_adj
 fn every_known_solver_error_has_a_plain_reason() {
     let failure = |error: &str| crate::AdjustmentFailure {
         anchor: st(0, 0),
-        section_ids: vec![0],
+        line_ids: vec![0],
         error: error.to_string(),
     };
     for (raw, starts) in [
@@ -740,7 +744,7 @@ fn every_known_solver_error_has_a_plain_reason() {
             "loop closures tie two zero datums",
         ),
         (
-            "Least squares adjustment produced inconsistent section translation",
+            "Least squares adjustment produced inconsistent line translation",
             "the loop closures here could not be solved",
         ),
         (
@@ -765,7 +769,7 @@ fn the_new_wire_fields_are_omitted_when_absent_and_declared_optional() {
     use ts_rs::TS;
 
     let warning = crate::ProjectWarning {
-        section_id: 0,
+        line_id: 0,
         shot_id: 1,
         shot_index: 0,
         code: crate::CLOSURE_ACROSS_ONE_SHOT.to_string(),
@@ -831,7 +835,7 @@ fn plant_positional(project: &mut Project, id: u64, a: StationRef, b: StationRef
 
 #[test]
 fn many_skipped_closures_between_two_big_knots_stay_cheap() {
-    // A hostile or legacy file: one section of 20_000 shots, closures tying
+    // A hostile or legacy file: one line of 20_000 shots, closures tying
     // every even station into one knot and every odd station into another,
     // then 60_000 closures each joining an even station to an odd one. Every
     // one of those collapses a shot, so every one is skipped and none unites
@@ -897,9 +901,9 @@ fn across_one_shot_by_brute_force(p: &Project) -> Vec<ClosureAcrossOneShot> {
         r
     }
     let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
-    for section in &p.sections {
-        for i in 0..=section.shots.len() as u32 {
-            parent.insert(st(section.id, i), st(section.id, i));
+    for line in &p.lines {
+        for i in 0..=line.shots.len() as u32 {
+            parent.insert(st(line.id, i), st(line.id, i));
         }
     }
     let union = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
@@ -930,13 +934,13 @@ fn across_one_shot_by_brute_force(p: &Project) -> Vec<ClosureAcrossOneShot> {
         if ra == rb {
             continue;
         }
-        let mut lowest: Option<(SectionId, usize)> = None;
-        for section in &p.sections {
-            for i in 0..section.shots.len() {
-                let x = find(&parent, st(section.id, i as u32));
-                let y = find(&parent, st(section.id, i as u32 + 1));
+        let mut lowest: Option<(LineId, usize)> = None;
+        for line in &p.lines {
+            for i in 0..line.shots.len() {
+                let x = find(&parent, st(line.id, i as u32));
+                let y = find(&parent, st(line.id, i as u32 + 1));
                 if (x == ra && y == rb) || (x == rb && y == ra) {
-                    let c = (section.id, i);
+                    let c = (line.id, i);
                     lowest = Some(lowest.map_or(c, |l| l.min(c)));
                 }
             }
@@ -966,21 +970,21 @@ fn the_helper_matches_a_brute_force_reference_on_random_projects() {
     let mut skipped_total = 0;
     for _case in 0..200 {
         let mut p = Project::new("ref".to_string(), None);
-        let mut sections: Vec<SectionId> = Vec::new();
+        let mut lines: Vec<LineId> = Vec::new();
         for i in 0..=next(4) {
             let id = add(
                 &mut p,
                 (0..=next(5)).map(|_| shot(next(360) as f64, 2.0)).collect(),
             );
             if i > 0 {
-                let prev = sections[next(sections.len() as u64) as usize];
-                let len = p.get_section(prev).unwrap().shots.len() as u64;
+                let prev = lines[next(lines.len() as u64) as usize];
+                let len = p.get_line(prev).unwrap().shots.len() as u64;
                 let _ = p.merge_stations(st(id, next(2) as u32), st(prev, next(len + 1) as u32));
             }
-            sections.push(id);
+            lines.push(id);
         }
         let stations: Vec<StationRef> = p
-            .sections
+            .lines
             .iter()
             .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
             .collect();

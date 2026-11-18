@@ -4,7 +4,7 @@ import { setupMockedPage, createProject } from './helpers/app';
 /**
  * #674: a `.stalx` picked through the in-project Import door asks whether to
  * open it as a project or add its survey data to the open one. The mock's
- * `add_project_file` only records the path and appends a section, so this
+ * `add_project_file` only records the path and appends a line, so this
  * covers the frontend routing and the receipt, not the merge itself (that is
  * pinned in the Rust `project_add_tests`).
  */

@@ -25,7 +25,7 @@ describe('mapFeatureClick', () => {
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'shot',
-        sectionId: 7,
+        lineId: 7,
         shotId: 42,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
@@ -37,11 +37,11 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 5,
-        selection: { type: 'shot', sectionId: 7, shotId: 42 },
+        selection: { type: 'shot', lineId: 7, shotId: 42 },
       })
       .mockResolvedValueOnce(undefined);
 
-    await expect(mapFeatureClick(browser, { featureType: 'shot', sectionId: 7, shotId: 42 })).resolves.toMatchObject({
+    await expect(mapFeatureClick(browser, { featureType: 'shot', lineId: 7, shotId: 42 })).resolves.toMatchObject({
       point: { x: 120, y: 230 },
       selectionVerified: true,
     });
@@ -56,7 +56,7 @@ describe('mapFeatureClick', () => {
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'station',
-        sectionId: 3,
+        lineId: 3,
         stationIndex: 8,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
@@ -68,12 +68,12 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 9,
-        selection: { type: 'station', stationRef: { section_id: 3, station_index: 9 } },
+        selection: { type: 'station', stationRef: { line_id: 3, station_index: 9 } },
       })
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
+      mapFeatureClick(browser, { featureType: 'station', lineId: 3, stationIndex: 8 }),
     ).rejects.toThrow('instead of station 3:8');
   });
 
@@ -82,7 +82,7 @@ describe('mapFeatureClick', () => {
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'station',
-        sectionId: 3,
+        lineId: 3,
         stationIndex: 8,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
@@ -98,7 +98,7 @@ describe('mapFeatureClick', () => {
     await expect(
       mapFeatureClick(browser, {
         featureType: 'station',
-        sectionId: 3,
+        lineId: 3,
         stationIndex: 8,
         button: 'right',
         verifySelection: false,
@@ -112,7 +112,7 @@ describe('mapFeatureClick', () => {
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'station',
-        sectionId: 3,
+        lineId: 3,
         stationIndex: 8,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
@@ -124,12 +124,12 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 12,
-        selection: { type: 'station', stationRef: { section_id: 3, station_index: 8 } },
+        selection: { type: 'station', stationRef: { line_id: 3, station_index: 8 } },
       })
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
+      mapFeatureClick(browser, { featureType: 'station', lineId: 3, stationIndex: 8 }),
     ).rejects.toThrow('did not reach a semantic map interaction handler');
   });
 
@@ -138,7 +138,7 @@ describe('mapFeatureClick', () => {
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'station',
-        sectionId: 3,
+        lineId: 3,
         stationIndex: 8,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
@@ -151,7 +151,7 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
+      mapFeatureClick(browser, { featureType: 'station', lineId: 3, stationIndex: 8 }),
     ).rejects.toThrow('pointer dispatch failed');
     expect(evalInAppMock.mock.calls[2]?.[1]).toContain('__stalagmight_clear_map_target__');
   });

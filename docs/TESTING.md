@@ -182,10 +182,10 @@ and the focus trap need. Both are required.
 | Dialogs | `<name>-dialog` | `new-project-dialog` |
 | Form inputs | `<field>-input` | `project-name-input` |
 | Statistics | `stats-<metric>` | `stats-total-length` |
-| Detail panel links | `<type>-<sectionId>-<position>-link` | `station-2-5-link`, `shot-2-3-link` |
-| Section links | `section-<sectionId>-link` | `section-2-link` |
+| Detail panel links | `<type>-<lineId>-<position>-link` | `station-2-5-link`, `shot-2-3-link` |
+| Line links | `line-<lineId>-link` | `line-2-link` |
 | Center-map buttons | `center-<type>-button` | `center-station-button` |
-| Detail views | `<type>-detail` | `station-detail`, `section-detail` |
+| Detail views | `<type>-detail` | `station-detail`, `line-detail` |
 
 Keep an id stable once a test uses it. Renaming one is a breaking change to the
 suite.

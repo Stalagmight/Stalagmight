@@ -1,14 +1,14 @@
 //! Per-shot survey credit through the command path: `EditShotCredit`, its one
-//! undo step, the legacy section-level surveyor/date, inheritance by new shots,
-//! and old undo payloads that still carry a section surveyor.
+//! undo step, the legacy line-level surveyor/date, inheritance by new shots,
+//! and old undo payloads that still carry a line surveyor.
 
 use chrono::NaiveDate;
 
 use super::AppState;
 use crate::core::{Command, UndoData};
 use crate::models::{
-    CreditEdit, CreditTargets, ImportPlacement, ImportSectionConfig, Person, SectionId,
-    SectionUpdates, ShotData, ShotId, SurveyCredit,
+    CreditEdit, CreditTargets, ImportLineConfig, ImportPlacement, LineId, LineUpdates, Person,
+    ShotData, ShotId, SurveyCredit,
 };
 
 fn shot(length: f64) -> ShotData {
@@ -49,23 +49,24 @@ fn state_with_project() -> AppState {
     state
 }
 
-fn create_section(state: &AppState, surveyor: Option<&str>, shots: Vec<ShotData>) -> SectionId {
-    let r = state.execute(Command::CreateSection {
+fn create_line(state: &AppState, surveyor: Option<&str>, shots: Vec<ShotData>) -> LineId {
+    let r = state.execute(Command::CreateLine {
         name: Some("S".to_string()),
         surveyor: surveyor.map(str::to_string),
         date: None,
         color: "#123456".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(r.success, "{:?}", r.error);
-    r.section_id.unwrap()
+    r.line_id.unwrap()
 }
 
-fn credits(state: &AppState, section_id: SectionId) -> Vec<SurveyCredit> {
+fn credits(state: &AppState, line_id: LineId) -> Vec<SurveyCredit> {
     let project = state.get_project_state().unwrap();
     project
-        .get_section(section_id)
+        .get_line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -73,10 +74,10 @@ fn credits(state: &AppState, section_id: SectionId) -> Vec<SurveyCredit> {
         .collect()
 }
 
-fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
+fn shot_ids(state: &AppState, line_id: LineId) -> Vec<ShotId> {
     let project = state.get_project_state().unwrap();
     project
-        .get_section(section_id)
+        .get_line(line_id)
         .unwrap()
         .shots
         .iter()
@@ -89,14 +90,14 @@ fn undo_len(state: &AppState) -> usize {
 }
 
 #[test]
-fn a_section_wide_edit_is_one_undo_step_and_round_trips() {
+fn a_line_wide_edit_is_one_undo_step_and_round_trips() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
     let before = credits(&state, sid);
     let steps = undo_len(&state);
 
     let r = state.execute(Command::EditShotCredit {
-        targets: CreditTargets::Section { section_id: sid },
+        targets: CreditTargets::Line { line_id: sid },
         edit: CreditEdit {
             add_surveyors: Some(vec![person("Ann"), person("Bo")]),
             set_date: Some(day(3)),
@@ -104,7 +105,7 @@ fn a_section_wide_edit_is_one_undo_step_and_round_trips() {
         },
     });
     assert!(r.success, "{:?}", r.error);
-    assert_eq!(r.section_ids, vec![sid]);
+    assert_eq!(r.line_ids, vec![sid]);
     let after = credits(&state, sid);
     assert!(after
         .iter()
@@ -142,7 +143,7 @@ fn a_section_wide_edit_is_one_undo_step_and_round_trips() {
 #[test]
 fn credit_edits_run_inside_a_batch_as_one_undo_step() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     let ids = shot_ids(&state, sid);
     let before = credits(&state, sid);
     let steps = undo_len(&state);
@@ -158,6 +159,7 @@ fn credit_edits_run_inside_a_batch_as_one_undo_step() {
 
     let r = state.execute(Command::Batch {
         commands: vec![set(ids[0], "Ann"), set(ids[1], "Bo")],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     assert_eq!(
@@ -169,39 +171,40 @@ fn credit_edits_run_inside_a_batch_as_one_undo_step() {
     assert_eq!(credits(&state, sid), before);
 }
 
-/// Edit Section's Save: a rename and a credit edit in ONE batch are one undo
+/// Edit Line's Save: a rename and a credit edit in ONE batch are one undo
 /// step - a single undo restores both, and nothing else is left to undo.
 #[test]
 fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     let before = credits(&state, sid);
     let steps = undo_len(&state);
 
     let r = state.execute(Command::Batch {
         commands: vec![
-            Command::UpdateSectionMetadata {
-                section_id: sid,
-                updates: SectionUpdates {
+            Command::UpdateLineMetadata {
+                line_id: sid,
+                updates: LineUpdates {
                     name: Some(Some("Renamed".to_string())),
                     ..Default::default()
                 },
             },
             Command::EditShotCredit {
-                targets: CreditTargets::Section { section_id: sid },
+                targets: CreditTargets::Line { line_id: sid },
                 edit: CreditEdit {
                     add_surveyors: Some(vec![person("Ann")]),
                     ..Default::default()
                 },
             },
         ],
+        label: None,
     });
     assert!(r.success, "{:?}", r.error);
     let name = |state: &AppState| {
         state
             .get_project_state()
             .unwrap()
-            .get_section(sid)
+            .get_line(sid)
             .unwrap()
             .name
             .clone()
@@ -221,7 +224,7 @@ fn a_rename_and_a_credit_edit_batch_into_one_undo_step() {
 #[test]
 fn explicit_targets_touch_only_those_shots_and_label_the_role() {
     let state = state_with_project();
-    let sid = create_section(&state, Some("Old"), vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(&state, Some("Old"), vec![shot(1.0), shot(2.0), shot(3.0)]);
     let ids = shot_ids(&state, sid);
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Shots {
@@ -253,7 +256,7 @@ fn explicit_targets_touch_only_those_shots_and_label_the_role() {
 #[test]
 fn an_unknown_target_fails_and_records_nothing() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0)]);
     let steps = undo_len(&state);
     let r = state.execute(Command::EditShotCredit {
         targets: CreditTargets::Shots {
@@ -266,7 +269,7 @@ fn an_unknown_target_fails_and_records_nothing() {
     });
     assert!(!r.success);
     let r = state.execute(Command::EditShotCredit {
-        targets: CreditTargets::Section { section_id: 77 },
+        targets: CreditTargets::Line { line_id: 77 },
         edit: CreditEdit::default(),
     });
     assert!(!r.success);
@@ -276,10 +279,10 @@ fn an_unknown_target_fails_and_records_nothing() {
 #[test]
 fn an_edit_that_changes_nothing_pushes_no_undo_step() {
     let state = state_with_project();
-    let sid = create_section(&state, Some("Ann"), vec![shot(1.0)]);
+    let sid = create_line(&state, Some("Ann"), vec![shot(1.0)]);
     let steps = undo_len(&state);
     let r = state.execute(Command::EditShotCredit {
-        targets: CreditTargets::Section { section_id: sid },
+        targets: CreditTargets::Line { line_id: sid },
         edit: CreditEdit {
             add_surveyors: Some(vec![person("ann")]),
             ..Default::default()
@@ -292,11 +295,11 @@ fn an_edit_that_changes_nothing_pushes_no_undo_step() {
 #[test]
 fn the_undo_record_addresses_shots_by_uuid_and_survives_json() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     assert!(
         state
             .execute(Command::EditShotCredit {
-                targets: CreditTargets::Section { section_id: sid },
+                targets: CreditTargets::Line { line_id: sid },
                 edit: CreditEdit {
                     set_explorers: Some(vec![person("Ex")]),
                     ..Default::default()
@@ -330,11 +333,11 @@ fn the_undo_record_addresses_shots_by_uuid_and_survives_json() {
 }
 
 #[test]
-fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
+fn a_legacy_line_surveyor_edit_sets_every_shot_and_undoes_exactly() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
     let ids = shot_ids(&state, sid);
-    // Three different credits, so a section-level undo could not restore them.
+    // Three different credits, so a line-level undo could not restore them.
     for (i, id) in ids.iter().enumerate() {
         let name = format!("P{i}");
         assert!(
@@ -354,9 +357,9 @@ fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
     }
     let before = credits(&state, sid);
 
-    let r = state.execute(Command::UpdateSectionMetadata {
-        section_id: sid,
-        updates: SectionUpdates {
+    let r = state.execute(Command::UpdateLineMetadata {
+        line_id: sid,
+        updates: LineUpdates {
             name: Some(Some("Renamed".to_string())),
             surveyor: Some(Some("nh / ds".to_string())),
             ..Default::default()
@@ -371,10 +374,10 @@ fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
         );
     }
 
-    // The history shows the legacy edit like any section edit, its old value
+    // The history shows the legacy edit like any line edit, its old value
     // read off the per-shot record.
     let top = &state.get_undo_stack()[0];
-    assert_eq!(top.command_type, "update_section_metadata");
+    assert_eq!(top.command_type, "update_line_metadata");
     let preview = top.preview_data.as_ref().unwrap();
     let surveyor = preview
         .changes
@@ -387,13 +390,13 @@ fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
     assert!(state.undo().success);
     assert_eq!(credits(&state, sid), before);
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.get_section(sid).unwrap().name.as_deref(), Some("S"));
+    assert_eq!(project.get_line(sid).unwrap().name.as_deref(), Some("S"));
 
     assert!(state.redo().success);
     assert_eq!(credits(&state, sid), after);
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.get_section(sid).unwrap().name.as_deref(),
+        project.get_line(sid).unwrap().name.as_deref(),
         Some("Renamed")
     );
 }
@@ -401,12 +404,12 @@ fn a_legacy_section_surveyor_edit_sets_every_shot_and_undoes_exactly() {
 #[test]
 fn a_legacy_date_edit_sets_every_shot() {
     let state = state_with_project();
-    let sid = create_section(&state, Some("A"), vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, Some("A"), vec![shot(1.0), shot(2.0)]);
     assert!(
         state
-            .execute(Command::UpdateSectionMetadata {
-                section_id: sid,
-                updates: SectionUpdates {
+            .execute(Command::UpdateLineMetadata {
+                line_id: sid,
+                updates: LineUpdates {
                     date: Some(day(9)),
                     ..Default::default()
                 },
@@ -425,7 +428,7 @@ fn a_legacy_date_edit_sets_every_shot() {
 #[test]
 fn a_new_shot_inherits_its_neighbours_credit() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     let ids = shot_ids(&state, sid);
     let first = credit(&["First"], &[], day(1));
     let second = credit(&["Second"], &["X"], day(2));
@@ -449,7 +452,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
 
     // Append: the previous (last) shot.
     let appended = state.execute(Command::CreateShot {
-        section_id: sid,
+        line_id: sid,
         shot: shot(3.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -459,7 +462,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
     assert!(
         state
             .execute(Command::CreateShot {
-                section_id: sid,
+                line_id: sid,
                 shot: shot(4.0),
                 after_shot_id: Some(ids[0]),
                 before_shot_id: None,
@@ -470,7 +473,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
     assert!(
         state
             .execute(Command::CreateShot {
-                section_id: sid,
+                line_id: sid,
                 shot: shot(5.0),
                 after_shot_id: None,
                 before_shot_id: Some(ids[0]),
@@ -482,7 +485,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
     assert!(
         state
             .execute(Command::CreateShot {
-                section_id: sid,
+                line_id: sid,
                 shot: ShotData {
                     credit: Some(own.clone().into()),
                     ..shot(6.0)
@@ -515,7 +518,7 @@ fn a_new_shot_inherits_its_neighbours_credit() {
 #[test]
 fn a_split_gives_both_pieces_the_shots_credit() {
     let state = state_with_project();
-    let sid = create_section(&state, Some("Split Person"), vec![shot(4.0), shot(4.0)]);
+    let sid = create_line(&state, Some("Split Person"), vec![shot(4.0), shot(4.0)]);
     let ids = shot_ids(&state, sid);
     let r = state.execute_split_shot_at_distance(sid, ids[0], 1.5);
     assert!(r.success, "{:?}", r.error);
@@ -527,28 +530,28 @@ fn a_split_gives_both_pieces_the_shots_credit() {
 }
 
 #[test]
-fn an_old_snapshot_with_a_section_surveyor_restores_people_onto_shots() {
+fn an_old_snapshot_with_a_line_surveyor_restores_people_onto_shots() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     let snapshot = state.capture_project_snapshot().unwrap();
     let mut json: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-    // What a build before per-shot credit wrote: section-level text, shots bare.
-    let section = json["sections"]
+    // What a build before per-shot credit wrote: line-level text, shots bare.
+    let line = json["lines"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
         .find(|s| s["id"] == sid)
         .unwrap();
-    section["surveyor"] = serde_json::json!("nh / ds");
-    section["date"] = serde_json::json!("2019-07-01");
+    line["surveyor"] = serde_json::json!("nh / ds");
+    line["date"] = serde_json::json!("2019-07-01");
     let old = json.to_string();
 
     let mut slot = None;
     assert!(AppState::restore_snapshot_into(&mut slot, &old));
     let project = slot.unwrap();
-    let section = project.get_section(sid).unwrap();
-    assert!(section.legacy_surveyor.is_none());
-    for shot in &section.shots {
+    let line = project.get_line(sid).unwrap();
+    assert!(line.legacy_surveyor.is_none());
+    for shot in &line.shots {
         assert_eq!(
             shot.credit(),
             &credit(&["ds"], &["nh"], NaiveDate::from_ymd_opt(2019, 7, 1))
@@ -557,19 +560,19 @@ fn an_old_snapshot_with_a_section_surveyor_restores_people_onto_shots() {
 }
 
 #[test]
-fn an_old_created_section_entry_with_a_surveyor_restores_people_onto_shots() {
+fn an_old_created_line_entry_with_a_surveyor_restores_people_onto_shots() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0)]);
-    // The redo of a `CreateSection` entry persisted before per-shot credit:
-    // its `SectionData` still carries the section-level surveyor.
-    let r = state.restore_section(
+    let sid = create_line(&state, None, vec![shot(1.0)]);
+    // The redo of a `CreateLine` entry persisted before per-shot credit:
+    // its `LineData` still carries the line-level surveyor.
+    let r = state.restore_line(
         sid + 1,
-        crate::models::SectionData {
+        crate::models::LineData {
             surveyor: Some("Doe, John".to_string()),
             shots: vec![shot(2.0)],
             ..Default::default()
         },
-        &crate::models::SectionIdentity::default(),
+        &crate::models::LineIdentity::default(),
     );
     assert!(r.success, "{:?}", r.error);
     assert_eq!(
@@ -583,8 +586,9 @@ fn import_overrides_replace_every_shots_credit() {
     let state = state_with_project();
     let mut file_shot = shot(1.0);
     file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)).into());
-    let config = ImportSectionConfig {
-        section_index: 0,
+    let config = ImportLineConfig {
+        cave_section: None,
+        line_index: 0,
         name: Some("Imported".to_string()),
         surveyor: None,
         date: None,
@@ -601,7 +605,7 @@ fn import_overrides_replace_every_shots_credit() {
         reverse: false,
         azimuth_reference: None,
     };
-    let r = state.execute_import_sections(
+    let r = state.execute_import_lines(
         vec![config],
         Vec::new(),
         None,
@@ -610,7 +614,7 @@ fn import_overrides_replace_every_shots_credit() {
         crate::core::VirtualShotMode::Auto,
     );
     assert!(r.success, "{:?}", r.error);
-    let sid = r.section_ids[0];
+    let sid = r.line_ids[0];
     assert_eq!(
         credits(&state, sid),
         vec![
@@ -627,7 +631,7 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
     let path = temp.path().join("credit.stalx");
     let (sid, before, after) = {
         let state = state_with_project();
-        let sid = create_section(&state, Some("nh / ds"), vec![shot(1.0), shot(2.0)]);
+        let sid = create_line(&state, Some("nh / ds"), vec![shot(1.0), shot(2.0)]);
         let before = credits(&state, sid);
         let ids = shot_ids(&state, sid);
         assert!(
@@ -662,22 +666,22 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
 }
 
 #[test]
-fn a_shotless_section_keeps_its_surveyor_until_its_first_shot_takes_it() {
+fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     let state = state_with_project();
-    let sid = create_section(&state, Some("nh / ds"), Vec::new());
+    let sid = create_line(&state, Some("nh / ds"), Vec::new());
     let legacy = |state: &AppState| {
         let project = state.get_project_state().unwrap();
-        let section = project.get_section(sid).unwrap();
-        (section.legacy_surveyor.clone(), section.legacy_date)
+        let line = project.get_line(sid).unwrap();
+        (line.legacy_surveyor.clone(), line.legacy_date)
     };
     assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
 
-    // A legacy edit of a shot-less section edits the pair, undoably.
+    // A legacy edit of a shot-less line edits the pair, undoably.
     assert!(
         state
-            .execute(Command::UpdateSectionMetadata {
-                section_id: sid,
-                updates: SectionUpdates {
+            .execute(Command::UpdateLineMetadata {
+                line_id: sid,
+                updates: LineUpdates {
                     surveyor: Some(Some("Solo".to_string())),
                     date: Some(day(4)),
                     ..Default::default()
@@ -689,9 +693,9 @@ fn a_shotless_section_keeps_its_surveyor_until_its_first_shot_takes_it() {
     assert!(state.undo().success);
     assert_eq!(legacy(&state), (Some("nh / ds".to_string()), None));
 
-    // The first shot takes the pair as its credit; the section lets it go.
+    // The first shot takes the pair as its credit; the line lets it go.
     let appended = state.execute(Command::CreateShot {
-        section_id: sid,
+        line_id: sid,
         shot: shot(1.0),
         after_shot_id: None,
         before_shot_id: None,
@@ -714,7 +718,7 @@ fn a_shotless_section_keeps_its_surveyor_until_its_first_shot_takes_it() {
 #[test]
 fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
     let state = state_with_project();
-    let sid = create_section(&state, None, vec![shot(1.0), shot(2.0)]);
+    let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
     let ids = shot_ids(&state, sid);
     assert!(
         state
@@ -731,7 +735,7 @@ fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
     );
     // Strip every uuid, as a pre-uuid file loads.
     let mut project = state.get_project_state().unwrap();
-    for shot in &mut project.get_section_mut(sid).unwrap().shots {
+    for shot in &mut project.get_line_mut(sid).unwrap().shots {
         shot.uuid = None;
     }
     project.rebuild_shot_uuid_index();
@@ -740,9 +744,9 @@ fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
 
     assert!(
         state
-            .execute(Command::UpdateSectionMetadata {
-                section_id: sid,
-                updates: SectionUpdates {
+            .execute(Command::UpdateLineMetadata {
+                line_id: sid,
+                updates: LineUpdates {
                     surveyor: Some(Some("Everyone".to_string())),
                     ..Default::default()
                 },
@@ -766,11 +770,11 @@ fn a_replayed_undo_credit_is_normalized() {
     use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
 
     let state = state_with_project();
-    let id = create_section(&state, None, vec![shot(3.0)]);
+    let id = create_line(&state, None, vec![shot(3.0)]);
     let uuid = state
         .get_project_state()
         .unwrap()
-        .get_section(id)
+        .get_line(id)
         .unwrap()
         .shots[0]
         .uuid
@@ -791,7 +795,7 @@ fn a_replayed_undo_credit_is_normalized() {
         date: day(9),
     };
     let change = ShotCreditChange {
-        section_id: id,
+        line_id: id,
         shot_uuid: uuid,
         before: SurveyCredit::default(),
         after: recorded,
@@ -824,8 +828,9 @@ fn an_imported_team_credit_stays_one_shared_allocation() {
                 ..shot(f64::from(i))
             })
             .collect();
-        let config = ImportSectionConfig {
-            section_index: 0,
+        let config = ImportLineConfig {
+            cave_section: None,
+            line_index: 0,
             name: Some("Team".to_string()),
             surveyor: None,
             date: None,
@@ -842,7 +847,7 @@ fn an_imported_team_credit_stays_one_shared_allocation() {
             reverse: false,
             azimuth_reference: None,
         };
-        let r = state.execute_import_sections(
+        let r = state.execute_import_lines(
             vec![config],
             Vec::new(),
             None,
@@ -852,10 +857,10 @@ fn an_imported_team_credit_stays_one_shared_allocation() {
         );
         assert!(r.success, "{:?}", r.error);
         let project = state.get_project_state().unwrap();
-        let section = project.get_section(r.section_ids[0]).unwrap();
-        let first = section.shots[0].credit.as_ref().unwrap();
+        let line = project.get_line(r.line_ids[0]).unwrap();
+        let first = line.shots[0].credit.as_ref().unwrap();
         assert!(
-            section.shots.iter().all(|s| s
+            line.shots.iter().all(|s| s
                 .credit
                 .as_ref()
                 .is_some_and(|c| std::sync::Arc::ptr_eq(c, first))),

@@ -5,7 +5,7 @@
  * `is_reference` -> `kind !== 'Normal'` rewrite left several effects testing
  * BOTH virtual kinds against the reference toggle alone, so hiding References
  * silently threw away state attached to still-visible Jumps (a selection, a
- * measure snap, a section's fit-bounds). This predicate is the single place
+ * measure snap, a line's fit-bounds). This predicate is the single place
  * that decides "is this leg currently drawn", so those effects agree.
  */
 

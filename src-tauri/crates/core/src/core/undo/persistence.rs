@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
 
 use super::{Command, PersistStack, UndoData, UndoEntry, UndoStack};
-use crate::models::{Project, SectionId, ShotId};
+use crate::models::{disk_names, LineId, Project, ShotId};
 
-/// What [`UndoData::shot_target`] hands back: the section, the target's uuid if
+/// What [`UndoData::shot_target`] hands back: the line, the target's uuid if
 /// the entry records one, and the in-session id it was recorded with.
-type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
+type ShotTarget<'a> = (LineId, Option<&'a str>, ShotId);
 
 /// Why a loaded history was dropped whole (see `drop_history_with_a_hole`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,8 +88,13 @@ struct PersistedIn {
 /// envelope, not an `UndoData`, or a compact entry that breaks the rules every
 /// delta obeys ([`check_shape`](super::ProjectDelta::check_shape): the file is untrusted input, and
 /// a delta that breaks them could build without bound).
+///
+/// The row is in the on-disk vocabulary ([`disk_names`]); the whole envelope
+/// is translated back before anything reads it, so the shape check, like
+/// every step that applies the delta later, sees the names this build
+/// serializes a project with (`lines`, `line_offsets`, ...).
 fn parse_undo_data(undo_data_json: &str) -> Option<UndoData> {
-    let data = serde_json::from_str::<PersistedIn>(undo_data_json)
+    let data = disk_names::from_disk_str::<PersistedIn>(undo_data_json)
         .ok()?
         .data;
     if let UndoData::Delta(delta) = &data {
@@ -105,8 +110,12 @@ fn parse_undo_data(undo_data_json: &str) -> Option<UndoData> {
     Some(data)
 }
 
+/// A row's payload as it is written: the envelope, in the on-disk vocabulary
+/// ([`disk_names::to_disk`] over all of it, a compact entry's member names and
+/// literal values included), so the file keeps the pre-rename names whatever
+/// the payload. [`parse_undo_data`] is the inverse.
 fn write_undo_data(undo_data: &UndoData) -> Option<String> {
-    serde_json::to_string(&PersistedOut { data: undo_data }).ok()
+    disk_names::to_disk_string(&PersistedOut { data: undo_data }).ok()
 }
 
 impl UndoStack {
@@ -143,8 +152,11 @@ impl UndoStack {
     }
 
     /// Serialize an entry to JSON.
+    ///
+    /// In the on-disk vocabulary (see [`disk_names`]): the history a file
+    /// carries stays readable by builds from before the Section -> Line rename.
     pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
+        let command_json = disk_names::to_disk_string(&entry.command).ok()?;
         let undo_data_json = write_undo_data(&entry.undo_data)?;
         Some((command_json, undo_data_json))
     }
@@ -153,7 +165,7 @@ impl UndoStack {
     pub fn serialize_entry_with_timestamp(
         entry: &UndoEntry,
     ) -> Option<(String, String, Option<String>)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
+        let command_json = disk_names::to_disk_string(&entry.command).ok()?;
         let undo_data_json = write_undo_data(&entry.undo_data)?;
         let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
         Some((command_json, undo_data_json, timestamp_str))
@@ -192,7 +204,7 @@ impl UndoStack {
     }
 
     fn deserialize_command(command_json: &str) -> Option<Command> {
-        match serde_json::from_str(command_json) {
+        match disk_names::from_disk_str(command_json) {
             Ok(command) => Some(command),
             Err(e) => {
                 tracing::warn!(
@@ -247,13 +259,13 @@ impl UndoStack {
     /// the uuid arm exists; this filter only promises to drop the entries that
     /// would WEDGE the history, not to catch every legacy misfire.
     fn shot_target_resolves(target: ShotTarget<'_>, project: &Project) -> bool {
-        let (section_id, uuid, recorded_id) = target;
+        let (line_id, uuid, recorded_id) = target;
         match uuid {
-            Some(uuid) => project.shot_id_by_uuid(section_id, uuid).is_some(),
+            Some(uuid) => project.shot_id_by_uuid(line_id, uuid).is_some(),
             // A legacy entry addresses by id, so that is what has to hold.
             None => project
-                .get_section(section_id)
-                .is_some_and(|section| section.shots.iter().any(|s| s.id == recorded_id)),
+                .get_line(line_id)
+                .is_some_and(|line| line.shots.iter().any(|s| s.id == recorded_id)),
         }
     }
 
@@ -277,13 +289,13 @@ impl UndoStack {
     /// newline forges a log line of its own) and bidi overrides dropped, then
     /// clamped on a char boundary.
     fn describe_dropped(entry: &UndoEntry, target: ShotTarget<'_>) -> String {
-        let (section_id, uuid, recorded_id) = target;
+        let (line_id, uuid, recorded_id) = target;
         let shot = uuid.map_or_else(
             || recorded_id.to_string(),
             |u| crate::core::command::sanitize_display_text(u, Self::DROPPED_UUID_CHARS),
         );
         format!(
-            "{} (section {section_id}, shot {shot})",
+            "{} (line {line_id}, shot {shot})",
             entry.command.description(),
         )
     }

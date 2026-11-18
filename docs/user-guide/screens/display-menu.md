@@ -12,7 +12,7 @@ What the map shows. Opened by **Display** in the top right of the
 ![Display menu](../images/display-menu.png)
 
 1. **Color**, one at a time:
-   - **Section**: each section in its own color.
+   - **Line**: each line in its own color.
    - **Depth**: color by depth.
    - **Distance**: color by distance along the cave from the entrances: the
      zero datums marked
@@ -26,7 +26,7 @@ What the map shows. Opened by **Display** in the top right of the
 2. **Overlays**: **Grid** and **Satellite** imagery.
 3. **Map elements**: **Stations**, **Shots**, **Jumps**, **References** and
    **Zero datum** stations.
-4. **Comments & labels**: **Section names**, **Station IDs**, **Station
+4. **Comments & labels**: **Line names**, **Station IDs**, **Station
    names**, **Station comments**, **Shot comments**, **Shot data** and **Errors**
    labels. **Errors** labels each shot with how far its readings disagree, for
    example `Δaz 23.4° Δinc 4.0° Δi/d -10.0° ΔL +0.4m`, and each loop closure with
@@ -42,10 +42,14 @@ What the map shows. Opened by **Display** in the top right of the
 
 - **Grid** adds a **Grid spacing** setting.
 - **Station IDs** and **Station names** label the stations in two ways, and
-  only one can be on: turning one on turns the other off. **Station names**
-  shows each station's name, such as the MNemo station number from a `.dmp`
-  import, and stations without a name get no label. It is unavailable when
-  the project has no station names.
+  only one can be on: turning one on turns the other off. **Station IDs**
+  shows each station's Station ID, the number unique in the project.
+  **Station names** shows each station's name, unique within its line, such
+  as the MNemo station number from a `.dmp` import. Merged stations get one
+  label, the main line's (see
+  [Labels at merged stations](../concepts/sections-shots-stations.md#labels-at-merged-stations)).
+  See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - **Closures Computed View** is unavailable when there are no loop closures
   and no GPS fixes to adjust. Edit in the **Raw Data View**.
 - **Distance** needs at least one zero datum: with none, no station is

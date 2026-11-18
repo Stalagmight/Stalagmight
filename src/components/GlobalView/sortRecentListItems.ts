@@ -30,7 +30,7 @@ export function sortRecentListItems(
       return Number.isFinite(timestamp) ? timestamp : undefined;
     }
     if (item.kind !== 'available') return undefined;
-    return field === 'sections' ? item.project.section_count : item.project.total_length;
+    return field === 'lines' ? item.project.line_count : item.project.total_length;
   };
   const sign = direction === 'asc' ? 1 : -1;
   return [...items].sort((a, b) => {

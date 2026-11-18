@@ -4,24 +4,24 @@
  * `ZeroDatumConfigDialog` writes ONE `stationIndex` from two pickers, and used
  * to feed it to a third consumer, each in a different index space:
  *   - the dropdown counts surviving editable rows (`survivors + 1` options);
- *   - `SectionPreview` numbers the dots it draws, i.e. the section's
+ *   - `LinePreview` numbers the dots it draws, i.e. the line's
  *     `shot_type === 'Standard'` shots, from 0;
  *   - `adjustStationForDeletedShots` maps from the `EditableShot.id` space,
  *     which is a position in the `isImportableDmpShot`-filtered file order.
  *
- * Those three coincide only for a section with no non-Standard shots, no
+ * Those three coincide only for a line with no non-Standard shots, no
  * length-1 shots and no deletions. This file pins the first two back together:
  * the preview is now built with `editableShotsToDmpSection`, so the dots it
  * draws are exactly the dialog's stations.
  *
- * `.tsx` so vitest runs it under jsdom - `SectionPreview` imports maplibre-gl at
+ * `.tsx` so vitest runs it under jsdom - `LinePreview` imports maplibre-gl at
  * module load, which the node tier cannot execute.
  */
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
-import { computeStationsFromDmpShots } from '../../components/Dialogs/SectionPreview';
+import { computeStationsFromDmpShots } from '../../components/Dialogs/LinePreview';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotsToDmpSection } from '../shotConversion';
 import { blankEditableShot } from '../../components/common/editableShot';
@@ -51,7 +51,7 @@ function standardShot(length: number): DmpShot {
   };
 }
 
-function section(shots: DmpShot[]): DmpSection {
+function line(shots: DmpShot[]): DmpSection {
   return {
     version: 1,
     name: 'Anchor',
@@ -69,22 +69,22 @@ function dialogStationCount(shots: EditableShot[]): number {
   return shots.filter(isEmittedShot).length + 1;
 }
 
-/** The dots `SectionPreview` actually draws for a section. */
+/** The dots `LinePreview` actually draws for a line. */
 function clickableDots(preview: DmpSection): number {
   return computeStationsFromDmpShots(preview.shots.filter((s) => s.shot_type === 'Standard')).length;
 }
 
 describe('zero-datum station domains', () => {
   it('a length-1 shot desynchronises the raw preview from the shot table, with nothing deleted', () => {
-    // A plain DMP section: four Standard shots, one of them the length-1 filler
+    // A plain DMP line: four Standard shots, one of them the length-1 filler
     // the importer skips by default.
-    const raw = section([standardShot(5), standardShot(1), standardShot(5), standardShot(5)]);
+    const raw = line([standardShot(5), standardShot(1), standardShot(5), standardShot(5)]);
     const editable = convertToEditableShots(raw.shots);
 
     expect(editable).toHaveLength(3);
     expect(dialogStationCount(editable)).toBe(4);
 
-    // What the preview used to draw: the raw section, five clickable dots for a
+    // What the preview used to draw: the raw line, five clickable dots for a
     // dialog that only offers four stations. Clicking the last dot committed a
     // station the dropdown cannot even name.
     expect(clickableDots(raw)).toBe(5);
@@ -94,7 +94,7 @@ describe('zero-datum station domains', () => {
   });
 
   it('a deletion keeps the dots and the dropdown in step', () => {
-    const raw = section([standardShot(5), standardShot(5), standardShot(5)]);
+    const raw = line([standardShot(5), standardShot(5), standardShot(5)]);
     const editable = convertToEditableShots(raw.shots);
     const afterDelete = editable.map((s, i) => (i === 0 ? { ...s, isDeleted: true } : s));
 
@@ -104,7 +104,7 @@ describe('zero-datum station domains', () => {
   });
 
   it('emits every surviving row as Standard so the preview filter cannot drop one', () => {
-    const raw = section([standardShot(5), standardShot(5)]);
+    const raw = line([standardShot(5), standardShot(5)]);
     const editable = convertToEditableShots(raw.shots);
     // A row the user re-typed to length 1 must still be drawn and still be
     // sent: `isImportableDmpShot` is an import-time default, not a live filter.
@@ -124,7 +124,7 @@ describe('zero-datum station domains', () => {
    * the one meant.
    */
   it('drops a blank new row from the preview geometry', () => {
-    const raw = section([standardShot(5), standardShot(5)]);
+    const raw = line([standardShot(5), standardShot(5)]);
     const withBlank = [...convertToEditableShots(raw.shots), blankEditableShot(99)];
 
     const preview = editableShotsToDmpSection(raw, withBlank);
@@ -139,15 +139,15 @@ describe('zero-datum station domains', () => {
     // Only a WHOLLY blank row is dropped. A row holding one measurement is the
     // user's work in progress: it is drawn, counted and refused at Confirm,
     // which is the one place that can say why.
-    const raw = section([standardShot(5)]);
+    const raw = line([standardShot(5)]);
     const partial = { ...blankEditableShot(99), length: 7 };
     const rows = [...convertToEditableShots(raw.shots), partial];
     expect(editableShotsToDmpSection(raw, rows).shots).toHaveLength(2);
     expect(dialogStationCount(rows)).toBe(3);
   });
 
-  it('carries the raw section identity through, only rewriting the geometry', () => {
-    const raw = section([standardShot(5), standardShot(5)]);
+  it('carries the raw line identity through, only rewriting the geometry', () => {
+    const raw = line([standardShot(5), standardShot(5)]);
     const preview = editableShotsToDmpSection(raw, convertToEditableShots(raw.shots));
     expect(preview.name).toBe(raw.name);
     expect(preview.content_hash).toBe(raw.content_hash);
@@ -156,7 +156,7 @@ describe('zero-datum station domains', () => {
 });
 
 /**
- * A gap in the measurements costs one leg, not the whole section.
+ * A gap in the measurements costs one leg, not the whole line.
  *
  * Stations are computed from one another, so a single non-finite contribution
  * reaches every station after it: the centerline disappears and the map is asked

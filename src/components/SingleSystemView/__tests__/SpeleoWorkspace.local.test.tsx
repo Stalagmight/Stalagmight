@@ -20,7 +20,7 @@ it('local SpeleoDB tab offers only conversion and opens the project creation for
   expect(screen.queryByTestId('speleodb-workspace-upload')).toBeNull();
   expect(screen.queryByTestId('speleodb-workspace-section-history')).toBeNull();
 });
-it('the local SpeleoDB tab, opened outside Survey, offers conversion without section editors', () => {
+it('the local SpeleoDB tab, opened outside Survey, offers conversion without line editors', () => {
   render(<LeftWorkspace sections={<div>Sections content</div>} />);
   for (const mode of ['plan', 'export'] as const) {
     act(() => useUIStore.getState().setAppMode(mode));

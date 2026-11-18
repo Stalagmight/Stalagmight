@@ -17,7 +17,7 @@ export interface InteractOverlayDeps {
   measuredPathIds: Set<number> | null;
   measuredPathStationIds: Set<number> | null;
   measureTintColor: string;
-  isSectionAnchored: (sectionId: number) => boolean;
+  isLineAnchored: (lineId: number) => boolean;
   isPlanIdleActive: boolean;
   displayColorContext: DisplayColorContext;
   themeColors: MapThemeColors;
@@ -32,7 +32,7 @@ export interface InteractOverlayDeps {
 }
 
 /**
- * One interact-overlay feature for a shot ("sectionId:shotId"), drawn at
+ * One interact-overlay feature for a shot ("lineId:shotId"), drawn at
  * `width`. Kind `shotMeasured` (measure tint, round caps, above the tint
  * layer) when the shot is on the measured path, else `shot` (its exact bulk
  * color; the ramp expressions take over in distance/gas modes via the
@@ -45,19 +45,19 @@ export function shotOverlayFeature(
 ): GeoJSON.Feature | null {
   if (!deps.geoIndex || !deps.cachedSurveyData) return null;
   const [secStr, shotStr] = idStr.split(':');
-  const sectionId = Number(secStr);
+  const lineId = Number(secStr);
   const shotId = Number(shotStr);
-  if (Number.isNaN(sectionId) || Number.isNaN(shotId)) return null;
-  const geo = deps.geoIndex.shotGeometry(sectionId, shotId);
+  if (Number.isNaN(lineId) || Number.isNaN(shotId)) return null;
+  const geo = deps.geoIndex.shotGeometry(lineId, shotId);
   if (!geo) return null;
   // A shot of a hidden kind must not surface via the overlay either (#27).
   if (geo.isReference && !isKindVisible(geo.kindFlags, deps.visibleKinds)) return null;
 
   const fid = deps.parseFeatureId(idStr);
   const measured = fid !== null && deps.measuredPathIds?.has(fid);
-  const section = deps.geoIndex.section(sectionId);
+  const line = deps.geoIndex.line(lineId);
   // Plan-mode idle tint (#395 revision): a hovered/selected shot must not flash
-  // its section color while there is no gas field yet - it paints the SAME flat
+  // its line color while there is no gas field yet - it paints the SAME flat
   // far color + dim alpha the bulk geometry does.
   const idleActive = deps.isPlanIdleActive;
   const color = measured
@@ -66,7 +66,7 @@ export function shotOverlayFeature(
       ? GAS_FAR
       : resolveShotDisplayColor(
           deps.cachedSurveyData,
-          section?.color ?? deps.themeColors.stationDefault,
+          line?.color ?? deps.themeColors.stationDefault,
           geo.globalIdx,
           deps.displayColorContext,
         );
@@ -78,7 +78,7 @@ export function shotOverlayFeature(
   );
   // Gas-dim must never brighten a fainter per-kind base (a reference at 0.28
   // < GAS_DIM_ALPHA 0.45), matching the shader's min() clamp (#395 review).
-  const opacity = deps.isSectionAnchored(sectionId)
+  const opacity = deps.isLineAnchored(lineId)
     ? SHOT_ALPHA_DIMMED
     : idleActive
       ? Math.min(GAS_DIM_ALPHA, SHOT_ALPHA_BY_KIND[overlayKind])
@@ -111,7 +111,7 @@ export function shotOverlayFeature(
 }
 
 /**
- * One interact-overlay feature for a station ("sectionId:stationIndex") in
+ * One interact-overlay feature for a station ("lineId:stationIndex") in
  * hover or selected style - the same radius/stroke the old feature-state
  * paint cases produced.
  */
@@ -123,8 +123,8 @@ export function stationOverlayFeature(
 ): GeoJSON.Feature | null {
   if (!deps.geoIndex || !deps.cachedSurveyData) return null;
   const [secStr, idxStr] = idStr.split(':');
-  const ref = { section_id: Number(secStr), station_index: Number(idxStr) };
-  if (Number.isNaN(ref.section_id) || Number.isNaN(ref.station_index)) return null;
+  const ref = { line_id: Number(secStr), station_index: Number(idxStr) };
+  if (Number.isNaN(ref.line_id) || Number.isNaN(ref.station_index)) return null;
   const coords = deps.geoIndex.stationCoords(ref);
   const g = deps.geoIndex.stationGlobalIndex(ref);
   if (!coords || g === null) return null;
@@ -134,11 +134,11 @@ export function stationOverlayFeature(
     return null;
 
   const fid = deps.parseFeatureId(idStr);
-  const section = deps.geoIndex.section(ref.section_id);
+  const line = deps.geoIndex.line(ref.line_id);
   const ctx = deps.displayColorContext;
   const measured = fid !== null && deps.measuredPathStationIds?.has(fid);
   // Plan-mode idle tint (#395 revision): see shotOverlayFeature - same flat far
-  // color + dim alpha instead of section color while there is no gas field yet.
+  // color + dim alpha instead of line color while there is no gas field yet.
   const idleActive = deps.isPlanIdleActive;
   const color = measured
     ? deps.measureTintColor
@@ -146,7 +146,7 @@ export function stationOverlayFeature(
       ? GAS_FAR
       : resolveStationDisplayColor(
           deps.cachedSurveyData,
-          section?.color ?? deps.themeColors.stationDefault,
+          line?.color ?? deps.themeColors.stationDefault,
           g,
           ctx,
         );
@@ -157,7 +157,7 @@ export function stationOverlayFeature(
     strokeWidth: style === 'hover' ? 4 : 2.5,
     strokeColor:
       style === 'hover' ? deps.themeColors.hoverHighlight : deps.themeColors.selectHighlight,
-    opacity: deps.isSectionAnchored(ref.section_id) ? 0.25 : idleActive ? GAS_DIM_ALPHA : 1,
+    opacity: deps.isLineAnchored(ref.line_id) ? 0.25 : idleActive ? GAS_DIM_ALPHA : 1,
   };
   if (deps.distanceMode && fid !== null) {
     properties.dist = deps.distanceState?.stations.get(fid) ?? -1;

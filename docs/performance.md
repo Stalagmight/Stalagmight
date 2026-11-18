@@ -11,7 +11,7 @@ The loop closure adjustment solves a weighted least-squares system to distribute
 survey errors across the network. The normal equations form a weighted graph
 Laplacian matrix - each edge (shot) contributes a constraint between two station
 groups, with weights derived from measurement uncertainties (sigma for length and
-azimuth, scaled by section quality).
+azimuth, scaled by line quality).
 
 ### Problem structure
 
@@ -65,7 +65,7 @@ in one pass. However:
 
 ### Profiling results
 
-On a project with ~500 sections (~10,000 stations):
+On a project with ~500 lines (~10,000 stations):
 - **Before (dense LU):** `adjust_least_squares` consumed 96.78% of CPU for
   multiple minutes. The inner loop was a Gaussian elimination kernel
   (movsd/mulsd/subsd) operating on a dense n×n matrix.
@@ -92,7 +92,7 @@ The original `is_shot_frozen()` ran two BFS traversals per shot - one from each
 endpoint - to check if both sides can still reach a datum station when the shot
 is excluded. With S shots and V stations:
 
-**Complexity:** O(S × V) - for 500 sections with ~20 shots each, this means
+**Complexity:** O(S × V) - for 500 lines with ~20 shots each, this means
 ~20,000 BFS operations, each visiting up to V stations.
 
 ### Current approach: Tarjan's bridge detection
@@ -111,7 +111,7 @@ The key insight is that frozen/non-frozen status is determined by the graph's
 The algorithm:
 
 1. **Index stations** into compact integers for array-based access.
-2. **Build adjacency list** with edge metadata (is_shot, section_id, shot_index)
+2. **Build adjacency list** with edge metadata (is_shot, line_id, shot_index)
    from shots, merges, and aligned closures.
 3. **Iterative Tarjan's DFS** (avoids stack overflow on large graphs):
    - Computes discovery times (`disc`) and low-link values (`low`)
@@ -131,14 +131,14 @@ The algorithm:
 The DFS uses a `parent_edge_skipped` flag to correctly handle the first back-
 edge to the DFS parent (skip it as the tree edge) vs subsequent edges (treat as
 back edges that prevent bridging). However, in practice the survey graph is a
-**simple graph**: shots connect consecutive intra-section stations, merges
-connect inter-section stations, and closures connect non-adjacent stations.
+**simple graph**: shots connect consecutive intra-line stations, merges
+connect inter-line stations, and closures connect non-adjacent stations.
 No two edge types can create parallel edges between the same station pair, so
 the multigraph handling is purely defensive.
 
 ### Profiling results
 
-On a project with ~500 sections, undo operations that previously stalled due to
+On a project with ~500 lines, undo operations that previously stalled due to
 `compute_frozen_shots()` dominating CPU no longer show the function in profiling
 hotspots.
 
@@ -150,7 +150,7 @@ Every command whose `Command::affects_geometry()` returns true runs a
 `remeasure_closure_alignment`, with `realign_merges` reaching
 `check_merge_alignment` and the offsets re-solve internally). That pass is
 O(total shots + total merges) and allocates two whole-project maps
-(`section_local_coords` and the resolved station offsets) - it is **not** cached
+(`line_local_coords` and the resolved station offsets) - it is **not** cached
 between calls.
 
 `UpdateShot` is in this group (a length/azimuth/depth edit moves stations, and
@@ -272,15 +272,15 @@ question that matters is what makes them bail. From `incremental.ts`:
 
 | Trigger | Why the fast paths cannot bound it |
 |---|---|
-| Structural edit (insert / delete / merge / split / reorder, and their undos) | vertex slots move, so a per-section re-emit lands in the wrong range |
+| Structural edit (insert / delete / merge / split / reorder, and their undos) | vertex slots move, so a per-line re-emit lands in the wrong range |
 | An edit that moves the survey bbox extent | the mercator anchor shifts, so every anchor-relative position changes |
 | GPS-origin change | same, via reprojection |
 | Issue-severity coloring active | severity arrays are recomputed per flush and severity is non-local |
 | Move-comment tint active | per-feature comment ownership is not tracked by the diff |
-| More than half the sections dirty | many `bufferSubData` calls lose to one rebuild (`incremental.ts:197`) |
+| More than half the lines dirty | many `bufferSubData` calls lose to one rebuild (`incremental.ts:197`) |
 
 Everything else takes a fast path: an edit that leaves the SoA layout byte-stable
-re-emits only the dirty sections' vertex ranges, and a pure global recolor
+re-emits only the dirty lines' vertex ranges, and a pure global recolor
 (analytical overlay enter/exit or recompute, theme swap, depth toggle)
 re-resolves and re-uploads only the four color buffers, skipping reprojection and
 tessellation entirely.
@@ -293,8 +293,8 @@ render stack) only when that padded viewport is exited or the slack runs out. A
 modest zoom-in inside the slack window needs no rebuild.
 
 **Hit-testing** runs per pointer move through
-`SurveyLayer.hitCandidateSections`, since `queryRenderedFeatures` returns nothing
-from a custom layer. `surveyLayer/geometryIndex.ts` caches projected section
+`SurveyLayer.hitCandidateLines`, since `queryRenderedFeatures` returns nothing
+from a custom layer. `surveyLayer/geometryIndex.ts` caches projected line
 AABBs against a camera snapshot, so a static hover reprojects once per camera
 rather than once per probe. Every camera change invalidates that cache.
 
@@ -358,7 +358,7 @@ link-time location cache (#339): in the harness (or devtools), wrap
 `getUniformLocation` / `getAttribLocation` on
 `window.__stalagmight_map__.getCanvas().getContext('webgl2')` with counters,
 run the `map-storm` scenario, and divide by frames (`map.on('render')`).
-Measured on the fractal fixture (32 sections / 116 stations, 300 jumps):
+Measured on the fractal fixture (32 lines / 116 stations, 300 jumps):
 ~54 lookups per frame before the cache, ~0.4 after - the residue is MapLibre's
 own lazy program setup on the shared context. The survey layers contribute
 zero: the only `get*Location` call sites left under `src/` are inside

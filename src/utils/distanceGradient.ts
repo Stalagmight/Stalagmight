@@ -46,7 +46,7 @@ export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
  * parameters clears the cached field to `null` (uiStore.setDistanceGradientOrigin
  * / gasPlanStore setters) and a fresh one lands a tick later. A naive
  * `field ? on : off` effect would drive the layer OFF (base colors) for that one
- * tick and back ON - a visible blink of section colors before the new ramp,
+ * tick and back ON - a visible blink of line colors before the new ramp,
  * worst under the custom renderer where OFF is a full buffer rebuild. This guard
  * splits the "off" case in two:
  *   - `'ramp'`: the field is ready → install / refresh the ramp.
@@ -87,40 +87,40 @@ export function overlayApplyAction(
  * `UNREACHABLE_DIST`. Keys use the shared `encodeFeatureId` so they line up with
  * the feature ids produced by `surveyLayer/features.ts`.
  *
- * Reads the struct-of-arrays `SurveyData` (section metadata + `shotIds`) rather
- * than `Section[].shots[]`: the overlay only needs each shot's stable id and its
- * section's shot count, so touching the lazy `section.shots` getter here would
+ * Reads the struct-of-arrays `SurveyData` (line metadata + `shotIds`) rather
+ * than `Line[].shots[]`: the overlay only needs each shot's stable id and its
+ * line's shot count, so touching the lazy `line.shots` getter here would
  * force-materialize every `Shot` object at load whenever the overlay is enabled
  * (~75k objects / ~1.3 GB for 92.stalx). The SoA path stays typed-array-only.
  */
 export function buildDistanceFeatureState(
-  data: Pick<SurveyData, 'sections' | 'shotIds'>,
+  data: Pick<SurveyData, 'lines' | 'shotIds'>,
   field: DistanceField,
 ): DistanceFeatureState {
   // station ref → distance (null = unreachable)
   const byRef = new Map<string, number | null>();
   for (let i = 0; i < field.station_refs.length; i++) {
     const r = field.station_refs[i]!;
-    byRef.set(`${r.section_id}:${r.station_index}`, field.distances[i] ?? null);
+    byRef.set(`${r.line_id}:${r.station_index}`, field.distances[i] ?? null);
   }
 
   const stations = new Map<number, number>();
   const shots = new Map<number, number>();
 
-  for (const section of data.sections) {
-    const n = section.shotCount;
+  for (const line of data.lines) {
+    const n = line.shotCount;
     // Stations: index 0..=n
     for (let idx = 0; idx <= n; idx++) {
-      const d = byRef.get(`${section.id}:${idx}`);
-      stations.set(encodeFeatureId(section.id, idx), d == null ? UNREACHABLE_DIST : d);
+      const d = byRef.get(`${line.id}:${idx}`);
+      stations.set(encodeFeatureId(line.id, idx), d == null ? UNREACHABLE_DIST : d);
     }
     // Shots: connect station i → i+1; key by the shot's stable id (from SoA).
     for (let i = 0; i < n; i++) {
-      const shotId = data.shotIds[section.shotOffset + i]!;
-      const from = byRef.get(`${section.id}:${i}`);
-      const to = byRef.get(`${section.id}:${i + 1}`);
+      const shotId = data.shotIds[line.shotOffset + i]!;
+      const from = byRef.get(`${line.id}:${i}`);
+      const to = byRef.get(`${line.id}:${i + 1}`);
       const value = from == null || to == null ? UNREACHABLE_DIST : (from + to) / 2;
-      shots.set(encodeFeatureId(section.id, shotId), value);
+      shots.set(encodeFeatureId(line.id, shotId), value);
     }
   }
 

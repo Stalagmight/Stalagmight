@@ -6,7 +6,7 @@
 //! and builds constraint groups - knots - from them
 //! (`lsq.rs`, `adjust_least_squares`). A shot whose two ends land in the same
 //! knot is skipped by the solve and keeps its measured vector, so the
-//! per-section translation check then finds two targets for one section and
+//! per-line translation check then finds two targets for one line and
 //! the whole component falls back to measured geometry.
 //!
 //! A closure that does that would squeeze that shot to zero length: its two
@@ -21,8 +21,8 @@
 //!   closure dialog;
 //! - the paths that carry closures in or make them from something else do NOT
 //!   ask, and need not: a file opened from disk, Add .stalx and Merge Projects
-//!   (`project_append`), Combine Sections (`combine_plan`, which turns a merge
-//!   that would tie the combined section to itself into a closure) and the
+//!   (`project_append`), Combine Lines (`combine_plan`, which turns a merge
+//!   that would tie the combined line to itself into a closure) and the
 //!   integrity repair's merge demotion (`integrity`). Whatever they bring, the
 //!   solve skips (`adjust_loop_closures`) and the warnings list
 //!   (`CLOSURE_ACROSS_ONE_SHOT`), from this same rule;
@@ -59,7 +59,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{SectionId, StationRef};
+use crate::{LineId, StationRef};
 
 use super::{ClosurePair, Project};
 
@@ -71,10 +71,10 @@ pub struct ClosureAcrossOneShot {
     /// The closure's own end stations (resolved, positional).
     pub station_a: StationRef,
     pub station_b: StationRef,
-    /// The shot it collapses: `(section, shot index)`, the shot between
-    /// stations `index` and `index + 1` of that section. When it would
-    /// collapse several, the lowest `(section, index)` is reported.
-    pub collapsed_shot: (SectionId, usize),
+    /// The shot it collapses: `(line, shot index)`, the shot between
+    /// stations `index` and `index + 1` of that line. When it would
+    /// collapse several, the lowest `(line, index)` is reported.
+    pub collapsed_shot: (LineId, usize),
 }
 
 impl ClosureAcrossOneShot {
@@ -84,41 +84,41 @@ impl ClosureAcrossOneShot {
     }
 }
 
-/// The user-facing refusal for a new closure that would tie the two ends of
-/// the shot `(section, shot index)` together. Shared by every creation path
-/// and the closure dialog's connectivity check, so the dialog shows exactly
-/// what the backend says.
-///
-/// This is the ONLY creation-time refusal the helper makes. A closure between
-/// two stations that other merges and closures already tie together is
-/// accepted as before: uniting two stations already in one knot changes
-/// nothing for the solve, and refusing it would drop closures from imported
-/// files.
-pub fn closure_across_one_shot_refusal(shot: (SectionId, usize)) -> String {
-    let (from, to) = shot_ends(shot);
+fn across_one_shot_text(from: &str, to: &str) -> String {
     format!(
-        "This closure would join the two ends of one shot ({} to {}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot.",
-        station_id_label(from),
-        station_id_label(to)
+        "This closure would join the two ends of one shot ({from} to {to}) and squeeze that shot to zero length. Pick two stations that are not the ends of a single shot."
     )
 }
 
-/// `S:I`, the station id the UI shows (`formatStationId`).
-pub fn station_id_label(station: StationRef) -> String {
-    format!("{}:{}", station.section_id, station.station_index)
+impl Project {
+    /// The user-facing refusal for a new closure that would tie the two ends
+    /// of the shot `(line, shot index)` together, with the two stations named
+    /// the way the user reads them (`Main Line / 4`). Shared by every creation
+    /// path and the closure dialog's connectivity check, so the dialog shows
+    /// exactly what the backend says.
+    ///
+    /// This is the ONLY creation-time refusal the helper makes. A closure
+    /// between two stations that other merges and closures already tie
+    /// together is accepted as before: uniting two stations already in one
+    /// knot changes nothing for the solve, and refusing it would drop closures
+    /// from imported files.
+    pub fn closure_across_one_shot_message(&self, shot: (LineId, usize)) -> String {
+        let (from, to) = shot_ends(shot);
+        across_one_shot_text(&self.station_text(from), &self.station_text(to))
+    }
 }
 
-fn shot_ends((section_id, shot_index): (SectionId, usize)) -> (StationRef, StationRef) {
+fn shot_ends((line_id, shot_index): (LineId, usize)) -> (StationRef, StationRef) {
     let index = u32::try_from(shot_index).unwrap_or(u32::MAX);
     (
-        StationRef::new(section_id, index),
-        StationRef::new(section_id, index.saturating_add(1)),
+        StationRef::new(line_id, index),
+        StationRef::new(line_id, index.saturating_add(1)),
     )
 }
 
-/// A shot, as `(section, shot index)`: the shot between stations `index` and
+/// A shot, as `(line, shot index)`: the shot between stations `index` and
 /// `index + 1`. Ordered, so "the lowest shot" is well defined.
-type Shot = (SectionId, usize);
+type Shot = (LineId, usize);
 
 /// Union-find over every station of the project, plus the CONTRACTED shot
 /// graph between its knots: for each knot (by root), the knots its stations
@@ -128,7 +128,7 @@ type Shot = (SectionId, usize);
 /// skipped closure does not unite anything, so a project can ask the same
 /// question about two large knots any number of times (#737).
 ///
-/// Slots are laid out section by section, so a station's shot neighbours are
+/// Slots are laid out line by line, so a station's shot neighbours are
 /// the adjacent slots. A knot that was never united keeps no map: its
 /// neighbours are read off the adjacent slots (`implicit_neighbours`) and the
 /// map is built only when it first takes part in a union. Most stations never
@@ -140,10 +140,10 @@ type Shot = (SectionId, usize);
 /// neighbours onto the survivor; an implicit neighbour needs nothing, because
 /// its map is built through `find` when it is materialised.
 pub(crate) struct Knots {
-    /// First slot of each section.
-    base: HashMap<SectionId, usize>,
-    /// Per slot: (section, station index, section shot count).
-    info: Vec<(SectionId, u32, u32)>,
+    /// First slot of each line.
+    base: HashMap<LineId, usize>,
+    /// Per slot: (line, station index, line shot count).
+    info: Vec<(LineId, u32, u32)>,
     parent: Vec<usize>,
     /// Per root: neighbour root -> lowest shot between the two knots. `None`
     /// for a slot never united (see the type docs); stale for non-roots.
@@ -152,14 +152,14 @@ pub(crate) struct Knots {
 
 impl Knots {
     pub(crate) fn new(project: &Project) -> Self {
-        let total: usize = project.sections.iter().map(|s| s.shots.len() + 1).sum();
-        let mut base = HashMap::with_capacity(project.sections.len());
+        let total: usize = project.lines.iter().map(|s| s.shots.len() + 1).sum();
+        let mut base = HashMap::with_capacity(project.lines.len());
         let mut info = Vec::with_capacity(total);
-        for section in &project.sections {
-            base.insert(section.id, info.len());
-            let shots = u32::try_from(section.shots.len()).unwrap_or(u32::MAX);
+        for line in &project.lines {
+            base.insert(line.id, info.len());
+            let shots = u32::try_from(line.shots.len()).unwrap_or(u32::MAX);
             for index in 0..=shots {
-                info.push((section.id, index, shots));
+                info.push((line.id, index, shots));
             }
         }
         let n = info.len();
@@ -172,7 +172,7 @@ impl Knots {
     }
 
     fn slot(&self, station: StationRef) -> Option<usize> {
-        let base = *self.base.get(&station.section_id)?;
+        let base = *self.base.get(&station.line_id)?;
         let (_, _, shots) = *self.info.get(base)?;
         (station.station_index <= shots).then(|| base + station.station_index as usize)
     }
@@ -186,12 +186,12 @@ impl Knots {
     }
 
     /// The (at most two) shot neighbours of `slot`: the adjacent slots of its
-    /// section, with the shot to each.
+    /// line, with the shot to each.
     fn implicit_neighbours(&self, slot: usize) -> impl Iterator<Item = (usize, Shot)> {
-        let (section_id, index, shots) = self.info[slot];
+        let (line_id, index, shots) = self.info[slot];
         let index = index as usize;
-        let before = (index > 0).then(|| (slot - 1, (section_id, index - 1)));
-        let after = (index < shots as usize).then(|| (slot + 1, (section_id, index)));
+        let before = (index > 0).then(|| (slot - 1, (line_id, index - 1)));
+        let after = (index < shots as usize).then(|| (slot + 1, (line_id, index)));
         before.into_iter().chain(after)
     }
 
@@ -345,18 +345,14 @@ impl Project {
     }
 
     /// Whether a NEW closure between `a` and `b` would tie the two ends of one
-    /// shot together, and which shot `(section, shot index)` - judged against
+    /// shot together, and which shot `(line, shot index)` - judged against
     /// the knots the solve would use now (current merges and the eligible
     /// and snapped closures it does not skip). Applies whatever the new
     /// closure's strategy: a tie across one shot means nothing for a `Move`
     /// closure either. `None` for a closure that closes a real loop, and for
     /// one whose stations are already tied together (redundant, but harmless:
     /// it is still created).
-    pub fn closure_spans_one_shot(
-        &self,
-        a: StationRef,
-        b: StationRef,
-    ) -> Option<(SectionId, usize)> {
+    pub fn closure_spans_one_shot(&self, a: StationRef, b: StationRef) -> Option<(LineId, usize)> {
         let (mut knots, _) = self.closure_knots();
         knots.collapsed_shot(a, b)
     }
@@ -365,13 +361,26 @@ impl Project {
 /// What an edit needs to know, BEFORE it runs, to name the closures it leaves
 /// across one shot (#737): which closures the solve ties already were (an
 /// edit only answers for what it causes), and every such closure's two
-/// stations as they resolve now. A gap-close renumbers stations, so closure
-/// 0:1-0:5 can come out as 0:1-0:2; the user created it as 0:1-0:5 and is
-/// told so.
+/// stations as they resolve now, with the names the user reads them by then.
+/// A gap-close renumbers stations, so closure 0:1-0:5 can come out as
+/// 0:1-0:2; the user created it between `Main / 1` and `Main / 5` and is told
+/// so.
 #[derive(Debug, Clone, Default)]
 pub struct ClosuresBeforeEdit {
     across: HashSet<u64>,
     ends: HashMap<u64, (StationRef, StationRef)>,
+    labels: HashMap<u64, (String, String)>,
+}
+
+impl ClosuresBeforeEdit {
+    /// The two stations of closure `closure_id` as the user read them before
+    /// the edit (`Main Line / 4`), if it was an eligible closure with both
+    /// ends resolved then.
+    pub fn labels(&self, closure_id: u64) -> Option<(&str, &str)> {
+        self.labels
+            .get(&closure_id)
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+    }
 }
 
 impl Project {
@@ -396,8 +405,16 @@ impl Project {
                     ),
                 ))
             })
+            .collect::<HashMap<_, _>>();
+        let labels = ends
+            .iter()
+            .map(|(&id, &(a, b))| (id, (self.station_text(a), self.station_text(b))))
             .collect();
-        ClosuresBeforeEdit { across, ends }
+        ClosuresBeforeEdit {
+            across,
+            ends,
+            labels,
+        }
     }
 
     /// The closures that tie the two ends of one shot together now but did

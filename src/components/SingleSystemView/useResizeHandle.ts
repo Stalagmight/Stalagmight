@@ -99,7 +99,7 @@ export function useResizeHandle({
   );
 
   // Persist on unmount-mid-drag. If the handle element unmounts while a drag is
-  // active (view/project switch, a section-focus collapse that hides the panel),
+  // active (view/project switch, a line-focus collapse that hides the panel),
   // no pointerup reaches the captured node, so onPointerUp never runs and the
   // in-progress size would be lost (reverting to the previously persisted size on
   // reload). Forward the last live size here instead. Refs only, so it runs

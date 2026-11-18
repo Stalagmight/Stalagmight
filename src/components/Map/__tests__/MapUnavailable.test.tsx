@@ -28,7 +28,7 @@ vi.mock('maplibre-gl', async (importOriginal) => ({
 }));
 
 import '../../../i18n';
-import SectionPreview from '../../Dialogs/SectionPreview';
+import LinePreview from '../../Dialogs/LinePreview';
 import GlobalViewMap from '../../GlobalView/GlobalViewMap';
 import MapCanvas from '../MapCanvas';
 import type { ProjectMetadata } from '../../../types/project';
@@ -46,10 +46,10 @@ describe('map without WebGL2', () => {
     expect(status).toHaveTextContent(en.map.webgl2Unavailable.body);
   }
 
-  it('shows the WebGL2 message in place of the section preview', () => {
-    render(<SectionPreview />);
-    expectMessage('section-preview-webgl2-unavailable');
-    expect(screen.getByTestId('section-preview')).toBeInTheDocument();
+  it('shows the WebGL2 message in place of the line preview', () => {
+    render(<LinePreview />);
+    expectMessage('line-preview-webgl2-unavailable');
+    expect(screen.getByTestId('line-preview')).toBeInTheDocument();
   });
 
   it('shows the WebGL2 message in place of the survey map', () => {
@@ -64,7 +64,7 @@ describe('map without WebGL2', () => {
       location: null,
       file_path: 'a.stalx',
       modified_at: '2026-01-01T00:00:00Z',
-      section_count: 1,
+      line_count: 1,
       total_length: 100,
       station_count: 2,
       gps_center: [-87.4, 20.2],

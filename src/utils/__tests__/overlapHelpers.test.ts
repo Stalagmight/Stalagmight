@@ -550,7 +550,7 @@ describe('reverseTargetShot', () => {
 
 // ─── Agreement with the backend reverse ─────────────────────────────────────
 
-describe('reverseTargetShot matches Project::reverse_section', () => {
+describe('reverseTargetShot matches Project::reverse_line', () => {
   // The round-trip tests below cannot catch either of these: both bugs make the
   // transform an IDENTITY (or a sign-flip that undoes itself), and an identity
   // round-trips perfectly.
@@ -968,11 +968,11 @@ describe('reverse direction: full pipeline with concrete data', () => {
   /**
    * Concrete scenario for Front + reverse:
    *
-   * Existing section "Main Passage" has 6 shots heading west (~270°):
+   * Existing line "Main Passage" has 6 shots heading west (~270°):
    *   shot[0]: az=268/269  shot[1]: az=270/271  shot[2]: az=272/273
    *   shot[3]: az=269/270  shot[4]: az=271/272  shot[5]: az=273/274
    *
-   * Import section "Side Passage" has 5 shots heading east (~90°).
+   * Import line "Side Passage" has 5 shots heading east (~90°).
    * It overlaps 3 shots at the front (importStationIndex=0), reverse direction.
    * existingStationIndex=4 means the existing anchor is station 4.
    *
@@ -1085,7 +1085,7 @@ describe('reverse direction: full pipeline Back + reverse', () => {
   /**
    * Back + reverse scenario:
    *
-   * Import section has 7 shots, overlap at back (importStationIndex=7).
+   * Import line has 7 shots, overlap at back (importStationIndex=7).
    * 3 matched shots: overlap IDs = {4, 5, 6}.
    * existingStationIndex=8, direction=reverse.
    *
@@ -1161,15 +1161,15 @@ describe('reverse direction: full pipeline Back + reverse', () => {
 
 describe('integration: overlap mode correctness', () => {
   /**
-   * Scenario: A 5-shot import section overlapping 3 shots with an existing
-   * section. The import is heading ~90° and the target is also ~90°.
+   * Scenario: A 5-shot import line overlapping 3 shots with an existing
+   * line. The import is heading ~90° and the target is also ~90°.
    *
    * After applying overlap data (existing_data mode), the resulting azimuths
    * should still be ~90°, NOT ~270° (which would be the original bug from
    * incorrect reversal logic).
    */
 
-  // Existing section shots heading ~90° (east)
+  // Existing line shots heading ~90° (east)
   const targetShots: TargetShotLike[] = Array.from({ length: 8 }, (_, i) =>
     makeTargetShot({
       azimuth_in: 88 + i,
@@ -1320,7 +1320,7 @@ describe('integration: overlap mode correctness', () => {
 
 /**
  * Walk a sequence of shots and return station (x, y, z) coordinates.
- * Uses the same formula as SectionPreview:
+ * Uses the same formula as LinePreview:
  *   azimuth = average(azimuth_in, azimuth_out) in degrees
  *   x += length * sin(azimuthRad)    (east)
  *   y += length * cos(azimuthRad)    (north)
@@ -1352,8 +1352,8 @@ describe('geometric invariant: station coordinates stay close across overlap mod
   /**
    * Setup: two surveyors measured approximately the same passage.
    *
-   * "existing" (target) section: 8 shots heading ~45° NE, gently descending.
-   * "import" section: 8 shots heading ~45° NE with small random-ish offsets
+   * "existing" (target) line: 8 shots heading ~45° NE, gently descending.
+   * "import" line: 8 shots heading ~45° NE with small random-ish offsets
    * (±0.8° azimuth, ±0.15m length, ±0.2m depth) to simulate real survey error.
    *
    * For each overlap case (Front/Back × Forward/Reverse):
@@ -1368,7 +1368,7 @@ describe('geometric invariant: station coordinates stay close across overlap mod
    * happen if azimuths were flipped 180°, making a ~5m shot produce ~10m error).
    */
 
-  // "Same-direction" existing section: 8 shots heading ~45° NE (same as import).
+  // "Same-direction" existing line: 8 shots heading ~45° NE (same as import).
   // Used for Forward cases where needsReversal=false.
   const existingSameDir: TargetShotLike[] = Array.from({ length: 8 }, (_, i) => ({
     azimuth_in:  44 + i * 0.5,
@@ -1380,12 +1380,12 @@ describe('geometric invariant: station coordinates stay close across overlap mod
     left: 2.0, right: 2.0, up: 1.5, down: 0.5,
   }));
 
-  // "Opposite-direction" existing section: heading ~225° SW (opposite of import).
+  // "Opposite-direction" existing line: heading ~225° SW (opposite of import).
   // Used for cases where needsReversal=true - reverseTargetShot flips ~225° → ~45°.
   // Created by reversing the same-direction shots, so the round-trip is exact.
   const existingOppositeDir: TargetShotLike[] = existingSameDir.map(reverseTargetShot);
 
-  // Import section: same passage as existing, heading ~45° with small survey error
+  // Import line: same passage as existing, heading ~45° with small survey error
   const importShots: EditableShotLike[] = Array.from({ length: 8 }, (_, i) => ({
     id: i,
     azimuth_in:  45 + i * 0.5 + (i % 3 - 1) * 0.8,   // ±0.8° jitter
@@ -1541,25 +1541,25 @@ describe('geometric invariant: station coordinates stay close across overlap mod
 
 // ─── Multi-connection overlap: target shot un-delete and update ──────────────
 //
-// When section A is the import for connection A→B (overlap shots in A deleted),
-// and later section C connects to A (C→A), the fix must update A's target shots.
+// When line A is the import for connection A→B (overlap shots in A deleted),
+// and later line C connects to A (C→A), the fix must update A's target shots.
 // If A's target shots were deleted by a DIFFERENT prior connection (e.g., A was
 // the import to D), those shots must be un-deleted so they can serve as the
 // surviving representative for the C→A overlap.
 
 describe('multi-connection overlap: target shot updates', () => {
-  // Section A has 10 shots. It was the import in A→D connection,
+  // Line A has 10 shots. It was the import in A→D connection,
   // which deleted overlap shots 8,9 (Back overlap at station 10).
   // Now C→A connects at A's station 2 (Front overlap, 2 matched shots).
   // C→A should update A's shots at indices 2,3.
-  const sectionA: EditableShotLike[] = Array.from({ length: 10 }, (_, i) =>
+  const lineA: EditableShotLike[] = Array.from({ length: 10 }, (_, i) =>
     makeEditableShot(i, { azimuth_in: 100 + i, length: 5 + i * 0.1, depth_in: i, depth_out: i + 1 }),
   );
   // Mark shots 8,9 as deleted (from A→D connection)
-  sectionA[8] = { ...sectionA[8]!, isDeleted: true };
-  sectionA[9] = { ...sectionA[9]!, isDeleted: true };
+  lineA[8] = { ...lineA[8]!, isDeleted: true };
+  lineA[9] = { ...lineA[9]!, isDeleted: true };
 
-  const sectionC: EditableShotLike[] = [
+  const lineC: EditableShotLike[] = [
     makeEditableShot(0, { azimuth_in: 200, length: 7.0, depth_in: 2, depth_out: 3 }),
     makeEditableShot(1, { azimuth_in: 210, length: 8.0, depth_in: 3, depth_out: 4 }),
     makeEditableShot(2, { azimuth_in: 220, length: 9.0, depth_in: 4, depth_out: 5 }),
@@ -1578,11 +1578,11 @@ describe('multi-connection overlap: target shot updates', () => {
     const shouldReverse = needsDirectionReversal(0, 'forward');
     expect(shouldReverse).toBe(false);
 
-    const modifiedA = sectionA.map(s => ({ ...s }));
+    const modifiedA = lineA.map(s => ({ ...s }));
     let modified = false;
 
     for (const overlapId of allOverlap) {
-      const importShot = sectionC.find(s => s.id === overlapId);
+      const importShot = lineC.find(s => s.id === overlapId);
       if (!importShot) continue;
       const targetIdx = computeTargetShotIndex(overlapId, cToAParams);
       if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
@@ -1606,18 +1606,18 @@ describe('multi-connection overlap: target shot updates', () => {
   it('un-deletes and updates target shots deleted by a previous connection', () => {
     // Now simulate a scenario where A's shots 2,3 were ALSO deleted
     // by a previous connection (e.g., A was import in A→E which overlapped at front)
-    const sectionAWithFrontDeleted = sectionA.map(s => ({ ...s }));
-    sectionAWithFrontDeleted[2] = { ...sectionAWithFrontDeleted[2]!, isDeleted: true };
-    sectionAWithFrontDeleted[3] = { ...sectionAWithFrontDeleted[3]!, isDeleted: true };
+    const lineAWithFrontDeleted = lineA.map(s => ({ ...s }));
+    lineAWithFrontDeleted[2] = { ...lineAWithFrontDeleted[2]!, isDeleted: true };
+    lineAWithFrontDeleted[3] = { ...lineAWithFrontDeleted[3]!, isDeleted: true };
 
     const allOverlap = computeOverlapIds(0, 2);
     const shouldReverse = needsDirectionReversal(0, 'forward');
 
-    const modifiedA = sectionAWithFrontDeleted.map(s => ({ ...s }));
+    const modifiedA = lineAWithFrontDeleted.map(s => ({ ...s }));
     let modified = false;
 
     for (const overlapId of allOverlap) {
-      const importShot = sectionC.find(s => s.id === overlapId);
+      const importShot = lineC.find(s => s.id === overlapId);
       if (!importShot) continue;
       const targetIdx = computeTargetShotIndex(overlapId, cToAParams);
       if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
@@ -1653,12 +1653,12 @@ describe('multi-connection overlap: target shot updates', () => {
     // Connection 2: C→A at A station 27, 2 matched, forward (updates A[27],A[28])
     // These should be independent - no conflict.
 
-    // Expand section A to 30 shots for this test
+    // Expand line A to 30 shots for this test
     const bigA: EditableShotLike[] = Array.from({ length: 30 }, (_, i) =>
       makeEditableShot(i, { azimuth_in: 100 + i, length: 5 + i * 0.1, depth_in: i, depth_out: i + 1 }),
     );
 
-    const sectionB: EditableShotLike[] = [
+    const lineB: EditableShotLike[] = [
       makeEditableShot(0, { azimuth_in: 300, length: 3.0, depth_in: 25, depth_out: 26 }),
       makeEditableShot(1, { azimuth_in: 310, length: 4.0, depth_in: 26, depth_out: 27 }),
     ];
@@ -1675,7 +1675,7 @@ describe('multi-connection overlap: target shot updates', () => {
     const modifiedA = bigA.map(s => ({ ...s }));
     const bOverlap = computeOverlapIds(2, 2); // {0, 1}
     for (const overlapId of bOverlap) {
-      const importShot = sectionB.find(s => s.id === overlapId);
+      const importShot = lineB.find(s => s.id === overlapId);
       if (!importShot) continue;
       const targetIdx = computeTargetShotIndex(overlapId, bToAParams);
       if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
@@ -1692,7 +1692,7 @@ describe('multi-connection overlap: target shot updates', () => {
     // Apply C→A connection (C from the outer scope, existing_stn=27)
     const cOverlap = computeOverlapIds(0, 2); // {0, 1}
     for (const overlapId of cOverlap) {
-      const importShot = sectionC.find(s => s.id === overlapId);
+      const importShot = lineC.find(s => s.id === overlapId);
       if (!importShot) continue;
       const targetIdx = computeTargetShotIndex(overlapId, { ...cToAParams, existingStationIndex: 27 });
       if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
@@ -1716,15 +1716,15 @@ describe('multi-connection overlap: target shot updates', () => {
 // ─── handleConfirm target-shot-update simulation ────────────────────────────
 //
 // These tests simulate the exact code path in DmpNewImportDialog.handleConfirm
-// that propagates overlap mode to the target section's shots for import-to-import
+// that propagates overlap mode to the target line's shots for import-to-import
 // connections. This is the fix for "interpolation not applied" bug.
-// Test file: /tmp/kb.dmp (sections 018 and 003)
+// Test file: /tmp/kb.dmp (lines 018 and 003)
 
 describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () => {
   /**
-   * Actual suggestion parameters from /tmp/kb.dmp (sections 018 and 003):
-   *   Import section 018: 29 shots, importStationIndex=0, matchedShots=2
-   *   Target section 003: 107 shots, existingStationIndex=27, direction=forward
+   * Actual suggestion parameters from /tmp/kb.dmp (lines 018 and 003):
+   *   Import line 018: 29 shots, importStationIndex=0, matchedShots=2
+   *   Target line 003: 107 shots, existingStationIndex=27, direction=forward
    *   Default merge station = importStationIndex = 0
    *
    * This is a FRONT overlap (importStationIndex=0).

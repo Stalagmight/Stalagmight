@@ -3,7 +3,7 @@
  * when it is not.
  *
  * `surveyFileSpecs.test.ts` covers the wave-1 generators and asks one big
- * question of them: does a `valid` DMP spec yield exactly as many sections as it
+ * question of them: does a `valid` DMP spec yield exactly as many lines as it
  * declares. These do the same job for Compass, Walls and GPX, and they need more
  * cases because there are more ways to lose data in silence. A Compass shot row
  * one column short truncates the rest of the survey; a Walls `#Units Order=` out
@@ -78,29 +78,29 @@ function splitCompassSurveys(text: string): string[] {
 
 /** `recognize_line` = `not_line_ending` + `line_ending` (`parser_utils.rs:38-42`). */
 function compassLines(block: string): string[] {
-  const lines: string[] = [];
+  const textLines: string[] = [];
   let rest = block;
   while (rest.length > 0) {
     const at = rest.indexOf('\n');
-    if (at === -1) return lines;
-    const line = rest.slice(0, at);
-    const cr = line.indexOf('\r');
-    if (cr !== -1 && cr !== line.length - 1) throw new Error('bare CR: not_line_ending fails');
-    lines.push(line.endsWith('\r') ? line.slice(0, -1) : line);
+    if (at === -1) return textLines;
+    const textLine = rest.slice(0, at);
+    const cr = textLine.indexOf('\r');
+    if (cr !== -1 && cr !== textLine.length - 1) throw new Error('bare CR: not_line_ending fails');
+    textLines.push(textLine.endsWith('\r') ? textLine.slice(0, -1) : textLine);
     rest = rest.slice(at + 1);
   }
-  return lines;
+  return textLines;
 }
 
 /** Rows after the `FROM` column header, whitespace-split (`survey/parser/mod.rs:60-64`). */
 function compassDataRows(block: string): string[][] {
-  const lines = compassLines(block);
-  const headerAt = lines.findIndex((line) => line.trimStart().startsWith('FROM'));
+  const textLines = compassLines(block);
+  const headerAt = textLines.findIndex((textLine) => textLine.trimStart().startsWith('FROM'));
   if (headerAt === -1) return [];
-  return lines
+  return textLines
     .slice(headerAt + 1)
-    .filter((line) => line.trim() !== '')
-    .map((line) => line.trim().split(/\s+/));
+    .filter((textLine) => textLine.trim() !== '')
+    .map((textLine) => textLine.trim().split(/\s+/));
 }
 
 /** The only characters the `.mak` lexer dispatches on (`project/lexer.rs:179-197`). */
@@ -140,8 +140,8 @@ function classifyWallsSrv(text: string): WallsLineKind[] {
   const raw = text.split('\n');
   if (raw.length > 0 && raw[raw.length - 1] === '') raw.pop();
   let depth = 0;
-  return raw.map((line) => {
-    const trimmed = line.replace(/\r$/, '').trim();
+  return raw.map((textLine) => {
+    const trimmed = textLine.replace(/\r$/, '').trim();
     if (trimmed === '') return 'blank';
     if (trimmed.startsWith('#[')) {
       depth += 1;
@@ -210,10 +210,10 @@ function extractSpans(body: string): { tokens: string[]; lrud: string | null } {
 
 /** `parse_vector_line`'s framing only (`walls/srv.rs:234-256`). */
 function parseWallsVector(
-  line: string,
+  textLine: string,
 ): { from: string; to: string; columns: string[]; lrud: string | null } | null {
-  const at = line.indexOf(';');
-  const body = at === -1 ? line : line.slice(0, at);
+  const at = textLine.indexOf(';');
+  const body = at === -1 ? textLine : textLine.slice(0, at);
   const { tokens, lrud } = extractSpans(body);
   if (tokens.length < 2) return null;
   return { from: tokens[0], to: tokens[1], columns: tokens.slice(2), lrud };
@@ -228,13 +228,13 @@ function isAnonymousStation(token: string): boolean {
 function wpjDirectives(text: string): { name: string; rest: string }[] {
   const out: { name: string; rest: string }[] = [];
   for (const raw of text.split('\n')) {
-    const line = raw.replace(/\r$/, '').trim();
-    if (line === '' || line.startsWith(';')) continue;
-    const at = line.search(/\s/);
+    const textLine = raw.replace(/\r$/, '').trim();
+    if (textLine === '' || textLine.startsWith(';')) continue;
+    const at = textLine.search(/\s/);
     out.push(
       at === -1
-        ? { name: line.toUpperCase(), rest: '' }
-        : { name: line.slice(0, at).toUpperCase(), rest: line.slice(at).trim() },
+        ? { name: textLine.toUpperCase(), rest: '' }
+        : { name: textLine.slice(0, at).toUpperCase(), rest: textLine.slice(at).trim() },
     );
   }
   return out;
@@ -296,23 +296,23 @@ describe('randomCompassDatSpec (valid)', () => {
       const blocks = splitCompassSurveys(writeCompassDat(spec));
       expect(blocks).toHaveLength(spec.surveys.length);
       for (const [index, block] of blocks.entries()) {
-        const lines = compassLines(block);
+        const textLines = compassLines(block);
         // NON-BLANK cave name. The terminator is `opt(ws(tag("\x0c")))` and
         // `ws` runs `multispace0` AFTER the form feed, so an all-whitespace
         // cave-name line is eaten by it: the next survey's `SURVEY NAME:` is
         // then read as ITS cave name and `many0` stops with no error at all.
         // Measured - it turned a 3-survey `.dat` into a 1-survey one.
-        expect(lines[0].trim()).not.toBe('');
-        expect(lines[1]).toBe(`SURVEY NAME: ${spec.surveys[index].name}`);
-        expect(lines[2].startsWith('SURVEY DATE:')).toBe(true);
-        expect(lines[3]).toBe('SURVEY TEAM:');
+        expect(textLines[0].trim()).not.toBe('');
+        expect(textLines[1]).toBe(`SURVEY NAME: ${spec.surveys[index].name}`);
+        expect(textLines[2].startsWith('SURVEY DATE:')).toBe(true);
+        expect(textLines[3]).toBe('SURVEY TEAM:');
         // `multispace1` after the tag is greedy ACROSS newlines, so a blank team
         // line swallows the parameter line and kills the survey.
-        expect(lines[4].trim()).not.toBe('');
-        expect(lines[5].startsWith('DECLINATION:')).toBe(true);
+        expect(textLines[4].trim()).not.toBe('');
+        expect(textLines[5].startsWith('DECLINATION:')).toBe(true);
         // `tag("FORMAT: ")` requires the trailing space, or the whole survey
         // silently reads as feet + degrees + no backsights + no corrections.
-        expect(lines[5]).toContain('  FORMAT: ');
+        expect(textLines[5]).toContain('  FORMAT: ');
       }
     }
   });
@@ -512,9 +512,9 @@ function expectedWallsColumns(units: string): number {
 function wallsVectorLines(spec: WallsSrvSpec): string[] {
   const text = writeWallsSrv(spec);
   const kinds = classifyWallsSrv(text);
-  const lines = text.split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines.filter((_line, index) => kinds[index] === 'vector').map((line) => line.trim());
+  const textLines = text.split('\n');
+  if (textLines.length > 0 && textLines[textLines.length - 1] === '') textLines.pop();
+  return textLines.filter((_textLine, index) => kinds[index] === 'vector').map((textLine) => textLine.trim());
 }
 
 describe('randomWallsSrvSpec (valid)', () => {
@@ -750,7 +750,7 @@ describe('randomGpxSpec (valid)', () => {
   it('reaches a one-point segment, a missing <ele> and a boundary coordinate', () => {
     const specs = SEEDS.map((seed) => randomGpxSpec(mulberry32(seed), 'valid'));
     const segments = specs.flatMap((spec) => (spec.tracks ?? []).flatMap((track) => track.segments));
-    // Skipped at import while its `section_index` is STILL consumed, so every
+    // Skipped at import while its `line_index` is STILL consumed, so every
     // later placement index shifts (`gpx.rs:920-923`).
     expect(segments.some((segment) => segment.length === 1)).toBe(true);
     expect(segments.some((segment) => segment.length >= 2)).toBe(true);
@@ -855,12 +855,12 @@ describe('selfCheckClaim', () => {
               (spec.gpx.routes?.length ?? 0),
           );
         }
-        if (spec.format === 'dmp') expect(claim.min).toBe(spec.dmp.sections.length);
-        // Topology reconstruction means a TML's section count is NOT the spec's
-        // section-name count, so the only honest claim is "at least one" - and
+        if (spec.format === 'dmp') expect(claim.min).toBe(spec.dmp.lines.length);
+        // Topology reconstruction means a TML's line count is NOT the spec's
+        // line-name count, so the only honest claim is "at least one" - and
         // only when the file has a leg at all. Shot 0 is the `START`, a station
         // rather than a leg, so a file with no `REAL` shot legitimately parses
-        // to zero sections.
+        // to zero lines.
         if (spec.format === 'tml' || spec.format === 'tmlu') {
           const hasLeg = spec.tml.shots.some((shot) => shot.type === 'REAL');
           expect([claim.min, claim.max]).toEqual([hasLeg ? 1 : 0, null]);
@@ -872,7 +872,7 @@ describe('selfCheckClaim', () => {
   it('returns -1 rather than throwing on a shape it did not expect', () => {
     for (const format of ALL_FORMATS) {
       const claim = selfCheckClaim(randomSurveyFileSpec(mulberry32(9), 'valid', format));
-      for (const garbage of [null, undefined, 7, 'text', [], {}, { sections: 'nope' }, { survey_count: 'x' }]) {
+      for (const garbage of [null, undefined, 7, 'text', [], {}, { lines: 'nope' }, { survey_count: 'x' }]) {
         expect(claim.read(garbage)).toBe(-1);
       }
     }

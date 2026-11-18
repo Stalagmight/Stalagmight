@@ -21,11 +21,11 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   trackDialogComplete: vi.fn(),
   setSource: vi.fn(),
 }));
-// SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
+// LinePreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. What the map DRAWS is covered by
 // utils/__tests__/tmlPreviewLayout.test.ts, on the pure layout function.
-vi.mock('./SectionPreview', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./SectionPreview')>()),
+vi.mock('./LinePreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./LinePreview')>()),
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
@@ -63,7 +63,7 @@ const SAVE_WARNING: ValidationWarning = {
 };
 const VALIDATION_WARNING: ValidationWarning = {
   code: 'LONG_SHOT',
-  message: 'Shot 3:5 length 142.0m above maximum threshold 120.0m',
+  message: 'Shot Main: 4 \u2192 5 length 142.0m above maximum threshold 120.0m',
   severity: 'warning',
 };
 
@@ -73,42 +73,42 @@ const tmlFile: TmlFile = {
   use_magnetic_azimuth: false,
   first_start_absolute_elevation: 0,
   geo_coding: null,
-  sections: [],
+  lines: [],
   closures: [],
 };
 
-const ok = (warnings: ValidationWarning[], section_ids: number[] = []): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids } as CommandResult);
+const ok = (warnings: ValidationWarning[], line_ids: number[] = []): CommandResult =>
+  ({ success: true, error: null, warnings, line_ids } as CommandResult);
 
-/** What the backend reports for a file whose every section was dropped (#411). */
+/** What the backend reports for a file whose every line was dropped (#411). */
 const EMPTY_RECEIPT: ImportReceipt = {
   source_format: 'Ariane TML',
   file_name: 'cave.tml',
-  sections_found: 2,
-  sections_imported: 0,
+  lines_found: 2,
+  lines_imported: 0,
   shot_count: 0,
   closures_requested: 0,
   closures_created: 0,
   unit_conversion: null,
-  warnings: ['2 sections had no shots after filtering and were dropped'],
+  warnings: ['2 lines had no shots after filtering and were dropped'],
   info: [],
   zero_datum_created: null,
 };
 
 /**
- * The wire shape that CRASHED this dialog in #411: `section_ids` was
+ * The wire shape that CRASHED this dialog in #411: `line_ids` was
  * `#[serde(skip_serializing_if = "Vec::is_empty")]`, so an import that created
- * no section omitted the key while the generated type promised an array, and a
- * bare `result.section_ids.length` threw. #441 removed the skip, so the backend
+ * no line omitted the key while the generated type promised an array, and a
+ * bare `result.line_ids.length` threw. #441 removed the skip, so the backend
  * always writes the key and this shape is no longer reachable from the shipped
  * binary - the literal is kept as the regression record for #411 and pins the
  * `?? []` that survives it. Every other mock writes the key, which is why the
  * bug hid; only a hand-built literal can express the omission.
  */
-const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
+const okWithoutLineIds = (receipt: ImportReceipt): CommandResult =>
   ({ success: true, error: null, warnings: [], import_receipt: receipt } as unknown as CommandResult);
 
-/** A section carrying one shot per flavour asked for. */
+/** A line carrying one shot per flavour asked for. */
 const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
   ({
     id: 1n,
@@ -131,13 +131,13 @@ const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
     latitude: 0,
     longitude: 0,
     closure_to_id: 0n,
-    section: 'S',
+    line: 'S',
     ...overrides,
   }) as TmlShot;
 
 const withShots = (shots: TmlShot[]): TmlFile => ({
   ...tmlFile,
-  sections: [
+  lines: [
     {
       name: 'S',
       shots,
@@ -197,7 +197,7 @@ const importContext = () => useUIStore.getState().importContext;
 /** The project a new-project import created: open, and still empty. `created_at`
  *  is the identity token the discard guard re-checks at click time. */
 const emptyProject = (overrides: Partial<Project> = {}) =>
-  ({ sections: [], created_at: '2026-08-05T00:00:00Z', ...overrides }) as unknown as Project;
+  ({ lines: [], created_at: '2026-08-05T00:00:00Z', ...overrides }) as unknown as Project;
 
 function openEmptyImportProject() {
   useProjectStore.setState({ project: emptyProject() });
@@ -236,10 +236,10 @@ describe('TmlImportDialog warning surfacing (#110)', () => {
     expect(openDialog).not.toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' }));
   });
 
-  it('shows the receipt when the import created nothing and section_ids is absent (#411)', async () => {
-    executeTmlImport.mockResolvedValue(okWithoutSectionIds(EMPTY_RECEIPT));
+  it('shows the receipt when the import created nothing and line_ids is absent (#411)', async () => {
+    executeTmlImport.mockResolvedValue(okWithoutLineIds(EMPTY_RECEIPT));
     // A non-empty PREVIEW: this guards the backend dropping everything it
-    // promised (sections_imported: 0 with real content going in), which is
+    // promised (lines_imported: 0 with real content going in), which is
     // distinct from this dialog's own zero-shot preview gate - that one blocks
     // Import outright and never reaches the backend at all.
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
@@ -270,9 +270,9 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
   it('reports a backend failure WITHOUT navigating into the empty project', async () => {
     executeTmlImport.mockResolvedValue({
       success: false,
-      error: 'Section 2 is unreadable',
+      error: 'Line 2 is unreadable',
       warnings: [],
-      section_ids: [],
+      line_ids: [],
     } as unknown as CommandResult);
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -281,7 +281,7 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     await waitFor(() =>
       expect(openDialog).toHaveBeenCalledWith(
         'error',
-        expect.objectContaining({ title: 'Import Errors', message: 'Section 2 is unreadable' }),
+        expect.objectContaining({ title: 'Import Errors', message: 'Line 2 is unreadable' }),
       ),
     );
     // The dialog closes (its work is over), but the navigate/fit half of the
@@ -294,16 +294,16 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     openEmptyImportProject();
     executeTmlImport.mockResolvedValue({
       success: false,
-      error: 'Section 2 is unreadable',
+      error: 'Line 2 is unreadable',
       warnings: [],
-      section_ids: [],
+      line_ids: [],
     } as unknown as CommandResult);
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
     await clickImport();
 
     expect(await screen.findByTestId('tml-import-residue-dialog')).toBeInTheDocument();
-    expect(screen.getByTestId('tml-import-residue-error')).toHaveTextContent('Section 2 is unreadable');
+    expect(screen.getByTestId('tml-import-residue-error')).toHaveTextContent('Line 2 is unreadable');
     expect(setView).not.toHaveBeenCalled();
   });
 
@@ -407,8 +407,8 @@ describe('TmlImportDialog empty-project residue (#411 C2)', () => {
     expect(closeProject).not.toHaveBeenCalled();
   });
 
-  it('closes straight out when the project already holds sections', async () => {
-    useProjectStore.setState({ project: emptyProject({ sections: [{}] as unknown as Project['sections'] }) });
+  it('closes straight out when the project already holds lines', async () => {
+    useProjectStore.setState({ project: emptyProject({ lines: [{}] as unknown as Project['lines'] }) });
     useUIStore.setState({ importContext: 'new-project' });
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -450,18 +450,18 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
     expect(screen.queryByTestId('tml-import-empty')).toBeNull();
   });
 
-  it('drops a section the toggles empty out from the section count', async () => {
+  it('drops a line the toggles empty out from the line count', async () => {
     const file: TmlFile = {
       ...tmlFile,
-      sections: [
-        withShots([shot({ id: 1n })]).sections[0]!,
-        { ...withShots([shot({ id: 2n, excluded: true })]).sections[0]!, name: 'All excluded' },
+      lines: [
+        withShots([shot({ id: 1n })]).lines[0]!,
+        { ...withShots([shot({ id: 2n, excluded: true })]).lines[0]!, name: 'All excluded' },
       ],
     };
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
 
-    // The converter drops a section with no shots left after filtering, so a
-    // preview claiming 2 promises a section that never arrives.
+    // The converter drops a line with no shots left after filtering, so a
+    // preview claiming 2 promises a line that never arrives.
     expect(await screen.findByTestId('tml-section-count')).toHaveTextContent('1');
 
     await userEvent.click(screen.getByTestId('tml-include-excluded'));
@@ -499,7 +499,7 @@ describe('TmlImportDialog import-context lifetime (#411 fix round)', () => {
       success: false,
       error: 'nope',
       warnings: [],
-      section_ids: [],
+      line_ids: [],
     } as unknown as CommandResult);
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -566,7 +566,7 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     // Something landed in the project between raising the prompt and the click -
     // this arm calls the app's only file-deleting API, so it must bail.
     useProjectStore.setState({
-      project: emptyProject({ sections: [{}] as unknown as Project['sections'], file_path: '/tmp/new.stalx' }),
+      project: emptyProject({ lines: [{}] as unknown as Project['lines'], file_path: '/tmp/new.stalx' }),
     });
     await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
 
@@ -613,7 +613,7 @@ describe('TmlImportDialog failure after unmount (#411 fix round)', () => {
     await clickImport();
     // A drop of another importable file re-routes the dialog slot mid-import.
     view.unmount();
-    settle({ success: false, error: 'late failure', warnings: [], section_ids: [] } as unknown as CommandResult);
+    settle({ success: false, error: 'late failure', warnings: [], line_ids: [] } as unknown as CommandResult);
 
     // setResidue on an unmounted component is a no-op, i.e. silence - the router
     // is store-level and always lands.
@@ -632,7 +632,7 @@ describe('TmlImportDialog failure after unmount (#411 fix round)', () => {
       success: false,
       error: 'nope',
       warnings: [],
-      section_ids: [],
+      line_ids: [],
     } as unknown as CommandResult);
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -646,15 +646,15 @@ describe('TmlImportDialog failure after unmount (#411 fix round)', () => {
 });
 
 /**
- * #425: the section filter and the placement step. The topology consequences
+ * #425: the line filter and the placement step. The topology consequences
  * are covered on both sides of the wire (import_options.rs, tmlPreviewLayout);
  * these pin what the DIALOG sends and what it refuses to send.
  */
-describe('TmlImportDialog section selection and placement (#425)', () => {
-  /** Two sections, the second hanging off the first's only shot. */
-  const twoSections = (over: Partial<TmlShot> = {}): TmlFile => ({
+describe('TmlImportDialog line selection and placement (#425)', () => {
+  /** Two lines, the second hanging off the first's only shot. */
+  const twoLines = (over: Partial<TmlShot> = {}): TmlFile => ({
     ...tmlFile,
-    sections: [
+    lines: [
       {
         name: 'A',
         shots: [shot({ id: 1n, from_id: 0n, ...over })],
@@ -683,18 +683,18 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
   const lastImportArgs = (): unknown[] =>
     executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1] ?? [];
 
-  it('sends no section list while every section is ticked', async () => {
+  it('sends no line list while every line is ticked', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     await clickImport();
-    // arg 5 is selectedSections: null keeps a full import unfiltered on the wire.
+    // arg 5 is selectedLines: null keeps a full import unfiltered on the wire.
     expect(lastImportArgs()[5]).toBeNull();
   });
 
-  it('sends the remaining indices once a section is unticked', async () => {
+  it('sends the remaining indices once a line is unticked', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     await userEvent.click(await screen.findByTestId('tml-section-0'));
     await clickImport();
@@ -703,7 +703,7 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
 
   it('does not call the NEW root re-anchored when the old root is unticked', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     // B hangs off A; unticking A leaves B as the new ROOT, which is not a lost
     // anchor - so nothing is flagged.
@@ -716,11 +716,11 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
     expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
   });
 
-  it('flags the section stranded by a deselected middle section', async () => {
+  it('flags the line stranded by a deselected middle line', async () => {
     const three: TmlFile = {
       ...tmlFile,
-      sections: [
-        ...twoSections().sections,
+      lines: [
+        ...twoLines().lines,
         {
           name: 'C',
           shots: [shot({ id: 3n, from_id: 2n })],
@@ -742,8 +742,8 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
     expect(screen.getByTestId('tml-section-reanchored-2')).toBeInTheDocument();
   });
 
-  it('disables Import when every section is unticked', async () => {
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+  it('disables Import when every line is unticked', async () => {
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     await userEvent.click(await screen.findByTestId('tml-select-all'));
     expect(await screen.findByTestId('tml-import-empty')).toBeInTheDocument();
@@ -753,7 +753,7 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
 
   it('sends an explicit origin placement for a file with no georeference', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     // No GPS anywhere, so the file option is not even offered.
     expect(screen.queryByTestId('tml-placement-file')).toBeNull();
@@ -767,7 +767,7 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
     render(
       <TmlImportDialog
-        tmlFile={twoSections({ latitude: 20.5, longitude: -87.1 })}
+        tmlFile={twoLines({ latitude: 20.5, longitude: -87.1 })}
         filePath="/tmp/cave.tml"
       />
     );
@@ -783,7 +783,7 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
 
   it('holds Import while typed coordinates do not parse, and releases it when they do', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={twoLines()} filePath="/tmp/cave.tml" />);
 
     await userEvent.click(await screen.findByTestId('tml-placement-manual'));
     // Chosen but empty: not an answer, so the button must not offer to send one.
@@ -810,7 +810,7 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
 describe('TmlImportDialog placement is not walked over by other controls (#425)', () => {
   const geoFile: TmlFile = {
     ...tmlFile,
-    sections: [
+    lines: [
       {
         name: 'A',
         shots: [shot({ id: 1n, from_id: 0n, latitude: 20.5, longitude: -87.1 })],
@@ -836,7 +836,7 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
     ],
   };
 
-  it('keeps an explicit Origin choice when a section is unticked afterwards', async () => {
+  it('keeps an explicit Origin choice when a line is unticked afterwards', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
     render(<TmlImportDialog tmlFile={geoFile} filePath="/tmp/cave.tml" />);
 
@@ -853,14 +853,14 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
     });
   });
 
-  it('falls back to Origin when the section carrying the coordinates is unticked', async () => {
+  it('falls back to Origin when the line carrying the coordinates is unticked', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
     render(<TmlImportDialog tmlFile={geoFile} filePath="/tmp/cave.tml" />);
 
     expect((await screen.findByTestId('tml-placement-file')) as HTMLInputElement).toBeChecked();
     await userEvent.click(screen.getByTestId('tml-section-0'));
 
-    // The option is gone with its section; leaving `choice` on it would disable
+    // The option is gone with its line; leaving `choice` on it would disable
     // Import with nothing on screen explaining why.
     expect(screen.queryByTestId('tml-placement-file')).toBeNull();
     expect((screen.getByTestId('tml-placement-origin') as HTMLInputElement)).toBeChecked();
@@ -872,10 +872,10 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
 });
 
 describe('TmlImportDialog root agreement (#425 review)', () => {
-  /** Section 0 is emptied by the exclusion filter, so it is never created. */
-  const firstSectionAllExcluded: TmlFile = {
+  /** Line 0 is emptied by the exclusion filter, so it is never created. */
+  const firstLineAllExcluded: TmlFile = {
     ...tmlFile,
-    sections: [
+    lines: [
       {
         name: 'Dropped',
         shots: [shot({ id: 1n, from_id: 0n, excluded: true })],
@@ -901,22 +901,22 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
     ],
   };
 
-  it('anchors the placement step to the surviving section and does not also call it stranded', async () => {
+  it('anchors the placement step to the surviving line and does not also call it stranded', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={firstLineAllExcluded} filePath="/tmp/cave.tml" />);
 
-    // The step names the section the import will actually create...
+    // The step names the line the import will actually create...
     expect(await screen.findByTestId('tml-placement-step')).toHaveTextContent('Survivor');
     // ...and cannot simultaneously badge it as landing at the origin for want
     // of a connection. Both used to be on screen at once, because the preview
-    // layout still called section 0 the root.
+    // layout still called line 0 the root.
     expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
     expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
   });
 
-  it('sends the typed datum, which the backend applies to that same section', async () => {
+  it('sends the typed datum, which the backend applies to that same line', async () => {
     executeTmlImport.mockResolvedValue(ok([], [1]));
-    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+    render(<TmlImportDialog tmlFile={firstLineAllExcluded} filePath="/tmp/cave.tml" />);
 
     await userEvent.click(await screen.findByTestId('tml-placement-manual'));
     await userEvent.type(screen.getByTestId('tml-placement-latitude'), '20.5');
@@ -936,9 +936,9 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
     // the Rust null-island guard had.
     const crafted: TmlFile = {
       ...tmlFile,
-      sections: [
+      lines: [
         {
-          ...firstSectionAllExcluded.sections[1]!,
+          ...firstLineAllExcluded.lines[1]!,
           name: 'Crafted',
           shots: [shot({ id: 1n, from_id: 0n, latitude: Number.NaN, longitude: Number.NaN })],
           start_ariane_id: 0n,
@@ -958,12 +958,12 @@ describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () =
    * Every other fixture in this file builds `BigInt` ids because that is what
    * the GENERATED types say. Tauri's IPC is JSON and serde writes an `i64` as a
    * JSON number, so the shipped app hands this dialog plain numbers - and a
-   * lookup that only worked for bigints made every non-root section look
+   * lookup that only worked for bigints made every non-root line look
    * stranded the moment the dialog opened.
    */
   const wireIds: TmlFile = {
     ...tmlFile,
-    sections: [
+    lines: [
       {
         name: 'A',
         shots: [{ ...shot(), id: 1 as unknown as bigint, from_id: 0 as unknown as bigint }],
@@ -989,18 +989,18 @@ describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () =
     ],
   };
 
-  it('does not call a connected section stranded on a file straight off the wire', async () => {
+  it('does not call a connected line stranded on a file straight off the wire', async () => {
     render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
 
     await screen.findByTestId('tml-placement-step');
     // B hangs off A and both are selected, so nothing is going to the origin.
-    // Before the fix this notice was on screen for every multi-section file the
+    // Before the fix this notice was on screen for every multi-line file the
     // real app opened, contradicting an import that connected them fine.
     expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
     expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
   });
 
-  it('still flags a genuinely stranded section on wire ids', async () => {
+  it('still flags a genuinely stranded line on wire ids', async () => {
     render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
 
     // Deselecting A leaves B as the new root, which is not stranded...

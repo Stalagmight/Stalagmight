@@ -43,7 +43,7 @@ const LINK: SpeleoLinkState = {
 
 function issue(severity: 'error' | 'warning', shotId: number, isResolved = false): ProjectWarning {
   return {
-    sectionId: 1, shotId, shotIndex: shotId, code: severity === 'error' ? 'NEGATIVE_LENGTH' : 'LARGE_LENGTH',
+    lineId: 1, shotId, shotIndex: shotId, code: severity === 'error' ? 'NEGATIVE_LENGTH' : 'LARGE_LENGTH',
     message: 'synthetic', severity, isResolved,
   };
 }

@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{SectionId, ShotId};
+use crate::models::{LineId, ShotId};
 
 impl AppState {
     /// Execute an insert-station-mid-shot operation (issue #59) as a single
@@ -11,7 +11,7 @@ impl AppState {
     /// `execute_delete_shot_and_split`.
     pub fn execute_split_shot_at_distance(
         &self,
-        section_id: SectionId,
+        line_id: LineId,
         shot_id: ShotId,
         distance: f64,
     ) -> CommandResult {
@@ -31,7 +31,7 @@ impl AppState {
         }
 
         tracing::info!(
-            section_id,
+            line_id,
             shot_id,
             distance,
             purpose = "insert station mid-shot",
@@ -55,9 +55,9 @@ impl AppState {
             // split a shot that is part of an adjusted survey network -- a split
             // changes both children's geometry, which would silently break the
             // LSQ solution's frozen geometry. Checked before the split mutates.
-            // (`is_shot_frozen_by_id` returns false for a missing section/shot, so
+            // (`is_shot_frozen_by_id` returns false for a missing line/shot, so
             // the not-found error still surfaces from the split below.)
-            if project.is_shot_frozen_by_id(section_id, shot_id) {
+            if project.is_shot_frozen_by_id(line_id, shot_id) {
                 return CommandResult::failure(
                     "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network."
                         .to_string(),
@@ -71,7 +71,7 @@ impl AppState {
             // just to describe it. The Command variants are a descriptive
             // placeholder for the undo entry (see push_snapshot_undo below); the
             // authoritative mutation is the ProjectSnapshotPair.
-            match project.split_shot_at_distance(section_id, shot_id, distance) {
+            match project.split_shot_at_distance(line_id, shot_id, distance) {
                 Ok(v) => v,
                 Err(e) => return CommandResult::failure(e),
             }
@@ -88,20 +88,26 @@ impl AppState {
             Err(result) => return result,
         };
 
+        // The label names the station the split made, as the after-state
+        // (station names settled) holds it.
+        let label = self.batch_label(|project| {
+            crate::core::undo::history_batch::insert_station(project, line_id, new_shot_id)
+        });
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateShot {
-                    section_id,
+                    line_id,
                     shot: head_data,
                     after_shot_id: None,
                     before_shot_id: Some(shot_id),
                 },
                 Command::UpdateShot {
-                    section_id,
+                    line_id,
                     shot_id,
                     updates: tail_updates,
                 },
             ],
+            label,
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a split mutated a remote project.
@@ -109,7 +115,7 @@ impl AppState {
         self.mark_remote_forward_edit();
 
         tracing::info!(
-            section_id,
+            line_id,
             shot_id,
             new_shot_id,
             purpose = "insert station mid-shot",

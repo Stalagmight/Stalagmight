@@ -30,10 +30,10 @@ const shot = (id: number, from: number, length: number, shotType: TmlShot['shot_
     latitude: 0,
     longitude: 0,
     closure_to_id: BigInt(closureTo),
-    section: 'S',
+    line: 'S',
   }) as TmlShot;
 
-const section = (name: string, shots: TmlShot[]): TmlSection => ({
+const line = (name: string, shots: TmlShot[]): TmlSection => ({
   name,
   shots,
   surveyor: null,
@@ -45,13 +45,13 @@ const section = (name: string, shots: TmlShot[]): TmlSection => ({
   start_depth: 0,
 });
 
-const file = (sections: TmlSection[]): TmlFile => ({
+const file = (lines: TmlSection[]): TmlFile => ({
   cave_name: 'Cave',
   unit: 'Metric',
   use_magnetic_azimuth: false,
   first_start_absolute_elevation: 0,
   geo_coding: null,
-  sections,
+  lines,
   closures: [],
 });
 
@@ -59,33 +59,33 @@ const file = (sections: TmlSection[]): TmlFile => ({
 // real 10 m, then a 7 m virtual shot dangling off the end (a Reference).
 const bounded = shot(2, 1, 5, 'Virtual');
 const dangling = shot(4, 3, 7, 'Virtual');
-const line = file([section('A', [shot(1, 0, 10), bounded, shot(3, 2, 10), dangling])]);
+const chain = file([line('A', [shot(1, 0, 10), bounded, shot(3, 2, 10), dangling])]);
 
 describe('TML import preview length', () => {
   it('Auto counts the virtual shots the chain rule makes Jumps, not References', () => {
-    expect(jumpShots(line.sections[0]!.shots, [])).toEqual(new Set([bounded]));
-    expect(computeTmlImportStats(line, false).totalLength).toBe(25);
-    expect(computeTmlImportStats(line, false, null, 'Auto').totalLength).toBe(25);
+    expect(jumpShots(chain.lines[0]!.shots, [])).toEqual(new Set([bounded]));
+    expect(computeTmlImportStats(chain, false).totalLength).toBe(25);
+    expect(computeTmlImportStats(chain, false, null, 'Auto').totalLength).toBe(25);
   });
 
   it('All jumps counts every virtual shot, All references none', () => {
-    expect(computeTmlImportStats(line, false, null, 'AllJumps').totalLength).toBe(32);
-    expect(computeTmlImportStats(line, false, null, 'AllReferences').totalLength).toBe(20);
+    expect(computeTmlImportStats(chain, false, null, 'AllJumps').totalLength).toBe(32);
+    expect(computeTmlImportStats(chain, false, null, 'AllReferences').totalLength).toBe(20);
   });
 
   it('a virtual run reaching a second real point through a loop closure is a Jump', () => {
-    // Section B hangs off station 1 with real survey; the dangling virtual
+    // Line B hangs off station 1 with real survey; the dangling virtual
     // shot's far end (4) is closed onto station 6 of B, a real point.
     const closed = file([
-      section('A', [shot(1, 0, 10), bounded, shot(3, 2, 10), dangling]),
-      section('B', [shot(5, 1, 4), shot(6, 5, 4), shot(7, 4, 0, 'Closure', 6)]),
+      line('A', [shot(1, 0, 10), bounded, shot(3, 2, 10), dangling]),
+      line('B', [shot(5, 1, 4), shot(6, 5, 4), shot(7, 4, 0, 'Closure', 6)]),
     ]);
     expect(computeTmlImportStats(closed, false).totalLength).toBe(10 + 5 + 10 + 7 + 4 + 4);
     expect(computeTmlImportStats(closed, false, null, 'AllReferences').totalLength).toBe(28);
   });
 
   it('a virtual run touching real survey at one point only is a Reference', () => {
-    const tie = file([section('A', [shot(1, 0, 10), shot(2, 1, 3, 'Virtual'), shot(9, 2, 3, 'Virtual')])]);
+    const tie = file([line('A', [shot(1, 0, 10), shot(2, 1, 3, 'Virtual'), shot(9, 2, 3, 'Virtual')])]);
     expect(computeTmlImportStats(tie, false).totalLength).toBe(10);
     expect(computeTmlImportStats(tie, false).virtualCount).toBe(2);
   });

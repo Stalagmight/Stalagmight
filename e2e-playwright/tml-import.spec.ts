@@ -9,7 +9,7 @@ import { setupMockedPage, selectDropdownOption } from './helpers/app';
  * execute_tml_import -> import receipt - against the synthetic TML the shared
  * IPC mock serves (no .tml fixture is read anywhere).
  *
- * The mocked file is 2 sections / 5 shots, one of them excluded, one virtual,
+ * The mocked file is 2 lines / 5 shots, one of them excluded, one virtual,
  * with 1 loop closure, so the dialog's optional controls and the receipt's
  * counts are all observable.
  */
@@ -52,7 +52,7 @@ async function getTmlImportCalls(page: Page): Promise<Array<Record<string, unkno
   );
 }
 
-async function getImportedSections(
+async function getImportedLines(
   page: Page
 ): Promise<Array<{ name: string; kinds: string[] }>> {
   return page.evaluate(() => {
@@ -61,15 +61,15 @@ async function getImportedSections(
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              project: { sections: Array<{ name: string; shots: Array<{ kind: string }> }> } | null;
+              project: { lines: Array<{ name: string; shots: Array<{ kind: string }> }> } | null;
             };
           };
         };
       }
     ).__E2E_TEST__?.projectStore.getState();
-    return (state?.project?.sections ?? []).map((section) => ({
-      name: section.name,
-      kinds: section.shots.map((shot) => shot.kind),
+    return (state?.project?.lines ?? []).map((line) => ({
+      name: line.name,
+      kinds: line.shots.map((shot) => shot.kind),
     }));
   });
 }
@@ -93,7 +93,7 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-shot-count')).toHaveText('4');
     await expect(page.getByTestId('tml-section-row-0')).toContainText('Main Line');
     await expect(page.getByTestId('tml-section-row-1')).toContainText('Side Passage');
-    // The branch-split marker rides on the second section.
+    // The branch-split marker rides on the second line.
     await expect(page.getByTestId('tml-section-row-1')).toContainText('branch');
     // A connected file must show NO stranded badge. This is the e2e mirror of
     // the wire-id regression: the mock delivers i64 ids as JSON numbers exactly
@@ -108,25 +108,25 @@ test.describe('Ariane TML import journey', () => {
     // Warning-free, unconverted receipt: #411/#420 downgrade it to a toast, not
     // the modal. Assert the toast FIRST (it waits for the receipt to actually
     // resolve) so the modal check after it isn't a same-instant false pass. The
-    // exact summary string - 2 of 2 sections, 4 shots (excluded out by
+    // exact summary string - 2 of 2 lines, 4 shots (excluded out by
     // default), the file's single loop closure - keeps its e2e contract here,
     // moved from the old modal assertion. `.filter` because the toast testid is
     // per-toast and strict mode errors on a second concurrent toast.
     await expect(
       page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
-    ).toContainText('Ariane TML import: 2 sections - 4 shots - 1 loop reconstructed', {
+    ).toContainText('Ariane TML import: 2 lines - 4 shots - 1 loop reconstructed', {
       timeout: 10000,
     });
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
     await expect(page.getByTestId('single-system-view')).toBeVisible();
 
-    const sections = await getImportedSections(page);
-    expect(sections.map((section) => section.name)).toEqual(['Main Line', 'Side Passage']);
+    const lines = await getImportedLines(page);
+    expect(lines.map((line) => line.name)).toEqual(['Main Line', 'Side Passage']);
     // Excluded shot dropped: 2 kept in Main Line, 2 in Side Passage.
     // No kind assertions here: the default Auto mode classifies virtual shots
     // via the backend's chain rule, which the IPC mock deliberately does not
     // model - kinds are only asserted under the override modes below.
-    expect(sections.map((section) => section.kinds.length)).toEqual([2, 2]);
+    expect(lines.map((line) => line.kinds.length)).toEqual([2, 2]);
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
@@ -147,7 +147,7 @@ test.describe('Ariane TML import journey', () => {
     // must count the opted-in excluded shot.
     await expect(
       page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
-    ).toContainText('Ariane TML import: 2 sections - 5 shots - 1 loop reconstructed', {
+    ).toContainText('Ariane TML import: 2 lines - 5 shots - 1 loop reconstructed', {
       timeout: 15000,
     });
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
@@ -156,8 +156,8 @@ test.describe('Ariane TML import journey', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].includeExcluded).toBe(true);
 
-    const sections = await getImportedSections(page);
-    expect(sections.map((section) => section.kinds.length)).toEqual([3, 2]);
+    const lines = await getImportedLines(page);
+    expect(lines.map((line) => line.kinds.length)).toEqual([3, 2]);
   });
 
   test('the virtual-shot override imports references instead of jumps', async ({ page }) => {
@@ -176,8 +176,8 @@ test.describe('Ariane TML import journey', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].virtualShotMode).toBe('AllReferences');
 
-    const sections = await getImportedSections(page);
-    expect(sections[1]?.kinds).toEqual(['Normal', 'Reference']);
+    const lines = await getImportedLines(page);
+    expect(lines[1]?.kinds).toEqual(['Normal', 'Reference']);
   });
 
   test('the all-jumps override imports jumps regardless of topology', async ({ page }) => {
@@ -196,8 +196,8 @@ test.describe('Ariane TML import journey', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].virtualShotMode).toBe('AllJumps');
 
-    const sections = await getImportedSections(page);
-    expect(sections[1]?.kinds).toEqual(['Normal', 'Jump']);
+    const lines = await getImportedLines(page);
+    expect(lines[1]?.kinds).toEqual(['Normal', 'Jump']);
   });
 
   test('an imperial file reports the unit conversion in the dialog and the receipt', async ({ page }) => {
@@ -232,7 +232,7 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-import-residue-dialog')).toBeHidden();
 
     expect(await getTmlImportCalls(page)).toHaveLength(0);
-    expect(await getImportedSections(page)).toEqual([]);
+    expect(await getImportedLines(page)).toEqual([]);
   });
 
   // #447: the Cancel/Import footer used to scroll away with the dialog body,
@@ -265,7 +265,7 @@ test.describe('Ariane TML import journey', () => {
     }
   });
 
-  // A section credited to five surveyors and two explorers over a date range:
+  // A line credited to five surveyors and two explorers over a date range:
   // at every window size the preview shows each name whole (pills wrap rather
   // than truncate to "Cy...") and the Date column is fully inside the panel -
   // no horizontal scrollbar hiding it.
@@ -306,9 +306,9 @@ test.describe('Ariane TML import journey', () => {
     });
   }
 
-  // #425: the per-section filter. Side Passage hangs off Main Line, so
+  // #425: the per-line filter. Side Passage hangs off Main Line, so
   // unticking Main Line also exercises the re-anchor path end to end.
-  test('unticking a section imports only the rest, and says so on the wire', async ({ page }) => {
+  test('unticking a line imports only the rest, and says so on the wire', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Filtered Import');
 
     await expect(page.getByTestId('tml-selected-count')).toContainText('2 of 2');
@@ -325,11 +325,11 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.selectedSections).toEqual([1]);
-    expect((await getImportedSections(page)).map((s) => s.name)).toEqual(['Side Passage']);
+    expect(calls[0]?.selectedLines).toEqual([1]);
+    expect((await getImportedLines(page)).map((s) => s.name)).toEqual(['Side Passage']);
   });
 
-  test('unticking every section disables Import', async ({ page }) => {
+  test('unticking every line disables Import', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Empty Selection Import');
 
     await page.getByTestId('tml-select-all').uncheck();

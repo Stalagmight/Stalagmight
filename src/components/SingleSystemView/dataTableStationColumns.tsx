@@ -3,10 +3,10 @@
  *
  * Mirrors the previous EditableTable columns (order, widths, formatting) as
  * SpreadsheetGrid column configs. Stations are derived from shots, so X/Y/Depth
- * are read-only, and so is the name (an imported MNemo station number, for
- * now); only the comment is editable (and never in the read-only
- * closure-adjusted geometry mode). The index pill moved to the row gutter. The
- * GPS (zero-datum) cell is a click target that opens the Edit Station dialog.
+ * are read-only, and so is the project-unique Station ID; the name (unique
+ * within the line, SPEC 4.1) and the comment are editable (never in a
+ * read-only view). The station's name pill sits in the row gutter. The GPS
+ * (zero-datum) cell is a click target that opens the Edit Station dialog.
  */
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
@@ -16,6 +16,8 @@ import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { xyToGps } from '../../utils/coordinates';
 import { displayStationName } from '../../utils/formatters';
+import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
+import type { IdentityLabels } from '../../utils/stationIdentity';
 import type { GpsCoordinates } from '../../types/project';
 
 export interface StationColumnContext {
@@ -31,6 +33,22 @@ export interface StationColumnContext {
   /** Click on a connections cell with connections - opens the merged/closure
    *  station picker at the pointer. */
   onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
+  /** Names for the rename check and the connections tooltip. */
+  labels?: Pick<IdentityLabels, 'station' | 'stationName' | 'stationId' | 'lineName'>;
+  /** The names of the stations of the shown line, by index - a rename to one
+   *  of them is refused inline before it reaches the backend. */
+  lineStationNames?: ReadonlyArray<string>;
+}
+
+/**
+ * The name a committed Name cell asks to set, or null when there is nothing to
+ * send: not a string, empty, or the station's stored name once trimmed (a
+ * re-typed or padded copy of the same name is no rename, and no undo step).
+ */
+export function stationRenameToSend(value: unknown, station: Pick<Station, 'name'>): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.trim();
+  return name === '' || name === station.name ? null : name;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -70,13 +88,32 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
 
   return [
     {
-      // Next to the gutter's positional S:I pill: both identify the station.
-      // Hidden by default (STATION_DEFAULT_HIDDEN / the backend panels default).
+      // The editable copy of the gutter's name pill (set_station_name: trimmed,
+      // never empty, unique within the line). Hidden by default
+      // (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),
-      width: 64,
+      width: 72,
       kind: 'text',
       getValue: (r) => displayStationName(r.name),
+      editable: !geometryReadOnly,
+      // An empty name is not a name: skip the write rather than send it.
+      parse: (raw) => (raw.trim() === '' ? undefined : raw.trim()),
+      validate: (value, r) => {
+        if (typeof value !== 'string' || !ctx.lineStationNames) return null;
+        const problem = stationNameProblem(value, ctx.lineStationNames, r.station_ref.station_index);
+        return problem
+          ? stationNameProblemMessage(problem, ctx.labels?.lineName(r.station_ref.line_id) ?? '', value)
+          : null;
+      },
+    },
+    {
+      // The project-unique Station ID (read-only).
+      key: '_stationId',
+      header: t('dataTable.stationColumns.stationId'),
+      width: 84,
+      align: 'right',
+      getValue: (r) => r.id,
     },
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),
@@ -104,7 +141,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
             if (!geometryReadOnly) ctx.onGpsCellClick(station);
           }}
           title={geometryReadOnly ? undefined : t('dataTable.stationGps.edit')}
-          data-testid={`station-gps-${station.station_ref.section_id}-${station.station_ref.station_index}`}
+          data-testid={`station-gps-${station.station_ref.line_id}-${station.station_ref.station_index}`}
         >
           {station.is_zero_datum ? (
             <DotIcon size={20} />
@@ -129,7 +166,8 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
         if (total === 0) return null;
         const tooltipParts: string[] = [];
         if (mergeCount > 0) {
-          tooltipParts.push(`Merges: ${station.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}`);
+          const named = (m: Station['station_ref']) => ctx.labels?.station(m, true) ?? '';
+          tooltipParts.push(`Merges: ${station.merged_with.map(named).join(', ')}`);
         }
         if (closureCount > 0) {
           tooltipParts.push(`Closures: ${closureCount}`);
@@ -142,7 +180,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
               e.stopPropagation();
               ctx.onConnectionsCellClick(station, { x: e.clientX, y: e.clientY });
             }}
-            data-testid={`station-conn-${station.station_ref.section_id}-${station.station_ref.station_index}`}
+            data-testid={`station-conn-${station.station_ref.line_id}-${station.station_ref.station_index}`}
           >
             <LinkIcon size={12} />
             {total}

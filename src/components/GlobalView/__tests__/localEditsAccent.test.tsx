@@ -34,7 +34,7 @@ const project = (id: string, name: string): ProjectMetadata => ({
   location: null,
   file_path: `/p/${name}.stalx`,
   modified_at: '2026-07-26T00:00:00Z',
-  section_count: 1,
+  line_count: 1,
   total_length: 10,
   station_count: 2,
   gps_center: null,
@@ -128,7 +128,7 @@ describe('recents local-edit accent (#270)', () => {
         location={null}
         filePath={DIRTY_PROJECT.file_path}
         modifiedAt={DIRTY_PROJECT.modified_at}
-        sectionCount={1}
+        lineCount={1}
         totalLength={10}
         speleoLock={resolveSpeleoLock(DIRTY_PROJECT, {}, null, {}, STATES)}
       />,

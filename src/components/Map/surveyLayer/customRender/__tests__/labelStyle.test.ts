@@ -19,7 +19,7 @@ import {
 const THEME = { textHalo: '#111111', textHaloAlt: '#222222' } as unknown as MapThemeColors;
 
 const S = LABEL_KIND.STATION_LABEL;
-const SEC = LABEL_KIND.SECTION_NAME;
+const SEC = LABEL_KIND.LINE_NAME;
 
 /** All-enabled inputs at a given DPR with theme halo colors resolved. */
 function inputs(over: Partial<LabelStyleInputs> = {}): LabelStyleInputs {
@@ -54,7 +54,7 @@ describe('interpolateStops', () => {
 });
 
 describe('resolveHaloColors', () => {
-  it('uses textHalo for section names and textHaloAlt for every other kind', () => {
+  it('uses textHalo for line names and textHaloAlt for every other kind', () => {
     const halos = resolveHaloColors(THEME);
     expect(halos[SEC]).toEqual(packCssColor('#111111'));
     expect(halos[LABEL_KIND.STATION_LABEL]).toEqual(packCssColor('#222222'));
@@ -84,7 +84,7 @@ describe('computeLabelUniforms', () => {
     // Toggle off collapses it even above minzoom.
     const off = inputs({ kindEnabled: [false, false, false, false, false] });
     expect(computeLabelUniforms(16, off).kindVisible[S]).toBe(0);
-    // Section names have minzoom 10.
+    // Line names have minzoom 10.
     expect(computeLabelUniforms(11, inputs()).kindVisible[SEC]).toBe(1);
     expect(computeLabelUniforms(9, inputs()).kindVisible[SEC]).toBe(0);
   });
@@ -118,7 +118,7 @@ describe('computeLabelUniforms - all five kinds (stock parity)', () => {
     expect(computeLabelUniforms(14, inputs()).kindVisible[SHOT]).toBe(1);
   });
 
-  it('section names: size 12→11 / 18→14, opacity 1, halo 1.5, minzoom 10', () => {
+  it('line names: size 12→11 / 18→14, opacity 1, halo 1.5, minzoom 10', () => {
     expect(computeLabelUniforms(12, inputs()).textSizePx[SEC]).toBeCloseTo(11, 6);
     expect(computeLabelUniforms(18, inputs()).textSizePx[SEC]).toBeCloseTo(14, 6);
     expect(computeLabelUniforms(15, inputs()).opacity[SEC]).toBeCloseTo(1, 6);

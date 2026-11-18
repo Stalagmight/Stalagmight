@@ -168,7 +168,7 @@ export function interpolateColor(
 
 /**
  * Get a color for a depth value using HSL gradient interpolation
- * Returns null for invalid inputs - caller should fallback to section color
+ * Returns null for invalid inputs - caller should fallback to line color
  *
  * @param depth - The depth value to get color for
  * @param shallowColor - Color for shallowest depth. REQUIRED - there is no
@@ -188,7 +188,7 @@ export function getDepthColor(
   minDepth: number,
   maxDepth: number
 ): string | null {
-  // Return null for invalid inputs - caller should fallback to section color
+  // Return null for invalid inputs - caller should fallback to line color
   // Use Number.isFinite for strict validation (doesn't coerce non-numbers)
   if (!Number.isFinite(depth) || !Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
     return null;
@@ -285,9 +285,9 @@ export function getContrastColor(backgroundColor: string): string {
 }
 
 /**
- * Default section color palette
+ * Default line color palette
  */
-export const SECTION_COLORS = [
+export const LINE_COLORS = [
   '#4ecdc4', // Teal
   '#ff6b6b', // Coral
   '#95e1d3', // Mint
@@ -299,20 +299,20 @@ export const SECTION_COLORS = [
 ];
 
 /**
- * Light-CANVAS counterpart of `SECTION_COLORS` (#357 item 9). `SECTION_COLORS`
+ * Light-CANVAS counterpart of `LINE_COLORS` (#357 item 9). `LINE_COLORS`
  * is dark-tuned pastel and draws at ~1.5:1 or worse on the light map canvas
  * (`#faf7f2`), so a survey seeded under a light theme got barely-visible
- * section lines. Section colour is per-project user data - a section keeps
+ * line lines. Line colour is per-project user data - a line keeps
  * whatever colour it was created with, so this only affects what a NEW
- * section seeds, never an already-persisted one.
+ * line seeds, never an already-persisted one.
  *
- * Same hue order/character as `SECTION_COLORS` (teal, coral, mint, salmon,
+ * Same hue order/character as `LINE_COLORS` (teal, coral, mint, salmon,
  * lavender, pink, sky blue, peach), darker/more saturated so every entry
  * clears WCAG's 3:1 floor for a non-text graphical object against `#faf7f2`.
  * Measured (not eyeballed) in `__tests__/colors.test.ts`, which also asserts
  * every pair is distinguishable from its neighbours.
  */
-export const LIGHT_SECTION_COLORS = [
+export const LIGHT_LINE_COLORS = [
   '#1a8a7d', // Teal
   '#c0392b', // Coral
   '#2e7d6e', // Mint
@@ -327,12 +327,12 @@ export const LIGHT_SECTION_COLORS = [
  * Move-comment tool palette (#52). Vivid, high-saturation colors used to
  * tint each comment label and the shot/station it belongs to, so the two
  * are visually paired while repositioning. Deliberately distinct from the
- * muted `SECTION_COLORS` above (so a tint reads clearly even when coloring
- * by section) and saturated/bright enough to stay readable on the dark map
+ * muted `LINE_COLORS` above (so a tint reads clearly even when coloring
+ * by line) and saturated/bright enough to stay readable on the dark map
  * background.
  *
  * Assignment (see `commentColorForKey` in `surveyLayer/features.ts`) is a
- * deterministic hash of each comment's owner identity (section + shot/station),
+ * deterministic hash of each comment's owner identity (line + shot/station),
  * not a build-order ordinal, so a color stays stable across adds/removes/moves
  * of other comments. Two accepted tradeoffs of hashing into only 8 slots:
  * nearby comments can collide on the same color, and a survey with more than
@@ -426,7 +426,7 @@ function generateRandomColor(usedColors: string[]): string {
 
 /**
  * WCAG relative luminance (0-1). Shared by `contrastRatio` and the
- * canvas-luminance check `isLightCanvasTheme` uses to pick a section palette.
+ * canvas-luminance check `isLightCanvasTheme` uses to pick a line palette.
  */
 export function relativeLuminance(hex: string): number {
   const channel = (v: number) => {
@@ -450,26 +450,26 @@ export function contrastRatio(a: string, b: string): number {
  * Whether `resolvedTheme`'s MAP CANVAS - not its chrome - is light. Themes
  * like `solarized_light` and `catppuccin_latte` have light chrome but leave
  * `--cc-map-background` unset, so they inherit `:root`'s dark canvas and must
- * NOT get the light section palette; `mapCanvasFor` resolves that distinction.
+ * NOT get the light line palette; `mapCanvasFor` resolves that distinction.
  */
 export function isLightCanvasTheme(resolvedTheme: string): boolean {
   return relativeLuminance(mapCanvasFor(resolvedTheme)) > 0.5;
 }
 
 /**
- * The section-color palette a NEW section seeded under `resolvedTheme` should
- * draw from - `LIGHT_SECTION_COLORS` on a light canvas, `SECTION_COLORS`
- * otherwise. Never applies to a section's already-persisted color.
+ * The line-color palette a NEW line seeded under `resolvedTheme` should
+ * draw from - `LIGHT_LINE_COLORS` on a light canvas, `LINE_COLORS`
+ * otherwise. Never applies to a line's already-persisted color.
  */
-export function sectionColorPalette(resolvedTheme: string): string[] {
-  return isLightCanvasTheme(resolvedTheme) ? LIGHT_SECTION_COLORS : SECTION_COLORS;
+export function lineColorPalette(resolvedTheme: string): string[] {
+  return isLightCanvasTheme(resolvedTheme) ? LIGHT_LINE_COLORS : LINE_COLORS;
 }
 
 /**
  * Get the next available color from the theme-appropriate palette.
  */
-export function getNextSectionColor(usedColors: string[], resolvedTheme: string): string {
-  for (const color of sectionColorPalette(resolvedTheme)) {
+export function getNextLineColor(usedColors: string[], resolvedTheme: string): string {
+  for (const color of lineColorPalette(resolvedTheme)) {
     if (!usedColors.includes(color)) {
       return color;
     }

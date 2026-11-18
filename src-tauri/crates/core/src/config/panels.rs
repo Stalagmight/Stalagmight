@@ -1,6 +1,6 @@
 //! The `[panels]` config table: panel sizes, reveal state, and the persisted
 //! column layout for each of the app's four shot grids (data table, stations
-//! table, new-section dialog, edit-section dialog).
+//! table, new-line dialog, edit-line dialog).
 //!
 //! Split out of `types.rs` because the four grids' order/hidden/width triples
 //! pushed that file past its size budget (#157). Everything here is reachable
@@ -97,44 +97,58 @@ pub struct PanelsConfig {
     /// deserializer.
     #[serde(default, deserialize_with = "lenient_column_widths")]
     pub data_table_station_column_widths: BTreeMap<String, u32>,
-    /// New-section dialog grid: column order (grid column keys; empty =
+    /// New-line dialog grid: column order (grid column keys; empty =
     /// declaration order). Kept separate from the data table's own layout: the
     /// two grids share column definitions but not a column SET (the dialog omits
     /// the warning/id columns), so one shared list would let a key hidden in one
     /// view silently govern the other.
-    #[serde(default)]
-    pub new_section_column_order: Vec<String>,
-    /// New-section dialog grid: hidden column keys (the in/out legs, pitch and
+    #[serde(default, alias = "new_section_column_order")]
+    pub new_line_column_order: Vec<String>,
+    /// New-line dialog grid: hidden column keys (the in/out legs, pitch and
     /// LRUD start hidden, matching what the old hand-rolled table showed).
-    #[serde(default = "default_new_section_hidden_columns")]
-    pub new_section_hidden_columns: Vec<String>,
-    /// New-section dialog grid: column widths in pixels, keyed by grid column
+    #[serde(
+        default = "default_new_line_hidden_columns",
+        alias = "new_section_hidden_columns"
+    )]
+    pub new_line_hidden_columns: Vec<String>,
+    /// New-line dialog grid: column widths in pixels, keyed by grid column
     /// key. See `data_table_shot_column_widths` for the BTreeMap and the
     /// tolerant deserializer.
-    #[serde(default, deserialize_with = "lenient_column_widths")]
-    pub new_section_column_widths: BTreeMap<String, u32>,
-    /// Edit-section dialog's shot grid: column order (grid column keys; empty =
+    #[serde(
+        default,
+        deserialize_with = "lenient_column_widths",
+        alias = "new_section_column_widths"
+    )]
+    pub new_line_column_widths: BTreeMap<String, u32>,
+    /// Edit-line dialog's shot grid: column order (grid column keys; empty =
     /// declaration order). Its own set again, for the same reason as
-    /// `new_section_*`: the grids share column definitions but not a column SET.
-    #[serde(default)]
-    pub edit_section_column_order: Vec<String>,
-    /// Edit-section dialog's shot grid: hidden column keys.
-    #[serde(default = "default_edit_section_hidden_columns")]
-    pub edit_section_hidden_columns: Vec<String>,
-    /// Edit-section dialog's shot grid: column widths in pixels, keyed by grid
+    /// `new_line_*`: the grids share column definitions but not a column SET.
+    #[serde(default, alias = "edit_section_column_order")]
+    pub edit_line_column_order: Vec<String>,
+    /// Edit-line dialog's shot grid: hidden column keys.
+    #[serde(
+        default = "default_edit_line_hidden_columns",
+        alias = "edit_section_hidden_columns"
+    )]
+    pub edit_line_hidden_columns: Vec<String>,
+    /// Edit-line dialog's shot grid: column widths in pixels, keyed by grid
     /// column key. See `data_table_shot_column_widths` for the BTreeMap and the
     /// tolerant deserializer.
-    #[serde(default, deserialize_with = "lenient_column_widths")]
-    pub edit_section_column_widths: BTreeMap<String, u32>,
+    #[serde(
+        default,
+        deserialize_with = "lenient_column_widths",
+        alias = "edit_section_column_widths"
+    )]
+    pub edit_line_column_widths: BTreeMap<String, u32>,
     /// The IMPORT-time shot grids (the MNemo wizard, both of its steps, and
     /// zero-datum config): column order. Its own set because those dialogs edit
     /// shots that are not in the project yet - reshaping columns while placing an
-    /// import is a different job from reviewing a saved section, and sharing one
+    /// import is a different job from reviewing a saved line, and sharing one
     /// set meant either overwrote the other's layout.
     #[serde(default)]
     pub import_shots_column_order: Vec<String>,
     /// Import-time shot grids: hidden column keys.
-    #[serde(default = "default_edit_section_hidden_columns")]
+    #[serde(default = "default_edit_line_hidden_columns")]
     pub import_shots_hidden_columns: Vec<String>,
     /// Import-time shot grids: column widths in pixels, keyed by grid column key.
     #[serde(default, deserialize_with = "lenient_column_widths")]
@@ -191,8 +205,8 @@ impl PanelsConfig {
         normalize_panel_mode(&mut self.data_table_mode);
         normalize_column_widths(&mut self.data_table_shot_column_widths);
         normalize_column_widths(&mut self.data_table_station_column_widths);
-        normalize_column_widths(&mut self.new_section_column_widths);
-        normalize_column_widths(&mut self.edit_section_column_widths);
+        normalize_column_widths(&mut self.new_line_column_widths);
+        normalize_column_widths(&mut self.edit_line_column_widths);
         normalize_column_widths(&mut self.import_shots_column_widths);
         // The eight column-key LISTS need the same ceiling as the width maps
         // beside them, and for the same reason - see `normalize_column_names`.
@@ -205,10 +219,10 @@ impl PanelsConfig {
         normalize_column_names(&mut self.data_table_shot_hidden_columns);
         normalize_column_names(&mut self.data_table_station_column_order);
         normalize_column_names(&mut self.data_table_station_hidden_columns);
-        normalize_column_names(&mut self.new_section_column_order);
-        normalize_column_names(&mut self.new_section_hidden_columns);
-        normalize_column_names(&mut self.edit_section_column_order);
-        normalize_column_names(&mut self.edit_section_hidden_columns);
+        normalize_column_names(&mut self.new_line_column_order);
+        normalize_column_names(&mut self.new_line_hidden_columns);
+        normalize_column_names(&mut self.edit_line_column_order);
+        normalize_column_names(&mut self.edit_line_hidden_columns);
         normalize_column_names(&mut self.import_shots_column_order);
         normalize_column_names(&mut self.import_shots_hidden_columns);
         // Same both-doors argument for the angle display modes. The PARTIAL
@@ -325,20 +339,20 @@ fn hide_newly_arrived(arrived: &[&str], hidden: &mut Vec<String>, seen: &mut Vec
 }
 
 pub(super) fn default_data_table_hidden_columns() -> Vec<String> {
-    let mut hidden = vec!["section_id".to_string(), "shot_id".to_string()];
+    let mut hidden = vec!["line_id".to_string(), "shot_id".to_string()];
     hidden.extend(default_shot_columns_seen());
     hidden
 }
 
-/// The edit-section grid hides the azimuth legs and the whole inclination family
+/// The edit-line grid hides the azimuth legs and the whole inclination family
 /// and shows everything else. It is editing a survey that already exists, so
 /// there is no "start simple" case the way there is when entering a brand-new
-/// section - but those five columns were added to the grid after the fact, and
+/// line - but those five columns were added to the grid after the fact, and
 /// hiding them is what keeps the four dialogs that render it looking exactly as
 /// they did before. The averages are what they have always shown.
 ///
-/// Mirrored by `DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS` in ShotTableEditor.tsx.
-pub(super) fn default_edit_section_hidden_columns() -> Vec<String> {
+/// Mirrored by `DEFAULT_EDIT_LINE_HIDDEN_COLUMNS` in ShotTableEditor.tsx.
+pub(super) fn default_edit_line_hidden_columns() -> Vec<String> {
     vec![
         "azimuth_in".to_string(),
         "azimuth_out".to_string(),
@@ -348,7 +362,7 @@ pub(super) fn default_edit_section_hidden_columns() -> Vec<String> {
     ]
 }
 
-fn default_new_section_hidden_columns() -> Vec<String> {
+fn default_new_line_hidden_columns() -> Vec<String> {
     vec![
         "azimuth_in".to_string(),
         "azimuth_out".to_string(),

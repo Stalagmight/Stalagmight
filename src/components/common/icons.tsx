@@ -269,7 +269,7 @@ export function RedoIcon(props: IconProps) {
 // "External link" / open-out icon: a box with an arrow breaking out of the
 // open top-right corner. The arrowhead's two arms are collinear with the box's
 // top and right edges (aligned with the square), with a gap so the shapes stay
-// distinct. Used as the section focus-mode entry affordance.
+// distinct. Used as the line focus-mode entry affordance.
 export function ExternalLinkIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
@@ -879,11 +879,11 @@ export function PinIcon(props: IconProps) {
 }
 
 /**
- * Survey sections: a short survey line (three shots between four stations), the
+ * Survey lines: a short survey line (three shots between four stations), the
  * thing the Sections panel lists. Filled bars and discs, never strokes, so it
  * keeps its weight under the WebKit UI zoom.
  */
-export function SectionsIcon(props: IconProps) {
+export function LinesIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       <Bar x1={3.5} y1={15} x2={8} y2={7} />
@@ -909,6 +909,40 @@ export function SignInIcon(props: IconProps) {
       <Bar x1={3.5} y1={10} x2={12} y2={10} />
       <Bar x1={8.5} y1={6.5} x2={12} y2={10} />
       <Bar x1={12} y1={10} x2={8.5} y2={13.5} />
+    </BaseIcon>
+  );
+}
+
+/** The eye struck through: hidden on the map (a Section's show/hide toggle,
+ *  #327). EyeIcon's filled lens with a diagonal bar over it. */
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M2 10 C2 10 5 5 10 5 C15 5 18 10 18 10 C18 10 15 15 10 15 C5 15 2 10 2 10 Z M3.9 10 C3.9 10 6.34 6.34 10 6.9 C13.66 6.34 16.1 10 16.1 10 C16.1 10 13.66 13.66 10 13.1 C6.34 13.66 3.9 10 3.9 10 Z"
+      />
+      <circle cx="10" cy="10" r="2.5" fill="currentColor" stroke="none" />
+      <Bar x1={4} y1={4} x2={16} y2={16} w={2.2} />
+    </BaseIcon>
+  );
+}
+
+/** A folder with a plus: a new group of lines (the Sections panel's "New
+ *  Section", #327). Filled bars (no strokes). */
+export function FolderPlusIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M2.5 5 L2.5 15.5 L17.5 15.5 L17.5 6.5 L9.5 6.5 L8 4.5 L3 4.5 Z M4.2 6.2 L7.2 6.2 L8.7 8.2 L15.8 8.2 L15.8 13.8 L4.2 13.8 Z"
+      />
+      <Bar x1={10} y1={9.6} x2={10} y2={12.4} w={1.6} />
+      <Bar x1={8.6} y1={11} x2={11.4} y2={11} w={1.6} />
     </BaseIcon>
   );
 }

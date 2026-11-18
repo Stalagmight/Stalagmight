@@ -12,7 +12,7 @@ for (const density of ['cards', 'table'] as const) {
     await page.addInitScript(({ cached, remote, path }) => {
       const metadata = {
         name: 'Old cached name', location: 'Local metadata', file_path: path,
-        modified_at: '2026-01-01T00:00:00Z', section_count: 123,
+        modified_at: '2026-01-01T00:00:00Z', line_count: 123,
         station_count: 456, total_length: 789, gps_center: null, gps_bounds: null,
         is_remote: true, speleodb_project_id: cached,
       };
@@ -67,7 +67,7 @@ for (const density of ['cards', 'table'] as const) {
 async function setupRemoteAndLocal(page: Page, pendingDownload = false, remoteOnMap = false): Promise<string[]> {
   await page.addInitScript(({ id, path, pending, onMap }) => {
     const local = { name: 'Local cave', file_path: '/projects/local.stalx', location: null,
-      modified_at: '2026-01-01T00:00:00Z', section_count: 1, station_count: 2,
+      modified_at: '2026-01-01T00:00:00Z', line_count: 1, station_count: 2,
       total_length: 3, gps_center: null, gps_bounds: null, is_remote: false };
     (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
       speleodb_session: { logged_in: true, user_email: 'me@example.com', endpoint: 'https://example.com' },

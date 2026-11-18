@@ -177,15 +177,15 @@ describe('ShotTableEditor averaged-angle edits', () => {
 /**
  * The warning column was showing nothing where the data table showed warnings:
  * it only ever ran the editor's own two threshold checks, never the project's
- * analysis. Passing a sectionId opts a host into that shared source.
+ * analysis. Passing a lineId opts a host into that shared source.
  */
 describe('ShotTableEditor warning column', () => {
   const warning = (over: Record<string, unknown> = {}) => ({
-    sectionId: 7,
+    lineId: 7,
     shotId: 1,
     shotIndex: 0,
     code: 'SHORT_SHOT',
-    message: 'Shot 7:1 is suspiciously short',
+    message: 'Shot Main: 0 \u2192 1 is suspiciously short',
     severity: 'warning',
     isResolved: false,
     ...over,
@@ -202,15 +202,15 @@ describe('ShotTableEditor warning column', () => {
       />
     );
 
-  it('shows the project warning for a shot once a sectionId is given', () => {
+  it('shows the project warning for a shot once a lineId is given', () => {
     useProjectStore.setState({ warnings: [warning()] as never });
-    renderEditor({ sectionId: 7 });
+    renderEditor({ lineId: 7 });
     expect(screen.getByTestId('shot-warning-0').getAttribute('title')).toContain(
       'suspiciously short'
     );
   });
 
-  it('shows nothing from the project without a sectionId to look up', () => {
+  it('shows nothing from the project without a lineId to look up', () => {
     useProjectStore.setState({ warnings: [warning()] as never });
     renderEditor();
     expect(screen.queryByTestId('shot-warning-0')).toBeNull();
@@ -218,19 +218,19 @@ describe('ShotTableEditor warning column', () => {
 
   it('reds the icon for an error-severity warning', () => {
     useProjectStore.setState({ warnings: [warning({ severity: 'error' })] as never });
-    renderEditor({ sectionId: 7 });
+    renderEditor({ lineId: 7 });
     expect(screen.getByTestId('shot-warning-0').className).toContain('text-error');
   });
 
-  it('ignores a resolved warning, and one for another shot or section', () => {
+  it('ignores a resolved warning, and one for another shot or line', () => {
     useProjectStore.setState({
       warnings: [
         warning({ isResolved: true }),
         warning({ shotId: 999 }),
-        warning({ sectionId: 8 }),
+        warning({ lineId: 8 }),
       ] as never,
     });
-    renderEditor({ sectionId: 7 });
+    renderEditor({ lineId: 7 });
     expect(screen.queryByTestId('shot-warning-0')).toBeNull();
   });
 
@@ -245,7 +245,7 @@ describe('ShotTableEditor warning column', () => {
         onShotChange={vi.fn()}
         onAddShot={vi.fn()}
         onDeleteShot={vi.fn()}
-        sectionId={7}
+        lineId={7}
       />
     );
     const title = screen.getByTestId('shot-warning-0').getAttribute('title') ?? '';
@@ -264,7 +264,7 @@ describe('ShotTableEditor warning column', () => {
         onShotChange={vi.fn()}
         onAddShot={vi.fn()}
         onDeleteShot={vi.fn()}
-        sectionId={7}
+        lineId={7}
       />
     );
     const title = screen.getByTestId('shot-warning-0').getAttribute('title') ?? '';
@@ -280,7 +280,7 @@ describe('ShotTableEditor warning column', () => {
         onShotChange={vi.fn()}
         onAddShot={vi.fn()}
         onDeleteShot={vi.fn()}
-        sectionId={7}
+        lineId={7}
       />
     );
     expect(screen.getByTestId('shot-warning-0').getAttribute('title')).toContain(
