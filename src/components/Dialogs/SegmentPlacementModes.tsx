@@ -17,7 +17,8 @@ import type { SkippedSuggestionPlacement } from './DmpNewImportDialog';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { displayStationName } from '../../utils/formatters';
 import { lineDisplayName } from '../../utils/stationIdentity';
-import { dmpFileStationName, importLineStationNames, suggestionTargetStationLabel } from '../../utils/importStationNames';
+import { dmpFileStationName, importStationChoices, suggestionTargetStationLabel } from '../../utils/importStationNames';
+import { toEmittedStationIndex } from '../common/emittedShots';
 
 export type SegmentPlacementMode = 'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard';
 
@@ -79,18 +80,24 @@ export function SegmentPlacementModes({
     }));
 
   // Each station of the anchor line by the name the import gives it: an
-  // edited line's rows as the user sees them, an unedited one by the file's
-  // MNemo numbers.
+  // edited line's emitted stations (a blank added row emits none, so it adds
+  // no option), an unedited one by the file's MNemo numbers. The pick is
+  // stored over the rows on screen, so the shown value is the option of the
+  // station the stored pick lands on.
+  const secIdx = segmentAnchor?.lineIndex;
+  const secEdits = secIdx != null ? lineEdits.get(secIdx) : undefined;
+  const editedChoices = secEdits ? importStationChoices(secEdits.shots, secEdits.reverse) : null;
   const stationOptions = (): SelectOption[] => {
-    const secIdx = segmentAnchor?.lineIndex;
-    const secEdits = secIdx != null ? lineEdits.get(secIdx) : undefined;
+    if (editedChoices) return editedChoices.map((c) => stationOption(c.index, c.name));
     const sec = secIdx != null ? dmpSections[secIdx] : null;
-    if (secEdits) {
-      const names = importLineStationNames(secEdits.shots.filter((s) => !s.isDeleted), secEdits.reverse);
-      return names.map((name, i) => stationOption(i, name));
-    }
     const count = sec ? sec.shots.filter((s) => s.shot_type === 'Standard').length + 1 : 0;
     return Array.from({ length: count }, (_, i) => stationOption(i, dmpFileStationName(i)));
+  };
+  const stationValue = (): string => {
+    const picked = segmentAnchor?.stationIndex ?? 0;
+    if (!editedChoices || !secEdits) return String(picked);
+    const emitted = toEmittedStationIndex(secEdits.shots, picked);
+    return String(editedChoices.find((c) => c.emitted === emitted)?.index ?? picked);
   };
 
   return (
@@ -113,7 +120,12 @@ export function SegmentPlacementModes({
             <div className="text-sm">
               <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
               <div className="text-xs text-text-secondary">
-                → {suggestionTargetStationLabel(labels, segmentSkippedSuggestion.suggestion, segmentSkippedSuggestion.mergeExistingStation)}
+                → {suggestionTargetStationLabel(
+                  labels,
+                  segmentSkippedSuggestion.suggestion,
+                  segmentSkippedSuggestion.mergeExistingStation,
+                  (i) => lineEdits.get(i)?.name,
+                )}
                 {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
               </div>
             </div>
@@ -161,7 +173,7 @@ export function SegmentPlacementModes({
                     {t('dialogs.dmpNewImport.manualPlacing.station')}
                   </label>
                   <Select
-                    value={String(segmentAnchor?.stationIndex ?? 0)}
+                    value={stationValue()}
                     onChange={(v) => {
                       if (!segmentAnchor) return;
                       onCommitSegmentAnchor({ lineIndex: segmentAnchor.lineIndex, stationIndex: Number(v) });
@@ -264,7 +276,7 @@ export function SegmentPlacementModes({
                     {t('dialogs.dmpNewImport.manualPlacing.station')}
                   </label>
                   <Select
-                    value={String(segmentAnchor?.stationIndex ?? 0)}
+                    value={stationValue()}
                     onChange={(v) => {
                       if (!segmentAnchor) return;
                       onCommitSegmentAnchor({ lineIndex: segmentAnchor.lineIndex, stationIndex: Number(v) });

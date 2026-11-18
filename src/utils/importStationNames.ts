@@ -12,6 +12,7 @@
  * exactly the name the import gives; keep the two in step.
  */
 import type { EditableShot } from '../components/common/editableShot';
+import { isEmittedShot, toEmittedStationIndex, visibleShotCount } from '../components/common/emittedShots';
 import type { CrossLineSuggestion } from '../types/commands';
 import { mnemoStationNumber } from '../hooks/useImportState';
 import { formatStationLabel } from './formatters';
@@ -178,6 +179,37 @@ export function importLineStationNames(rows: readonly EditableShot[], reverse = 
   return slots.map((slot) => slot ?? '');
 }
 
+/** A station of an incoming line a wizard lets the user pick. */
+export interface ImportStationChoice {
+  /** The pick as the wizard stores it: a station counted over the rows on
+   *  screen (`isVisibleShot`, blank added rows included). */
+  index: number;
+  /** The station of the imported line it lands on (`isEmittedShot` space). */
+  emitted: number;
+  /** The name that station gets. */
+  name: string;
+}
+
+/**
+ * The stations of an edited incoming line a wizard's station picker lists: one
+ * per station the import EMITS, by the name it gets (computed over the emitted
+ * rows, as the backend names them), each at the first on-screen station that
+ * lands on it. A blank added row emits nothing, so the stations around it are
+ * one station of the import and listed once - not under a name (`1a`) no
+ * station will have.
+ */
+export function importStationChoices(shots: readonly EditableShot[], reverse = false): ImportStationChoice[] {
+  const names = importLineStationNames(shots.filter(isEmittedShot), reverse);
+  const choices: ImportStationChoice[] = [];
+  const stations = visibleShotCount(shots) + 1;
+  for (let index = 0; index < stations; index++) {
+    const emitted = toEmittedStationIndex(shots, index);
+    if (choices.length > 0 && choices[choices.length - 1]!.emitted === emitted) continue;
+    choices.push({ index, emitted, name: names[emitted] ?? '' });
+  }
+  return choices;
+}
+
 /**
  * The name of station `index` of a DMP line, counted in the file's own
  * numbering (the importable shots before any wizard edit - the space the
@@ -196,16 +228,24 @@ export function dmpFileStationLabel(index: number, lineName: string | null | und
 /**
  * `Main Line / 17`: station `index` at the far end of a DMP suggestion - a
  * station of an existing project line, named by the project, or of another
- * incoming line, in that line's file numbering.
+ * incoming line, in that line's file numbering. An incoming line goes by the
+ * name the user gave it in the wizard (`wizardLineName`, by import index),
+ * the file's until renamed.
  */
 export function suggestionTargetStationLabel(
   labels: Pick<IdentityLabels, 'stationName'>,
-  suggestion: Pick<CrossLineSuggestion, 'targetType' | 'existingLineId' | 'existingLineName'>,
+  suggestion: Pick<CrossLineSuggestion, 'targetType' | 'existingLineId' | 'existingLineName'> &
+    Partial<Pick<CrossLineSuggestion, 'targetImportIndex'>>,
   index: number,
+  wizardLineName?: (importIndex: number) => string | undefined,
 ): string {
   const name =
     suggestion.targetType === 'existing' && suggestion.existingLineId != null
       ? labels.stationName({ line_id: suggestion.existingLineId, station_index: index })
       : dmpFileStationName(index);
-  return formatStationLabel(name, lineDisplayName(suggestion.existingLineName));
+  const lineName =
+    suggestion.targetType === 'importing' && suggestion.targetImportIndex != null
+      ? (wizardLineName?.(suggestion.targetImportIndex) ?? suggestion.existingLineName)
+      : suggestion.existingLineName;
+  return formatStationLabel(name, lineDisplayName(lineName));
 }

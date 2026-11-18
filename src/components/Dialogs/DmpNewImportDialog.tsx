@@ -2578,11 +2578,18 @@ export default function DmpNewImportDialog({
     return linePalette[(pos >= 0 ? pos : 0) % linePalette.length] ?? '#4ecdc4';
   }, [editState?.color, currentSuggestion?.importLineIndex, selectedIndices, linePalette]);
 
+  // An incoming line by the name the user gave it in this wizard - the file's
+  // until renamed. The line on screen reads its live edit state.
+  const wizardLineName = (importIndex: number): string | undefined =>
+    importIndex === editStateForLine && editState ? editState.name : lineEditsRef.current.get(importIndex)?.name;
+
   // A merge pair by the names the two stations have (will get, on the import side).
   const mergePairLabel = (importStation: number, targetStation: number) =>
     t('dialogs.dmpNewImport.mergeOption', {
       importStation: dmpFileStationName(importStation),
-      targetStation: currentSuggestion ? suggestionTargetStationLabel(labels, currentSuggestion, targetStation) : '',
+      targetStation: currentSuggestion
+        ? suggestionTargetStationLabel(labels, currentSuggestion, targetStation, wizardLineName)
+        : '',
     });
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
@@ -3831,13 +3838,13 @@ export default function DmpNewImportDialog({
                 {/* Connection description */}
                 <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
                   <div className="text-sm">
-                    <span className="font-medium">{dmpFileStationLabel(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, currentSuggestion!.importLineName)}</span>
+                    <span className="font-medium">{dmpFileStationLabel(selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, wizardLineName(currentSuggestion!.importLineIndex) ?? currentSuggestion!.importLineName)}</span>
                   </div>
                   <div className="text-text-secondary text-sm my-1">
                     {t('dialogs.dmpNewImport.connectsTo')}
                   </div>
                   <div className="text-sm">
-                    <span className="font-medium">{suggestionTargetStationLabel(labels, currentSuggestion!, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex)}</span>
+                    <span className="font-medium">{suggestionTargetStationLabel(labels, currentSuggestion!, selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex, wizardLineName)}</span>
                     {isImportTarget && (
                       <span className="ml-1 text-xs text-text-secondary">(importing)</span>
                     )}
@@ -3946,7 +3953,7 @@ export default function DmpNewImportDialog({
                           </span>
                           <span className="flex-1 truncate">
                             <span className="text-text-secondary">{dmpFileStationName(alt.importStationIndex)} ↔ </span>
-                            <span className="font-medium">{suggestionTargetStationLabel(labels, alt, alt.existingStationIndex)}</span>
+                            <span className="font-medium">{suggestionTargetStationLabel(labels, alt, alt.existingStationIndex, wizardLineName)}</span>
                             {alt.targetType === 'importing' && (
                               <span className="text-text-secondary text-[10px] ml-0.5">(imp)</span>
                             )}

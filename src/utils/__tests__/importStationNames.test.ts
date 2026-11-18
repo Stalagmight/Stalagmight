@@ -130,4 +130,15 @@ describe('DMP wizard station labels', () => {
       suggestionTargetStationLabel(labels, { targetType: 'importing', existingLineId: null, existingLineName: 'Dive 2' }, 3)
     ).toBe('Dive 2 / 3');
   });
+
+  it("names an incoming target line by the user's rename in the wizard, the file's name until then", () => {
+    const importing = { targetType: 'importing' as const, existingLineId: null, existingLineName: 'Dive 2', targetImportIndex: 4 };
+    const renamed = (i: number) => (i === 4 ? 'Upper Sump' : undefined);
+    expect(suggestionTargetStationLabel(labels, importing, 3, renamed)).toBe('Upper Sump / 3');
+    expect(suggestionTargetStationLabel(labels, importing, 3, () => undefined)).toBe('Dive 2 / 3');
+    // A project line is the project's, whatever the wizard holds.
+    expect(
+      suggestionTargetStationLabel(labels, { targetType: 'existing', existingLineId: 5, existingLineName: 'Main Line' }, 1, () => 'X'),
+    ).toBe('Main Line / A7');
+  });
 });
