@@ -329,21 +329,22 @@ pub struct ExportImageOptions {
     /// **Raster-only**: SVG export is always monochrome regardless of this.
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// Whether to draw station-index labels at every station touched by at
-    /// least one drawn (non-reference) shot - i.e. all points on the drawn
+    /// Whether to draw Station ID labels (the project-unique integer
+    /// `Station::id`, never the positional index) at every station touched by
+    /// at least one drawn (non-reference) shot - i.e. all points on the drawn
     /// passage, deduped by colocation (station merges / aligned closures).
     /// Opt-in (default `false`); black text + white halo, same placement
     /// machinery as the penetration labels, so labels stay monochrome
     /// regardless of `color_mode`.
     #[serde(default)]
     pub show_station_labels: bool,
-    /// Whether to draw each station's name (e.g. the MNemo station number a
-    /// DMP import recorded) instead of its index, with the same points and
-    /// placement as `show_station_labels`. A point with no named station gets
-    /// no label - there is no fallback to the index. Opt-in (default `false`).
+    /// Whether to draw each station's name (unique within its line; every
+    /// station of a normalized project has one) instead of its Station ID,
+    /// with the same points and placement as `show_station_labels`. A point
+    /// whose name cleans to nothing gets no label. Opt-in (default `false`).
     /// The UI keeps it exclusive with `show_station_labels`; when both arrive
-    /// `true`, the index labels win, so a caller that predates this option
-    /// keeps the meaning it always had.
+    /// `true`, the Station ID labels win, so a caller that predates this
+    /// option keeps the meaning it always had.
     #[serde(default)]
     pub show_station_names: bool,
     /// Whether to draw line-name labels at the centroid of each line's
@@ -3986,8 +3987,10 @@ mod tests {
     fn station_labels_mark_all_stations() {
         // CHANGED semantics (#240 follow-up): station labels now cover every
         // point touched by a drawn shot (deg >= 1), including interior
-        // degree-2 stations 1 and 2 -- not just endpoints/junctions.
-        let project = three_shot_line_project();
+        // degree-2 stations 1 and 2 -- not just endpoints/junctions. The label
+        // is the Station ID, allocated 0..=3 along the line.
+        let mut project = three_shot_line_project();
+        project.ensure_station_identities();
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4100,8 +4103,10 @@ mod tests {
 
     #[test]
     fn station_labels_win_when_both_label_options_are_set() {
+        let mut project = named_line_project();
+        project.ensure_station_identities();
         let svg = generate_svg_string(
-            &named_line_project(),
+            &project,
             &ExportImageOptions {
                 show_station_labels: true,
                 ..names_only()
@@ -4267,6 +4272,8 @@ mod tests {
             station_b: StationRef::new(main_id, 1).into(),
             merged_at: chrono::Utc::now(),
         });
+        // Station IDs: Main 0..=3, Branch 4..=6.
+        project.ensure_station_identities();
 
         let svg = generate_svg_string(
             &project,
@@ -4302,8 +4309,8 @@ mod tests {
         assert!(
             labels
                 .iter()
-                .any(|(x, _, text)| text == "2" && x.abs() < 1.0),
-            "branch free endpoint (Branch:2, x≈0) should be labeled: {svg}"
+                .any(|(x, _, text)| text == "6" && x.abs() < 1.0),
+            "branch free endpoint (Branch:2, Station ID 6, x≈0) should be labeled: {svg}"
         );
     }
 

@@ -145,9 +145,19 @@ fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
 }
 
 fn create_line_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
+    // Line names are unique (the create_line IPC refuses a taken one): the
+    // first line is "Line A", later ones "Line A2", "Line A3", ...
+    let taken = state(app)
+        .get_project_state()
+        .map_or(0, |project| project.lines.len());
+    let name = if taken == 0 {
+        "Line A".to_string()
+    } else {
+        format!("Line A{}", taken + 1)
+    };
     let result = line::create_line(
         state(app),
-        Some("Line A".to_string()),
+        Some(name),
         Some("Surveyor".to_string()),
         None,
         "#4ecdc4".to_string(),

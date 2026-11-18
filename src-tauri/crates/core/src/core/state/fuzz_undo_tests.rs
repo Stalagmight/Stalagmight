@@ -935,7 +935,12 @@ const TOLERANCE_REL: f64 = 1e-12;
 fn drop_key(path: &str) -> bool {
     matches!(
         path,
-        "modified_at" | "file_path" | "next_line_id" | "next_closure_id" | "lines.*.next_shot_id"
+        "modified_at"
+            | "file_path"
+            | "next_line_id"
+            | "next_closure_id"
+            | "next_station_id"
+            | "lines.*.next_shot_id"
     )
 }
 
@@ -943,9 +948,13 @@ fn drop_key(path: &str) -> bool {
 /// pairs built from a `HashMap`, so their ORDER is not stable across a restore.
 /// Sorting them canonicalizes that without hiding a value - the same treatment
 /// the harness gives `line_offsets` (whose JSON-object form serde_json already
-/// sorts on parse).
+/// sorts on parse). `station_names` and `station_ids` are key-ordered by the
+/// project serde already, and sorted here too so a masked key compares alike.
 fn sort_as_set(path: &str) -> bool {
-    matches!(path, "station_offsets" | "station_comments")
+    matches!(
+        path,
+        "station_offsets" | "station_comments" | "station_names" | "station_ids"
+    )
 }
 
 /// Round to 12 significant digits, as the harness's canonical serializer does.

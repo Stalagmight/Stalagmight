@@ -124,13 +124,14 @@ fn imported_names_land_on_their_stations_and_undo_redo_with_the_import() {
 
 /// Indexes are given in the FILE's order; the backend mirrors them for a
 /// reversed import, so the file's station 0 - MNemo "0" - ends up on the
-/// station now numbered 3, still the same physical point.
+/// station now numbered 3, still the same physical point. The station the
+/// file does not name sits between "3" and "1", so it takes the Mid rule.
 #[test]
 fn a_reversed_import_mirrors_names_onto_the_same_physical_stations() {
     let state = import(config(true, &[(0, "0"), (1, "1"), (3, "3")], &[]));
     assert_eq!(
         names(&state.get_project_state().unwrap()),
-        named(&[Some("3"), None, Some("1"), Some("0")])
+        named(&[Some("3"), Some("3a"), Some("1"), Some("0")])
     );
 }
 
@@ -139,7 +140,8 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
     for reverse in [false, true] {
         let state = import(config(reverse, &[(7, "nowhere"), (1, "1")], &[]));
         let project = state.get_project_state().unwrap();
-        assert_eq!(project.station_names.len(), 1, "reverse={reverse}");
+        // The one name that lands, and the rest filled by the creation rules.
+        assert_eq!(project.station_names.len(), 4, "reverse={reverse}");
         assert!(!project.station_names.values().any(|n| n == "nowhere"));
     }
 }

@@ -277,8 +277,11 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// nothing for these sources. Re-pinned for per-shot survey credit: each
 /// line's `surveyor` left the line and rides on every shot as `credit`
 /// (the same person, `user1`, on each of the source's shots); nothing else in
-/// the canonical form moved.
-const MERGE_PARITY_DIGEST: u64 = 7_905_845_170_930_071_176;
+/// the canonical form moved. Re-pinned for station identity: every station of
+/// the merged file now has a name (seeded from its index, `"0"`..) and a
+/// Station ID (`0..=16` in line order, `next_station_id` 17); the line names
+/// and everything else are as before.
+const MERGE_PARITY_DIGEST: u64 = 10_262_733_135_849_276_131;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on
@@ -440,7 +443,10 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
         assert_eq!(content.station_merges.len(), 1);
         assert_eq!(content.loop_closures.len(), 1);
         assert_eq!(content.station_comments.len(), 2);
-        assert_eq!(content.station_names.len(), 1);
+        // Every added station is named and has an id (one name came from the
+        // source; the rest were seeded on the way in).
+        assert_eq!(content.station_names.len(), 9);
+        assert_eq!(content.station_ids.len(), 9);
         assert!(
             content.baseline.is_none(),
             "the stub baseline never persists"

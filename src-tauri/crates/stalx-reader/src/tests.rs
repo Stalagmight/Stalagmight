@@ -167,7 +167,21 @@ fn reads_every_part_of_a_current_file() {
         .iter()
         .map(|n| (n.station, n.name.as_str()))
         .collect();
-    assert_eq!(names, [(id(main.id, 0), "0"), (id(main.id, 4), "17")]);
+    // Every station has a name once the survey is read (an unnamed one is
+    // seeded from its index, as the app does on open).
+    assert_eq!(
+        names,
+        [
+            (id(main.id, 0), "0"),
+            (id(main.id, 1), "1"),
+            (id(main.id, 2), "2"),
+            (id(main.id, 3), "3"),
+            (id(main.id, 4), "17"),
+            (id(side.id, 0), "0"),
+            (id(side.id, 1), "1"),
+            (id(side.id, 2), "2"),
+        ]
+    );
     assert_eq!(survey.unresolved_references, 0);
     assert!(survey.stations.is_none(), "positions are opt-in");
 }
@@ -394,14 +408,18 @@ fn an_expired_deadline_interrupts_a_long_statement() {
 }
 
 /// A v18 file written before station names has no `station_names` table; it
-/// still reads, with no names.
+/// still reads, every station named after its index (the app's seed).
 #[test]
-fn a_file_without_station_names_reads_with_none() {
+fn a_file_without_station_names_reads_with_seeded_names() {
     let path = with_schema_sql("DROP TABLE station_names;");
 
     let survey = read_file(&path).unwrap();
 
-    assert!(survey.station_names.is_empty());
+    assert_eq!(survey.station_names.len(), 8);
+    assert!(survey
+        .station_names
+        .iter()
+        .all(|n| n.name == n.station.index.to_string()));
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
 }
@@ -413,7 +431,9 @@ fn a_dangling_station_name_is_dropped_and_counted() {
 
     let survey = read_file(&path).unwrap();
 
-    assert_eq!(survey.station_names.len(), 1);
+    // The dangling name is dropped and counted; its station reads seeded.
+    assert_eq!(survey.station_names.len(), 8);
+    assert!(!survey.station_names.iter().any(|n| n.name == "17"));
     assert_eq!(survey.unresolved_references, 1);
 }
 
@@ -742,6 +762,35 @@ fn zero_datum_extras_are_counted_against_their_own_cap() {
     assert!(read_file_with(
         &path,
         &ReadOptions::default().count_limits(CountLimits::default().zero_datum_extras(3))
+    )
+    .is_ok());
+}
+
+/// `station_ids` rows (one per station) are capped like `station_names`.
+#[test]
+fn station_ids_are_counted_against_their_own_cap() {
+    let dir = TempDir::new().unwrap();
+    let mut project = full_project();
+    project.ensure_station_identities();
+    let path = save(&dir, &project);
+    let options = ReadOptions::default().count_limits(CountLimits::default().station_ids(7));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::StationIds,
+                count: 8,
+                max: 7
+            }
+        ),
+        "{err}"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().station_ids(8))
     )
     .is_ok());
 }

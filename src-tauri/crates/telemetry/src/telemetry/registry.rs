@@ -1189,7 +1189,9 @@ mod tests {
         //       command.get_adjustment_report = 730.
         //   + 1 the Edit Station dialog's read-only preview of what a new zero
         //       datum would do (#741): command.preview_zero_datum = 731.
-        assert_eq!(EVENT_NAMES.len(), 731);
+        //   + 2 renaming a station (line identity): command.set_station_name,
+        //       undo-after.set_station_name = 733.
+        assert_eq!(EVENT_NAMES.len(), 733);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -1401,7 +1401,8 @@ fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
             Some((0.0, 0.0, 0.25)),
         );
         if inside_shot {
-            // The new station at the cut carries nothing; the loaded station
+            // The new station at the cut carries no comment or offset, and
+            // the Insert Station name (`J1` plus a letter); the loaded station
             // stays the first half's station 2.
             assert_eq!(
                 texts_at(&project, StationRef::new(main, 2)),
@@ -1410,7 +1411,7 @@ fn a_split_at_a_loaded_station_undoes_and_redoes_exactly() {
             );
             assert_eq!(
                 texts_at(&project, StationRef::new(second, 0)),
-                (None, None, None),
+                (None, Some("J1a".to_string()), None),
                 "{what}"
             );
             assert_eq!(

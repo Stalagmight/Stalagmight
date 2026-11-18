@@ -1237,7 +1237,7 @@ mod tests {
 
         assert_eq!(
             cases.len(),
-            30,
+            31,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {

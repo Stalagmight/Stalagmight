@@ -266,7 +266,12 @@ fn resort_set_like(snapshot: &str) -> String {
         return snapshot.to_string();
     };
     if let serde_json::Value::Object(map) = &mut value {
-        for key in ["station_offsets", "station_comments"] {
+        for key in [
+            "station_offsets",
+            "station_comments",
+            "station_names",
+            "station_ids",
+        ] {
             if let Some(serde_json::Value::Array(items)) = map.get_mut(key) {
                 items.sort_by_key(ToString::to_string);
             }

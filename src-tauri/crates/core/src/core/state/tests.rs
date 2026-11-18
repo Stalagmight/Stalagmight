@@ -4908,10 +4908,11 @@ fn test_split_shot_at_distance_rejects_invalid_distances() {
     });
     let sec = project.lines[0].id;
     let shot_id = project.lines[0].shots[0].id;
-    let before_json = serde_json::to_string(&project).unwrap();
 
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
+    // As installed (with its station identities settled).
+    let before_json = serde_json::to_string(&state.get_project_state().unwrap()).unwrap();
 
     // 0.005 and length - 0.005 = 9.995 both fall under the MIN_SPLIT_CHILD_LENGTH_M
     // (0.01m) floor and must be rejected even though they are strictly between
