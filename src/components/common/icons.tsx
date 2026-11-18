@@ -912,3 +912,37 @@ export function SignInIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+/** The eye struck through: hidden on the map (a Section's show/hide toggle,
+ *  #327). EyeIcon's filled lens with a diagonal bar over it. */
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M2 10 C2 10 5 5 10 5 C15 5 18 10 18 10 C18 10 15 15 10 15 C5 15 2 10 2 10 Z M3.9 10 C3.9 10 6.34 6.34 10 6.9 C13.66 6.34 16.1 10 16.1 10 C16.1 10 13.66 13.66 10 13.1 C6.34 13.66 3.9 10 3.9 10 Z"
+      />
+      <circle cx="10" cy="10" r="2.5" fill="currentColor" stroke="none" />
+      <Bar x1={4} y1={4} x2={16} y2={16} w={2.2} />
+    </BaseIcon>
+  );
+}
+
+/** A folder with a plus: a new group of lines (the Sections panel's "New
+ *  Section", #327). Filled bars (no strokes). */
+export function FolderPlusIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M2.5 5 L2.5 15.5 L17.5 15.5 L17.5 6.5 L9.5 6.5 L8 4.5 L3 4.5 Z M4.2 6.2 L7.2 6.2 L8.7 8.2 L15.8 8.2 L15.8 13.8 L4.2 13.8 Z"
+      />
+      <Bar x1={10} y1={9.6} x2={10} y2={12.4} w={1.6} />
+      <Bar x1={8.6} y1={11} x2={11.4} y2={11} w={1.6} />
+    </BaseIcon>
+  );
+}
