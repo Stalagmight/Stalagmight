@@ -17,9 +17,9 @@ use std::collections::{HashMap, HashSet};
 use crate::{LineId, ShotId, StationAnchor, StationId, StationKey, StationRef, MAX_STATION_ID};
 
 use super::station_naming::{
-    dedupe_line_name, fill_line_station_names, name_after_end, name_before_start,
-    name_characters_refusal, name_with_free_letter, plan_combine_prefixes, seed_line_name,
-    settle_line_station_names, CombinePrefixReason, CombinePrefixes,
+    dedupe_line_name, dedupe_line_name_from, fill_line_station_names, name_after_end,
+    name_before_start, name_characters_refusal, name_with_free_letter, plan_combine_prefixes,
+    seed_line_name_from, settle_line_station_names, CombinePrefixReason, CombinePrefixes,
 };
 use super::{station_key_order, Project};
 
@@ -278,6 +278,11 @@ impl Project {
             .filter_map(|line| line.name.clone())
             .collect();
         let mut kept: HashSet<String> = HashSet::with_capacity(self.lines.len());
+        // `taken` only grows, so each search resumes at a cursor (one per
+        // repeated name, one for the seeds): N lines sharing a name, or N
+        // unnamed ones, cost O(N) probes rather than O(N^2).
+        let mut dedupe_from: HashMap<String, u64> = HashMap::new();
+        let mut seed_from: u64 = 1;
         // Repeats first, in line order, then the seeds, so a seed never takes
         // a name a later repeat would have been renamed to.
         for line in &mut self.lines {
@@ -285,7 +290,8 @@ impl Project {
                 continue;
             };
             if !kept.insert(name.clone()) {
-                let fresh = dedupe_line_name(&name, &|n| taken.contains(n));
+                let from = dedupe_from.entry(name.clone()).or_insert(2);
+                let fresh = dedupe_line_name_from(&name, from, &|n| taken.contains(n));
                 taken.insert(fresh.clone());
                 kept.insert(fresh.clone());
                 line.name = Some(fresh);
@@ -294,7 +300,7 @@ impl Project {
         }
         for line in &mut self.lines {
             if !named(&line.name) {
-                let fresh = seed_line_name(&|n| taken.contains(n));
+                let fresh = seed_line_name_from(&mut seed_from, &|n| taken.contains(n));
                 taken.insert(fresh.clone());
                 line.name = Some(fresh);
                 changed += 1;

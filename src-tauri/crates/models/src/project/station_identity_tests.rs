@@ -216,6 +216,44 @@ fn line_names_are_seeded_and_deduplicated() {
     assert_eq!(name(d), "Line 1");
 }
 
+/// A crafted file of thousands of lines sharing one name, and thousands with
+/// none: each repeat and each seed resumes the search where the last stopped
+/// (the search from ` (2)` / `Line 1` per line was quadratic).
+#[test]
+fn many_repeated_and_unnamed_lines_are_named_in_one_pass() {
+    const N: usize = 10_000;
+    let mut project = Project::new("Lines".to_string(), None);
+    let repeated: Vec<LineId> = (0..N).map(|_| add(&mut project, Some("Main"), 0)).collect();
+    let unnamed: Vec<LineId> = (0..N).map(|_| add(&mut project, None, 0)).collect();
+    let held = add(&mut project, Some("Main (3)"), 0);
+    let started = std::time::Instant::now();
+    assert_eq!(project.ensure_line_names(), 2 * N - 1);
+    let elapsed = started.elapsed();
+    let name = |id| project.get_line(id).unwrap().name.clone().unwrap();
+    assert_eq!(name(repeated[0]), "Main");
+    assert_eq!(name(repeated[1]), "Main (2)");
+    assert_eq!(
+        name(repeated[2]),
+        "Main (4)",
+        "Main (3) is held further down"
+    );
+    assert_eq!(name(repeated[N - 1]), format!("Main ({})", N + 1));
+    assert_eq!(name(held), "Main (3)");
+    assert_eq!(name(unnamed[0]), "Line 1");
+    assert_eq!(name(unnamed[N - 1]), format!("Line {N}"));
+    let all: HashSet<String> = project
+        .lines
+        .iter()
+        .filter_map(|l| l.name.clone())
+        .collect();
+    assert_eq!(all.len(), project.lines.len(), "every name unique");
+    assert_eq!(project.ensure_line_names(), 0, "a fixpoint");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "naming took {elapsed:?}"
+    );
+}
+
 #[test]
 fn split_at_a_station_gives_the_copy_a_new_id_and_the_same_name() {
     let mut project = Project::new("Split".to_string(), None);

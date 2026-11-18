@@ -143,6 +143,53 @@ fn filling_a_partly_named_line_follows_the_creation_rules() {
     );
 }
 
+/// A crafted line of thousands of stations sharing one name, or a long run
+/// the file leaves unnamed: each name resumes the search where the last one
+/// stopped (a rescan of the suffixes, or a rebuild of the taken set, per
+/// station was quadratic). The names are the ones a station-by-station search
+/// gives.
+#[test]
+fn long_repeats_and_runs_are_named_in_one_pass() {
+    const N: usize = 20_000;
+    let started = std::time::Instant::now();
+    let mut names: Vec<Option<String>> = vec![Some("5".to_string()); N];
+    names.push(Some("5b".to_string()));
+    settle_line_station_names(&mut names);
+    assert_eq!(
+        filled(&names[..4]),
+        ["5", "5a", "5c", "5d"],
+        "5b is held further down"
+    );
+    assert_eq!(names[N].as_deref(), Some("5b"));
+    let unique: HashSet<&str> = names.iter().flatten().map(String::as_str).collect();
+    assert_eq!(unique.len(), names.len());
+
+    // Head, middle and tail runs of one line.
+    let mut names: Vec<Option<String>> = vec![None; N];
+    names.push(Some("A3".to_string()));
+    names.extend(vec![None; N]);
+    names.push(Some("A4".to_string()));
+    names.extend(vec![None; N]);
+    assert_eq!(fill_line_station_names(&mut names), 3 * N);
+    let tail_end = format!("A{}", 4 + N);
+    let head_start = format!("A{}", 4 + 2 * N);
+    assert_eq!(names[N + 1].as_deref(), Some("A3a"));
+    assert_eq!(names[N + 2].as_deref(), Some("A3b"));
+    assert_eq!(names[3 * N + 1].as_deref(), Some(tail_end.as_str()));
+    assert_eq!(
+        names[N - 1].as_deref(),
+        Some(format!("A{}", 5 + N).as_str())
+    );
+    assert_eq!(names[0].as_deref(), Some(head_start.as_str()));
+    let unique: HashSet<&str> = names.iter().flatten().map(String::as_str).collect();
+    assert_eq!(unique.len(), names.len());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "naming took {:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn line_names_seed_and_dedupe() {
     let taken = set(&["Line 1", "Line 3"]);

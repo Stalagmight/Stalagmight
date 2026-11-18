@@ -132,45 +132,71 @@ fn letter_suffix(index: u64) -> String {
 /// word does not run into its letter. Also the rule a repeated name and a
 /// taken seed are made unique by.
 pub fn name_with_free_letter(base: &str, taken: &dyn Fn(&str) -> bool) -> String {
+    name_with_free_letter_from(base, &mut 0, taken)
+}
+
+/// [`name_with_free_letter`], searching from suffix number `*from` and
+/// leaving `*from` past the one it returns. A pass that names many stations
+/// after one base, over a taken set that only grows, keeps one cursor per base
+/// so each search resumes where the last stopped: N repeats of one name cost
+/// O(N) probes, not O(N^2).
+pub fn name_with_free_letter_from(
+    base: &str,
+    from: &mut u64,
+    taken: &dyn Fn(&str) -> bool,
+) -> String {
     let separator = if base.bytes().any(|b| b.is_ascii_digit()) {
         ""
     } else {
         "-"
     };
-    let mut index: u64 = 0;
+    first_free(
+        from,
+        |index| format!("{base}{separator}{}", letter_suffix(index)),
+        taken,
+    )
+}
+
+/// The first `candidate(n)`, `n >= *from`, that is not taken, leaving `*from`
+/// at the `n` after it. Over a taken set that only grows, a name once seen
+/// taken stays taken, so resuming from the cursor finds the same name a search
+/// from the start would.
+fn first_free(
+    from: &mut u64,
+    candidate: impl Fn(u64) -> String,
+    taken: &dyn Fn(&str) -> bool,
+) -> String {
     loop {
-        let candidate = format!("{base}{separator}{}", letter_suffix(index));
-        if !taken(&candidate) {
-            return candidate;
+        let name = candidate(*from);
+        *from = from.saturating_add(1);
+        if !taken(&name) || *from == u64::MAX {
+            return name;
         }
-        index += 1;
     }
 }
 
 /// The seed of an unnamed line: `Line n` with the smallest `n >= 1` no line
 /// holds.
 pub fn seed_line_name(taken: &dyn Fn(&str) -> bool) -> String {
-    let mut n: u64 = 1;
-    loop {
-        let candidate = format!("Line {n}");
-        if !taken(&candidate) {
-            return candidate;
-        }
-        n += 1;
-    }
+    seed_line_name_from(&mut 1, taken)
+}
+
+/// [`seed_line_name`] searching from `n = *from`, with a cursor as
+/// [`name_with_free_letter_from`] keeps one.
+pub fn seed_line_name_from(from: &mut u64, taken: &dyn Fn(&str) -> bool) -> String {
+    first_free(from, |n| format!("Line {n}"), taken)
 }
 
 /// A repeated line name made unique: `name (k)` with the smallest `k >= 2`
 /// no line holds.
 pub fn dedupe_line_name(name: &str, taken: &dyn Fn(&str) -> bool) -> String {
-    let mut k: u64 = 2;
-    loop {
-        let candidate = format!("{name} ({k})");
-        if !taken(&candidate) {
-            return candidate;
-        }
-        k += 1;
-    }
+    dedupe_line_name_from(name, &mut 2, taken)
+}
+
+/// [`dedupe_line_name`] searching from `k = *from`, with a cursor as
+/// [`name_with_free_letter_from`] keeps one.
+pub fn dedupe_line_name_from(name: &str, from: &mut u64, taken: &dyn Fn(&str) -> bool) -> String {
+    first_free(from, |k| format!("{name} ({k})"), taken)
 }
 
 /// The family letter of a lettered name: an ASCII capital directly followed
@@ -427,12 +453,15 @@ pub fn settle_line_station_names(names: &mut [Option<String>]) -> (usize, usize)
     // station already holds.
     let mut taken: HashSet<String> = names.iter().flatten().cloned().collect();
     let mut kept: HashSet<String> = HashSet::with_capacity(names.len());
+    // One suffix cursor per base: `taken` only grows (see `first_free`).
+    let mut letter_from: HashMap<String, u64> = HashMap::new();
     let (mut seeded, mut renamed) = (0, 0);
     for (index, slot) in names.iter_mut().enumerate() {
         match slot {
             Some(name) if !name.trim().is_empty() && kept.insert(name.clone()) => {}
             Some(name) if !name.trim().is_empty() => {
-                let fresh = name_with_free_letter(name, &|n| taken.contains(n));
+                let from = letter_from.entry(name.clone()).or_insert(0);
+                let fresh = name_with_free_letter_from(name, from, &|n| taken.contains(n));
                 taken.insert(fresh.clone());
                 kept.insert(fresh.clone());
                 *slot = Some(fresh);
@@ -441,7 +470,8 @@ pub fn settle_line_station_names(names: &mut [Option<String>]) -> (usize, usize)
             _ => {
                 let seed = index.to_string();
                 let fresh = if taken.contains(&seed) {
-                    name_with_free_letter(&seed, &|n| taken.contains(n))
+                    let from = letter_from.entry(seed.clone()).or_insert(0);
+                    name_with_free_letter_from(&seed, from, &|n| taken.contains(n))
                 } else {
                     seed
                 };
@@ -471,6 +501,12 @@ pub fn fill_line_station_names(names: &mut [Option<String>]) -> usize {
     let last_named = names.iter().rposition(named).unwrap_or(first_named);
     let mut taken: HashSet<String> = names.iter().flatten().cloned().collect();
     let mut filled = 0;
+    // Each step below names one station against `taken`, which only grows: the
+    // End and Prepend rules are applied here with the set (and the Prepend
+    // family's highest number) kept across steps, and the Mid rule with a
+    // cursor per base, so a long unnamed run costs O(run) rather than a
+    // rebuild of the set (or a rescan of the suffixes) per station.
+    let mut letter_from: HashMap<String, u64> = HashMap::new();
     // Forward: the middle and the tail.
     let mut anchor: Option<String> = None;
     for index in first_named..names.len() {
@@ -481,18 +517,40 @@ pub fn fill_line_station_names(names: &mut [Option<String>]) -> usize {
         let Some(base) = anchor.clone() else { continue };
         let fresh = if index > last_named {
             let previous = names[index - 1].clone().unwrap_or(base);
-            name_after_end(&previous, taken.iter().map(String::as_str))
+            // `name_after_end`, without rebuilding the set per station.
+            match trailing_number(&previous) {
+                Some((prefix, number, width)) => {
+                    next_numbered(prefix, number, width, &|n| taken.contains(n))
+                }
+                None => next_free_integer(taken.iter().map(String::as_str)),
+            }
         } else {
-            name_with_free_letter(&base, &|n| taken.contains(n))
+            let from = letter_from.entry(base.clone()).or_insert(0);
+            name_with_free_letter_from(&base, from, &|n| taken.contains(n))
         };
         taken.insert(fresh.clone());
         names[index] = Some(fresh);
         filled += 1;
     }
-    // Backward: the head.
+    // Backward: the head, by `name_before_start` with each family's highest
+    // number computed once and raised as the run names its stations.
+    let mut family_tops: HashMap<String, u64> = HashMap::new();
     for index in (0..first_named).rev() {
         let next = names.get(index + 1).cloned().flatten().unwrap_or_default();
-        let fresh = name_before_start(&next, taken.iter().map(String::as_str));
+        let fresh = match trailing_number(&next) {
+            Some((prefix, number, width)) => {
+                let top = *family_tops.entry(prefix.to_string()).or_insert_with(|| {
+                    family_max(prefix, taken.iter().map(String::as_str)).unwrap_or(number)
+                });
+                next_numbered(prefix, top.max(number), width, &|n| taken.contains(n))
+            }
+            None => next_free_integer(taken.iter().map(String::as_str)),
+        };
+        if let Some((prefix, number, _)) = trailing_number(&fresh) {
+            if let Some(top) = family_tops.get_mut(prefix) {
+                *top = (*top).max(number);
+            }
+        }
         taken.insert(fresh.clone());
         names[index] = Some(fresh);
         filled += 1;

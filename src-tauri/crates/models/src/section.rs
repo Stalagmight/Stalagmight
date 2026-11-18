@@ -20,6 +20,14 @@ use ts_rs::TS;
 /// highest saved id, like `next_line_id`.
 pub type SectionId = u32;
 
+/// Every valid Section id is below this (2^31), as Station IDs are below
+/// [`crate::MAX_STATION_ID`]. A stored id at or above it (a crafted file, a
+/// corrupt undo record) is re-minted by `Project::normalize_sections`, and a
+/// counter past it is brought back; the headroom keeps `next_section_id`
+/// arithmetic far from `u32::MAX`, where a saturating add hands one id out
+/// twice.
+pub const MAX_SECTION_ID: SectionId = 1 << 31;
+
 /// The longest Section name a user may type, in characters. Automatic paths
 /// (an importer naming a Section after a file's survey) truncate instead.
 pub const MAX_SECTION_NAME_CHARS: usize = 200;
@@ -49,9 +57,31 @@ pub const SECTION_PALETTE: [&str; 8] = [
     "#4ecdc4", "#ff6b6b", "#95e1d3", "#f38181", "#aa96da", "#fcbad3", "#a8d8ea", "#ffcb77",
 ];
 
-/// `name` trimmed and cut to [`MAX_SECTION_NAME_CHARS`], for automatic paths.
+/// `name` made fit for a Section on automatic paths (an import, a file, an
+/// undo record): the characters a typed name is refused for
+/// ([`crate::project::station_naming::is_forbidden_name_char`]) go - a control
+/// character becomes a space, an invisible formatting one is dropped - then
+/// it is trimmed and cut to [`MAX_SECTION_NAME_CHARS`].
 pub fn clamp_section_name(name: &str) -> String {
-    name.trim().chars().take(MAX_SECTION_NAME_CHARS).collect()
+    let cleaned: String = name
+        .chars()
+        .filter_map(|c| {
+            if c.is_control() {
+                Some(' ')
+            } else if crate::project::station_naming::is_forbidden_name_char(c) {
+                None
+            } else {
+                Some(c)
+            }
+        })
+        .collect();
+    cleaned
+        .trim()
+        .chars()
+        .take(MAX_SECTION_NAME_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -75,6 +105,22 @@ mod tests {
         assert_eq!(
             clamp_section_name(&long).chars().count(),
             MAX_SECTION_NAME_CHARS
+        );
+    }
+
+    #[test]
+    fn automatic_names_lose_control_and_invisible_characters() {
+        assert_eq!(clamp_section_name("Upper\nlevel"), "Upper level");
+        assert_eq!(
+            clamp_section_name("\tUpper\u{200B} level\r\n"),
+            "Upper level"
+        );
+        assert_eq!(clamp_section_name("\u{202E}\u{0}"), "");
+        // Cut at the limit, the name never ends in the space the cut left.
+        let spaced = format!("{} tail", "x".repeat(MAX_SECTION_NAME_CHARS - 1));
+        assert_eq!(
+            clamp_section_name(&spaced),
+            "x".repeat(MAX_SECTION_NAME_CHARS - 1)
         );
     }
 }

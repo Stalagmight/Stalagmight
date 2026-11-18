@@ -6,13 +6,72 @@
 //! makes a taken name unique with ` (2)`, ` (3)`, ...; a name the user typed is
 //! refused instead ([`Project::validate_section_name`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::Project;
 use crate::{
-    clamp_section_name, is_section_color, Line, LineId, Section, SectionId, MAX_SECTION_NAME_CHARS,
-    SECTION_PALETTE,
+    clamp_section_name, is_section_color, Line, LineId, Section, SectionId, MAX_SECTION_ID,
+    MAX_SECTION_NAME_CHARS, SECTION_PALETTE,
 };
+
+/// What an automatic path names a Section whose own name is empty.
+const FALLBACK_SECTION_NAME: &str = "Section";
+
+/// `name` as an automatic path takes it: cleaned and clamped
+/// ([`clamp_section_name`]), [`FALLBACK_SECTION_NAME`] when nothing is left.
+fn automatic_section_name(name: &str) -> String {
+    let name = clamp_section_name(name);
+    if name.is_empty() {
+        FALLBACK_SECTION_NAME.to_string()
+    } else {
+        name
+    }
+}
+
+/// Unique Section names for an automatic path that names many at once. The
+/// names to avoid live in one set that only grows, so a ` (n)` once seen
+/// taken stays taken, and the next search for the same base resumes at the
+/// first `n` not yet tried: naming N Sections after one base costs O(N)
+/// probes, not a rescan from ` (2)` per Section (a crafted file of thousands
+/// of same-named Sections hung its open on that rescan).
+struct SectionNamer {
+    taken: HashSet<String>,
+    next_suffix: HashMap<String, u64>,
+}
+
+impl SectionNamer {
+    fn avoiding<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            taken: names.into_iter().map(str::to_string).collect(),
+            next_suffix: HashMap::new(),
+        }
+    }
+
+    /// The first `base (n)`, `n >= 2`, not taken; taken from then on.
+    fn suffixed(&mut self, base: &str) -> String {
+        let n = self.next_suffix.entry(base.to_string()).or_insert(2);
+        let name = loop {
+            let candidate = format!("{base} ({n})");
+            *n += 1;
+            if !self.taken.contains(&candidate) {
+                break candidate;
+            }
+        };
+        self.taken.insert(name.clone());
+        name
+    }
+
+    /// `name` as an automatic path takes it, then `name (2)`, `name (3)`, ...
+    /// while taken; taken from then on.
+    fn claim(&mut self, name: &str) -> String {
+        let base = automatic_section_name(name);
+        if self.taken.insert(base.clone()) {
+            base
+        } else {
+            self.suffixed(&base)
+        }
+    }
+}
 
 impl Project {
     /// The Section with `id`.
@@ -80,23 +139,10 @@ impl Project {
     }
 
     /// `base` made unique among the Section names, for automatic paths:
-    /// trimmed and clamped, then `base (2)`, `base (3)`, ... while taken. An
-    /// empty base becomes `Section`.
+    /// cleaned and clamped ([`clamp_section_name`]), then `base (2)`,
+    /// `base (3)`, ... while taken. An empty base becomes `Section`.
     pub fn unique_section_name(&self, base: &str) -> String {
-        let base = clamp_section_name(base);
-        let base = if base.is_empty() {
-            "Section".to_string()
-        } else {
-            base
-        };
-        let taken: HashSet<&str> = self.sections.iter().map(|s| s.name.as_str()).collect();
-        if !taken.contains(base.as_str()) {
-            return base;
-        }
-        (2..=u32::MAX)
-            .map(|n| format!("{base} ({n})"))
-            .find(|candidate| !taken.contains(candidate.as_str()))
-            .unwrap_or(base)
+        SectionNamer::avoiding(self.sections.iter().map(|s| s.name.as_str())).claim(base)
     }
 
     /// The colour an automatic Section takes: the next one of
@@ -109,16 +155,77 @@ impl Project {
     /// they are: callers validate ([`Self::validate_section_name`]) or dedupe
     /// ([`Self::unique_section_name`]) first.
     pub fn add_section(&mut self, name: String, color: String) -> SectionId {
+        self.reserve_section_ids(1);
+        self.push_section(name, color)
+    }
+
+    /// Append copies of `sections` (another project's, on an Add) with fresh
+    /// ids, each name made unique among the project's Sections and the copies
+    /// before it as [`Self::unique_section_name`] would, the colours as given.
+    /// Returns the new ids in order. Linear in the Sections held and copied,
+    /// where `add_section` in a loop rescans the list per Section.
+    pub fn append_sections(&mut self, sections: &[Section]) -> Vec<SectionId> {
+        self.reserve_section_ids(sections.len());
+        let mut namer = SectionNamer::avoiding(self.sections.iter().map(|s| s.name.as_str()));
+        sections
+            .iter()
+            .map(|section| {
+                let name = namer.claim(&section.name);
+                self.push_section(name, section.color.clone())
+            })
+            .collect()
+    }
+
+    /// Make room for `count` fresh ids: `next_section_id` raised above every
+    /// held id (a stale counter never hands out a live one), and, when `count`
+    /// more would reach [`MAX_SECTION_ID`], every Section renumbered first.
+    /// The next `count` [`Self::push_section`]s then take valid, unused ids
+    /// rather than saturating on one.
+    fn reserve_section_ids(&mut self, count: usize) {
         let above_all = self
             .sections
             .iter()
             .map(|s| s.id.saturating_add(1))
             .max()
             .unwrap_or(0);
-        let id = self.next_section_id.max(above_all);
-        self.next_section_id = id.saturating_add(1);
+        self.next_section_id = self.next_section_id.max(above_all);
+        let room = u64::from(MAX_SECTION_ID.saturating_sub(self.next_section_id));
+        if count as u64 > room {
+            self.renumber_sections();
+        }
+    }
+
+    /// Append one Section under the counter; [`Self::reserve_section_ids`]
+    /// made room for it.
+    fn push_section(&mut self, name: String, color: String) -> SectionId {
+        let id = self.next_section_id;
+        self.next_section_id = id + 1;
         self.sections.push(Section { id, name, color });
         id
+    }
+
+    /// Renumber the Sections `0, 1, ...` in panel order, their lines following
+    /// them (a line naming no held Section is ungrouped), the counter after
+    /// them. Only a crafted counter or id, or 2^31 Sections created, leaves no
+    /// room below [`MAX_SECTION_ID`]; the hidden-Sections view setting (keyed
+    /// by id) may then name another Section.
+    fn renumber_sections(&mut self) {
+        tracing::warn!(
+            sections = self.sections.len(),
+            next_section_id = self.next_section_id,
+            purpose = "keep Section ids unique and bounded",
+            "Section ids would overflow; renumbering every Section"
+        );
+        let mut remap: HashMap<SectionId, SectionId> = HashMap::with_capacity(self.sections.len());
+        for (index, section) in self.sections.iter_mut().enumerate() {
+            let id = index as SectionId;
+            remap.entry(section.id).or_insert(id);
+            section.id = id;
+        }
+        for line in &mut self.lines {
+            line.section_id = line.section_id.and_then(|old| remap.get(&old).copied());
+        }
+        self.next_section_id = self.sections.len() as SectionId;
     }
 
     /// The Section named `name`, created (deduped, palette colour) when the
@@ -159,73 +266,168 @@ impl Project {
     }
 
     /// Group imported lines by name: each `(line, name)` joins the Section
-    /// called `name`, which is created when the project has none
-    /// ([`Self::section_named_or_new`]). A line that does not exist is skipped.
+    /// called `name` (as [`clamp_section_name`] cleans it), which is created
+    /// when the project has none, as [`Self::section_named_or_new`] would. A
+    /// line that does not exist, or a name that cleans to nothing, is
+    /// skipped. Linear in the assignments and the Sections.
     pub fn assign_sections_by_name(&mut self, assignments: &[(LineId, String)]) {
-        for (line_id, name) in assignments {
-            if name.trim().is_empty() || self.get_line(*line_id).is_none() {
-                continue;
+        let wanted = |project: &Self, line_id: LineId, name: &str| {
+            let name = clamp_section_name(name);
+            (!name.is_empty() && project.get_line(line_id).is_some()).then_some(name)
+        };
+        // The names no Section has yet, in first-use order, so the ids are
+        // reserved (and any renumbering done) before one is handed out.
+        let mut fresh: Vec<String> = Vec::new();
+        {
+            let held: HashSet<&str> = self.sections.iter().map(|s| s.name.as_str()).collect();
+            let mut seen: HashSet<String> = HashSet::new();
+            for (line_id, name) in assignments {
+                if let Some(name) = wanted(self, *line_id, name) {
+                    if !held.contains(name.as_str()) && seen.insert(name.clone()) {
+                        fresh.push(name);
+                    }
+                }
             }
-            let section = self.section_named_or_new(name);
-            self.set_line_section(*line_id, Some(section));
+        }
+        let mut by_name: HashMap<String, SectionId> = HashMap::with_capacity(self.sections.len());
+        if !fresh.is_empty() {
+            self.reserve_section_ids(fresh.len());
+            let mut namer = SectionNamer::avoiding(self.sections.iter().map(|s| s.name.as_str()));
+            for name in fresh {
+                let unique = namer.claim(&name);
+                let color = self.next_section_color();
+                let id = self.push_section(unique, color);
+                by_name.insert(name, id);
+            }
+        }
+        for section in &self.sections {
+            by_name.entry(section.name.clone()).or_insert(section.id);
+        }
+        for (line_id, name) in assignments {
+            let Some(name) = wanted(self, *line_id, name) else {
+                continue;
+            };
+            if let Some(&section) = by_name.get(&name) {
+                self.set_line_section(*line_id, Some(section));
+            }
         }
     }
 
-    /// Bring the Sections a file or another tool handed us to what this build
-    /// maintains, returning how many things it changed:
+    /// Bring the Sections a file, an undo record or another tool handed us to
+    /// what this build maintains, returning how many things it changed:
     /// - a repeated Section id keeps its first Section (later ones are dropped);
-    /// - an empty name is replaced and a repeated name made unique (the later
-    ///   Section is renamed), as on every automatic path;
     /// - a line naming a Section that does not exist is ungrouped;
+    /// - an id at or past [`MAX_SECTION_ID`] is re-minted, its lines following
+    ///   it, and a counter past the bound starts again above the valid ids;
+    /// - a name is cleaned as on every automatic path ([`clamp_section_name`]),
+    ///   an empty one replaced and a repeated one made unique (the later
+    ///   Section is renamed);
+    /// - a colour that is not `#rgb` / `#rrggbb` (trimmed) takes the palette
+    ///   colour of the Section's place;
     /// - `next_section_id` is moved above every id.
+    ///
+    /// Linear in the Sections and lines: a file's rows are not bounded by
+    /// anything the user did.
     pub fn normalize_sections(&mut self) -> usize {
         let mut changed = 0usize;
-        let mut ids: HashSet<SectionId> = HashSet::new();
+        let mut ids: HashSet<SectionId> = HashSet::with_capacity(self.sections.len());
         let before = self.sections.len();
         self.sections.retain(|s| ids.insert(s.id));
         changed += before - self.sections.len();
 
-        let mut names: HashSet<String> = HashSet::new();
-        for index in 0..self.sections.len() {
-            let current = clamp_section_name(&self.sections[index].name);
-            let base = if current.is_empty() {
-                "Section".to_string()
-            } else {
-                current
-            };
-            let unique = if names.contains(&base) {
-                (2..=u32::MAX)
-                    .map(|n| format!("{base} ({n})"))
-                    .find(|candidate| {
-                        !names.contains(candidate)
-                            && !self.sections.iter().any(|s| &s.name == candidate)
-                    })
-                    .unwrap_or_else(|| base.clone())
-            } else {
-                base
-            };
-            if unique != self.sections[index].name {
-                self.sections[index].name.clone_from(&unique);
+        for line in &mut self.lines {
+            if line.section_id.is_some_and(|id| !ids.contains(&id)) {
+                line.section_id = None;
                 changed += 1;
             }
-            names.insert(unique);
         }
 
-        for line in &mut self.lines {
-            if let Some(section) = line.section_id {
-                if !ids.contains(&section) {
-                    line.section_id = None;
-                    changed += 1;
-                }
+        changed += self.bound_section_ids();
+
+        // A repeat is decided against the names already settled; its new name
+        // avoids those and every name a Section still holds, so a later
+        // `A (2)` is not renamed for an earlier repeat of `A`.
+        let mut namer = SectionNamer::avoiding(self.sections.iter().map(|s| s.name.as_str()));
+        let mut settled: HashSet<String> = HashSet::with_capacity(self.sections.len());
+        for (index, section) in self.sections.iter_mut().enumerate() {
+            let base = automatic_section_name(&section.name);
+            let name = if settled.contains(&base) {
+                namer.suffixed(&base)
+            } else {
+                namer.taken.insert(base.clone());
+                base
+            };
+            if name != section.name {
+                section.name.clone_from(&name);
+                changed += 1;
+            }
+            settled.insert(name);
+
+            if !is_section_color(&section.color) {
+                let trimmed = section.color.trim();
+                section.color = if is_section_color(trimmed) {
+                    trimmed.to_string()
+                } else {
+                    SECTION_PALETTE[index % SECTION_PALETTE.len()].to_string()
+                };
+                changed += 1;
             }
         }
 
-        let above_all = ids.iter().map(|id| id.saturating_add(1)).max().unwrap_or(0);
+        let above_all = self.sections.iter().map(|s| s.id + 1).max().unwrap_or(0);
         if self.next_section_id < above_all {
             self.next_section_id = above_all;
             changed += 1;
         }
         changed
+    }
+
+    /// Every Section id below [`MAX_SECTION_ID`] and the counter at most it:
+    /// a Section holding an id past the bound gets a fresh one, its lines
+    /// following it (every Section is renumbered when there is no room); a
+    /// counter past the bound starts again above the valid ids. Runs with the
+    /// ids unique and every membership naming a held Section. Returns how
+    /// many things it changed.
+    fn bound_section_ids(&mut self) -> usize {
+        let mut changed = 0;
+        if self.next_section_id > MAX_SECTION_ID {
+            self.next_section_id = 0;
+            changed += 1;
+        }
+        let invalid = self
+            .sections
+            .iter()
+            .filter(|s| s.id >= MAX_SECTION_ID)
+            .count();
+        if invalid == 0 {
+            return changed;
+        }
+        let above_valid = self
+            .sections
+            .iter()
+            .filter(|s| s.id < MAX_SECTION_ID)
+            .map(|s| s.id + 1)
+            .max()
+            .unwrap_or(0);
+        self.next_section_id = self.next_section_id.max(above_valid);
+        if invalid as u64 > u64::from(MAX_SECTION_ID - self.next_section_id) {
+            self.renumber_sections();
+            return changed + invalid;
+        }
+        let mut remap: HashMap<SectionId, SectionId> = HashMap::with_capacity(invalid);
+        for section in &mut self.sections {
+            if section.id >= MAX_SECTION_ID {
+                remap.insert(section.id, self.next_section_id);
+                section.id = self.next_section_id;
+                self.next_section_id += 1;
+            }
+        }
+        for line in &mut self.lines {
+            if let Some(&id) = line.section_id.and_then(|old| remap.get(&old)) {
+                line.section_id = Some(id);
+            }
+        }
+        changed + invalid
     }
 }
 
@@ -385,6 +587,151 @@ mod tests {
         assert_eq!(project.get_line(ids[1]).unwrap().section_id, None);
         assert_eq!(project.get_line(ids[2]).unwrap().section_id, Some(7));
         assert_eq!(project.next_section_id, 9);
+        assert_eq!(project.normalize_sections(), 0, "a fixpoint");
+    }
+
+    fn named(id: SectionId, name: &str, color: &str) -> Section {
+        Section {
+            id,
+            name: name.into(),
+            color: color.into(),
+        }
+    }
+
+    /// A crafted file of 20k Sections sharing one name (the read is not
+    /// bounded by anything the user did): every repeat gets the next free
+    /// suffix in one pass. The old search restarted at ` (2)` for each and
+    /// scanned every Section per candidate, cubic in the rows.
+    #[test]
+    fn normalizing_many_repeats_of_one_name_is_linear() {
+        const N: u32 = 20_000;
+        let (mut project, _) = project_with_lines(0);
+        project.sections = (0..N).map(|id| named(id, "X", "#123456")).collect();
+        // A later Section already holding a suffix keeps it; the repeats skip it.
+        project.sections.push(named(N, "X (3)", "#123456"));
+        let started = std::time::Instant::now();
+        project.normalize_sections();
+        let elapsed = started.elapsed();
+        let names: HashSet<&str> = project.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names.len(), project.sections.len(), "every name unique");
+        assert_eq!(project.sections[0].name, "X");
+        assert_eq!(project.sections[1].name, "X (2)");
+        assert_eq!(
+            project.sections[2].name, "X (4)",
+            "X (3) is held further down"
+        );
+        assert_eq!(project.sections[N as usize].name, "X (3)");
+        assert_eq!(project.normalize_sections(), 0, "a fixpoint");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "normalizing took {elapsed:?}"
+        );
+    }
+
+    /// The batch paths (an Add's copies, an import's groups) dedupe in one pass
+    /// too, with the names `unique_section_name` gives one at a time.
+    #[test]
+    fn batch_appends_dedupe_like_one_at_a_time() {
+        let (mut project, ids) = project_with_lines(2);
+        project.add_section("Upper".into(), "#123456".into());
+        let copies: Vec<Section> = (0..5_000)
+            .map(|id| named(id, " Upper ", "#abcdef"))
+            .collect();
+        let started = std::time::Instant::now();
+        let new_ids = project.append_sections(&copies);
+        assert_eq!(new_ids.len(), 5_000);
+        assert_eq!(new_ids[0], 1);
+        assert_eq!(project.sections[1].name, "Upper (2)");
+        assert_eq!(project.sections[5_000].name, "Upper (5001)");
+        assert_eq!(project.next_section_id, 5_001);
+
+        let assignments: Vec<(LineId, String)> = vec![
+            (ids[0], "Lower\tlevel".to_string()),
+            (ids[1], "Lower level".to_string()),
+            (999, "Ghost".to_string()),
+            (ids[1], "\u{200B}".to_string()),
+        ];
+        project.assign_sections_by_name(&assignments);
+        let lower = project.section_named("Lower level").unwrap().id;
+        assert_eq!(project.get_line(ids[0]).unwrap().section_id, Some(lower));
+        assert_eq!(project.get_line(ids[1]).unwrap().section_id, Some(lower));
+        assert!(project.section_named("Ghost").is_none());
+        assert!(
+            project.section_named("Section").is_none(),
+            "a name that cleans to nothing is skipped"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// File or undo-record content: control characters and invisible marks
+    /// leave a name, an empty one is replaced, and a colour that is not a hex
+    /// colour takes the palette colour of the Section's place.
+    #[test]
+    fn normalization_cleans_names_and_colours() {
+        let (mut project, _) = project_with_lines(0);
+        project.sections = vec![
+            named(0, "Up\nper", " #AbC "),
+            named(1, "\u{202E}\u{0}", "red"),
+            named(2, "Upper", "#12345"),
+            named(3, "Fine", "#4ecdc4"),
+        ];
+        assert!(project.normalize_sections() > 0);
+        let got: Vec<(&str, &str)> = project
+            .sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.color.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Up per", "#AbC"),
+                ("Section", SECTION_PALETTE[1]),
+                ("Upper", SECTION_PALETTE[2]),
+                ("Fine", "#4ecdc4"),
+            ]
+        );
+        assert_eq!(project.normalize_sections(), 0, "a fixpoint");
+    }
+
+    /// Ids are bounded like Station IDs: a counter at the bound renumbers the
+    /// Sections (lines following) instead of minting one id twice, an id past
+    /// it is re-minted on normalization, and a counter past it starts again
+    /// above the valid ids.
+    #[test]
+    fn section_ids_stay_below_the_bound() {
+        let (mut project, ids) = project_with_lines(2);
+        let a = project.add_section("A".into(), "#123456".into());
+        project.set_line_section(ids[0], Some(a));
+        project.next_section_id = MAX_SECTION_ID;
+        let b = project.add_section("B".into(), "#123456".into());
+        let c = project.add_section("C".into(), "#123456".into());
+        assert_ne!(b, c, "no id is handed out twice");
+        assert!(b < MAX_SECTION_ID && c < MAX_SECTION_ID);
+        let a = project.section_named("A").unwrap().id;
+        assert_eq!(
+            project.get_line(ids[0]).unwrap().section_id,
+            Some(a),
+            "the line follows its Section"
+        );
+
+        project.next_section_id = u32::MAX;
+        assert_eq!(project.add_section("D".into(), "#123456".into()), 3);
+        assert_eq!(project.add_section("E".into(), "#123456".into()), 4);
+
+        let (mut project, ids) = project_with_lines(2);
+        project.sections = vec![
+            named(5, "Low", "#123456"),
+            named(u32::MAX, "High", "#123456"),
+        ];
+        project.next_section_id = u32::MAX;
+        project.get_line_mut(ids[0]).unwrap().section_id = Some(u32::MAX);
+        project.get_line_mut(ids[1]).unwrap().section_id = Some(5);
+        assert!(project.normalize_sections() > 0);
+        let high = project.section_named("High").unwrap().id;
+        assert_eq!(high, 6);
+        assert_eq!(project.get_line(ids[0]).unwrap().section_id, Some(high));
+        assert_eq!(project.get_line(ids[1]).unwrap().section_id, Some(5));
+        assert_eq!(project.next_section_id, 7);
         assert_eq!(project.normalize_sections(), 0, "a fixpoint");
     }
 
