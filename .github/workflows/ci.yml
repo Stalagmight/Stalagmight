@@ -12,10 +12,10 @@ name: CI
 # Filters are safe because `master` is unprotected - no required-check deadlock (#122).
 on:
   push:
-    branches: [master]
+    branches: [master, 'release/**']
     paths-ignore: ['**/*.md', 'docs/**', 'e2e-playwright/**']
   pull_request:
-    branches: [master]
+    branches: [master, 'release/**']
     paths-ignore: ['**/*.md', 'docs/**', 'e2e-playwright/**']
 
 # Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
