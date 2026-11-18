@@ -23,6 +23,46 @@ type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 /// envelope: a history written before it (whole-project snapshot pairs) is
 /// dropped on open, both stacks, by decision (the snapshot pairs are what made
 /// large files large).
+/// Why a loaded history was dropped whole (see `drop_history_with_a_hole`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryDropped {
+    /// Rows written by a build before compact entries: no `{"v2": ...}` envelope.
+    EarlierVersion,
+    /// A row in this format that could not be read.
+    Unreadable,
+}
+
+/// Tally of the rows a load could not read, by why.
+#[derive(Default)]
+struct Unread {
+    earlier: usize,
+    damaged: usize,
+}
+
+impl Unread {
+    fn note(&mut self, undo_data_json: &str) {
+        if undo_data_json.trim_start().starts_with("{\"v2\":") {
+            self.damaged += 1;
+        } else {
+            self.earlier += 1;
+        }
+    }
+
+    fn total(&self) -> usize {
+        self.earlier + self.damaged
+    }
+
+    fn reason(&self) -> Option<HistoryDropped> {
+        if self.damaged > 0 {
+            Some(HistoryDropped::Unreadable)
+        } else if self.earlier > 0 {
+            Some(HistoryDropped::EarlierVersion)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 struct PersistedOut<'a> {
     #[serde(rename = "v2")]
@@ -385,24 +425,28 @@ impl UndoStack {
     }
 
     /// Load legacy persisted undo data.
-    pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
+    pub fn load_from_persisted(
+        &mut self,
+        entries: Vec<(String, String)>,
+    ) -> Option<HistoryDropped> {
         self.clear();
 
         let rows = entries.len();
-        let mut unreadable = 0;
+        let mut unread = Unread::default();
         let mut dropped: Vec<String> = Vec::new();
         for (command_json, undo_data_json) in entries {
             match Self::deserialize_entry(&command_json, &undo_data_json) {
                 Some(entry) if Self::is_applicable(&entry) => self.push_undo_tracked(entry),
                 Some(entry) => dropped.push(entry.command.description()),
-                None => unreadable += 1,
+                None => unread.note(&undo_data_json),
             }
         }
         Self::warn_dropped_unapplicable(&dropped);
-        if unreadable > 0 {
-            self.drop_history_with_a_hole(unreadable, rows);
+        if unread.total() > 0 {
+            self.drop_history_with_a_hole(unread.total(), rows);
         }
         self.enforce_depth_limit();
+        unread.reason()
     }
 
     /// Drop the whole history because `unreadable` of its `rows` could not be
@@ -427,15 +471,19 @@ impl UndoStack {
     }
 
     /// Load persisted undo and redo data with timestamps.
+    ///
+    /// Returns why the whole history was dropped, when it was: an earlier
+    /// version's rows, or a row that could not be read (see
+    /// [`Self::drop_history_with_a_hole`]).
     pub fn load_from_persisted_with_timestamps(
         &mut self,
         undo_entries: Vec<(String, String, Option<String>)>,
         redo_entries: Vec<(String, String, Option<String>)>,
-    ) {
+    ) -> Option<HistoryDropped> {
         self.clear();
 
         let rows = undo_entries.len() + redo_entries.len();
-        let mut unreadable = 0;
+        let mut unread = Unread::default();
         if !Self::undo_timestamps_are_valid(&undo_entries) {
             tracing::warn!(
                 entries = undo_entries.len(),
@@ -453,7 +501,7 @@ impl UndoStack {
                 ) {
                     Some(entry) if Self::is_applicable(&entry) => self.push_undo_tracked(entry),
                     Some(entry) => dropped.push(entry.command.description()),
-                    None => unreadable += 1,
+                    None => unread.note(&undo_data_json),
                 }
             }
             Self::warn_dropped_unapplicable(&dropped);
@@ -488,14 +536,15 @@ impl UndoStack {
                     timestamp_str.as_deref(),
                 ) {
                     Some(entry) => self.push_redo_tracked(entry),
-                    None => unreadable += 1,
+                    None => unread.note(&undo_data_json),
                 }
             }
         }
 
-        if unreadable > 0 {
-            self.drop_history_with_a_hole(unreadable, rows);
+        if unread.total() > 0 {
+            self.drop_history_with_a_hole(unread.total(), rows);
         }
         self.enforce_depth_limit();
+        unread.reason()
     }
 }

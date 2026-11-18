@@ -2769,6 +2769,8 @@
     "historyDiscarded": {
       "lead": "Edit history could not be read and was discarded.",
       "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
+      "earlierVersionLead": "Undo history from an earlier version of Stalagmight was not kept.",
+      "earlierVersionDetail": "Your survey data is unaffected. Edits you make from now on can be undone as usual.",
       "dismiss": "Dismiss"
     }
   },

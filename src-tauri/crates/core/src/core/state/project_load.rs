@@ -433,7 +433,9 @@ impl AppState {
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                let dropped =
+                    undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                self.note_history_dropped(dropped);
                 // ...and against the project they will be replayed onto: first
                 // translated through the shot UUIDs this load renamed (the
                 // entries were recorded against the old ids), then a restored
@@ -1109,7 +1111,9 @@ impl AppState {
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                let dropped =
+                    undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                self.note_history_dropped(dropped);
                 // ...and against the project they will be replayed onto: first
                 // translated through the shot UUIDs this load renamed, then an
                 // entry that still cannot find its shot is dropped (#413).

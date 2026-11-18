@@ -60,6 +60,7 @@ function App() {
   const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
   const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
   const historyDiscarded = useProjectStore((s) => s.historyDiscarded);
+  const historyDiscardedEarlierVersion = useProjectStore((s) => s.historyDiscardedEarlierVersion);
   const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
   const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
@@ -638,9 +639,9 @@ function App() {
           data-testid="history-discarded-banner"
         >
           <span className="text-warning font-medium flex-1 min-w-0">
-            {t('banners.historyDiscarded.lead')}{' '}
+            {t(historyDiscardedEarlierVersion ? 'banners.historyDiscarded.earlierVersionLead' : 'banners.historyDiscarded.lead')}{' '}
             <span className="text-text-secondary font-normal">
-              {t('banners.historyDiscarded.detail')}
+              {t(historyDiscardedEarlierVersion ? 'banners.historyDiscarded.earlierVersionDetail' : 'banners.historyDiscarded.detail')}
             </span>
           </span>
           <button

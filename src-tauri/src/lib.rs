@@ -1830,6 +1830,7 @@ pub fn run() {
             commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
             commands::project::history_discarded,
+            commands::project::history_discarded_from_earlier_version,
             commands::project::get_project_state,
             commands::project::get_adjusted_stations,
             commands::project::get_adjustment_report,

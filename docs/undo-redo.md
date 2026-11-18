@@ -45,10 +45,113 @@ Commands go through a two-phase capture during execution:
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Section Here and Combine Sections (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ProjectSnapshotPair` | A CAPTURE shape only: Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Section Here and Combine Sections (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) capture one, and `UndoData::compact` stores it as a `Delta` before it is pushed | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `Delta` | Every entry captured as a `ProjectSnapshotPair` (see [Compact entries](#compact-entries-deltas-instead-of-snapshots)) | Apply the delta to the live project, restore the result, re-encode the way back | The same, the other way |
 | `ShotCredits` | EditShotCredit, and an UpdateSectionMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a section edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateSectionMetadata: execute the original command |
 | `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
 | `None` | Non-undoable commands | N/A | N/A |
+
+## Compact entries: deltas instead of snapshots
+
+A command whose effect cannot be inverted field by field records two whole-project
+snapshots. Stored as they were, those made the history most of a large file: on a
+20,000-shot survey a single Delete Shot or Merge Stations was ~14 MB of entry, 390% of
+the 3.6 MB `.stalx` it lived in. `UndoData::compact` (`core/undo.rs`) turns every pair
+into an `UndoData::Delta` before it is pushed: only what differs between the two
+states (`core/undo/delta.rs`, `delta/*.rs`).
+
+### What a delta holds
+
+A `ProjectDelta` turns one serialized project (its SOURCE) into another (its TARGET),
+in the project's own JSON shape:
+
+- the top-level members other than `sections`, member by member (`Edit`: a changed
+  offset key, an added merge, a new datum). The members whose order carries no meaning
+  (`station_offsets`, `station_comments`, `station_names`, `counter_parity_shots`) are
+  edited as bags - elements to remove by value and to add - so a load that prunes an
+  unrelated element (`counter_parity_shots` is pruned on load) cannot misalign them. A
+  short list (datums, held gauges) is replaced whole. A long positional list records
+  its length, and an edit whose source has another length REFUSES rather than keeping
+  the wrong elements;
+- the sections as runs over the source's sections: a run of untouched sections is two
+  numbers;
+- a touched section's shots as runs over the source's SHOTS, matched by uuid in any
+  source section and in either direction, so a split, a combine or a reverse - which
+  move or reorder shots without changing them - costs a few numbers per run. A
+  reversed run may replay Reverse Section's own per-shot transform
+  (`models::reversed_azimuths`, shared with `reverse_shots`), leaving only the
+  residuals. Shots the delta carries literally (a deleted shot on the undo side) are
+  written as key-once tables.
+
+Equality is bitwise on floats: `-0.0` is not `0.0`, and a restore puts back the bits.
+
+### One direction at a time
+
+An entry holds the delta from the LIVE project to the state on its other side - its
+`before` while it is on the undo stack, its `after` while it is on the redo stack. A
+step (`AppState::step_through_delta`, `core/state/undo_delta.rs`) serializes the live
+project, applies the delta to that text, installs the result through the same
+`restore_snapshot_into_with` every snapshot restore takes, and re-encodes the entry as
+the delta back to the state it just left. This is the delta form of the
+self-refreshing wall below: the next step starts from exactly the state the last one
+installed, so undo and redo stay exact inverses whatever undo-less change (a save's
+heals) happened in between.
+
+The engine works on the serialized TEXT (`Doc`): an untouched section stays a borrowed
+slice of the live project's JSON, matched by `memcmp`, and only the sections a delta
+touches are parsed. On a 20,000-shot survey a step through a compact entry takes about
+what the snapshot restore took (32-39 ms against 29-30 ms in release).
+
+### What a step settles
+
+- **Shot ids.** The loader renumbers every shot, so after a reopen a shot the delta
+  carries literally can carry an id a renumbered live shot holds. A copied shot keeps
+  its live id; a literal whose id is taken takes a fresh one from its section's
+  allocator, and every allocator is raised past every id in its window, as the
+  project's section allocator is raised past every section. In a session that has not
+  reloaded nothing collides and nothing changes.
+- **Gauge pairs.** A snapshot restore carried a save's gauge pair onto a restored
+  section only when that section held the shots it names (`reapply_heals_after_restore`).
+  A delta keeps every member it does not edit, so the step applies the same rule to the
+  sections it rebuilt whose source held no pair (`SectionRun::Edit { ungauged }`), and
+  hands the restore the pairs it takes away as the `edited` set the pair arm reads from
+  the half it leaves.
+- **The history preview.** Delete Section and Remove Zero Datum previews read their
+  `before` state; the entry records those facts once, at capture (`BeforePreview`).
+
+### The load's uuid remap walks a holder view
+
+A snapshot half was a whole recorded state; a delta is not. `uuid_remap.rs` therefore
+walks each stack from the live project outwards with a `HolderWalk`
+(`core/undo/history_walk.rs`) - shot uuids by section, nothing else - stepped through
+every entry the way undo or redo steps the project (`ProjectDelta::step_holders`). A
+reinstall is judged against the state it replays into (#732), each state a delta
+records is folded in like a snapshot half (its ids, its repeats), and a COPIED shot
+whose id the remap renames gets the new id pinned as an edit on the copy
+(`ProjectDelta::rename_copies`), since a copy carries no uuid of its own.
+
+### Persisted rows, and older builds
+
+Every row's `undo_data_json` is written as `{"v2": <UndoData>}`. An older build (0.5.5
+and before) reads the column as a bare `UndoData` and skips - silently - any row it
+cannot parse while keeping the rest; with compact entries that would undo onto the
+wrong project, because each delta is relative to the state the entry above it leaves.
+Under the envelope NO row parses there, so an older build opens a file saved by this
+one with an empty history and the survey intact, and its next save rewrites the tables
+in its own format. In the other direction this build drops a history it cannot read
+whole (`drop_history_with_a_hole`): a history written before compact entries (by
+decision - its snapshot pairs are what made large files large) and a damaged row alike.
+
+### The size gate
+
+`core/state/undo_size_gate_tests.rs` runs every undoable action kind once on a
+synthetic 5,000- and a 20,000-shot survey (tree-merged lines, loop closures, a datum,
+an unmerged island) and fails if any entry - on the undo stack, and again on the redo
+stack once undone - is more than 1% of the saved `.stalx`. Actions that bring whole-file
+data in (Add `.stalx`, an import, Merge Projects) are exempt. Run it with
+`STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the table; the largest entries are a shot
+edit that moves a big subtree's offsets (0.33%) and a section delete, which is the
+deleted section itself.
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
 
@@ -334,9 +437,15 @@ oracle.
 #### An inverse still RESTORES the offsets it re-derives
 
 Two undo arms re-derive the offsets their inverse recomputes, and both carry the
-pre-command map of the edited section's rigid connected set
-(`Project::capture_rigid_connected_section_offsets`) and hand it back verbatim
-afterwards:
+pre-command offsets of every key the command CHANGED and hand them back verbatim
+afterwards. The capture reads the whole map before the command
+(`Project::capture_all_section_offsets`); `UndoData::keep_changed_offsets` cuts it to
+the keys whose bits the command changed before the entry is pushed (every
+`previous_offsets` map is cut the same way). Every OTHER key is pinned to its live value
+after the inverse runs (`AppState::restore_offsets_pinning_the_rest`): a key the command
+did not change has the same value before and after it, so the live value read before
+the inverse is the one to restore. The whole map comes back exactly, however the
+re-derivation moved it:
 
 - `UndoData::PreviousValues { previous_offsets }` - the undo re-executes
   `update_shot`, whose `realign_after_shot_edit` re-derives the group's offsets.
@@ -350,8 +459,8 @@ recomputes an offset from section-local coordinates and is self-correcting, but 
 removal above genuinely accumulates: it computes `(v + d) - d`, which is not `v` in
 IEEE. One cycle of that drift is below every oracle's tolerance, which is exactly
 why no fuzz survey reaches it, and it is the shape the horizon mode watches
-accumulate (finding 19). The captures make the undo bit-exact instead. They are
-bounded - the rigid connected component only - and elided entirely when empty, so a
+accumulate (finding 19). The captures make the undo bit-exact instead. They hold what
+the command moved - the cascade it set off - and are elided entirely when empty, so a
 metadata-only shot edit carries none.
 
 Only the undo direction needs them. A redo re-executes the forward command from a
@@ -406,10 +515,9 @@ re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
 offset, which makes a whole-project translation a provable no-op for the loader, so
 save/reopen converges without teaching it anything.
 
-The other three offset captures stay merge/rigid-scoped: no per-keystroke shot edit
-can change the frame, and widening those would put an N-entry map on every one.
-Entries persisted with a narrow map still restore through the same arm - what they
-recorded, and no more.
+Whatever the capture reads, the entry keeps only what the command changed
+(`UndoData::keep_changed_offsets`): a GPS fix that moves nothing records no offset at
+all, and a first datum that re-frames the survey records every one.
 
 #### The one derived field an inverse RE-DERIVES: `is_aligned` (#469, item 2)
 
@@ -588,7 +696,7 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - Only the last N entries are persisted (configurable limit), except in the hybrid mode below
 - Persistence is synchronous to avoid race conditions with concurrent readers
 - Serialization failures are logged but don't block the save
-- Deserialization failures skip invalid entries and load whatever is valid
+- Every payload is written in the `{"v2": ...}` envelope, and a history with ANY row this build cannot read is dropped whole (see [Compact entries](#persisted-rows-and-older-builds)): a compact entry is relative to the one above it, so a skipped row would undo the rest onto the wrong project
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 
@@ -737,9 +845,8 @@ assumption the save path breaks. The whole apparatus (`PersistPlan`, `StackSync`
 stable ids) has been removed rather than left standing as scaffolding.
 
 The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds: a save re-gzips the whole
-persisted stack, which is fine for a 20-entry window and would be seconds of compression
-for an unbounded byte-budgeted one, since a delete-heavy session's whole-project snapshots
-are megabytes each.
+persisted stack. With compact entries that stack is a few kilobytes per entry rather than
+megabytes per delete, so it is small even for a byte-budgeted window.
 
 ## Hybrid mode for SpeleoDB projects (#303)
 
@@ -765,12 +872,12 @@ and the benefit are local.
 
 **The byte budget** (`UNDO_BYTE_BUDGET_BYTES`, 32 MiB of serialized JSON ~= 2.5 MB per
 commit) replaces the entry-count window rather than joining it. Count is the wrong unit
-here: `Delete shot`, `Delete section`, `Reverse section` and every `Batch` store a
-`ProjectSnapshotPair` - two whole-project JSON snapshots, about 4.2 MB on a 5,000-shot
-project - so a fixed 100 entries is anywhere from kilobytes to half a gigabyte. The budget
-buys roughly 32,000 ordinary entries, or ~8 whole-project snapshot pairs on a 5,000-shot
-project, or ~2 on a 20,000-shot one. The newest entry is always kept even if it alone
-exceeds the budget. Trims log once with a count.
+here: an entry is as large as what its command changed - a few hundred bytes for most,
+the deleted data for a delete, the whole added file for an Add or an import - so a fixed
+count says nothing about bytes. (Before compact entries, every Delete shot, Delete section,
+Reverse section and Batch stored two whole-project snapshots, ~3.5 MB on a 5,000-shot
+project, and the budget held about 8 of them.) The newest entry is always kept even if it
+alone exceeds the budget. Trims log once with a count.
 
 Because every save rewrites the persisted stack, the budget also bounds the worst-case save
 (~0.3 s of gzip at the measured throughput, which a 30 s autosave absorbs). Raising it
@@ -1014,6 +1121,10 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
+| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`) |
+| `src-tauri/crates/core/src/core/state/undo_delta.rs` | `step_through_delta`: one step through a compact entry |
+| `src-tauri/crates/core/src/core/undo/history_walk.rs` | `HolderWalk`: shot ownership in every recorded state, for the load's uuid remap |
+| `src-tauri/crates/core/src/core/state/undo_size_gate_tests.rs` | The 1% size gate on 5k- and 20k-shot surveys |
 | `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver) |
 | `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
 | `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |

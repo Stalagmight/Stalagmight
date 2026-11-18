@@ -21,6 +21,7 @@ mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 pub use delta::{BeforePreview, Doc, ProjectDelta, SectionIds, SnapshotDelta};
+pub use persistence::HistoryDropped;
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -1814,24 +1815,27 @@ mod tests {
         })
         .unwrap();
 
-        stack.load_from_persisted(vec![valid_entry.clone()]);
+        assert_eq!(stack.load_from_persisted(vec![valid_entry.clone()]), None);
         assert_eq!(stack.len(), 1, "a readable history loads");
 
         // A compact entry is a delta against the entry above it, so a history
         // with a hole would undo onto the wrong project: all of it goes.
-        stack.load_from_persisted(vec![
-            ("invalid json".to_string(), "{}".to_string()),
+        let damaged = stack.load_from_persisted(vec![
+            ("invalid json".to_string(), "{\"v2\":7}".to_string()),
             valid_entry.clone(),
-            ("{}".to_string(), "also invalid".to_string()),
         ]);
         assert_eq!(stack.len(), 0);
+        assert_eq!(damaged, Some(HistoryDropped::Unreadable));
 
-        // So does a history written by an older build (a bare payload).
+        // So does a history written by an older build (a bare payload), and the
+        // banner is told it was an earlier version's rather than damaged.
         let legacy =
             serde_json::to_string(&UndoData::InverseCommand(test_delete_section_command(1)))
                 .unwrap();
-        stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
+        let earlier =
+            stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
         assert_eq!(stack.len(), 0);
+        assert_eq!(earlier, Some(HistoryDropped::EarlierVersion));
     }
 
     /// A stack persisted before the forward guard existed can carry an entry with

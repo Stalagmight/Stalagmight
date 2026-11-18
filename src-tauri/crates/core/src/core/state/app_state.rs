@@ -198,6 +198,11 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// Whether the history [`Self::history_discarded`] reports was dropped because an
+    /// EARLIER version of the app wrote it (`UndoStack::load_from_persisted_with_timestamps`
+    /// returning `HistoryDropped::EarlierVersion`), not because it was unreadable. The
+    /// banner says which. Reset with the flag it qualifies.
+    pub(super) history_from_earlier_version: AtomicBool,
     /// Ignored warnings an "Add .stalx" carried in for sections the open file's
     /// database does not hold yet (#674; see `project_add.rs`). Written by the
     /// next save, cleared with every project-slot commit. Transient.
@@ -292,6 +297,7 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
+            history_from_earlier_version: AtomicBool::new(false),
             pending_ignores: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
@@ -1116,6 +1122,32 @@ impl AppState {
     pub fn set_history_discarded(&self, discarded: bool) {
         self.history_discarded
             .store(discarded, std::sync::atomic::Ordering::SeqCst);
+        self.history_from_earlier_version
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Record what the history load of the just-committed project dropped, if
+    /// anything: either reason raises the discarded-history banner, and an earlier
+    /// version's history gets its own words there (it was not damaged, only written in
+    /// the format before compact undo entries).
+    pub fn note_history_dropped(&self, dropped: Option<crate::core::HistoryDropped>) {
+        let Some(reason) = dropped else {
+            return;
+        };
+        self.history_discarded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.history_from_earlier_version.store(
+            reason == crate::core::HistoryDropped::EarlierVersion,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Whether [`Self::history_discarded`]'s history was an earlier version's.
+    pub fn history_discarded_from_earlier_version(&self) -> bool {
+        self.history_discarded()
+            && self
+                .history_from_earlier_version
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// [#473] Whether the open project lost its edit history on load.

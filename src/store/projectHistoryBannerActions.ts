@@ -19,6 +19,10 @@ export interface ProjectHistoryBannerState {
    * and was replaced by an empty stack. See `AppState::history_discarded` for why ONE
    * flag serves both stacks. */
   historyDiscarded: boolean;
+  /** True when that history was dropped because an EARLIER version of the app wrote
+   * it (the format before compact undo entries) rather than because it was unreadable,
+   * so the banner can say the history was not damaged. */
+  historyDiscardedEarlierVersion: boolean;
   /** True once the user dismissed the discarded-history banner for the OPEN project.
    * Frontend-only, like `integrityDismissed`: the backend flag describes an ongoing
    * condition and keeps answering true, so the dismissal has to live here. */
@@ -49,6 +53,7 @@ let historyDiscardedCheckSeq = 0;
  */
 export const HISTORY_BANNER_CLEARED = {
   historyDiscarded: false,
+  historyDiscardedEarlierVersion: false,
   historyDiscardedDismissed: false,
 } as const;
 
@@ -79,6 +84,11 @@ export function createProjectHistoryBannerActions(
         const discarded = await invokeIpc<boolean>('history_discarded', undefined, {
           purpose: 'report a history load that was discarded',
         });
+        const earlierVersion = discarded
+          ? await invokeIpc<boolean>('history_discarded_from_earlier_version', undefined, {
+              purpose: 'say whether a discarded history was an earlier version',
+            })
+          : false;
         const cur = get();
         if (
           mySeq !== historyDiscardedCheckSeq ||
@@ -90,6 +100,7 @@ export function createProjectHistoryBannerActions(
         }
         set((state) => ({
           historyDiscarded: discarded,
+          historyDiscardedEarlierVersion: earlierVersion,
           // Clear a stale dismissal when the condition clears, so a LATER project
           // that does lose its history still gets a banner.
           historyDiscardedDismissed: discarded ? state.historyDiscardedDismissed : false,

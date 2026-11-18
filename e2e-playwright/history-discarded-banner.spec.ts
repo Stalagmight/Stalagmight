@@ -11,15 +11,18 @@ import { setupMockedPage, createProject } from './helpers/app';
  * mock's `history_discarded` answers `__MOCK_SET_HISTORY_DISCARDED__`.
  */
 
-async function seedFlag(page: Page, discarded: boolean): Promise<void> {
-  await page.evaluate((seed) => {
-    (window as unknown as { __MOCK_SET_HISTORY_DISCARDED__: (d: boolean) => void })
-      .__MOCK_SET_HISTORY_DISCARDED__(seed);
-  }, discarded);
+async function seedFlag(page: Page, discarded: boolean, earlierVersion = false): Promise<void> {
+  await page.evaluate(
+    ([seed, earlier]) => {
+      (window as unknown as { __MOCK_SET_HISTORY_DISCARDED__: (d: boolean, e: boolean) => void })
+        .__MOCK_SET_HISTORY_DISCARDED__(seed, earlier);
+    },
+    [discarded, earlierVersion] as const
+  );
 }
 
-async function seedAndCheck(page: Page, discarded: boolean): Promise<void> {
-  await seedFlag(page, discarded);
+async function seedAndCheck(page: Page, discarded: boolean, earlierVersion = false): Promise<void> {
+  await seedFlag(page, discarded, earlierVersion);
   await page.evaluate(async () => {
     await (window as unknown as {
       __E2E_TEST__: { projectStore: { getState: () => { checkHistoryDiscarded: () => Promise<void> } } };
@@ -74,6 +77,18 @@ test.describe('Discarded-history banner', () => {
     // or "Reload" action replacing Dismiss, which is the policy this is meant to pin.
     await expect(banner.getByRole('button')).toHaveCount(1);
     await expect(banner.getByTestId('history-discarded-dismiss-button')).toBeVisible();
+  });
+
+  test('says so when the history was an earlier version of the app', async ({ page }) => {
+    // A project last saved before compact undo entries opens with its history dropped
+    // whole. Nothing was damaged, so the banner must not say "could not be read".
+    await seedAndCheck(page, true, true);
+
+    const banner = page.getByTestId('history-discarded-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Undo history from an earlier version of Stalagmight was not kept');
+    await expect(banner).toContainText('survey data is unaffected');
+    await expect(banner).not.toContainText('could not be read');
   });
 
   test('dismisses, and a re-check does not resurrect it', async ({ page }) => {
