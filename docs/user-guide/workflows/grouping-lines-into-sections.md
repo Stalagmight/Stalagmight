@@ -55,6 +55,8 @@ there. The panel still lists them, dimmed. Click the eye again to show them.
 - Selecting a hidden line in the panel shows that line on the map until you
   select something else. The section stays hidden.
 - Statistics still count hidden lines.
+- Hidden sections stay hidden in **Plan** and **Export**; show them again from
+  the **Sections** panel in **Survey**.
 - An exported image draws every line, hidden or not.
 
 ## Color
