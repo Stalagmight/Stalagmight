@@ -11,7 +11,7 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=277e5c862c6701e081c381f38e63bfac5d3c4e6e7eb1390c81a5de6c211ec636
+Cargo.lock=92a1da20b840d61c5418ee3fff019dba80adaf7c4fede3a0c9122eeb3017dd0d
 pnpm-lock.yaml=0fdfd981c7d0b4501862c826a85107c7215a26e0e458742aea8fb1b914f08549
 gen-third-party-licenses.mjs=5450d2ab535a7ad141d28dd699d64e10b5b513487cfa5906454d4d8af24bd0ba
 about.toml=c7bd02edf652dab73230740c94195d391bfe6e103f17f226c8e0c2e517df1c46
