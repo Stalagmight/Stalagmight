@@ -508,7 +508,13 @@ name and refuses an empty one or one another station of the line holds ("Line
 X already has a station named Y"). Renaming a line (Edit Line) or creating one
 from the UI refuses an empty name or one another line holds ("A line named X
 already exists"); automatic paths (imports, split and combine default names)
-de-duplicate instead.
+de-duplicate instead. The dialogs, the data table and the Sections panel
+check the same rules inline before sending anything, and also refuse a name
+holding a control character or an invisible formatting character (the
+left-to-right / right-to-left marks, the bidi embeddings, overrides and
+isolates, the zero-width space and joiners, the BOM; `nameValidation.ts`),
+which can make a name read as something it is not. A name that only differs
+from the current one by surrounding spaces is no rename: nothing is sent.
 
 **Labels.** The "Station IDs" map and image-export label draws the Station ID;
 the "Station names" label draws the name (every station has one). The two are
