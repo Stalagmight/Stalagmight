@@ -285,17 +285,18 @@ pub enum CombineRenameReason {
     Lettered,
 }
 
-/// How a combine renames one line's stations: how many, how many keep their
-/// names, and the first and the last renamed station in the line's own
+/// How a combine letters one line's stations: how many, how many keep their
+/// names, and the first and the last lettered station in the line's own
 /// station order, before and after (`0` -> `A0` .. `3` -> `A3`). The first
-/// and last are of the renamed stations only: a custom name the combine
-/// keeps (`Junction` between `1` and `5`) is counted in `unchanged`, never
-/// implied by the range.
+/// and last are of the lettered stations only: a custom name the combine
+/// keeps (`Junction` between `1` and `5`) is counted in `unchanged`, and a
+/// name made unique by the Mid rule is listed in
+/// [`CombineStationRenames::suffixed`], never implied by the range.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct CombineLineRenames {
     pub count: u32,
     /// The line's stations that keep their names (the other line's join
-    /// station, whose name the combine retires, is in neither count).
+    /// station, whose name the combine retires, is in no count).
     pub unchanged: u32,
     pub first_from: String,
     pub first_to: String,
@@ -303,18 +304,31 @@ pub struct CombineLineRenames {
     pub last_to: String,
 }
 
+/// One station a combine renames, before and after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CombineStationRename {
+    pub from: String,
+    pub to: String,
+}
+
 /// The station renames a combine makes, for one choice of the kept line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct CombineStationRenames {
     pub reason: CombineRenameReason,
-    /// The kept line's renames; absent when it keeps its names.
+    /// The kept line's lettering; absent when it letters no station.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub kept: Option<CombineLineRenames>,
-    /// The other line's renames; absent when it keeps its names.
+    /// The other line's lettering; absent when it letters no station.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub other: Option<CombineLineRenames>,
+    /// The other line's stations whose name the kept line also holds, made
+    /// unique by the Mid rule (`Sump` -> `Sump-a`), in station order; absent
+    /// when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub suffixed: Option<Vec<CombineStationRename>>,
     /// The joined station's name after the combine.
     pub join_name: String,
 }

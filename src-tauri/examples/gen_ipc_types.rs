@@ -55,10 +55,10 @@ use stalagmight_lib::models::{
     ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CombineCandidate, CombineJoinEnds,
     CombineJoinKind, CombineJoinedMove, CombineLineRenames, CombineLinesOptions, CombinePick,
     CombinePlan, CombineRemovedClosure, CombineRemovedKind, CombineRenameReason,
-    CombineReplacedClosure, CombineReplacedKind, CombineStationRenames, ConnectivityResult,
-    Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson, CylRole, Cylinder,
-    DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan,
-    DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
+    CombineReplacedClosure, CombineReplacedKind, CombineStationRename, CombineStationRenames,
+    ConnectivityResult, Coordinates, CorrectionSource, CreditEdit, CreditTargets, CreditedPerson,
+    CylRole, Cylinder, DatumGap, DatumRole, DeleteShotImpact, DeleteShotRangeImpact, DistanceField,
+    DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate, FarGpsFix, FrozenShotRef,
     GasReachField, GpsBounds, GpsCoordinates, ImportLineConfig, ImportPlacement, KeptMovesReason,
     Line, LineCreditSummary, LineData, LineEnd, LineRelationships, LineStats, LineUpdates,
     LoopClosureWire, MarkedPoint, MergeDatumShift, NorthReference, PathShot, Person, PlanAnchorSet,
@@ -258,6 +258,7 @@ fn main() {
     export::<CombinePlan>(&out_dir);
     export::<CombineRenameReason>(&out_dir);
     export::<CombineLineRenames>(&out_dir);
+    export::<CombineStationRename>(&out_dir);
     export::<CombineStationRenames>(&out_dir);
     export::<CombineJoinedMove>(&out_dir);
     export::<CombineRemovedClosure>(&out_dir);
@@ -589,6 +590,7 @@ fn main() {
         "CombinePlan",
         "CombineRenameReason",
         "CombineLineRenames",
+        "CombineStationRename",
         "CombineStationRenames",
         "CombineJoinedMove",
         "CombineRemovedClosure",

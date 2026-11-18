@@ -216,7 +216,8 @@ describe('CombineLinesDialog', () => {
           station_renames: {
             reason: 'collision',
             kept: { count: 9, unchanged: 2, first_from: '0', last_from: '10', first_to: 'A0', last_to: 'A10' },
-            other: { count: 3, unchanged: 1, first_from: '1', last_from: 'Sump', first_to: 'B1', last_to: 'Sump-a' },
+            other: { count: 2, unchanged: 1, first_from: '1', last_from: '3', first_to: 'B1', last_to: 'B3' },
+            suffixed: [{ from: 'Sump', to: 'Sump-a' }],
             join_name: 'A10',
           },
         }),
@@ -226,7 +227,28 @@ describe('CombineLinesDialog', () => {
     expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
       'Station names collide, so stations will be renamed: ' +
         'Main-A 0..10 \u2192 A0..A10 (9 renamed, 2 keep their names), ' +
-        'Main-B 1..Sump \u2192 B1..Sump-a (3 renamed, 1 keeps its name)'
+        'Main-B 1..3 \u2192 B1..B3 (2 renamed, 1 keeps its name), Main-B Sump \u2192 Sump-a'
+    );
+  });
+
+  it('lists the names made unique by a letter, counting past three', () => {
+    const suffixed = ['Sump', 'Pit', 'Dome', 'Hall', 'Gate'].map((from) => ({ from, to: `${from}-a` }));
+    dialogData = {
+      candidate: candidate({
+        plan_keeping_a: quietPlan(2, {
+          station_renames: {
+            reason: 'collision',
+            other: { count: 1, unchanged: 0, first_from: '1', last_from: '1', first_to: 'A1', last_to: 'A1' },
+            suffixed,
+            join_name: 'Entrance',
+          },
+        }),
+      }),
+    };
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-rename-note')).toHaveTextContent(
+      'Station names collide, so stations will be renamed: Main-B 1 \u2192 A1 (1 renamed), ' +
+        'Main-B Sump \u2192 Sump-a, Pit \u2192 Pit-a, Dome \u2192 Dome-a and 2 more'
     );
   });
 

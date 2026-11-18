@@ -294,6 +294,7 @@ fn a_custom_name_both_lines_hold_is_suffixed_on_the_other_line() {
     assert_eq!(plan.kept["3"], "A3");
     assert_eq!(plan.other["Sump"], "Sump-a");
     assert_eq!(plan.other["2"], "B2");
+    assert_eq!(plan.other_suffixed, HashSet::from(["Sump".to_string()]));
 
     // The suffix avoids every name either line ends up with.
     let plan = plan_combine_prefixes(&["0", "Sump", "Sump-a"], &["0", "Sump", "2"], Some("0"));

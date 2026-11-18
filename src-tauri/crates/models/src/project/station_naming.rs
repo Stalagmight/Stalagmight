@@ -200,6 +200,9 @@ pub enum CombinePrefixReason {
 pub struct CombinePrefixes {
     pub kept: HashMap<String, String>,
     pub other: HashMap<String, String>,
+    /// The keys of `other` renamed by the Mid rule (a name the kept line also
+    /// holds, `Sump` -> `Sump-a`) rather than lettered.
+    pub other_suffixed: HashSet<String>,
     pub reason: Option<CombinePrefixReason>,
 }
 
@@ -369,6 +372,7 @@ fn suffix_other_line_clashes(
         let fresh = name_with_free_letter(&current, &|n| taken.contains(n));
         taken.insert(fresh.clone());
         plan.other.insert((*name).to_string(), fresh);
+        plan.other_suffixed.insert((*name).to_string());
     }
 }
 

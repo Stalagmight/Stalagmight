@@ -412,6 +412,7 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
         ),
         (2, "1", "B1", "B2")
     );
+    assert_eq!(renames.suffixed, None);
     assert_eq!(renames.join_name, "A3");
 
     // The combine does what the candidate said.
@@ -455,11 +456,25 @@ fn a_combine_keeps_custom_names_and_says_how_many_it_keeps() {
         (kept.last_from.as_str(), kept.last_to.as_str()),
         ("8", "A8")
     );
+    // Side's lettering is `1` and `3`; its `Sump` is listed on its own.
     let other = renames.other.unwrap();
-    assert_eq!((other.count, other.unchanged), (3, 0));
+    assert_eq!((other.count, other.unchanged), (2, 0));
     assert_eq!(
-        (other.first_from.as_str(), other.first_to.as_str()),
-        ("1", "B1")
+        (
+            other.first_from.as_str(),
+            other.first_to.as_str(),
+            other.last_from.as_str(),
+            other.last_to.as_str()
+        ),
+        ("1", "B1", "3", "B3")
+    );
+    let suffixed = renames.suffixed.unwrap();
+    assert_eq!(
+        suffixed
+            .iter()
+            .map(|r| (r.from.as_str(), r.to.as_str()))
+            .collect::<Vec<_>>(),
+        [("Sump", "Sump-a")]
     );
     assert_eq!(renames.join_name, "A8");
 

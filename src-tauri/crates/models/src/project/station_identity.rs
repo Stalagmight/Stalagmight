@@ -736,12 +736,13 @@ impl Project {
     /// What combining `other` into `kept` (joined at `kept_join` and
     /// `other_join`) will rename, for the Combine Lines dialog to say before
     /// the user confirms: `None` when no station is renamed. Each line's
-    /// renames are summarized by how many stations are renamed and how many
-    /// keep their names, and the first and the last renamed station in its
-    /// own station order; the other line's join station is left out (its name
-    /// is retired: it becomes the joined station). `join_name` is the joined
-    /// station's name after the combine (the kept join station's, prefixed
-    /// when it is).
+    /// lettering is summarized by how many stations are lettered and how many
+    /// keep their names, and the first and the last lettered station in its
+    /// own station order; the other line's names made unique by the Mid rule
+    /// are listed one by one (`suffixed`), and its join station is left out
+    /// of everything (its name is retired: it becomes the joined station).
+    /// `join_name` is the joined station's name after the combine (the kept
+    /// join station's, prefixed when it is).
     pub fn combine_station_renames(
         &self,
         kept: LineId,
@@ -755,8 +756,10 @@ impl Project {
             CombinePrefixReason::Lettered => crate::CombineRenameReason::Lettered,
         };
         let retired = self.station_name_at(other_join).map(str::to_string);
+        let no_suffixes = HashSet::new();
         let summarize = |line: LineId,
                          renames: &HashMap<String, String>,
+                         suffixed: &HashSet<String>,
                          skip: Option<&str>|
          -> Option<crate::CombineLineRenames> {
             let names: Vec<String> = self
@@ -765,24 +768,35 @@ impl Project {
                 .flatten()
                 .filter(|name| Some(name.as_str()) != skip)
                 .collect();
-            let changes: Vec<(&String, &String)> = names
+            let lettered: Vec<(&String, &String)> = names
                 .iter()
+                .filter(|old| !suffixed.contains(*old))
                 .filter_map(|old| renames.get(old).map(|new| (old, new)))
                 .collect();
-            let (first, last) = (changes.first()?, changes.last()?);
+            let (first, last) = (lettered.first()?, lettered.last()?);
+            let renamed = lettered.len().saturating_add(suffixed.len());
             Some(crate::CombineLineRenames {
-                count: u32::try_from(changes.len()).unwrap_or(u32::MAX),
-                unchanged: u32::try_from(names.len().saturating_sub(changes.len()))
-                    .unwrap_or(u32::MAX),
+                count: u32::try_from(lettered.len()).unwrap_or(u32::MAX),
+                unchanged: u32::try_from(names.len().saturating_sub(renamed)).unwrap_or(u32::MAX),
                 first_from: first.0.clone(),
                 first_to: first.1.clone(),
                 last_from: last.0.clone(),
                 last_to: last.1.clone(),
             })
         };
-        let kept_renames = summarize(kept, &plan.kept, None);
-        let other_renames = summarize(other, &plan.other, retired.as_deref());
-        if kept_renames.is_none() && other_renames.is_none() {
+        let kept_renames = summarize(kept, &plan.kept, &no_suffixes, None);
+        let other_renames = summarize(other, &plan.other, &plan.other_suffixed, retired.as_deref());
+        let suffixed: Vec<crate::CombineStationRename> = self
+            .line_station_names(other)
+            .into_iter()
+            .flatten()
+            .filter(|old| plan.other_suffixed.contains(old))
+            .filter_map(|old| {
+                let to = plan.other.get(&old)?.clone();
+                Some(crate::CombineStationRename { from: old, to })
+            })
+            .collect();
+        if kept_renames.is_none() && other_renames.is_none() && suffixed.is_empty() {
             return None;
         }
         let join = self.station_name_at(kept_join)?.to_string();
@@ -791,6 +805,7 @@ impl Project {
             reason,
             kept: kept_renames,
             other: other_renames,
+            suffixed: (!suffixed.is_empty()).then_some(suffixed),
             join_name,
         })
     }

@@ -12,6 +12,7 @@ import { defaultConfig } from '../../types/config';
 import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombineLineRenames } from '../../types/ipc/CombineLineRenames';
+import type { CombineStationRename } from '../../types/ipc/CombineStationRename';
 import type { CombineStationRenames } from '../../types/ipc/CombineStationRenames';
 import type { CombinePick } from '../../types/ipc/CombinePick';
 import type { LineId, StationRef } from '../../types/project';
@@ -61,18 +62,30 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 }
 
 /**
- * One line's renames as the note reads them: `Main 0..3 → A0..A3`. The range
- * spans the renamed stations only; when some of the line's stations keep their
- * names (a custom `Junction` between `1` and `5` is not lettered), the counts
- * say so, so the range never reads as renaming them: `Main 0..10 → A0..A10
- * (9 renamed, 2 keep their names)`.
+ * One line's lettering as the note reads it: `Main 0..3 → A0..A3`. The range
+ * spans the lettered stations only. When some of the line's stations are not
+ * lettered (a custom `Junction` between `1` and `5` keeps its name, a `Sump`
+ * both lines hold is listed on its own), the counts say so, so the range never
+ * reads as renaming them: `Main 0..10 → A0..A10 (9 renamed, 2 keep their
+ * names)`.
  */
-function lineRenameText(lineName: string, renames: CombineLineRenames): string {
+function lineRenameText(lineName: string, renames: CombineLineRenames, suffixed: number): string {
   const span = (first: string, last: string) => (renames.count > 1 ? `${first}..${last}` : first);
   const text = `${lineName} ${span(renames.first_from, renames.last_from)} \u2192 ${span(renames.first_to, renames.last_to)}`;
-  if (renames.unchanged === 0) return text;
+  if (renames.unchanged === 0 && suffixed === 0) return text;
+  if (renames.unchanged === 0) return `${text} (${renames.count} renamed)`;
   const kept = renames.unchanged === 1 ? '1 keeps its name' : `${renames.unchanged} keep their names`;
   return `${text} (${renames.count} renamed, ${kept})`;
+}
+
+/** At most this many Mid-suffixed renames are spelled out; the rest are counted. */
+const SUFFIXED_SHOWN = 3;
+
+/** The other line's names made unique by a letter: `Side Sump → Sump-a`. */
+function suffixedRenameText(lineName: string, suffixed: readonly CombineStationRename[]): string {
+  const shown = suffixed.slice(0, SUFFIXED_SHOWN).map((r) => `${r.from} \u2192 ${r.to}`);
+  const more = suffixed.length - shown.length;
+  return `${lineName} ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
 }
 
 /**
@@ -81,9 +94,11 @@ function lineRenameText(lineName: string, renames: CombineLineRenames): string {
  * last renamed station before and after.
  */
 function stationRenameNote(renames: CombineStationRenames, keptName: string, otherName: string): string {
+  const suffixed = renames.suffixed ?? [];
   const parts = [
-    renames.kept ? lineRenameText(keptName, renames.kept) : null,
-    renames.other ? lineRenameText(otherName, renames.other) : null,
+    renames.kept ? lineRenameText(keptName, renames.kept, 0) : null,
+    renames.other ? lineRenameText(otherName, renames.other, suffixed.length) : null,
+    suffixed.length > 0 ? suffixedRenameText(otherName, suffixed) : null,
   ].filter((part): part is string => part !== null);
   const why =
     renames.reason === 'collision'

@@ -73,6 +73,7 @@ export * from './ipc/CombineJoinKind';
 export * from './ipc/CombinePlan';
 export * from './ipc/CombineRenameReason';
 export * from './ipc/CombineLineRenames';
+export * from './ipc/CombineStationRename';
 export * from './ipc/CombineStationRenames';
 export * from './ipc/CombineJoinedMove';
 export * from './ipc/CombineRemovedClosure';
