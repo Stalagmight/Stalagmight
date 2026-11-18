@@ -13,7 +13,10 @@ order: 2
   retaken more carefully.
 
 Stalagmight still draws the survey as well as it can while errors are open.
-Both are listed in the [Warnings panel](../screens/warnings-panel.md).
+Both are listed in the [Warnings panel](../screens/warnings-panel.md), with
+the shot named by its two stations and its line: "Shot 4 → 5 has zero
+length", on `Main Line: 4 → 5`. See
+[Names and Station IDs](sections-shots-stations.md#names-and-station-ids).
 
 ## Thresholds
 

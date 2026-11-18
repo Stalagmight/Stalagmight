@@ -61,9 +61,12 @@ for the project details.
 
 ![Import / Create Line dialog](../images/create-section-dialog.png)
 
-- **Line Name** (2) is optional. So are **Surveyors** and **Explorers**
-  (lists of names: type a name and press **Enter**) and **Survey date**, which
-  go on every shot you enter.
+- **Line Name** (2) starts as the next free `Line N`, `Line 1` in a new
+  project. Keep it or type your own: every line needs a name no other line
+  has.
+- **Surveyors** and **Explorers** (lists of names: type a name and press
+  **Enter**) and **Survey date** are optional, and go on every shot you
+  enter.
 - **Color** (5) is how the line shows on the map.
 - The picture shows an older layout with one **Surveyor** field (3) and a
   **Date** field (4). See the
@@ -77,7 +80,8 @@ for the project details.
 - **J/R** (13): leave blank for permanent line. Click it for `J` (jump) or `R`
   (reference). See
   [shot kinds](../concepts/sections-shots-stations.md).
-- **Create Line** (16).
+- **Create Line** (16). The stations are named `0`, `1`, `2`, ... from the
+  first; see [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - LRUD, and azimuth or inclination at both ends of a shot, are extra columns
   under the eye icon. See the
   [dialog page](../screens/create-section-dialog.md).

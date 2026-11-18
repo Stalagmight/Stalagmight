@@ -84,9 +84,10 @@ with its fix.
 - "Part of the survey could not be adjusted and is shown as measured." For
   example, loop closures tie two zero datums to the same point. The warning in
   the Warnings panel says which part and why.
-- "Bent to a GPS fix at 2:14, 32 m from its surveyed position. Check it." The
-  view passes through a [GPS fix](../concepts/zero-datums-and-gps-fixes.md)
-  that is far from where the survey puts its station. Check the GPS reading and
+- "Bent to a GPS fix at Main Line / 14, 32 m from its surveyed position. Check
+  it." The view passes through a
+  [GPS fix](../concepts/zero-datums-and-gps-fixes.md) that is far from where
+  the survey puts its station, named with its line. Check the GPS reading and
   the survey. The notice stays while the fix is that far, even if you ignore
   its warning.
 

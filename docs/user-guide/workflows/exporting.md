@@ -32,10 +32,12 @@ replacing stays as it was.
   this many others through reference shots are drawn thick, the rest thin.
   Reference shots themselves are not drawn.
 - **Comments & Labels Options** (folded away at first): **Line names**,
-  **Station IDs**, **Station names** (instead of the IDs; only when the project
-  has station names), **Station comments**, **Shot comments**, **Shot data**
-  and **Penetration-distance labels** (on by default: the distance through the
-  cave from the entrance, at the far end of each thick passage).
+  **Station IDs** (each station's Station ID), **Station names** (each
+  station's name, instead of the IDs), **Station comments**, **Shot
+  comments**, **Shot data** and **Penetration-distance labels** (on by
+  default: the distance through the cave from the entrance, at the far end of
+  each thick passage). See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - **Color**: **None (monochrome)**, **By line**, **By depth** or **By
   distance**. Color is for PNG and PDF; SVG is always monochrome. Depth and
   distance use the palette chosen on the map, and a range control (**Depth
@@ -46,10 +48,13 @@ replacing stays as it was.
 - **TML (Ariane)**: a file for Ariane. In the save dialog, pick **TML (ZIP)**
   for a `.tml` file or **TMLU (XML)** for a `.tmlu` file. A name without an
   extension saves as `.tml`. See below for what it keeps.
-- **CSV**: one row per shot: line, shot, length, bearings in and out, depths
-  in and out, left, right, up, down, kind and comment.
-- **JSON**: the project name and location, then every line with its people,
-  dates, color and shots.
+- **CSV**: one row per shot: the line's name (`line`), the names of the
+  shot's two stations (`from`, `to`) and their Station IDs (`from_id`,
+  `to_id`), then length, bearings in and out, depths in and out, left, right,
+  up, down, kind and comment.
+- **JSON**: the project name and location, then every line with its name,
+  people, dates, color and shots. Each shot has the same `from`, `to`,
+  `from_id` and `to_id` as the CSV.
 - CSV and JSON hold the shot readings only: no zero datums, merges or loop
   closures.
 

@@ -48,6 +48,9 @@ order: 4
 
 - Each section recorded on the MNemo becomes one line. Ticked lines (6) are
   imported. Empty ones (5) can't be picked.
+- Each station is named after its MNemo station number, so the names in
+  Stalagmight match your notes. See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - The people (2) and **Date Override** (3) apply to every line. The
   screenshot shows an older single Surveyor field where **Surveyors** and
   **Explorers** now sit.
@@ -65,8 +68,8 @@ order: 4
 
 ![DMP import, configure zero datum](../images/dmp-import-zero-datum-config.png)
 
-- **Zero datum station** (3): station 13 here. Clicking a station on the
-  preview (2) picks it too.
+- **Zero datum station** (3): station 13 here, by its MNemo station number.
+  Clicking a station on the preview (2) picks it too.
 - **GPS coordinates** (4), in any
   [GPS format](../screens/edit-station-dialog.md#gps-formats). Check what it
   read (5).

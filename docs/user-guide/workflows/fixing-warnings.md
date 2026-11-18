@@ -22,6 +22,8 @@ Always fix errors. A warning may just mean the shot needs retaking, see
 
 - Here the first shot is shorter than its depth change (4), which is
   impossible. Its station is red on the map (6).
+- A warning names its shot by the shot's two stations, such as `0 → 1`. The
+  picture shows the older `0:1`.
 - **Resolve** (5) fixes one warning, **Resolve all** (3) goes through all of
   them. See the [Warnings panel](../screens/warnings-panel.md).
 

@@ -75,6 +75,18 @@ SpeleoDB project**.
 
 - The small arrow on 8 and 9 picks a variant: **Move comment** (`Shift+C`), or
   **Move segment** / **Move shot** / **Move station**.
+- **Details** for a station shows its **Name**, its **Station ID** and its
+  **Line**; **Edit** at the bottom opens the
+  [Edit Station dialog](edit-station-dialog.md). A shot is shown by its two
+  stations, `4 → 5`. See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
+- **Data** has a **Shots** and a **Stations** view of the selected line.
+  Each row starts with the shot (`4 → 5`) or the station name; double-click it
+  to find it on the map. The **Stations** view has a **Station ID** column,
+  and a **Name** column, hidden at first, where you can rename a station: show
+  it with **Choose visible columns** (the eye icon). The **Line** and **Shot**
+  columns of the **Shots** view, also hidden at first, show the line's name
+  and `from → to`.
 - Hover over **Undo** or **Redo** to list recent steps; click one to undo or
   redo back to it.
 - The map pans when you drag it and zooms with the scroll wheel, whatever the

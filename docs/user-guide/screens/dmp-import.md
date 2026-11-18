@@ -11,6 +11,12 @@ Imports an MNemo `.dmp` file into the open project, in steps. Opened by
 **Import from MNemo...** reads a device over USB. With no project open, the
 [Create Project for Import dialog](create-project-for-import.md) comes first.
 
+Each station is named after its MNemo station number, as in your notes, and
+the wizard already shows stations by those names, with their line where
+needed: `AC1 / 13`. A station of a row you add in the wizard has no MNemo
+number and is named by the
+[usual rules](../concepts/sections-shots-stations.md#names-for-new-stations).
+
 ## Step 1: pick lines
 
 Each section recorded on the MNemo becomes one line in Stalagmight.
@@ -64,7 +70,7 @@ After picking a line in step 2.
 
 1. **Close**: nothing imported.
 2. Preview. The ring marks the zero datum station. Click a station to pick it.
-3. **Zero datum station**
+3. **Zero datum station**, by name.
 4. **GPS coordinates**, in any [GPS format](edit-station-dialog.md#gps-formats).
    The badge shows the format it was read as.
 5. The position as read from 4.
@@ -72,8 +78,9 @@ After picking a line in step 2.
 7. **Name**
 8. **Surveyors** and **Explorers**, side by side. They start with the people
    from step 1. (The screenshot shows an older single Surveyor field.)
-9. **Reverse numbering**: number the stations and shots from the other end
-   (ticked here). The cave does not move.
+9. **Reverse numbering**: run the line from the other end (ticked here), so
+   its last station comes first. The cave does not move, and every station
+   keeps its MNemo name.
 10. **Cancel**: same as 1.
 11. **Back**: to step 2.
 12. **Confirm Zero Datum**: disabled until 4 can be read and 6 is empty or a
@@ -109,7 +116,7 @@ between lines and suggests where each line joins, one at a time.
 2. Lines placed so far.
 3. Preview: grey is already placed, red is the line being placed, the gold
    dot is where they join.
-4. The suggested connection: which station joins which.
+4. The suggested connection: which station joins which, each with its line.
 5. Confidence (high, medium or low) and how many shots matched. The arrow shows
    whether they run the same way (→) or opposite ways (←).
 6. **Merge at**: pick another station pair, when there is more than one.

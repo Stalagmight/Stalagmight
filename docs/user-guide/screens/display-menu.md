@@ -42,10 +42,11 @@ What the map shows. Opened by **Display** in the top right of the
 
 - **Grid** adds a **Grid spacing** setting.
 - **Station IDs** and **Station names** label the stations in two ways, and
-  only one can be on: turning one on turns the other off. **Station names**
-  shows each station's name, such as the MNemo station number from a `.dmp`
-  import, and stations without a name get no label. It is unavailable when
-  the project has no station names.
+  only one can be on: turning one on turns the other off. **Station IDs**
+  shows each station's Station ID, the number unique in the project.
+  **Station names** shows each station's name, unique within its line, such
+  as the MNemo station number from a `.dmp` import. See
+  [Names and Station IDs](../concepts/sections-shots-stations.md#names-and-station-ids).
 - **Closures Computed View** is unavailable when there are no loop closures
   and no GPS fixes to adjust. Edit in the **Raw Data View**.
 - **Distance** needs at least one zero datum: with none, no station is

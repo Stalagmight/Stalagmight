@@ -64,6 +64,14 @@ In menu order, with when each one shows:
   [Unmerging stations](../workflows/merging-stations.md#unmerging-stations).
   **Remove Closure**: see
   [Removing a closure](../workflows/closing-a-loop.md#removing-a-closure).
+- **Add Shot Before** and **Add Shot After** name the new station after the
+  line's others: after `5` comes `6`, and before a line `0` to `6` comes `7`.
+  **Insert Station...** in the shot menu puts a lettered station inside the
+  shot: `4a` on `4 → 5`. See
+  [Names for new stations](../concepts/sections-shots-stations.md#names-for-new-stations).
+- In **Edit Line**, the line's name cannot be empty or the name of another
+  line: the reason shows under the name, and the dialog does not save until
+  it is fixed.
 - Both deletes ask for confirmation first.
 - In the Closures Computed View, or on a SpeleoDB project you are not editing,
   the entries are shown but disabled.

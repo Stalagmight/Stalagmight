@@ -20,7 +20,10 @@ readings disagree.
 2. **Show resolved**: also list the resolved ones.
 3. **Resolve all**: go through every open warning in turn.
 4. A warning. Click it to highlight the shot on the map, double-click to pan
-   to it. The shot (`0:1`) and line pills open them in **Details**.
+   to it. The shot pill names the shot by its two stations, such as `0 → 1`,
+   and the line pill shows the line's name; both open them in **Details**.
+   The picture shows the older numbers (`0:1`, and the line's number beside
+   its name).
 5. **Resolve**: pick a fix, see below.
 6. Red: where the error is.
 7. Green: no problem.
