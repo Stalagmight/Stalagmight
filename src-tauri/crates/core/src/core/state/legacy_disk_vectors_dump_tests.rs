@@ -1,5 +1,13 @@
-//! Golden on-disk JSON vectors, captured from the code as it stands BEFORE the
-//! Section -> Line identifier rename.
+//! The tool that captured the golden on-disk JSON vectors of
+//! `undo/testdata/pre_line_rename_rows.json`.
+//!
+//! It was run ONCE, on the commit before the Section -> Line identifier rename
+//! (7fcf87b01, where it still spoke the old identifiers); this copy was
+//! renamed along with the rest of the code. Re-running it now captures what
+//! THIS build writes - already translated to the pre-rename names by
+//! `disk_names` - so it can show today's on-disk shapes, but it can no longer
+//! produce vectors from the old code: never regenerate the testdata file with
+//! it. `pre_line_rename_disk_tests` holds the comparison.
 //!
 //! A rename of Rust identifiers (`section_id` -> `line_id`, `CreateSection` ->
 //! `CreateLine`, ...) silently changes every serde name derived from them, and
@@ -10,8 +18,7 @@
 //! config. This test builds a project through the real `AppState` command
 //! paths, saves it through the real save path, reads the saved file back and
 //! writes every one of those shapes, decompressed and parsed, to the directory
-//! named by `LEGACY_VECTORS_OUT`. The vectors are then compared after a round
-//! trip through the renamed code, never regenerated.
+//! named by `LEGACY_VECTORS_OUT`.
 //!
 //! Synthetic data only: every survey is built in code, no fixture is read.
 //! `#[ignore]`d - it writes files outside the tree, so it runs on demand:

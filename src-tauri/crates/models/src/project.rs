@@ -575,8 +575,10 @@ pub struct Project {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub sections: Vec<Section>,
-    /// Next [`SectionId`] to assign. Not persisted in the file: a load derives
-    /// it from the highest saved id, as it does `next_line_id`.
+    /// Next [`SectionId`] to assign. Persisted as the `next_cave_section_id`
+    /// project setting and read as the larger of that and the highest saved id
+    /// plus one, so an id freed by an undo or a delete is never handed out
+    /// again (a hidden-Sections entry could otherwise hide the newcomer).
     #[serde(
         default,
         rename = "next_cave_section_id",
