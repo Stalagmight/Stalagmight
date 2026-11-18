@@ -4,6 +4,8 @@
     clippy::unwrap_used,
     reason = "test setup and assertions"
 )]
+mod sdk_dates;
+
 use super::*;
 use serde_json::{json, Value};
 use std::io::{Read, Write};

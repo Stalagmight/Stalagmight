@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::{ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef};
+use crate::{
+    ClosureRef, ClosureStrategy, Coordinates, LoopClosure, Section, SectionId, Station, StationRef,
+};
 
 use super::{AdjustedStations, AdjustmentFailure, Project};
 
@@ -466,12 +468,47 @@ impl Project {
     /// Whether a loop closure participates in the least-squares adjustment.
     /// Mirrors the strategy filter inside [`Self::adjust_loop_closures`]: `Move`
     /// closures are already coincident (snap-to-merge) and the deferred
-    /// proportional/equal strategies are not solved.
+    /// proportional/equal strategies are not solved. A snapped closure is
+    /// still TIED by the solve ([`Self::closure_is_snap`]), but it gives a
+    /// component nothing to solve.
     pub(crate) fn closure_is_eligible(strategy: ClosureStrategy) -> bool {
         matches!(
             strategy,
             ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
         )
+    }
+
+    /// Whether a loop closure is a SNAP, which the least-squares solve ties
+    /// as one point the way it ties a merge (#736): an aligned closure
+    /// (`is_aligned`, measured by [`Self::closure_alignment_stamp`]) that is
+    /// not one the solve already takes ([`Self::closure_is_eligible`]). In
+    /// practice a `Move` closure, made by Move Station onto a station already
+    /// connected to it.
+    ///
+    /// The Raw Data View holds every aligned closure rigid, whatever its
+    /// strategy ([`Self::get_rigid_connected_section_ids`], the offset
+    /// cascade, depth co-location), so the Closures Computed View must keep
+    /// its two stations on one point too, or the view pulls them apart. An
+    /// aligned `Batch` / `LeastSquaresWeighted` closure (the destructive
+    /// adjust before 0.5.0 wrote those) is eligible and so tied already. No
+    /// version wrote an aligned proportional/equal closure; one from a hand
+    /// edited file is a snap, so the solve and the raw view read one
+    /// definition of a rigid closure.
+    ///
+    /// A snap gives a component nothing to solve (its stations coincide
+    /// already, to the 1 cm the stamp allows), so it never makes the view
+    /// adjust a component ([`Self::component_has_eligible_closure`]).
+    pub(crate) fn closure_is_snap(strategy: ClosureStrategy, is_aligned: bool) -> bool {
+        is_aligned && !Self::closure_is_eligible(strategy)
+    }
+
+    /// Whether the least-squares solve ties `closure`'s two stations as one
+    /// point, by its kind: an eligible closure or a snap. The across-one-shot
+    /// sweep still skips one that would collapse a shot
+    /// ([`Self::closures_across_one_shot`]).
+    pub(crate) fn closure_ties_in_solve(closure: &LoopClosure) -> bool {
+        Self::closure_is_eligible(closure.strategy)
+            || Self::closure_is_snap(closure.strategy, closure.is_aligned)
     }
 
     /// Whether the least-squares adjustment solves `component`: it holds a

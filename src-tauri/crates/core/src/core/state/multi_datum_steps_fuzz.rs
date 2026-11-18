@@ -423,13 +423,17 @@ pub(super) fn next_op(
         }
         18..=21 if datums > 0 => {
             let at = datum_station(rng, p)?;
-            match spare_frame(rng, at) {
-                Some(op) => op,
-                None => Op::Twin {
-                    at,
-                    k: rng.below(datums),
-                    acc,
-                },
+            if let Some(op) = spare_frame(rng, at) {
+                op
+            } else {
+                let k = rng.below(datums);
+                // Half the time the copy keeps the source's accuracy too:
+                // twins nothing stored tells apart (#778).
+                let acc = match p.zero_datums.get(k) {
+                    Some(zd) if rng.chance(50) => zd.accuracy_m,
+                    _ => acc,
+                };
+                Op::Twin { at, k, acc }
             }
         }
         22..=29 if datums > 0 => Op::Accuracy {

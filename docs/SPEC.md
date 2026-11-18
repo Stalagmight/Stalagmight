@@ -1781,7 +1781,13 @@ it, for the section it shows as kept, before the user confirms:
   stays, becomes an ordinary loop closure between the same two stations: the
   one nearest the moving section, so the least moves. The loop's misclosure
   moves there, and the closures the combine made or stretched are measured
-  again. When both sides are anchored by zero datums, the moving side's merge
+  again. A snapped closure whose stations had come apart (more than 1 cm)
+  counts as snapped when the combine brings them back together there, so it
+  becomes an ordinary loop closure too rather than snapping again inside the
+  combined section; Details name it as the loop closure left from a snap. So
+  does a snapped closure the combine pulls apart, where the joined station
+  keeps the other join station's position as shown, and Details say so
+  (#736). When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
   groups; a merge may not). Where two loop closures end up tying the same two
   stations, one stays: the first that the Closures Computed View adjusts (the
