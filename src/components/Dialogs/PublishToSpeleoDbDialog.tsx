@@ -82,12 +82,8 @@ export default function PublishToSpeleoDbDialog() {
     !bothProvided || (latNum !== null && lonNum !== null && validateCoordinates(latNum, lonNum).valid);
   const coordsValid = coordsPairValid && coordsRangeValid;
 
-  // SpeleoDB's Project model requires a non-blank description (`blank=False,
-  // null=False`), so an empty one 400s the create before anything is written. Gate
-  // it here as required rather than let Publish silently fail after the click.
   const canPublish =
     name.trim().length > 0 &&
-    description.trim().length > 0 &&
     country !== '' &&
     coordsValid &&
     !publishing && !busy && loggedIn;
@@ -198,7 +194,7 @@ export default function PublishToSpeleoDbDialog() {
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.publish.descriptionLabel')} <span className="text-error">*</span>
+            {t('speleodb.publish.descriptionLabel')}
           </label>
           <textarea
             value={description}
@@ -208,11 +204,6 @@ export default function PublishToSpeleoDbDialog() {
             aria-label={t('speleodb.publish.descriptionLabel')}
             data-testid="publish-to-speleodb-dialog-description"
           />
-          {description.trim() === '' && (
-            <p className="text-error text-xs mt-1" data-testid="publish-to-speleodb-dialog-description-error">
-              {t('speleodb.publish.descriptionRequired')}
-            </p>
-          )}
         </div>
 
         <div>
