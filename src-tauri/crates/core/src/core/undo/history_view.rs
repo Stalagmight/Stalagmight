@@ -957,11 +957,13 @@ fn derive_preview_data(
         }
 
         // Default catch-all: show command description so hover is never empty
+        // (a Section command's names its Section, as its label does).
         _ => Some(PreviewData {
             changes: vec![FieldChange {
                 field: "Action".to_string(),
                 old_value: String::new(),
-                new_value: entry.command.description(),
+                new_value: super::history_cave_section::description(entry)
+                    .unwrap_or_else(|| entry.command.description()),
             }],
             additional_changes: 0,
         }),
