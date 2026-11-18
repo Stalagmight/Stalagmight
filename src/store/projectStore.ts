@@ -1504,13 +1504,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   refreshProjectState: async () => {
+    // The project this refresh is for (#24's identity, `created_at`). A load or a close does
+    // not wait for an in-flight refresh, so its reply may land after the store moved on.
+    const requestProjectKey = get().project?.created_at ?? null;
     try {
       debugLog('[projectStore] refreshProjectState: invoking get_project_state...');
       const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
         purpose: 'refresh project state in UI',
       });
       debugLog('[projectStore] refreshProjectState: got state, lines:', state?.project?.lines?.length);
-      if (state) {
+      // Dropped whole when the store holds another project by now, or none after holding one
+      // (a close): the reply would paint the old project over what replaced it. A store that
+      // held nothing yet (a refresh that installs the project) has not moved.
+      const currentProjectKey = get().project?.created_at ?? null;
+      const storeMoved =
+        projectSwitched(requestProjectKey, currentProjectKey) ||
+        (requestProjectKey !== null && currentProjectKey === null);
+      if (state && !storeMoved) {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
         // the only shape stored; project loses .lines[i].shots.
@@ -1527,8 +1537,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });
-        // A deleted (or undone) Section leaves the hidden list (#327).
-        useUIStore.getState().pruneHiddenSections(state.project.cave_sections);
+        // A deleted (or undone) Section leaves the hidden list (#327). Only against the
+        // project the refresh was issued for: when the backend had already switched (a load
+        // whose reply is not in the store yet), the reply's Sections are another project's,
+        // and the prune would drop valid hidden ids and save that into the newly open file.
+        // (A tree replacement that changes `created_at` skips one prune; the next refresh,
+        // issued against the new tree, prunes.)
+        if (!projectSwitched(requestProjectKey, state.project.created_at ?? null)) {
+          useUIStore.getState().pruneHiddenSections(state.project.cave_sections);
+        }
       }
       debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
