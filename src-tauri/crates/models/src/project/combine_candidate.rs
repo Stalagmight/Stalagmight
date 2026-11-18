@@ -118,13 +118,13 @@ fn end_index(line: &Line, end: LineEnd) -> u32 {
     }
 }
 
-/// A line as the user knows it: its name, or "Line N" when it has none
-/// (the label the Combine dialog and its refusals use).
+/// A line as the user knows it: its name, or `unnamed line` when it has
+/// none (the label the Combine dialog and its refusals use) - never its id.
 pub fn line_label(line: &Line) -> String {
     line.name
         .clone()
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| format!("Line {}", line.id))
+        .unwrap_or_else(|| super::UNNAMED_LINE.to_string())
 }
 
 fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {

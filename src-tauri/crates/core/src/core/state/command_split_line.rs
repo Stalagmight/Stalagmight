@@ -253,7 +253,7 @@ impl AppState {
     /// every refusal of the split is decided here, before anything changes.
     fn validate_cut(project: &Project, line_id: LineId, at: SplitAt) -> Result<Cut, String> {
         let Some(line) = project.get_line(line_id) else {
-            return Err(format!("Line {line_id} not found"));
+            return Err(crate::models::LINE_GONE.to_string());
         };
         // The split mints the second half's id (#555); refuse rather than
         // truncate the first half with nowhere to put the rest.
@@ -264,12 +264,12 @@ impl AppState {
             SplitAt::Station { station_index } => Cut::Station(station_index),
             SplitAt::Shot { shot_id, distance } => {
                 let Some(pos) = line.shots.iter().position(|s| s.id == shot_id) else {
-                    return Err(format!("Shot {shot_id} not found in line {line_id}"));
+                    return Err(crate::models::SHOT_GONE.to_string());
                 };
                 let length = line.shots[pos].length;
                 if !distance.is_finite() || distance < 0.0 || distance > length {
                     return Err(format!(
-                        "Distance {distance} is outside shot {shot_id} (0 to {length} m)"
+                        "Distance {distance} is outside the shot (0 to {length} m)"
                     ));
                 }
                 if distance < MIN_SPLIT_CHILD_LENGTH_M {

@@ -270,7 +270,7 @@ impl AppState {
         };
 
         let Some(line) = project.get_line_mut(line_id) else {
-            return CommandResult::failure(format!("Line {line_id} not found"));
+            return CommandResult::failure(crate::models::LINE_GONE.to_string());
         };
 
         // Recreate the shot with its original ID and UUID so the restored shot

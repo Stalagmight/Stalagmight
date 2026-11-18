@@ -719,7 +719,7 @@ impl AppState {
             if let Err(f) = self.speleodb_collect_reverify() {
                 return f;
             }
-            if let Err(f) = self.guard_mutation(&cmd.description()) {
+            if let Err(f) = self.guard_mutation_for(&cmd) {
                 return f;
             }
             // Lazy 20-min lock re-verify (#202): on a lock-held remote edit through
@@ -1246,7 +1246,7 @@ impl AppState {
             if !Self::is_batch_allowed(cmd) {
                 return CommandResult::failure(format!(
                     "Command '{}' is not allowed in batch context",
-                    cmd.description()
+                    self.command_label(cmd)
                 ));
             }
         }

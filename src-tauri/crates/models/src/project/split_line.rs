@@ -69,7 +69,7 @@ impl Project {
         }
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let k = station_index as usize;
 
         let direction = line.direction;
@@ -98,7 +98,7 @@ impl Project {
 
         let first = self
             .get_line_mut(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         first.name = Some(options.name_a.trim().to_string());
         first.color.clone_from(&options.color_a);
         first.shots.truncate(k);
@@ -161,13 +161,15 @@ impl Project {
     /// one. Read-only, so a caller can refuse before changing anything.
     pub fn split_station_refusal(&self, line_id: LineId, station_index: u32) -> Option<String> {
         let Some(line) = self.get_line(line_id) else {
-            return Some(format!("Line {line_id} not found"));
+            return Some(crate::LINE_GONE.to_string());
         };
         let k = station_index as usize;
         (k == 0 || k >= line.shots.len()).then(|| {
             format!(
-                "Station {station_index} is the first or last station of line \
-                 {line_id}; split at a station in the middle"
+                "Station {} is the first or last station of {}; split at a station in the middle",
+                self.station_name_at(StationRef::new(line_id, station_index))
+                    .map_or_else(|| station_index.to_string(), str::to_string),
+                self.line_label(line_id).unwrap_or_default()
             )
         })
     }

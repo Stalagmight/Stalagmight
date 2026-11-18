@@ -1333,13 +1333,12 @@ impl AppState {
         let Some(project) = guard.as_ref() else {
             return Err("No project open".to_string());
         };
-        // Spelled distinctly from the id-addressed "Shot {id} not found in
-        // line {s}": this one says the shot's persistent IDENTITY is gone,
-        // which is a different fact from an id that no longer resolves, and the
-        // fuzz gate tells the two apart by exactly this wording.
+        // Spelled distinctly from `SHOT_GONE` (a handle that no longer
+        // resolves): this one says the shot's persistent IDENTITY is gone,
+        // which is a different fact. Neither names an id.
         project
             .shot_id_by_uuid(line_id, uuid)
-            .ok_or_else(|| format!("Shot {uuid} (addressed by uuid) not found in line {line_id}"))
+            .ok_or_else(|| "That shot no longer exists: its recorded identity is gone.".to_string())
     }
 
     /// `command` with the shot it addresses re-resolved through the uuid its

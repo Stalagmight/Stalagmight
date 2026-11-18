@@ -1146,7 +1146,7 @@ fn reverse_of_a_missing_line_fails() {
         swap_left_right: false,
     });
     assert!(!result.success);
-    assert!(result.error.unwrap().contains("not found"));
+    assert!(result.error.unwrap().contains("no longer exists"));
 }
 
 #[test]

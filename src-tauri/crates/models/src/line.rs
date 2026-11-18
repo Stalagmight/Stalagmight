@@ -14,6 +14,14 @@ use super::{
 /// Unique identifier for a line
 pub type LineId = u32;
 
+/// What the user reads when an edit addresses a line by a handle the project
+/// no longer holds (deleted since, a stale view): never the internal id,
+/// which the user never sees (decision 2 of the line-identity contract).
+pub const LINE_GONE: &str = "That line no longer exists.";
+
+/// [`LINE_GONE`] for a shot.
+pub const SHOT_GONE: &str = "That shot no longer exists.";
+
 /// Survey direction (In = going into cave, Out = returning)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]

@@ -23,6 +23,10 @@ use super::station_naming::{
 };
 use super::{station_key_order, Project};
 
+/// What a line without a name is called in user-facing text
+/// ([`Project::line_label`]).
+pub const UNNAMED_LINE: &str = "unnamed line";
+
 /// What one [`Project::ensure_station_identities`] pass changed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct IdentityHeal {
@@ -454,15 +458,16 @@ impl Project {
         out
     }
 
-    /// The name a line shows the user: its name, or `Line <id>` for a line
-    /// a normalization has not reached yet.
+    /// The name a line shows the user: its name, or `unnamed line` for a
+    /// line a normalization has not reached yet - never `Line <id>`, which
+    /// reads as (and can collide with) a seeded name like `Line 3`.
     pub fn line_label(&self, line_id: LineId) -> Option<String> {
         let line = self.get_line(line_id)?;
         Some(
             line.name
                 .clone()
                 .filter(|n| !n.trim().is_empty())
-                .unwrap_or_else(|| format!("Line {line_id}")),
+                .unwrap_or_else(|| UNNAMED_LINE.to_string()),
         )
     }
 
@@ -787,7 +792,7 @@ impl Project {
     pub fn validate_station_name(&self, station: StationRef, name: &str) -> Result<String, String> {
         let line = self
             .get_line(station.line_id)
-            .ok_or_else(|| format!("Line {} not found", station.line_id))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         if station.station_index as usize > line.shots.len() {
             return Err("Station not found".to_string());
         }

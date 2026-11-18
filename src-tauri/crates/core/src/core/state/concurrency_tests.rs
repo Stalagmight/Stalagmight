@@ -742,8 +742,7 @@ fn check_final_state(state: &AppState, walked: &mut usize) -> Vec<String> {
             let documented = error.contains("part of a loop")
                 || error.contains("zero datum")
                 || error.contains("Cannot delete a frozen shot")
-                || error.contains("not found in line")
-                || (error.starts_with("Shot ") && error.ends_with(" not found"));
+                || error.contains("no longer exists");
             if !documented {
                 problems.push(format!(
                     "the post-run undo walk failed at step {steps} for an undocumented reason: \

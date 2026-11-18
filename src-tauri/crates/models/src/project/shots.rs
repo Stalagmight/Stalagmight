@@ -145,7 +145,7 @@ impl Project {
     /// caller can refuse before changing anything.
     pub fn shot_insert_refusal(&self, line_id: LineId) -> Option<String> {
         let Some(line) = self.get_line(line_id) else {
-            return Some(format!("Line {line_id} not found"));
+            return Some(crate::LINE_GONE.to_string());
         };
         if line.shots.len() >= Self::max_shots_per_line() {
             return Some(format!(
@@ -464,7 +464,7 @@ impl Project {
     ) -> Result<(ShotId, ShotData, ShotUpdates), String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         if line.shots.len() >= Self::max_shots_per_line() {
             return Err(format!(
                 "Line \"{}\" has reached the maximum of {} shots",
@@ -474,15 +474,15 @@ impl Project {
         }
         let shot = line
             .get_shot(shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
         let (head_data, tail_updates) = Self::compute_split(shot, distance)?;
 
         let line = self
             .get_line_mut(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let tail = line
             .get_shot_mut(shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
         tail.apply_updates(&tail_updates);
 
         let new_shot = line
@@ -600,12 +600,12 @@ impl Project {
     ) -> Result<DeleteShotImpact, String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let pos = line
             .shots
             .iter()
             .position(|s| s.id == shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
 
         let removed_station = if pos == 0 {
             StationRef::new(line_id, 0)
@@ -891,18 +891,18 @@ impl Project {
     ) -> Result<DeleteShotRangeImpact, String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let n = line.shots.len();
         let mut start_pos = line
             .shots
             .iter()
             .position(|s| s.id == start_shot_id)
-            .ok_or_else(|| format!("Shot {start_shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
         let mut end_pos = line
             .shots
             .iter()
             .position(|s| s.id == end_shot_id)
-            .ok_or_else(|| format!("Shot {end_shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
         if start_pos > end_pos {
             std::mem::swap(&mut start_pos, &mut end_pos);
         }
@@ -1373,12 +1373,12 @@ impl Project {
     ) -> Result<(Shot, DeleteShotImpact, Vec<LoopClosure>), String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let pos = line
             .shots
             .iter()
             .position(|s| s.id == shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
 
         let impact = self.preview_delete_shot(line_id, shot_id)?;
         // Which closures the sweep would act on ALREADY (orphans, and closures
@@ -1512,10 +1512,10 @@ impl Project {
         let deleted_shot = {
             let line_mut = self
                 .get_line_mut(line_id)
-                .ok_or_else(|| format!("Line {line_id} not found"))?;
+                .ok_or_else(|| crate::LINE_GONE.to_string())?;
             line_mut
                 .remove_shot(shot_id)
-                .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?
+                .ok_or_else(|| crate::SHOT_GONE.to_string())?
         };
 
         // Station keys are position-independent - no ref-shifting on delete. The
@@ -1680,7 +1680,7 @@ impl Project {
     ) -> Result<Shot, String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         if line.shots.len() != 1 || line.shots[0].id != shot_id {
             return Err(format!(
                 "Shot {shot_id} is not the only shot of line {line_id}"
@@ -1715,7 +1715,7 @@ impl Project {
         let removed = self
             .get_line_mut(line_id)
             .and_then(|line| line.remove_shot(shot_id))
-            .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+            .ok_or_else(|| crate::SHOT_GONE.to_string())?;
 
         // Same duty `remove_shot_with_rewire` discharges after ITS retains
         // and its shot removal, for the same reason and in the same place: dropping

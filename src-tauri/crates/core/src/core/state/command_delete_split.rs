@@ -16,11 +16,14 @@ pub(super) fn line_budget_refusal(project: &Project, line_id: LineId) -> Option<
         return None;
     }
     Some(CommandResult::failure(format!(
-        "Cannot split line {line_id}: to split it into two lines needs \
+        "Cannot split {}: to split it into two lines needs \
          a new line id, but the project has reached the maximum number of lines \
          (limit = {MAX_LINES_IN_ID_SPACE}); shot ids encode as \
          line_id * {FEATURE_ID_STRIDE} + position in 32 bits, so line ids \
-         past {MAX_LINE_ID} cannot hold shots"
+         past {MAX_LINE_ID} cannot hold shots",
+        project
+            .line_label(line_id)
+            .map_or_else(|| "the line".to_string(), |name| format!("line \"{name}\""))
     )))
 }
 
@@ -110,17 +113,13 @@ impl AppState {
             let closures_before = project.closures_before_sweep();
 
             let Some(line) = project.get_line(line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             // Pre-check: distinguish "shot not found" from "edge shot"
             let shot_pos = line.shots.iter().position(|s| s.id == shot_id);
             match shot_pos {
-                None => {
-                    return CommandResult::failure(format!(
-                        "Shot {shot_id} not found in line {line_id}"
-                    ))
-                }
+                None => return CommandResult::failure(crate::models::SHOT_GONE.to_string()),
                 Some(p) if p == 0 || p == line.shots.len() - 1 => {
                     return CommandResult::failure(
                         "Cannot split at edge shot (first or last). Use simple delete instead."
@@ -201,7 +200,7 @@ impl AppState {
             // Step 3: Modify original line -> line A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
             let Some(line_mut) = project.get_line_mut(line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
             line_mut.name = Some(name_a);
             line_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
@@ -425,19 +424,15 @@ impl AppState {
             // Before anything changes, to name what the orphan sweep removes (#738).
             let closures_before = project.closures_before_sweep();
             let Some(line) = project.get_line(line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             let n = line.shots.len();
             let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {start_shot_id} not found in line {line_id}"
-                ));
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             let Some(mut end_pos) = line.shots.iter().position(|s| s.id == end_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {end_shot_id} not found in line {line_id}"
-                ));
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             if start_pos > end_pos {
                 std::mem::swap(&mut start_pos, &mut end_pos);
@@ -530,7 +525,7 @@ impl AppState {
                 // to the before-snapshot so a failure here leaves no half-applied
                 // state (mirrors the shift path's rollback on remove failure).
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
             line_mut.name = Some(name_a);
             line_mut.shots.truncate(start_pos);
@@ -735,19 +730,15 @@ impl AppState {
                 return CommandResult::failure("No project open".to_string());
             };
             let Some(line) = project.get_line(line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             let n = line.shots.len();
             let Some(mut start_pos) = line.shots.iter().position(|s| s.id == start_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {start_shot_id} not found in line {line_id}"
-                ));
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             let Some(mut end_pos) = line.shots.iter().position(|s| s.id == end_shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {end_shot_id} not found in line {line_id}"
-                ));
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             };
             if start_pos > end_pos {
                 std::mem::swap(&mut start_pos, &mut end_pos);
@@ -951,24 +942,20 @@ impl AppState {
 
             // Validate line exists
             let Some(line) = project.get_line(line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             // Verify line has exactly 1 shot
             if line.shots.len() != 1 {
                 return CommandResult::failure(format!(
-                    "Line {} has {} shots, expected exactly 1",
-                    line_id,
+                    "That line has {} shots, not exactly 1.",
                     line.shots.len()
                 ));
             }
 
             // Verify the shot matches
             if line.shots[0].id != shot_id {
-                return CommandResult::failure(format!(
-                    "Shot {} not found in line {} (line has shot {})",
-                    shot_id, line_id, line.shots[0].id
-                ));
+                return CommandResult::failure(crate::models::SHOT_GONE.to_string());
             }
 
             // Step 3: Preserve merge/closure connectivity, then clean up line references
@@ -1013,7 +1000,7 @@ impl AppState {
                     "remove_line returned None after validation; rolling back"
                 );
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!("Line {line_id} not found during removal"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             }
 
             // Step 5: Enforce the closures-are-loops invariant, like the two split

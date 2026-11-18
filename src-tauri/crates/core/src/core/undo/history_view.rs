@@ -307,7 +307,9 @@ fn derive_command_details(cmd: &Command, line_names: &NameBook) -> Option<String
             format_station_with_name(station_b, line_names),
             closure_strategy.as_str()
         )),
-        Command::RemoveLoopClosure { closure_id } => Some(format!("Closure #{closure_id}")),
+        // The closure's numeric id is no name to show; the entry's own
+        // preview names its stations from the undo record.
+        Command::RemoveLoopClosure { .. } => None,
         Command::SetShotKind { kind, .. } => Some(format!("Kind: {}", kind.label())),
         Command::CreateShot { shot, .. } => Some(format!(
             "Length: {:.2}, Azimuth: {:.1}",

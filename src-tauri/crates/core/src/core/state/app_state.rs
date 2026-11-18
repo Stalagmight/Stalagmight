@@ -420,6 +420,37 @@ impl AppState {
         )))
     }
 
+    /// [`Self::guard_mutation`] for a command, named the way the user reads it
+    /// ([`Self::command_label`]); the label is only built for a refusal.
+    pub(super) fn guard_mutation_for(
+        &self,
+        cmd: &crate::core::Command,
+    ) -> Result<(), CommandResult> {
+        if self.edit_enabled() {
+            return Ok(());
+        }
+        self.guard_mutation(&self.command_label(cmd))
+    }
+
+    /// What `cmd` is called in a message the user reads (a read-only refusal,
+    /// a batch refusal): its undo-history label, with the lines, stations and
+    /// shots it addresses named as the open project holds them
+    /// (`history_names::describe`), never by a positional id. Takes the
+    /// project lock briefly; never call it holding that lock.
+    pub(super) fn command_label(&self, cmd: &crate::core::Command) -> String {
+        use crate::core::undo::history_names::{describe, referenced_lines, NameBook};
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let names = guard.as_ref().map_or_else(NameBook::default, |project| {
+            let mut lines = std::collections::HashSet::new();
+            referenced_lines(cmd, &mut lines);
+            NameBook::of(project, lines)
+        });
+        describe(cmd, &names)
+    }
+
     /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
     /// successful edit of a remote project (#191, D-B16; v10 last_edit_at). No-op
     /// for local-only (`load_speleo_link → None`). The dirty bit is SET-ONLY in

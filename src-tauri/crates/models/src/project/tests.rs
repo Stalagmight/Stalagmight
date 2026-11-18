@@ -10250,7 +10250,7 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     // Named by its stations, without the closure's internal id or `0:0`.
     assert!(
         closure_violations[0].message.starts_with(&format!(
-            "Loop closure Line {a} / 0 \u{2194} Line {b} / 2 is marked closed"
+            "Loop closure unnamed line / 0 \u{2194} unnamed line / 2 is marked closed"
         )),
         "{}",
         closure_violations[0].message

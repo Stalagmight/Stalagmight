@@ -111,7 +111,7 @@ impl AppState {
         self.with_project(|project| {
             // Validate line exists
             if !project.lines.iter().any(|s| s.id == line_id) {
-                return Err(format!("Line {line_id} not found"));
+                return Err(crate::models::LINE_GONE.to_string());
             }
 
             // Filter to existing lines (stale merges/closures may reference deleted lines)
@@ -150,7 +150,7 @@ impl AppState {
 
         // Validate line exists
         if !project.lines.iter().any(|s| s.id == line_id) {
-            return Err(format!("Line {line_id} not found"));
+            return Err(crate::models::LINE_GONE.to_string());
         }
 
         // Get all connected line IDs

@@ -476,7 +476,7 @@ impl Project {
     ) -> Result<Vec<(LoopClosure, LoopClosure)>, String> {
         let (kept_end, other_end) = (setup.kept_end, setup.other_end);
         if kept_end == other_end && !self.reverse_line(other, options.swap_lr) {
-            return Err(format!("Line {other} not found"));
+            return Err(crate::LINE_GONE.to_string());
         }
         // After the reverse the other line meets the kept one start to end.
         let append = kept_end == LineEnd::End;
@@ -519,7 +519,7 @@ impl Project {
         self.rebuild_line_index();
         let line = self
             .get_line_mut(kept)
-            .ok_or_else(|| format!("Line {kept} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         for data in other_shots.iter().cloned() {
             line.add_shot(data);
         }

@@ -3651,7 +3651,7 @@ fn test_update_line_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = line::update_line(state(&app), 99, LineUpdates::default());
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
@@ -3689,7 +3689,7 @@ fn test_delete_line_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = line::delete_line(state(&app), 22);
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
@@ -3801,7 +3801,7 @@ fn test_create_shot_fails_invalid_line() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::create_shot(state(&app), 99, shot_data(1.0), None, None);
-    assert_failure_contains(&result, "Line 99 not found");
+    assert_failure_contains(&result, "That line no longer exists.");
 }
 
 #[test]
@@ -3922,7 +3922,7 @@ fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::update_shot(state(&app), 0, 999, ShotUpdates::default());
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That shot no longer exists.");
 }
 
 #[test]
@@ -3960,7 +3960,7 @@ fn test_delete_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::delete_shot(state(&app), 0, 1);
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "no longer exists.");
 }
 
 #[test]
@@ -4018,7 +4018,7 @@ fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
-    assert_failure_contains(&result, "not found");
+    assert_failure_contains(&result, "That shot no longer exists.");
 }
 
 #[test]
@@ -6131,7 +6131,7 @@ fn test_get_segment_geometry_invalid_line_errors() {
     create_project(&app);
     let result = line::get_segment_geometry_impl(state(&app).inner(), 999);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().contains("That line no longer exists."));
 }
 
 #[test]

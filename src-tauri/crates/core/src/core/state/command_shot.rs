@@ -184,7 +184,7 @@ impl AppState {
         // Compute the real shot index for validation messages
         let shot_index = {
             let Some(line) = project.lines.iter().find(|s| s.id == line_id) else {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
 
             if line.shots.len() >= max_shots {
@@ -426,7 +426,7 @@ impl AppState {
             );
             CommandResult::success()
         } else {
-            CommandResult::failure(format!("Shot {line_id}:{shot_id} not found"))
+            CommandResult::failure(crate::models::SHOT_GONE.to_string())
         }
     }
 
@@ -605,7 +605,7 @@ impl AppState {
                 );
                 CommandResult::success()
             } else {
-                CommandResult::failure(format!("Shot {line_id}:{shot_id} not found"))
+                CommandResult::failure(crate::models::SHOT_GONE.to_string())
             }
         })
     }

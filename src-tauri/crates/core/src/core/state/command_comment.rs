@@ -13,10 +13,7 @@ impl AppState {
             let line = match project.get_line(station_ref.line_id) {
                 Some(s) => s,
                 None => {
-                    return CommandResult::failure(format!(
-                        "Line {} not found",
-                        station_ref.line_id
-                    ));
+                    return CommandResult::failure(crate::models::LINE_GONE.to_string());
                 }
             };
 
@@ -145,7 +142,7 @@ impl AppState {
                 // Validate station exists
                 let line = project
                     .get_line(station_ref.line_id)
-                    .ok_or_else(|| format!("Line {} not found", station_ref.line_id))?;
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
                 let max_station_index = line.shots.len() as u32;
                 if station_ref.station_index > max_station_index {
                     return Err(format!(
@@ -160,10 +157,10 @@ impl AppState {
             CommentHolder::Shot { line_id, shot_id } => {
                 let line = project
                     .get_line(*line_id)
-                    .ok_or_else(|| format!("Line {line_id} not found"))?;
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
                 let shot = line
                     .get_shot(*shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
                 Ok(shot.comment.clone())
             }
         }
@@ -194,12 +191,12 @@ impl AppState {
             CommentHolder::Shot { line_id, shot_id } => {
                 let line = project
                     .get_line_mut(*line_id)
-                    .ok_or_else(|| format!("Line {line_id} not found"))?;
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
                 let shot = line
                     .shots
                     .iter_mut()
                     .find(|s| s.id == *shot_id)
-                    .ok_or_else(|| format!("Shot {shot_id} not found in line {line_id}"))?;
+                    .ok_or_else(|| crate::models::SHOT_GONE.to_string())?;
                 match comment {
                     Some(text) if !text.is_empty() => {
                         shot.comment = Some(text);

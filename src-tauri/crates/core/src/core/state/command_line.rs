@@ -106,7 +106,7 @@ impl AppState {
                 );
                 CommandResult::success()
             } else {
-                CommandResult::failure(format!("Line {line_id} not found"))
+                CommandResult::failure(crate::models::LINE_GONE.to_string())
             }
         })
     }
@@ -124,7 +124,7 @@ impl AppState {
     pub(super) fn reverse_line(&self, line_id: LineId, swap_lr: bool) -> CommandResult {
         self.with_project_mut(|project| {
             if !project.reverse_line(line_id, swap_lr) {
-                return CommandResult::failure(format!("Line {line_id} not found"));
+                return CommandResult::failure(crate::models::LINE_GONE.to_string());
             }
             tracing::debug!(
                 line_id,
@@ -172,7 +172,7 @@ impl AppState {
                 );
                 CommandResult::success()
             } else {
-                CommandResult::failure(format!("Line {line_id} not found"))
+                CommandResult::failure(crate::models::LINE_GONE.to_string())
             }
         })
     }

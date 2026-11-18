@@ -944,7 +944,13 @@ impl Command {
         }
     }
 
-    /// Get a human-readable description of this command
+    /// A description of this command from its fields alone, for logs and as
+    /// the fallback of the history label. It can name lines, stations, shots
+    /// and closures by their internal handles (`line 3`, `1:0`, `#7`), so
+    /// text the user reads goes through `history_names::describe` (with the
+    /// names resolved against the project; `AppState::command_label` for a
+    /// refusal) instead, which falls back here only for commands whose
+    /// description holds no such handle.
     pub fn description(&self) -> String {
         match self {
             Command::CreateProject { name, .. } => format!("Create project '{name}'"),

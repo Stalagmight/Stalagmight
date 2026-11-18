@@ -34,7 +34,7 @@ impl Project {
     ) -> Result<(), String> {
         let line = self
             .get_line(line_id)
-            .ok_or_else(|| format!("Line {line_id} not found"))?;
+            .ok_or_else(|| crate::LINE_GONE.to_string())?;
         let n = line.shots.len();
         if start_pos > end_pos || end_pos >= n {
             return Err(format!(

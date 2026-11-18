@@ -20,7 +20,7 @@ fn resolve_targets(
         CreditTargets::Line { line_id } => {
             let line = project
                 .get_line(*line_id)
-                .ok_or_else(|| format!("Line {line_id} not found"))?;
+                .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
             Ok(line.shots.iter().map(|s| (*line_id, s.id)).collect())
         }
         CreditTargets::Shots { shots } => {
@@ -34,9 +34,9 @@ fn resolve_targets(
             for &(line_id, shot_id) in shots {
                 let line = project
                     .get_line(line_id)
-                    .ok_or_else(|| format!("Line {line_id} not found"))?;
+                    .ok_or_else(|| crate::models::LINE_GONE.to_string())?;
                 if line.get_shot(shot_id).is_none() {
-                    return Err(format!("Shot {shot_id} not found in line {line_id}"));
+                    return Err(crate::models::SHOT_GONE.to_string());
                 }
                 if seen.insert((line_id, shot_id)) {
                     out.push((line_id, shot_id));

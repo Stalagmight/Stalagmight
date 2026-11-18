@@ -339,6 +339,9 @@ pub fn describe(cmd: &Command, names: &NameBook) -> String {
                 format!("Move comment from {source} to {target}")
             }
         }
+        // A closure is addressed by its numeric id, which is no name.
+        Command::RemoveLoopClosure { .. } => "Remove loop closure".to_string(),
+        // Every other command's description holds no positional handle.
         _ => cmd.description(),
     }
 }

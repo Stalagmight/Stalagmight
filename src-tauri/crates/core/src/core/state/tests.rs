@@ -17937,7 +17937,10 @@ fn test_merge_projects_source_missing() {
         false,
     );
     assert!(!result.success);
-    assert!(result.error.unwrap_or_default().contains("not found"));
+    assert!(result
+        .error
+        .unwrap_or_default()
+        .contains("no longer exists"));
 }
 
 #[test]
@@ -19406,7 +19409,10 @@ fn a_batch_that_reverses_a_line_after_deleting_it_rolls_back() {
     });
 
     assert!(!result.success);
-    assert!(result.error.unwrap_or_default().contains("not found"));
+    assert!(result
+        .error
+        .unwrap_or_default()
+        .contains("no longer exists"));
     let after: Vec<_> = state
         .get_project_state()
         .unwrap()
@@ -25931,5 +25937,63 @@ fn undo_of_create_line_re_reads_the_live_shots_so_redo_keeps_uuids_on_their_own_
         unique.len(),
         uuids_after.len(),
         "the restored line holds a duplicate shot identity: {uuids_after:?}"
+    );
+}
+
+/// A read-only refusal names the command the way the history does - lines and
+/// stations by name - never by a positional id (`Update shot 3:0`, `Remove
+/// loop closure #7`), and a batch refusal likewise.
+#[test]
+fn a_read_only_refusal_names_the_command_without_positional_ids() {
+    let (state, sid, shid, _temp) = remote_fixture();
+    let line = state
+        .get_project_state()
+        .unwrap()
+        .get_line(sid)
+        .unwrap()
+        .name
+        .clone()
+        .unwrap();
+    let refusal = |cmd: Command| state.execute(cmd).error.unwrap_or_default();
+    let update = refusal(Command::UpdateShot {
+        line_id: sid,
+        shot_id: shid,
+        updates: ShotUpdates::default(),
+    });
+    assert!(
+        update.contains(&format!("Update shot in line \"{line}\" is disabled")),
+        "{update}"
+    );
+    let merge = refusal(Command::MergeStations {
+        station_a: StationRef::new(sid, 0),
+        station_b: StationRef::new(sid, 2),
+    });
+    assert!(
+        merge.contains(&format!(
+            "Merge stations {line} / 0 and {line} / 2 is disabled"
+        )),
+        "{merge}"
+    );
+    let closure = refusal(Command::RemoveLoopClosure { closure_id: 7 });
+    assert!(
+        closure.contains("Remove loop closure is disabled"),
+        "{closure}"
+    );
+    for text in [&update, &merge, &closure] {
+        assert!(!text.contains(&format!("{sid}:")), "{text}");
+        assert!(!text.contains('#'), "{text}");
+    }
+
+    // A batch refusal of a command it does not take names it the same way.
+    state.set_edit_enabled(true);
+    let batch = refusal(Command::Batch {
+        commands: vec![Command::SetStationComment {
+            station_ref: StationRef::new(sid, 1),
+            comment: Some("sump".to_string()),
+        }],
+    });
+    assert_eq!(
+        batch,
+        format!("Command 'Set comment on station {line} / 1' is not allowed in batch context")
     );
 }

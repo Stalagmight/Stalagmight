@@ -24,7 +24,7 @@ fn existing_lines(project: &Project, line_ids: &[LineId]) -> Result<Vec<LineId>,
     let mut out = Vec::with_capacity(line_ids.len());
     for id in line_ids {
         if project.get_line(*id).is_none() {
-            return Err(format!("Line {id} not found"));
+            return Err(crate::models::LINE_GONE.to_string());
         }
         if seen.insert(*id) {
             out.push(*id);
