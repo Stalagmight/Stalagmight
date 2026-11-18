@@ -409,16 +409,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createLine: (data: LineData, caveSectionId?: number | null) => Promise<CommandResult>;
-  /** Create a line and merge one of its stations onto `targetStation`, as ONE
-   *  undo step. `caveSectionId` puts the new line in that Section (#327) inside
-   *  the same step. */
-  createLineAndMerge: (
-    data: LineData,
-    importStationIndex: number,
-    targetStation: StationRef,
-    closureStrategy: ClosureStrategy,
-    caveSectionId?: number | null
-  ) => Promise<CommandResult>;
   updateLine: (lineId: LineId, updates: LineUpdates) => Promise<CommandResult>;
   deleteLine: (lineId: LineId) => Promise<CommandResult>;
   /**
@@ -1820,35 +1810,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       },
       {
         purpose: 'add line to project',
-        fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
-      }
-    );
-  },
-
-  createLineAndMerge: async (
-    data: LineData,
-    importStationIndex: number,
-    targetStation: StationRef,
-    closureStrategy: ClosureStrategy,
-    caveSectionId?: number | null
-  ) => {
-    return executeCommand(
-      'create_line_and_merge',
-      {
-        name: data.name,
-        surveyor: data.surveyor,
-        date: data.date,
-        color: data.color,
-        direction: data.direction,
-        quality: data.quality,
-        shots: data.shots,
-        importStationIndex,
-        targetStation,
-        closureStrategy,
-        caveSectionId: caveSectionId ?? null, // the New Line dialog's target Section (#327)
-      },
-      {
-        purpose: 'add line and merge stations',
         fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
       }
     );

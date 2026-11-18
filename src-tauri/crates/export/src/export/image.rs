@@ -48,6 +48,7 @@ use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
 use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
+use super::image_scope;
 use crate::models::{LineId, Project, StationRef};
 
 /// Output image format.
@@ -622,29 +623,12 @@ pub fn generate_svg_string_with_stations(
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<String> {
-    let hidden: HashSet<LineId> = options
-        .hidden_line_ids
-        .iter()
-        .flatten()
-        .copied()
-        .filter(|id| project.get_line(*id).is_some())
-        .collect();
-    if hidden.is_empty() {
-        return render_svg(project, None, options, stations);
+    // The hidden Sections' lines are left out (`image_scope`).
+    match image_scope::without_hidden_lines(project, options.hidden_line_ids.as_deref(), &stations)
+    {
+        None => render_svg(project, None, options, stations),
+        Some((drawn, shown)) => render_svg(&drawn, Some((project, &stations)), options, shown),
     }
-    // Draw from a copy without the hidden lines: every pass below walks
-    // `project.lines` and the stations, and a merge, closure or comment
-    // whose station is on a hidden line no longer resolves, so it is left
-    // out with its line. The whole survey still measures the distances.
-    let mut drawn = project.clone();
-    drawn.lines.retain(|line| !hidden.contains(&line.id));
-    drawn.rebuild_line_index();
-    let shown: Vec<crate::models::Station> = stations
-        .iter()
-        .filter(|s| !hidden.contains(&s.station_ref.line_id))
-        .cloned()
-        .collect();
-    render_svg(&drawn, Some((project, &stations)), options, shown)
 }
 
 /// [`generate_svg_string_with_stations`] for the lines it draws: `project`
@@ -653,7 +637,7 @@ pub fn generate_svg_string_with_stations(
 /// along (`None` = `project` is the whole survey).
 fn render_svg(
     project: &Project,
-    whole: Option<(&Project, &[crate::models::Station])>,
+    whole: image_scope::Whole<'_>,
     options: &ExportImageOptions,
     stations: Vec<crate::models::Station>,
 ) -> Result<String> {
@@ -1090,26 +1074,8 @@ fn render_svg(
     let depth_ramp = options.depth_ramp();
     let depth_scale = options.depth_scale.as_ref().map(ResolvedScale::new);
     let distance_scale = options.distance_scale.as_ref().map(ResolvedScale::new);
-    let dist_field = (mode == ColorMode::Distance).then(|| {
-        // The map colors the distance ramp from MEASURED distances (it draws
-        // adjusted geometry but deliberately computes the distance field from
-        // measured coords - see `AppState::distance_field`). Match that: distances
-        // key by station_ref, so this stays consistent with the adjusted geometry
-        // we draw. (It also skips the adjusted solve the map was designed to avoid.)
-        let measured = whole.map_or(project, |(whole, _)| whole);
-        let field = measured.distance_field_from_with(
-            &measured.compute_station_coordinates(),
-            None,
-            options.include_reference_legs,
-        );
-        let by_ref: HashMap<StationRef, Option<f64>> = field
-            .station_refs
-            .iter()
-            .copied()
-            .zip(field.distances.iter().copied())
-            .collect();
-        (by_ref, field.max_reachable)
-    });
+    let dist_field = (mode == ColorMode::Distance)
+        .then(|| image_scope::distance_field(project, whole, options.include_reference_legs));
     let _ = writeln!(
         svg,
         r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
@@ -1344,33 +1310,18 @@ fn render_svg(
     // halo for readability and dodge collisions by trying eight placement
     // offsets before giving up. A datum on a hidden line still measures the
     // drawn ones.
-    let has_datum = !zero_datum_indices.is_empty()
-        || whole.is_some_and(|(_, all)| all.iter().any(|s| s.is_zero_datum));
+    let has_datum = image_scope::has_datum(!zero_datum_indices.is_empty(), whole);
     if options.show_penetration_labels && has_datum {
         // Use the project's shared along-cave penetration computation -
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        // Along the whole survey, hidden lines included: hiding a Section
-        // does not make the cave beyond it any closer.
-        let pen_dist: Vec<f64> = match whole {
-            None => project
-                .compute_penetration_distances_with(&stations, options.include_reference_legs),
-            Some((whole, all)) => {
-                let by_ref: HashMap<StationRef, f64> =
-                    all.iter()
-                        .map(|s| s.station_ref)
-                        .zip(whole.compute_penetration_distances_with(
-                            all,
-                            options.include_reference_legs,
-                        ))
-                        .collect();
-                stations
-                    .iter()
-                    .map(|s| by_ref.get(&s.station_ref).copied().unwrap_or(f64::INFINITY))
-                    .collect()
-            }
-        };
+        let pen_dist = image_scope::penetration_distances(
+            project,
+            whole,
+            &stations,
+            options.include_reference_legs,
+        );
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.

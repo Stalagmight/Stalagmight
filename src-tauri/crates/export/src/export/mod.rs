@@ -4,6 +4,7 @@ pub mod csv;
 mod depth_colors;
 pub mod dive_profile;
 pub mod image;
+mod image_scope;
 pub mod json;
 pub mod tml;
 mod tml_azimuth;
