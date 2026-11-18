@@ -812,7 +812,7 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
             .collect();
         let mut planted = 0;
         if snaps {
-            for _ in 0..(1 + next(2)) {
+            for _ in 0..=next(2) {
                 let x = stations[next(stations.len() as u64) as usize];
                 let y = stations[next(stations.len() as u64) as usize];
                 let (Some(a), Some(b)) = (
