@@ -2888,6 +2888,7 @@
       "color": "Change section color",
       "expand": "Expand {{name}}",
       "hide": "Hide this section on the map",
+      "hideToggle": "Hide {{name}} on the map",
       "new": "New Section",
       "renameLabel": "Section name",
       "show": "Show this section on the map"
@@ -2936,7 +2937,8 @@
     },
     "stats_one": "{{lines}} line · {{length}}",
     "stats_other": "{{lines}} lines · {{length}}",
-    "ungrouped": "Ungrouped"
+    "ungrouped": "Ungrouped",
+    "ungroupedHint": "The lines in no section. Drag a line here to take it out of its section."
   },
   "shotTable": {
     "actions": {

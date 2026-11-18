@@ -525,7 +525,7 @@ export const GroupHeaderRow = memo(function GroupHeaderRow({
       data-drop-group={dropGroupAttr(row.group)}
       data-drop-target={isDropTarget ? 'true' : undefined}
       data-hidden-on-map={row.hidden ? 'true' : undefined}
-      title={t('caveSections.headerHint')}
+      title={t(section ? 'caveSections.headerHint' : 'caveSections.ungroupedHint')}
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualStart}px)` }}
       className={`pl-1 pr-2 py-1.5 ${index > 0 ? 'border-t border-border' : ''} cursor-pointer group outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
         isDropTarget ? 'bg-accent-20 ring-2 ring-accent ring-inset' : (isFocused ? 'bg-background-50' : 'hover:bg-accent-10')
@@ -611,7 +611,8 @@ export const GroupHeaderRow = memo(function GroupHeaderRow({
             size="sm"
             variant="ghost"
             tooltip={t(row.hidden ? 'caveSections.actions.show' : 'caveSections.actions.hide')}
-            aria-label={t(row.hidden ? 'caveSections.actions.show' : 'caveSections.actions.hide')}
+            // A toggle: one name, its state in aria-pressed (pressed = hidden).
+            aria-label={t('caveSections.actions.hideToggle', { name: section.name })}
             aria-pressed={row.hidden}
             className={row.hidden ? 'text-text-secondary' : 'text-text-secondary opacity-60 group-hover:opacity-100 hover:text-accent'}
             tabIndex={-1}
@@ -666,7 +667,7 @@ function RenameField({
         aria-label={t('caveSections.actions.renameLabel')}
         aria-invalid={error !== null}
         aria-describedby={error ? errorId : undefined}
-        className={`w-full text-sm px-1 py-0.5 bg-panel border rounded focus:outline-none focus:ring-1 focus:ring-accent ${
+        className={`w-full select-text text-sm px-1 py-0.5 bg-panel border rounded focus:outline-none focus:ring-1 focus:ring-accent ${
           error ? 'border-error' : 'border-border'
         }`}
         onKeyDown={(e) => {
