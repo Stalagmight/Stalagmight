@@ -102,10 +102,17 @@ fn likeness(was: &DatumWas, now: &DatumWas) -> Option<usize> {
     Some(2 * tier + usize::from(!same_value))
 }
 
-/// Pairs of each rank in an alignment, strongest rank first: compared
-/// lexicographically, so one more pair of a stronger rank outweighs any
-/// number of weaker ones.
-type Score = [u32; RANKS];
+/// An alignment's pairs, then its pairs of each rank, strongest rank first:
+/// compared lexicographically.
+///
+/// The count comes first. A command edits, removes or appends a datum or
+/// two, so the alignment that keeps the most datums is the likeliest story,
+/// however alike a crossing pair looks: a new GPS on the frame datum copied
+/// from a fix on its spot, accuracy and all, makes the frame look like that
+/// fix re-keyed where it stands, and pairing them would drop every datum in
+/// between. Among alignments that keep as many, one more pair of a stronger
+/// rank outweighs any number of weaker ones.
+type Score = [u32; RANKS + 1];
 
 /// What an alignment does with an earlier datum and a current one.
 #[derive(Clone, Copy)]
@@ -119,9 +126,9 @@ enum Step {
 }
 
 /// The best order-preserving pairing of `before` earlier datums with `after`
-/// current ones, `rank(i, j)` being [`likeness`]: the most pairs of rank 0,
-/// then of rank 1, and so on. Returns, for each current datum, the earlier
-/// datum it is, or `None` for a new one.
+/// current ones, `rank(i, j)` being [`likeness`]: the most pairs, then the
+/// most of rank 0, then of rank 1, and so on ([`Score`]). Returns, for each
+/// current datum, the earlier datum it is, or `None` for a new one.
 ///
 /// On a tie it pairs rather than drop, and drops rather than add: a command
 /// appends a new datum at the end of the list, so a current datum is left
@@ -136,7 +143,7 @@ pub(super) fn align(
     let mut steps = vec![Step::Added; before * after];
     // `next[j]` is the best score of earlier datums `i + 1..` against current
     // ones `j..`, and `row[j]` that of `i..`: the suffixes, from the end.
-    let mut next: Vec<Score> = vec![[0; RANKS]; after + 1];
+    let mut next: Vec<Score> = vec![[0; RANKS + 1]; after + 1];
     let mut row = next.clone();
     for i in (0..before).rev() {
         for j in (0..after).rev() {
@@ -144,7 +151,9 @@ pub(super) fn align(
             if let Some(r) = rank(i, j) {
                 debug_assert!(r < RANKS, "likeness rank {r} is past RANKS");
                 let mut paired = next[j + 1];
-                if let Some(count) = paired.get_mut(r) {
+                let [pairs, ranks @ ..] = &mut paired;
+                *pairs += 1;
+                if let Some(count) = ranks.get_mut(r) {
                     *count += 1;
                 }
                 if paired >= best.0 {

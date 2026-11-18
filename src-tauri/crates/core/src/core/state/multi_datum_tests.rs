@@ -1125,6 +1125,66 @@ fn a_new_frame_gps_re_places_the_other_piece_and_undo_restores_it() {
 }
 
 #[test]
+fn a_frame_gps_copied_from_a_fix_on_its_spot_moves_every_piece_once() {
+    // A is the frame on the first entrance. P is a piece of its own, placed
+    // at P:0 by a copy of the frame's GPS, so P:0 sits on the origin as well,
+    // and Q hangs off P:0 with a fix 30 m east of the survey: on the origin
+    // too. The frame then takes the fix's GPS, with no accuracy typed on
+    // either, so the frame datum looks like Q's fix re-keyed where it
+    // stands. The frame correction alone moves P and Q 30 m west.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "FrameCopiesAFix".to_string(),
+        location: None,
+    });
+    let a = create_section(&state, "A", north_shots(2, 20.0));
+    set_datum(&state, StationRef::new(a, 0), origin(), None);
+    let p = create_section(&state, "P", north_shots(2, 20.0));
+    set_datum(&state, StationRef::new(p, 0), origin(), None);
+    let q = create_section(&state, "Q", north_shots(2, 20.0));
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(p, 0),
+        station_b: StationRef::new(q, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let fix = gps_at(30.0, 0.0);
+    set_datum(&state, StationRef::new(q, 0), fix, None);
+    let before = project(&state);
+    assert_eq!(
+        before.datum_roles(),
+        vec![
+            Some(DatumRole::Placement),
+            Some(DatumRole::Placement),
+            Some(DatumRole::GpsFix)
+        ]
+    );
+    assert_near(
+        xy_of(&before, StationRef::new(q, 0)),
+        (0.0, 0.0),
+        1e-9,
+        "Q:0 on the origin",
+    );
+
+    set_datum(&state, StationRef::new(a, 0), fix, None);
+
+    let after = project(&state);
+    assert_near(
+        xy_of(&after, StationRef::new(a, 0)),
+        (0.0, 0.0),
+        1e-9,
+        "the frame stays on the origin",
+    );
+    assert_near(
+        xy_of(&after, StationRef::new(p, 0)),
+        gps_to_local(&origin(), &fix),
+        1e-6,
+        "P:0 on its own GPS in the new frame, moved once",
+    );
+    assert_placements_on_their_gps(&state, "frame GPS copied from a fix");
+    assert_undo_redo_round_trip(&state, &before);
+}
+
+#[test]
 fn an_entrance_only_edit_of_the_frame_moves_nothing() {
     let (state, a, _b, c) = frame_fix_and_separate_piece();
     // C left 30 m off its GPS, as an older file can.

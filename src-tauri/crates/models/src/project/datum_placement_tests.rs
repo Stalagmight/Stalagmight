@@ -40,7 +40,7 @@ fn twins_pair_in_list_order_even_when_a_crossing_pair_shares_a_key() {
     // combine gives F P's key and moves it (P-F': key and GPS, rank 4) and
     // re-keys P where it stands (P-P': GPS and position, rank 2). F-F' and
     // F-P' share only the GPS (rank 6). The pairs cannot cross, and F-F' +
-    // P-P' beats P-F' alone by its rank 2 pair.
+    // P-P' keeps both datums where P-F' keeps one.
     assert_eq!(
         aligned(&[&[Some(6), Some(6)], &[Some(4), Some(2)]]),
         vec![Some(0), Some(1)]
@@ -48,11 +48,30 @@ fn twins_pair_in_list_order_even_when_a_crossing_pair_shares_a_key() {
 }
 
 #[test]
-fn one_stronger_pair_outweighs_any_number_of_weaker_ones() {
-    // A is untouched as Y (rank 0); A-X and B-Y share only a GPS (rank 7).
+fn keeping_more_datums_outweighs_a_stronger_crossing_pair() {
+    // The frame F, and a fix X on its spot, on a piece of its own. F gets a
+    // new GPS copied from X, accuracy and all, and the frame correction moves
+    // X's piece: F-F' is its GPS edited (rank 8), X-X' moved (rank 4), and
+    // X-F' looks like X re-keyed where it stands (rank 2). X-F' alone would
+    // drop F and leave X' new.
     assert_eq!(
-        aligned(&[&[Some(7), Some(0)], &[None, Some(7)]]),
-        vec![None, Some(0)]
+        aligned(&[&[Some(8), None], &[Some(2), Some(4)]]),
+        vec![Some(0), Some(1)]
+    );
+}
+
+#[test]
+fn among_as_many_pairs_one_stronger_pair_outweighs_any_number_of_weaker_ones() {
+    // Three pairs either way: A-X, B-Y, C-Z all GPS-only (rank 6), or B-X
+    // untouched (rank 0) with C-Y and D-Z GPS-only of another value (rank 7).
+    assert_eq!(
+        aligned(&[
+            &[Some(6), None, None],
+            &[Some(0), Some(6), None],
+            &[None, Some(7), Some(6)],
+            &[None, None, Some(7)],
+        ]),
+        vec![Some(1), Some(2), Some(3)]
     );
 }
 
