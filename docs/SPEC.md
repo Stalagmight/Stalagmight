@@ -844,22 +844,30 @@ Primary view for survey work.
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, lines).
 
-**UI Display ID Format:**
-Detail Panel display IDs (distinct from internal data model IDs) use the format `lineId:position` where station position is 0-indexed:
-- Station position = `station_index`
-- Shot position = `shot array index + 1`
-- Line links show `Line <lineId> - <lineName>` (or `Line <lineId> - Unnamed line` if no name); at the default `full` syntactic-highlighting level the link renders as a pill instead: entity symbol, line name, then the line id
+**Display labels (names, never ids):**
+The Detail Panel names elements the way the rest of the UI does (4.1/4.2); the
+positional `StationRef`, shot ids and line ids address them internally (and key
+the test ids) but are never shown:
+- Station: its name, `17`; with line context `Main Line / 17` (merged and
+  closure partners, which may be on another line). The Station detail also
+  shows the read-only **Station ID**.
+- Shot: its two station names, `4 → 5`; with line context `Main Line: 4 → 5`
+  (aria-labels and selection announcements always carry the line).
+- Line: its name (`Unnamed line` only for a line that somehow has none).
+- At the default `full` syntactic-highlighting level a link renders as a pill:
+  entity symbol, the label, then (for a station or shot on another line) the
+  line name dimmed after a divider.
 
 **Shot Detail - Connected Line:**
 ```
 ┌─ Shot ─────────────────────────────────────────────┐
-│  ID: 2:3                                           │
+│  Shot: 2 → 3                                       │
 │  Length: 4.5m  Azimuth: 127.3 deg  Depth: 8.2m    │
 │                                                    │
 │  ┌─ Connected ───────────────────────────────────┐ │
-│  │  Start Station: 2:2 (link)                    │ │
-│  │  End Station: 2:3 (link)                      │ │
-│  │  Line: 2: Main Line (link)                    │ │
+│  │  Start Station: 2 (link)                      │ │
+│  │  End Station: 3 (link)                        │ │
+│  │  Line: Main Line (link)                       │ │
 │  └───────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────┘
 ```
@@ -867,20 +875,21 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 **Station Detail - Connected Line:**
 ```
 ┌─ Station ──────────────────────────────────────────┐
-│  ID: 2:5                                           │
+│  Name: 5   Station ID: 812                         │
 │  Depth: 12.3m  Line: Main Line                     │
 │                                                    │
 │  ┌─ Loop Closures (collapsible, default expanded) ┐│
-│  │  Closure to 1:3 (link), 1:4 (link)            ││
+│  │  Closure to Side / 3 (link), Side / 4 (link)  ││
 │  │  Path: 15.2m | Error: 0.30m (1.97%)           ││
-│  │  Transitive closure to 3:0 (link) (via 1:3)   ││
+│  │  Transitive closure to Upper / 0 (link)       ││
+│  │    (via Side / 3)                             ││
 │  │  Path: 42.1m | Error: 0.85m (2.02%)           ││
 │  └────────────────────────────────────────────────┘│
 │                                                    │
 │  ┌─ Connected ───────────────────────────────────┐ │
-│  │  Previous Shot: 2:5 (link)                    │ │
-│  │  Next Shot: 2:6 (link)                        │ │
-│  │  Line: 2: Main Line (link)                    │ │
+│  │  Previous Shot: 4 → 5 (link)                  │ │
+│  │  Next Shot: 5 → 6 (link)                      │ │
+│  │  Line: Main Line (link)                       │ │
 │  └───────────────────────────────────────────────┘ │
 │                                                    │
 │  (Previous/Next hidden at line boundaries)         │
@@ -906,8 +915,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  Length: 127.4m  Shots: 42                         │
 │                                                    │
 │  ┌─ Endpoints ───────────────────────────────────┐ │
-│  │  First Station: 2:0 (link)                    │ │
-│  │  Last Station: 2:42 (link)                    │ │
+│  │  First Station: 0 (link)                      │ │
+│  │  Last Station: 42 (link)                      │ │
 │  └───────────────────────────────────────────────┘ │
 │  (Single station lines show only "Station:")       │
 └────────────────────────────────────────────────────┘
@@ -922,8 +931,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 
 **Shot-to-Station Mapping:**
 Shot at array index `i` (0-indexed) connects:
-- Start station: `station_index = i` (display position = `i`)
-- End station: `station_index = i + 1` (display position = `i + 1`)
+- Start station: `station_index = i` (shown by its name)
+- End station: `station_index = i + 1` (shown by its name)
 
 Station at `station_index` has:
 - Previous shot: `line.shots[station_index - 1]` (hidden when `station_index === 0`)
@@ -1118,9 +1127,11 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Stations (dots)
 - Line names (labels)
 - Station IDs or Station names (labels; one or the other, never both). Station
-  IDs label every station with its index. Station names label each named
-  station with its name (e.g. its MNemo station number) and leave unnamed
-  stations unlabelled; the pill is disabled while the project has no names.
+  IDs label every station with its project-unique Station ID
+  (`SurveyData.stationIds`), never its position. Station names label every
+  station with its name (unique within its line, e.g. its MNemo station
+  number); a name that is empty once control characters are stripped draws no
+  label.
 - Station comments, shot comments
 - Shot data (azimuth, length, depth)
 - Errors: one label per shot with how far its readings disagree (Δaz azimuth in
@@ -1679,8 +1690,10 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
    shot?" and is deleted without splitting; a mid-line shot opens the Delete
    Shot dialog offering [Split Line] or [Shift Geometry]; the last remaining
    shot removes the whole line
-3. On Split Line, the line splits into two, named "<line>-A" and
-   "<line>-B" by default (both editable)
+3. On Split Line, the line splits into two, named "<line> A" and
+   "<line> B" by default, each made unique against the other lines (both
+   editable; an empty name, another line's name or the two names equal is
+   refused inline and disables the button)
 4. A delete with shift (a single shot's Shift Geometry, or a range of shots with
    shift) that leaves a loop closure spanning a single shot - e.g. closure A:1-A:4
    after shots 1..2 are gap-closed - removes that closure with the delete. The
@@ -1799,7 +1812,8 @@ explorers and date). The two copies are NOT
 merged. Merges on the split station, its name and its manual offset go to both
 copies; its loop closures stay on the first half; the dialog picks the half for
 its comment (A, B or both) and its zero datum (A or B). Names default to
-`<name>-A` / `<name>-B`, each half has a colour picker: A keeps the line's
+`<name> A` / `<name> B` made unique (` (2)`, ...; line names are required and
+project-unique, 4.1), each half has a colour picker: A keeps the line's
 colour, B defaults to the colour a new line gets (the next palette colour no
 line uses, never A's). The dialog notes that the halves are not connected
 (merge the two cut stations for routes and gas planning to continue across

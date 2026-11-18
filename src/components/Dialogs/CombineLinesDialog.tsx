@@ -252,7 +252,7 @@ export default function CombineLinesDialog() {
 
         <div className="flex items-center justify-between gap-2 text-sm">
           <span data-testid="combine-kept-label">
-            Keep <strong>{keptName}</strong> (its id, shot numbers and direction)
+            Keep <strong>{keptName}</strong> (the combined line continues it, in its direction)
           </span>
           <Button onClick={() => setKeepB((v) => !v)} disabled={isSubmitting || isStale} data-testid="combine-swap-kept">
             Keep {otherName} instead

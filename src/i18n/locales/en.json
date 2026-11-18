@@ -2842,7 +2842,7 @@
     },
     "help": {
       "quality": "Higher values apply more closure adjustment to this line.",
-      "reverse": "Numbers the line from the other end; the cave does not move. Left/right measurements are kept as recorded."
+      "reverse": "Runs the line from the other end; the cave does not move and every station keeps its name. Left/right measurements are kept as recorded."
     },
     "labels": {
       "color": "Color",

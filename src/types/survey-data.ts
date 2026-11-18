@@ -319,11 +319,12 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
 const showableNamesCache = new WeakMap<Map<number, string>, boolean>();
 
 /**
- * Whether any station has a name that would be drawn as a label (e.g. the MNemo
- * station numbers a DMP import records): non-empty once control and bidi
- * characters are stripped and it is trimmed - the rule the map label and the
- * image export apply. The Display menu and the export offer the "Station names"
- * labels only when this holds, because otherwise they would label nothing.
+ * Whether any station has a name that would be drawn as a label: non-empty
+ * once control and bidi characters are stripped and it is trimmed - the rule
+ * the map label and the image export apply. Every station of a loaded project
+ * has a name (SPEC 4.1), so this holds for any project with stations; the
+ * Display menu and the export still offer the "Station names" labels only when
+ * it does, because otherwise they would label nothing (an empty project).
  */
 export function hasStationNames(data: Pick<SurveyData, 'stationNames'> | null | undefined): boolean {
   const names = data?.stationNames;
