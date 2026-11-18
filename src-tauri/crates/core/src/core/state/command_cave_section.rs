@@ -190,16 +190,51 @@ impl AppState {
                 None => return CommandResult::failure("No project open".to_string()),
             }
         }
+        between_section_locks(self);
         let result = self.create_line(data);
         if let (true, Some(section_id), Some(line_id)) = (result.success, section, result.line_id) {
             let mut guard = self
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Re-checked under this lock: `command_lock` serializes commands,
+            // undo and redo, but a project load does not take it, so the
+            // project (and its Sections) may have changed since the check
+            // above; a line whose Section is gone stays ungrouped.
             if let Some(project) = guard.as_mut() {
-                project.set_line_section(line_id, Some(section_id));
+                if project.section(section_id).is_some() {
+                    project.set_line_section(line_id, Some(section_id));
+                }
             }
         }
         result
     }
+}
+
+/// A no-op outside tests.
+#[cfg(not(test))]
+fn between_section_locks(_state: &AppState) {}
+
+/// Test-only: run the hook a test installed with
+/// [`set_between_section_locks_hook`], once, in the window where
+/// `create_line_command` holds no `project` lock. Per thread, so it reaches no
+/// other test.
+#[cfg(test)]
+fn between_section_locks(state: &AppState) {
+    if let Some(hook) = BETWEEN_SECTION_LOCKS.with(|slot| slot.borrow_mut().take()) {
+        hook(state);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_SECTION_LOCKS: std::cell::RefCell<Option<Box<dyn FnOnce(&AppState)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: run `hook` between the next `create_line_command`'s Section
+/// check and its line's creation, on this thread.
+#[cfg(test)]
+pub(super) fn set_between_section_locks_hook(hook: impl FnOnce(&AppState) + 'static) {
+    BETWEEN_SECTION_LOCKS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }

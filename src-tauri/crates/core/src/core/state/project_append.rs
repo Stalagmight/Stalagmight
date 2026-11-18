@@ -263,12 +263,11 @@ fn carry_shot_identity(
 /// line keeps its membership through the remap. A Section with no copied
 /// line is appended too: it is part of the source's survey.
 fn copy_sections(target: &mut Project, source: &Project, line_id_map: &HashMap<LineId, LineId>) {
-    let mut section_map: HashMap<SectionId, SectionId> = HashMap::new();
-    for section in &source.sections {
-        let name = target.unique_section_name(&section.name);
-        let id = target.add_section(name, section.color.clone());
-        section_map.insert(section.id, id);
-    }
+    // One batch: names deduped and ids allocated in a single pass, where a
+    // loop of `add_section` rescans the target's Sections per copy.
+    let copied = target.append_sections(&source.sections);
+    let section_map: HashMap<SectionId, SectionId> =
+        source.sections.iter().map(|s| s.id).zip(copied).collect();
     for line in &source.lines {
         let (Some(&copied), Some(section)) = (line_id_map.get(&line.id), line.section_id) else {
             continue;

@@ -518,6 +518,34 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
     assert_eq!(section_of(&state, plain), None);
 }
 
+/// `create_line_command` checks the Section, then creates the line with no
+/// `project` lock held. Commands are serialized, but a project load does not
+/// take `command_lock`: when the Section is gone by the time the line exists
+/// (a load committed a project without it), the line stays ungrouped rather
+/// than naming a Section the project does not hold.
+#[test]
+fn a_section_gone_before_the_line_exists_leaves_the_line_ungrouped() {
+    let state = new_state();
+    let id = create_section(&state, "Upper level", &[]);
+    super::command_cave_section::set_between_section_locks_hook(move |state| {
+        let mut guard = state.project.lock().unwrap();
+        guard.as_mut().unwrap().remove_section(id);
+    });
+    let line = ok(state.execute(Command::CreateLine {
+        name: Some("New".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#123456".to_string(),
+        direction: None,
+        shots: vec![shot(10.0, 4.0)],
+        cave_section_id: Some(id),
+    }))
+    .line_id
+    .unwrap();
+    assert!(project(&state).section(id).is_none());
+    assert_eq!(section_of(&state, line), None);
+}
+
 /// A New Line placed by snapping onto a station goes in its Section inside
 /// the create-and-merge step: ONE undo removes the line, its merge and its
 /// membership; one redo brings all three back.
