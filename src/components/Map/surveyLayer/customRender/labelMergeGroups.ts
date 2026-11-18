@@ -7,8 +7,8 @@
  * main line; the main line's station is the junction's name), then one that
  * is not its line's last station, ties broken by the line's order in the
  * project and then by station index. A station that is not merged is its own
- * representative. The image export (`image.rs`, Pass 4a) picks by the same
- * rule; keep the two in step.
+ * representative. The image export picks by the same rule
+ * (`point_representatives` in `image_labels.rs`); keep the two in step.
  *
  * A merge group is a station plus its `stationMergedWith` refs (transitive, so
  * every member lists the whole group). A member on a line the SoA leaves out
