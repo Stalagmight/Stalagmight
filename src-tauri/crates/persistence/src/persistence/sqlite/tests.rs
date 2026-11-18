@@ -9140,3 +9140,110 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
     }
     assert_eq!(stored(new_line), fallback, "a new line has no stored time");
 }
+
+/// What `parse_from_rfc3339` accepts but `to_rfc3339` cannot write back
+/// as RFC 3339: an offset that moves year 0000 or 9999 past the range once in
+/// UTC, and a leap second.
+fn out_of_range_times() -> [chrono::DateTime<Utc>; 3] {
+    [
+        "0000-01-01T00:00:00+23:59",
+        "9999-12-31T23:59:59-23:59",
+        "2016-12-31T23:59:60Z",
+    ]
+    .map(|text| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Utc)
+    })
+}
+
+#[test]
+fn every_saved_time_is_rfc3339_that_parses_again() {
+    let [before, after, leap] = out_of_range_times();
+    assert_eq!(write::stored_time(before), "0000-01-01T00:00:00+00:00");
+    assert_eq!(
+        write::stored_time(after),
+        "9999-12-31T23:59:59.999999999+00:00"
+    );
+    assert_eq!(
+        write::stored_time(leap),
+        "2016-12-31T23:59:59.999999999+00:00"
+    );
+    let ordinary = chrono::DateTime::parse_from_rfc3339("2024-03-05T10:20:30.123456789+00:00")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(
+        write::stored_time(ordinary),
+        "2024-03-05T10:20:30.123456789+00:00"
+    );
+}
+
+/// A file whose project times are RFC 3339 that this build parses, but past
+/// years 0000-9999 once in UTC, opened (it always did) and then saved as
+/// `-0001-...` / `+10000-...`, which the strict read refuses: the file never
+/// opened again. The save clamps them, so it reopens; a station merge time
+/// read from the file, or held in memory, is saved the same way.
+#[test]
+fn a_project_with_out_of_range_times_still_opens_after_a_save() {
+    let dir = TempDir::new().unwrap();
+    let mut project = Project::new("Far times".to_string(), None);
+    for name in ["A", "B"] {
+        project.add_line(LineData {
+            name: Some(name.to_string()),
+            shots: vec![ShotData {
+                length: 4.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    let (a, b) = (project.lines[0].id, project.lines[1].id);
+    let [before, after, leap] = out_of_range_times();
+    project.station_merges.push(StationMerge {
+        station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
+        station_b: project.key_for_ref(StationRef::new(b, 0)).unwrap(),
+        merged_at: leap,
+    });
+    let written = dir.path().join("written.stalx");
+    Database::open(&written)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    Database::open_existing(&written)
+        .unwrap()
+        .conn
+        .execute(
+            "UPDATE project SET created_at = '0000-01-01T00:00:00+23:59', \
+             modified_at = '9999-12-31T23:59:59-23:59'",
+            [],
+        )
+        .unwrap();
+
+    let opened = Database::open_existing(&written)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!((opened.created_at, opened.modified_at), (before, after));
+    let resaved = dir.path().join("resaved.stalx");
+    Database::open(&resaved)
+        .unwrap()
+        .save_project(&opened)
+        .unwrap();
+
+    let reopened = Database::open_existing(&resaved)
+        .unwrap()
+        .load_project()
+        .expect("a saved file must open again");
+    assert_eq!(
+        reopened.created_at.to_rfc3339(),
+        "0000-01-01T00:00:00+00:00"
+    );
+    assert_eq!(
+        reopened.modified_at.to_rfc3339(),
+        "9999-12-31T23:59:59.999999999+00:00"
+    );
+    assert_eq!(
+        reopened.station_merges[0].merged_at.to_rfc3339(),
+        "2016-12-31T23:59:59.999999999+00:00"
+    );
+}

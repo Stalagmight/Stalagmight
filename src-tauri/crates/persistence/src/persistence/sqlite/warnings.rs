@@ -308,7 +308,7 @@ impl Database {
                 warning.line_id,
                 warning.shot_id,
                 warning.warning_code,
-                warning.resolved_at.to_rfc3339(),
+                super::write::stored_time(warning.resolved_at),
                 warning.resolved_comment,
                 warning.shot_uuid,
             ],
@@ -491,7 +491,7 @@ impl Database {
                     warning.line_id,
                     warning.shot_id,
                     warning.warning_code,
-                    warning.resolved_at.to_rfc3339(),
+                    super::write::stored_time(warning.resolved_at),
                     warning.resolved_comment,
                     warning.shot_uuid,
                 ])?;
