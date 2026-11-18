@@ -564,6 +564,7 @@ mod settings;
 mod shot_credits;
 mod station_ids;
 mod station_texts;
+mod stored_times;
 mod undo;
 mod warnings;
 mod write;

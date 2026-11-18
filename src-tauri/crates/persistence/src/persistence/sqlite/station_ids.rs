@@ -6,8 +6,8 @@
 //! station as the primary key, like `station_names`; the allocation counter
 //! (`Project::next_station_id`) is the `project_settings` row
 //! `next_station_id`. Both arrived WITHOUT a schema bump, for the reason
-//! `station_texts` gives: SpeleoDB's Python reader accepts exactly v18 and
-//! reads only the tables it knows (`project_settings` by key), so a new table
+//! `station_texts` gives: SpeleoDB's Python reader pins the schema version
+//! (exactly 18 before its 0.0.2) and reads only the tables it knows (`project_settings` by key), so a new table
 //! and a new key are invisible to it. Plain DDL (no CHECK, no partial or
 //! expression index, no DEFAULT expression) so the schema guard admits it.
 //!

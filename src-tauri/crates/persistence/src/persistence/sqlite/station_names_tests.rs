@@ -196,9 +196,10 @@ pub(super) fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>
 /// The SpeleoDB contract. OpenSpeleo's Python package `stalagmight_lib` (which
 /// SpeleoDB uses, through `openspeleo_lib`, to turn an uploaded `.stalx` into a
 /// map; not this repo's Rust crate of the same name) reads these tables by
-/// explicit column lists and refuses any file whose `PRAGMA user_version` or
-/// `project.schema_version` is not exactly 18 - see `station_texts` for the
-/// version of it this was verified against. Station names must therefore
+/// explicit column lists and, before its 0.0.2, refuses any file whose
+/// `PRAGMA user_version` or `project.schema_version` is not exactly 18 (0.0.2
+/// also takes 19) - see `station_texts` for the versions this was verified
+/// against. Station names must therefore
 /// live only in their own table: the same project saved with and without names
 /// must produce identical rows everywhere that reader looks, at version 18.
 ///
@@ -208,7 +209,7 @@ pub(super) fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>
 fn names_leave_every_table_an_outside_reader_reads_unchanged() {
     assert_eq!(
         SCHEMA_VERSION, 18,
-        "SpeleoDB's Python stalagmight_lib accepts exactly v18; see this test's doc comment"
+        "SpeleoDB's Python stalagmight_lib before 0.0.2 accepts exactly v18; see this test's doc comment"
     );
 
     let dir = TempDir::new().unwrap();

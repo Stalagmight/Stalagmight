@@ -41,9 +41,8 @@ impl Database {
             .context("Failed to read project metadata header")?;
         let t_header = start.elapsed();
 
-        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at_raw)
-            .context("Failed to parse modified_at")?
-            .with_timezone(&Utc);
+        let modified_at = super::stored_times::parse_stored(&modified_at_raw)
+            .context("Failed to parse modified_at")?;
 
         // Aggregate-only queries.
         let line_count: i64 = self
@@ -256,8 +255,10 @@ impl Database {
             (n, l, c, m, None)
         };
 
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
-        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
+        // Normalized on the way in, so the value in memory is the one the
+        // next save writes (`stored_times`).
+        let created_at = super::stored_times::parse_stored(&created_at)?;
+        let modified_at = super::stored_times::parse_stored(&modified_at)?;
 
         // Load lines
         let mut lines: Vec<Line> = Vec::new();
@@ -309,6 +310,17 @@ impl Database {
                 .map(|c| c > 0)
                 .unwrap_or(false);
 
+            // Every schema has `created_at`, but a file of another tool may
+            // not: absent reads as NULL, and the save writes the fallback.
+            let has_created_at_column: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='created_at'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .is_ok_and(|c| c > 0);
+
             let quality_expr = if has_quality_column { "quality" } else { "1.0" };
             let parity_expr = if has_reverse_parity_column {
                 "reverse_parity"
@@ -324,6 +336,11 @@ impl Database {
                 "azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year"
             } else {
                 "NULL, NULL, NULL, NULL"
+            };
+            let created_at_expr = if has_created_at_column {
+                "created_at"
+            } else {
+                "NULL"
             };
             // #557: refuse BEFORE materializing. `ORDER BY id` puts over-bound
             // rows last, so the per-row check below would allocate the whole
@@ -345,7 +362,8 @@ impl Database {
 
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
-                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
+                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs}, {created_at_expr} \
+                 FROM sections ORDER BY id"
             ))?;
 
             let mut line_rows = Vec::new();
@@ -365,6 +383,9 @@ impl Database {
                     row.get::<_, Option<f64>>(11)?,
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<i32>>(13)?,
+                    // Tolerant: an unusable value is no stored time, not a
+                    // failed open (`stored_line_time`).
+                    stored_line_time(row.get_ref(14)?),
                 ))
             })?;
             for row in rows {
@@ -394,6 +415,7 @@ impl Database {
                     azimuth_correction,
                     azimuth_source,
                     azimuth_epoch_year,
+                    created_at,
                 ) = line_row;
                 stored_legacy.insert(id, (surveyor.clone(), date_str.clone()));
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
@@ -455,6 +477,7 @@ impl Database {
                 line.gauge_shot_uuid = gauge_shot_uuid;
                 line.gauge_neighbour_uuid = gauge_neighbour_uuid;
                 line.azimuth_reference = azimuth_reference;
+                line.loaded_created_at = created_at;
                 line_by_id.insert(id, lines.len());
                 // Cannot overflow once ids are bounded above; saturating keeps
                 // the counter rebuild total even if the bound ever moves.
@@ -645,8 +668,7 @@ impl Database {
 
             for merge_row in merge_rows {
                 let (a_sec, a_idx, b_sec, b_idx, merged_at_str) = merge_row?;
-                let merged_at =
-                    chrono::DateTime::parse_from_rfc3339(&merged_at_str)?.with_timezone(&Utc);
+                let merged_at = super::stored_times::parse_stored(&merged_at_str)?;
                 // Persisted positionally; load as transitional Index anchors,
                 // which `reanchor_station_refs` (run on the load path) canonicalizes
                 // to stable shot-UUID anchors once shots are present.
@@ -1532,4 +1554,14 @@ impl Database {
             parsed
         }))
     }
+}
+
+/// A line's stored `sections.created_at`, or `None` when it is not text, not
+/// RFC 3339, or not a time every reader parses (`stored_times`): the save
+/// then writes the fallback (`Line::loaded_created_at`).
+fn stored_line_time(value: rusqlite::types::ValueRef<'_>) -> Option<chrono::DateTime<Utc>> {
+    let at = chrono::DateTime::parse_from_rfc3339(value.as_str().ok()?)
+        .ok()?
+        .with_timezone(&Utc);
+    (super::stored_times::normalized(at) == at).then_some(at)
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use chrono::Utc;
 use rusqlite::params;
 
 use crate::models::{LineId, Project, StationKey};
@@ -13,6 +12,7 @@ use super::shot_credits::{
 };
 use super::station_ids::{write_station_ids, CREATE_STATION_IDS};
 use super::station_texts::{StationTextTable, CREATE_STATION_NAMES};
+use super::stored_times::to_stored;
 use super::{Database, SCHEMA_VERSION};
 
 impl Database {
@@ -84,8 +84,8 @@ impl Database {
             params![
                 project.name,
                 project.location,
-                project.created_at.to_rfc3339(),
-                project.modified_at.to_rfc3339(),
+                to_stored(project.created_at),
+                to_stored(project.modified_at),
                 SCHEMA_VERSION,
                 next_closure_id_i64
             ],
@@ -146,7 +146,9 @@ impl Database {
                     line
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
-                    Utc::now().to_rfc3339()
+                    // What the file held, so an unchanged project saves to
+                    // the same bytes (`Line::loaded_created_at`).
+                    to_stored(line.loaded_created_at.unwrap_or(project.created_at))
                 ],
             )?;
             // What this build wrote, so a later open can tell a pair retyped
@@ -235,7 +237,7 @@ impl Database {
                     a.station_index,
                     b.line_id,
                     b.station_index,
-                    merge.merged_at.to_rfc3339()
+                    to_stored(merge.merged_at)
                 ],
             )?;
         }
