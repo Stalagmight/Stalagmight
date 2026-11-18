@@ -8,8 +8,27 @@
  */
 import i18n from '../i18n';
 
-/** Why a name cannot be used: none given, or another line / station has it. */
-export type NameProblem = 'empty' | 'duplicate';
+/** Why a name cannot be used: none given, a character no name may hold, or
+ *  another line / station has it. */
+export type NameProblem = 'empty' | 'invalidChars' | 'duplicate';
+
+/**
+ * Characters no line, station or Section name may hold (the backend refuses
+ * them too): the control characters (Cc) and the invisible format characters
+ * that can make a name read as something it is not (Trojan Source) - the
+ * left-to-right / right-to-left marks, the bidi embeddings, overrides and
+ * isolates, the zero-width space and joiners, and the BOM.
+ */
+const FORBIDDEN_NAME_CHARS = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+/**
+ * Whether `name` holds a character no name may hold, once trimmed (a pasted
+ * trailing newline is trimmed away, not refused). A BOM counts anywhere: the
+ * JS trim strips one at the edges, the backend's does not.
+ */
+export function hasForbiddenNameChars(name: string): boolean {
+  return FORBIDDEN_NAME_CHARS.test(name.trim()) || name.includes('\uFEFF');
+}
 
 /**
  * Whether `name` can name a line, given the project's `lines`. `exceptLineId`
@@ -22,6 +41,7 @@ export function lineNameProblem(
 ): NameProblem | null {
   const trimmed = name.trim();
   if (trimmed === '') return 'empty';
+  if (hasForbiddenNameChars(name)) return 'invalidChars';
   const taken = (lines ?? []).some((l) => l.id !== exceptLineId && (l.name ?? '').trim() === trimmed);
   return taken ? 'duplicate' : null;
 }
@@ -37,7 +57,21 @@ export function stationNameProblem(
 ): NameProblem | null {
   const trimmed = name.trim();
   if (trimmed === '') return 'empty';
+  if (hasForbiddenNameChars(name)) return 'invalidChars';
   return lineStationNames.some((n, i) => i !== stationIndex && n === trimmed) ? 'duplicate' : null;
+}
+
+/** The inline message for a station-name problem; `lineName` names the
+ *  station's line, `name` is the name typed. */
+export function stationNameProblemMessage(problem: NameProblem, lineName: string, name: string): string {
+  switch (problem) {
+    case 'empty':
+      return i18n.t('identity.stationNameEmpty');
+    case 'invalidChars':
+      return i18n.t('identity.nameInvalidChars');
+    case 'duplicate':
+      return i18n.t('identity.stationNameTaken', { line: lineName, name: name.trim() });
+  }
 }
 
 function takenNames(lines: ReadonlyArray<{ name: string | null }> | null | undefined): Set<string> {
@@ -116,6 +150,8 @@ export function lineNameProblemMessage(problem: SplitNameProblem, name: string):
   switch (problem) {
     case 'empty':
       return i18n.t('identity.lineNameEmpty');
+    case 'invalidChars':
+      return i18n.t('identity.nameInvalidChars');
     case 'duplicate':
       return i18n.t('identity.lineNameTaken', { name: name.trim() });
     case 'same':

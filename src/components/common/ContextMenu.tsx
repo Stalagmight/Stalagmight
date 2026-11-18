@@ -22,7 +22,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
 import { ChevronRightIcon } from './icons';
 import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
-import { caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
+import { CAVE_SECTION_VIEW_LABEL_KEYS, caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
 
 /** The widest the menu grows; a hint line wraps within it. */
 const MENU_MAX_WIDTH_PX = 288;
@@ -1009,7 +1009,7 @@ export default function ContextMenu() {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
-    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', t('caveSections.menu.zoom')]);
+    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', ...CAVE_SECTION_VIEW_LABEL_KEYS.map((k) => t(k))]);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
       return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)

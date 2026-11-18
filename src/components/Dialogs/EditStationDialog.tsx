@@ -22,7 +22,7 @@ import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
 import { useIdentityLabels } from '../../hooks/useIdentityLabels';
-import { stationNameProblem } from '../../utils/nameValidation';
+import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
 
 const DIALOG_ID = 'edit-station';
 
@@ -86,12 +86,7 @@ export default function EditStationDialog() {
   const nameChanged = name.trim() !== storedName;
   const nameProblem =
     stationRef && nameChanged ? stationNameProblem(name, labels.lineStationNames(stationRef.line_id), stationRef.station_index) : null;
-  const nameError =
-    nameProblem === 'empty'
-      ? t('identity.stationNameEmpty')
-      : nameProblem === 'duplicate'
-        ? t('identity.stationNameTaken', { line: lineName, name: name.trim() })
-        : nameRefusal;
+  const nameError = nameProblem ? stationNameProblemMessage(nameProblem, lineName, name) : nameRefusal;
 
   // What this datum would do, as soon as valid GPS is entered (#741).
   const preview = useZeroDatumPreview(
@@ -187,27 +182,36 @@ export default function EditStationDialog() {
 
     if (nameProblem !== null) return;
 
+    // Every check the dialog can make runs BEFORE anything is sent, so a Save
+    // with a field to fix changes nothing (no rename landing ahead of a
+    // datum error). Only the backend's own refusals can still stop it part
+    // way: set_station_comment and remove_zero_datum are not batchable, so the
+    // changes go as separate commands, the rename first.
+    const wasZeroDatum = station.is_zero_datum;
+    const willBeZeroDatum = isZeroDatum;
+    if (willBeZeroDatum && showAccuracy && accuracy === null) {
+      setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
+      return;
+    }
+    if (willBeZeroDatum && !gpsCoords) {
+      setError('Please enter valid GPS coordinates');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setNameRefusal(null);
 
     try {
       // Rename first: a refused name (taken meanwhile, e.g. by an undo) stops
-      // the save before anything else changes, and shows at the field.
+      // the save before anything else changes, and shows at the field. A name
+      // that only differs by surrounding spaces is no rename (`nameChanged`).
       if (nameChanged) {
         const nameResult = await setStationName(stationRef, name.trim());
         if (!nameResult.success) {
           setNameRefusal(nameResult.error ?? t('identity.stationNameEmpty'));
           return;
         }
-      }
-
-      const wasZeroDatum = station.is_zero_datum;
-      const willBeZeroDatum = isZeroDatum;
-
-      if (willBeZeroDatum && showAccuracy && accuracy === null) {
-        setError(t('dialogs.editStation.accuracyInvalid', { max: MAX_DATUM_ACCURACY_M }));
-        return;
       }
       // Send the stored accuracy back unless the user changed it, which may be
       // none at all. The backend stores what it is sent (nothing means the
@@ -223,13 +227,8 @@ export default function EditStationDialog() {
         ...(entranceToSend === undefined ? {} : { entrance: entranceToSend }),
       };
 
-      if (!wasZeroDatum && willBeZeroDatum) {
+      if (!wasZeroDatum && willBeZeroDatum && gpsCoords) {
         // Setting new zero datum
-        if (!gpsCoords) {
-          setError('Please enter valid GPS coordinates');
-          return;
-        }
-
         const result = await setZeroDatum(
           stationRef,
           {
@@ -251,13 +250,8 @@ export default function EditStationDialog() {
           setError(result.error ?? 'Failed to remove zero datum');
           return;
         }
-      } else if (wasZeroDatum && willBeZeroDatum) {
+      } else if (wasZeroDatum && willBeZeroDatum && gpsCoords) {
         // Updating GPS coordinates - check if changed
-        if (!gpsCoords) {
-          setError('Please enter valid GPS coordinates');
-          return;
-        }
-
         const oldLat = station.gps_coordinates?.latitude;
         const oldLon = station.gps_coordinates?.longitude;
 

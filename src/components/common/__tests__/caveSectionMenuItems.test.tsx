@@ -93,10 +93,12 @@ describe('Move to Section', () => {
 });
 
 describe('Section header menu', () => {
-  it('lists Rename, Color..., Apply Color to Lines, Zoom to Section and Delete Section', () => {
+  beforeEach(() => useUIStore.setState({ hiddenSections: [], selectionAnnouncement: '' }));
+
+  it('lists Rename, Color..., Apply Color to Lines, Hide on Map, Zoom to Section and Delete Section', () => {
     const items = caveSectionHeaderMenuItems(7, project, t, () => {});
     expect(items.map((i) => (i.separator ? '---' : i.label))).toEqual([
-      'Rename', 'Color...', 'Apply Color to Lines', 'Zoom to Section', '---', 'Delete Section',
+      'Rename', 'Color...', 'Apply Color to Lines', 'Hide on Map', 'Zoom to Section', '---', 'Delete Section',
     ]);
     expect(items.find((i) => i.label === 'Delete Section')!.danger).toBe(true);
     expect(items.find((i) => i.label === 'Apply Color to Lines')!.hint).toBe('Give its 2 lines the section color');
@@ -117,6 +119,27 @@ describe('Section header menu', () => {
     items.find((i) => i.label === 'Zoom to Section')!.action();
     expect(useUIStore.getState().requestZoomToLine).toEqual([1, 2]);
     expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('Hide on Map hides the Section and announces it; a hidden one offers Show on Map', () => {
+    const close = vi.fn();
+    caveSectionHeaderMenuItems(7, project, t, close).find((i) => i.label === 'Hide on Map')!.action();
+    expect(useUIStore.getState().hiddenSections).toEqual([7]);
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Upper level is hidden on the map');
+    expect(close).toHaveBeenCalledTimes(1);
+
+    const items = caveSectionHeaderMenuItems(7, project, t, close);
+    expect(items.some((i) => i.label === 'Hide on Map')).toBe(false);
+    items.find((i) => i.label === 'Show on Map')!.action();
+    expect(useUIStore.getState().hiddenSections).toEqual([]);
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Upper level is shown on the map');
+  });
+
+  it('a hidden Section has nothing drawn to frame: Zoom to Section is off and says why', () => {
+    useUIStore.setState({ hiddenSections: [7] });
+    const zoom = caveSectionHeaderMenuItems(7, project, t, () => {}).find((i) => i.label === 'Zoom to Section')!;
+    expect(zoom.disabled).toBe(true);
+    expect(zoom.hint).toBe('Show the section on the map first');
   });
 
   it('is empty for a Section that no longer exists', () => {

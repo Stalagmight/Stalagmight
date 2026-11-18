@@ -9,9 +9,12 @@
  *
  * Pure: everything here is unit-tested without React.
  */
+import type { TFunction } from 'i18next';
 import type { Line, LineId } from '../../types/project';
 import type { Section } from '../../types/ipc/Section';
+import type { Selection } from '../../store/uiStore';
 import { UNGROUPED_GROUP_ID } from '../../store/sectionsViewSlice';
+import { hasForbiddenNameChars } from '../../utils/nameValidation';
 
 /** A group of the tree: a Section's id, or {@link UNGROUPED_GROUP_ID}. */
 export type GroupId = number;
@@ -183,19 +186,61 @@ export function defaultSectionName(sections: readonly Pick<Section, 'name'>[], b
 /** The most characters a Section name may have (the backend's limit). */
 export const SECTION_NAME_MAX = 200;
 
+export type SectionNameProblem =
+  | { kind: 'empty' }
+  | { kind: 'tooLong' }
+  | { kind: 'invalidChars' }
+  | { kind: 'taken'; name: string };
+
 /** Why `raw` cannot name Section `selfId` (null when it can): empty, too long,
- *  or another Section's name. Mirrors the backend so the panel can say so
- *  inline before sending anything; the backend still decides. */
+ *  a character no name may hold, or another Section's name. Mirrors the
+ *  backend so the panel can say so inline before sending anything; the
+ *  backend still decides. */
 export function sectionNameProblem(
   raw: string,
   sections: readonly Pick<Section, 'id' | 'name'>[],
   selfId: number | null,
-): { kind: 'empty' } | { kind: 'tooLong' } | { kind: 'taken'; name: string } | null {
+): SectionNameProblem | null {
   const name = raw.trim();
   if (name === '') return { kind: 'empty' };
   if ([...name].length > SECTION_NAME_MAX) return { kind: 'tooLong' };
+  if (hasForbiddenNameChars(raw)) return { kind: 'invalidChars' };
   if (sections.some((s) => s.id !== selfId && s.name === name)) return { kind: 'taken', name };
   return null;
+}
+
+/** The message for a {@link SectionNameProblem}. */
+export function sectionNameProblemMessage(problem: SectionNameProblem, t: TFunction): string {
+  switch (problem.kind) {
+    case 'taken':
+      return t('caveSections.rename.taken', { name: problem.name });
+    case 'empty':
+      return t('caveSections.rename.empty');
+    case 'tooLong':
+      return t('caveSections.rename.tooLong');
+    case 'invalidChars':
+      return t('identity.nameInvalidChars');
+  }
+}
+
+/**
+ * The selection after a modified click on a group header: Shift adds every
+ * line of the group; Ctrl/Cmd toggles them - removes them all when every one
+ * is selected already, else adds the missing ones (like a Ctrl-click on a line
+ * row toggles that line). Other selected items stay.
+ */
+export function groupClickSelection(
+  current: readonly Selection[],
+  groupLineIds: readonly LineId[],
+  mode: 'add' | 'toggle',
+): Selection[] {
+  const have = new Set(current.filter((s) => s.type === 'line').map((s) => s.lineId));
+  const group = new Set(groupLineIds);
+  if (mode === 'toggle' && groupLineIds.every((id) => have.has(id))) {
+    return current.filter((s) => !(s.type === 'line' && s.lineId !== undefined && group.has(s.lineId)));
+  }
+  const added: Selection[] = groupLineIds.filter((id) => !have.has(id)).map((id) => ({ type: 'line', lineId: id }));
+  return [...current, ...added];
 }
 
 /**

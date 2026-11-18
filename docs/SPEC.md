@@ -1002,26 +1002,36 @@ empty: it is where a line is dragged to leave its Section).
   `aria-selected` on lines. Up / Down / Home / End walk the rows; Right expands
   a header, then steps into it; Left collapses it, or steps from a line to its
   header; Enter selects and zooms to a line, or frames a header's lines; Space
-  selects a line, or opens / closes a header; F2 renames a Section;
+  selects a line, or opens / closes a header; F2 renames a Section; H hides or
+  shows a Section on the map (said through the selection live region);
   Shift+F10 / the Menu key opens the row's context menu; Escape clears the
   selection.
 - **Headers are not selected.** A click on a header only focuses it: a Section
   is not a map item, so the map, Details and the data table would have nothing
   to show, and selecting its lines would replace the user's selection and draw
-  a hidden Section. Shift- or Ctrl-click adds all its lines to the selection;
-  double-click frames them on the map.
+  a hidden Section. Shift-click adds all its lines to the selection;
+  Ctrl/Cmd-click toggles them (takes them out when every one is selected
+  already, else adds the rest); double-click frames them on the map. A hidden
+  Section has nothing drawn to frame: double-click only focuses its header,
+  Enter says "Show the section on the map first", and the menu's Zoom to
+  Section is disabled with that hint.
 - **Collapse** is per project, for the session. Selecting a line of a collapsed
   group elsewhere (map, data table, Details) opens the group, so a selection is
   always visible in the panel.
 - **Editing** - New Section (header button; `Section N` in the next free palette
   colour, then an inline rename), the header menu (Rename, Color..., Apply Color
-  to Lines, Zoom to Section, Delete Section), the line menu's **Move to
+  to Lines, Hide / Show on Map, Zoom to Section, Delete Section), the line menu's **Move to
   Section** flyout (each Section, No Section, New Section...; the right-clicked
   line, or the whole line selection it is part of), dragging a line row (or the
   line selection it is part of) onto a group, and the New Line dialog's Section.
   Every one is gated on `useEditingBlocked()` and re-checked at commit time; the
   drag uses pointer events (not HTML5 drag-and-drop, which WebKitGTK runs
   unreliably), mouse and pen only, so a touch long-press keeps opening the menu.
+  The inline rename refuses what the backend refuses (empty, over 200
+  characters, another Section's name, a control or invisible formatting
+  character): Enter keeps the field open with the reason under it; leaving the
+  field keeps the old name and says why in a warning toast, as the data
+  table's inline edits revert.
 - **Show / hide** is allowed in the read-only views too (it is a view setting).
   A hidden Section's lines are left out of the map's survey data
   (`store/sectionVisibility.ts`), so their geometry, stations, labels, comments,

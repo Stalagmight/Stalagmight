@@ -2,7 +2,8 @@
  * Context-menu rows for Sections (#327): the line menu's "Move to Section"
  * flyout, and the menu of a Section header in the Sections panel. Built here
  * and spliced into `ContextMenu.tsx`, whose read-only gate disables them like
- * every other edit row (only "Zoom to Section" stays live).
+ * every other edit row (only the view rows - Hide / Show on Map and Zoom to
+ * Section, `CAVE_SECTION_VIEW_LABEL_KEYS` - stay live).
  *
  * Every action awaits its command before closing the menu, as the menu's other
  * actions do: a refusal is then toasted (executeCommand toasts while the
@@ -18,7 +19,7 @@ import { getNextLineColor } from '../../utils/colors';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { defaultSectionName } from '../SingleSystemView/sectionsTree';
 import { ToolGlyph } from './toolIcons';
-import { LayersIcon, PencilIcon, TrashIcon } from './icons';
+import { EyeIcon, EyeOffIcon, LayersIcon, PencilIcon, TrashIcon } from './icons';
 
 /** The fields of a ContextMenu row these builders fill. */
 export interface SectionMenuItem {
@@ -44,6 +45,28 @@ function closeAfter(closeDialog: () => void, work: () => Promise<unknown> | void
     trackDialogComplete('context-menu');
     closeDialog();
   };
+}
+
+/** The header menu's rows that change only the view, not the project: the
+ *  read-only views keep them (ContextMenu's read-only gate). */
+export const CAVE_SECTION_VIEW_LABEL_KEYS = [
+  'caveSections.menu.hide',
+  'caveSections.menu.show',
+  'caveSections.menu.zoom',
+] as const;
+
+/**
+ * Hide a Section on the map, or show it again, and say so through the
+ * selection live region - the eye button, the header menu and the `H` key of
+ * a focused header all go through here. A view setting, never an edit, so
+ * the read-only views allow it.
+ */
+export function setSectionHiddenAnnounced(section: Pick<Section, 'id' | 'name'>, hidden: boolean, t: TFunction) {
+  const ui = useUIStore.getState();
+  ui.setSectionHidden(section.id, hidden);
+  ui.announceSelection(
+    t(hidden ? 'caveSections.announce.hidden' : 'caveSections.announce.shown', { name: section.name }),
+  );
 }
 
 /**
@@ -120,7 +143,9 @@ export function caveSectionLineMenuItems(
 }
 
 /** The menu of a Section header: Rename, Colour..., Apply Colour to Lines,
- *  Zoom to Section and Delete Section (its lines stay, ungrouped). */
+ *  Hide / Show on Map, Zoom to Section and Delete Section (its lines stay,
+ *  ungrouped). Zoom to Section is off while the Section is hidden: there is
+ *  nothing drawn to frame. */
 export function caveSectionHeaderMenuItems(
   sectionId: number,
   project: ProjectSlice | null | undefined,
@@ -131,6 +156,7 @@ export function caveSectionHeaderMenuItems(
   if (!project || !section) return [];
   const lineIds = project.lines.filter((l) => l.cave_section_id === sectionId).map((l) => l.id);
   const empty = lineIds.length === 0;
+  const hidden = useUIStore.getState().hiddenSections.includes(sectionId);
   const store = () => useProjectStore.getState();
   const dot = <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: section.color }} />;
   return [
@@ -163,6 +189,15 @@ export function caveSectionHeaderMenuItems(
       hint: empty ? t('caveSections.menu.noLines') : t('caveSections.menu.applyColorHint', { count: lineIds.length }),
     },
     {
+      label: t(hidden ? 'caveSections.menu.show' : 'caveSections.menu.hide'),
+      icon: hidden ? <EyeIcon size={16} /> : <EyeOffIcon size={16} />,
+      action: () => {
+        setSectionHiddenAnnounced(section, !hidden, t);
+        trackDialogComplete('context-menu');
+        closeDialog();
+      },
+    },
+    {
       label: t('caveSections.menu.zoom'),
       icon: <ToolGlyph tool="zoom" size={16} />,
       action: () => {
@@ -170,7 +205,8 @@ export function caveSectionHeaderMenuItems(
         trackDialogComplete('context-menu');
         closeDialog();
       },
-      disabled: empty,
+      disabled: empty || hidden,
+      hint: hidden && !empty ? t('caveSections.menu.zoomHidden') : undefined,
     },
     { label: '', action: () => {}, separator: true },
     {

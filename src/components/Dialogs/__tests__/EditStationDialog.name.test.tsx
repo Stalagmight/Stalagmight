@@ -133,6 +133,42 @@ describe('Edit Station name', () => {
     expect(mutations().map(([command]) => command)).toEqual(['set_station_comment']);
   });
 
+  it('refuses control and invisible formatting characters inline', async () => {
+    render(<EditStationDialog />);
+    fireEvent.change(nameInput(), { target: { value: '5\u202Eb' } });
+    expect(screen.getByTestId('station-name-error')).toHaveTextContent(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    expect(saveButton()).toBeDisabled();
+    await save();
+    expect(mutations()).toEqual([]);
+  });
+
+  it('checks every field before sending anything: a datum without GPS keeps the rename back too', async () => {
+    render(<EditStationDialog />);
+    fireEvent.change(nameInput(), { target: { value: '5a' } });
+    fireEvent.change(screen.getByTestId('station-comment-input'), { target: { value: 'Tie-off' } });
+    fireEvent.click(screen.getByTestId('station-zero-datum-input'));
+    await save();
+    // Nothing reached the backend, the dialog stays open on the fix to make.
+    expect(mutations()).toEqual([]);
+    expect(screen.getByTestId('edit-station-dialog')).toHaveTextContent('Please enter valid GPS coordinates');
+    expect(useUIStore.getState().closeDialog).not.toHaveBeenCalled();
+
+    // With the GPS given, the save goes through: the rename first.
+    fireEvent.change(screen.getByTestId('station-gps-input'), { target: { value: '20.5, -87.3' } });
+    await save();
+    expect(mutations().map(([command]) => command)).toEqual(['set_station_name', 'set_zero_datum', 'set_station_comment']);
+  });
+
+  it('sends no rename for the same name with spaces around it', async () => {
+    render(<EditStationDialog />);
+    fireEvent.change(nameInput(), { target: { value: ' 5 ' } });
+    fireEvent.change(screen.getByTestId('station-comment-input'), { target: { value: 'Tie-off' } });
+    await save();
+    expect(mutations().map(([command]) => command)).toEqual(['set_station_comment']);
+  });
+
   it('shows a refusal the backend still makes at the name field, and keeps the dialog open', async () => {
     const refusal = 'Line "Main Line" already has a station named "9"';
     invokeIpcMock.mockImplementation(async (command: string) => {

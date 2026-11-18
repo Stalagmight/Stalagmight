@@ -2884,11 +2884,15 @@
       "collapse": "Collapse {{name}}",
       "color": "Change section color",
       "expand": "Expand {{name}}",
-      "hide": "Hide this section on the map",
+      "hide": "Hide this section on the map (H)",
       "hideToggle": "Hide {{name}} on the map",
       "new": "New Section",
       "renameLabel": "Section name",
-      "show": "Show this section on the map"
+      "show": "Show this section on the map (H)"
+    },
+    "announce": {
+      "hidden": "{{name}} is hidden on the map",
+      "shown": "{{name}} is shown on the map"
     },
     "ariaTree": "Lines, grouped by section",
     "defaultNameBase": "Section",
@@ -2899,7 +2903,8 @@
       "noTarget_one": "Drop on a section to move this line",
       "noTarget_other": "Drop on a section to move {{count}} lines"
     },
-    "headerHint": "Double-click to zoom to this section · Shift+click to select its lines",
+    "headerHint": "Double-click to zoom to this section · Shift+click to add its lines to the selection, Ctrl+click to toggle them · H hides it on the map",
+    "headerHintHidden": "Hidden on the map: show it (H) to zoom to it · Shift+click to add its lines to the selection, Ctrl+click to toggle them",
     "hiddenLineHint": "Its section is hidden on the map. Selecting the line shows it until you select something else.",
     "hiddenState": "hidden on the map",
     "menu": {
@@ -2913,13 +2918,16 @@
       "color": "Color...",
       "delete": "Delete Section",
       "deleteHint": "Its lines stay, ungrouped",
+      "hide": "Hide on Map",
       "moveLinesTo": "Move {{count}} Lines to Section",
       "moveTo": "Move to Section",
       "newSectionWithLines": "New Section...",
       "noLines": "This section has no lines",
       "noSection": "No Section",
       "rename": "Rename",
-      "zoom": "Zoom to Section"
+      "show": "Show on Map",
+      "zoom": "Zoom to Section",
+      "zoomHidden": "Show the section on the map first"
     },
     "newLine": {
       "label": "Section",
@@ -2929,6 +2937,7 @@
     "readOnlyProject": "This project is open read-only, so sections cannot be changed.",
     "rename": {
       "empty": "A section needs a name.",
+      "kept": "The section is still named \"{{name}}\". {{reason}}",
       "taken": "There is already a section named \"{{name}}\".",
       "tooLong": "A section name can be at most 200 characters."
     },
@@ -4166,6 +4175,7 @@
     "stationNameEmpty": "A station needs a name.",
     "stationNameTaken": "{{line}} already has a station named \"{{name}}\". Station names must be unique within their line.",
     "stationId": "Station ID",
-    "stationName": "Name"
+    "stationName": "Name",
+    "nameInvalidChars": "A name cannot contain control characters or invisible formatting characters."
   }
 }

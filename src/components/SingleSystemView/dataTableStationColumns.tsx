@@ -16,7 +16,7 @@ import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { xyToGps } from '../../utils/coordinates';
 import { displayStationName } from '../../utils/formatters';
-import { stationNameProblem } from '../../utils/nameValidation';
+import { stationNameProblem, stationNameProblemMessage } from '../../utils/nameValidation';
 import type { IdentityLabels } from '../../utils/stationIdentity';
 import type { GpsCoordinates } from '../../types/project';
 
@@ -38,6 +38,17 @@ export interface StationColumnContext {
   /** The names of the stations of the shown line, by index - a rename to one
    *  of them is refused inline before it reaches the backend. */
   lineStationNames?: ReadonlyArray<string>;
+}
+
+/**
+ * The name a committed Name cell asks to set, or null when there is nothing to
+ * send: not a string, empty, or the station's stored name once trimmed (a
+ * re-typed or padded copy of the same name is no rename, and no undo step).
+ */
+export function stationRenameToSend(value: unknown, station: Pick<Station, 'name'>): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.trim();
+  return name === '' || name === station.name ? null : name;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -91,14 +102,9 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       validate: (value, r) => {
         if (typeof value !== 'string' || !ctx.lineStationNames) return null;
         const problem = stationNameProblem(value, ctx.lineStationNames, r.station_ref.station_index);
-        if (problem === 'empty') return t('identity.stationNameEmpty');
-        if (problem === 'duplicate') {
-          return t('identity.stationNameTaken', {
-            line: ctx.labels?.lineName(r.station_ref.line_id) ?? '',
-            name: value.trim(),
-          });
-        }
-        return null;
+        return problem
+          ? stationNameProblemMessage(problem, ctx.labels?.lineName(r.station_ref.line_id) ?? '', value)
+          : null;
       },
     },
     {

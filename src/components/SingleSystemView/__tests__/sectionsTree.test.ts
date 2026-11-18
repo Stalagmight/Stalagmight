@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Line } from '../../../types/ipc/Line';
 import type { Section } from '../../../types/ipc/Section';
 import { UNGROUPED_GROUP_ID } from '../../../store/sectionsViewSlice';
+import type { Selection } from '../../../store/uiStore';
 import {
   buildSectionTree,
   defaultSectionName,
   dropChangesSomething,
   dropGroupAttr,
+  groupClickSelection,
   linesToCarry,
   parseDropGroup,
   sectionNameProblem,
@@ -154,6 +156,35 @@ describe('Section names', () => {
     expect(sectionNameProblem('Upper', sections, 1)).toBeNull();
     // Names compare exactly after trimming, as the backend does.
     expect(sectionNameProblem('lower', sections, 1)).toBeNull();
+  });
+
+  it('refuses control and invisible formatting characters like the backend', () => {
+    const sections = [{ id: 1, name: 'Upper' }];
+    for (const bad of ['Up\nper', 'Up\u0000', '\u202Eper', 'Up\u2068per\u2069', 'U\u200Dp', 'Up\u200E', '\uFEFFUpper']) {
+      expect(sectionNameProblem(bad, sections, 2)).toEqual({ kind: 'invalidChars' });
+    }
+    // A pasted trailing newline is trimmed away, not refused.
+    expect(sectionNameProblem('Lower\n', sections, 2)).toBeNull();
+  });
+});
+
+describe('groupClickSelection', () => {
+  const line = (lineId: number): Selection => ({ type: 'line', lineId });
+  const station: Selection = { type: 'station', stationRef: { line_id: 9, station_index: 0 } };
+
+  it('Shift adds the missing lines of the group and keeps the rest', () => {
+    expect(groupClickSelection([station, line(2)], [1, 2, 3], 'add')).toEqual([station, line(2), line(1), line(3)]);
+    // Already all selected: nothing changes.
+    expect(groupClickSelection([line(1), line(2)], [1, 2], 'add')).toEqual([line(1), line(2)]);
+  });
+
+  it('Ctrl adds the group while any of its lines is unselected', () => {
+    expect(groupClickSelection([line(2)], [1, 2], 'toggle')).toEqual([line(2), line(1)]);
+  });
+
+  it('Ctrl removes the group once every one of its lines is selected', () => {
+    expect(groupClickSelection([station, line(1), line(5), line(2)], [1, 2], 'toggle')).toEqual([station, line(5)]);
+    expect(groupClickSelection([line(1), line(2)], [1, 2], 'toggle')).toEqual([]);
   });
 });
 

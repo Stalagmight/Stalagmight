@@ -7,12 +7,14 @@ import { describe, it, expect } from 'vitest';
 import '../../i18n';
 import {
   defaultSplitNames,
+  hasForbiddenNameChars,
   isLineNameRefusal,
   lineNameProblem,
   lineNameProblemMessage,
   nextFreeLineName,
   splitNameProblems,
   stationNameProblem,
+  stationNameProblemMessage,
   uniqueLineName,
 } from '../nameValidation';
 
@@ -144,5 +146,44 @@ describe('isLineNameRefusal', () => {
     expect(isLineNameRefusal('Line 3 not found')).toBe(false);
     expect(isLineNameRefusal(null)).toBe(false);
     expect(isLineNameRefusal(undefined)).toBe(false);
+  });
+});
+
+describe('forbidden characters', () => {
+  // Cc, LRM/RLM, the bidi embeddings / overrides / isolates, zero-width
+  // space and joiners, BOM - the characters the backend refuses in a name.
+  const bad = [
+    '\u0000', '\u0007', '\u001F', '\u007F', '\u0085', '\u009F',
+    '\u200B', '\u200C', '\u200D', '\u200E', '\u200F',
+    '\u202A', '\u202B', '\u202C', '\u202D', '\u202E',
+    '\u2066', '\u2067', '\u2068', '\u2069', '\uFEFF',
+  ];
+
+  it('flags each of them inside a name', () => {
+    for (const ch of bad) expect(hasForbiddenNameChars(`a${ch}b`), JSON.stringify(ch)).toBe(true);
+  });
+
+  it('lets ordinary names through, and trims a pasted newline away', () => {
+    for (const ok of ['Main Line', 'A3', '2a', 'Cueva \u00f1', '\u0644\u0627', 'x \u00b7 y', 'Main\n', '\tSide']) {
+      expect(hasForbiddenNameChars(ok), JSON.stringify(ok)).toBe(false);
+    }
+  });
+
+  it('counts a BOM at the edges, which the JS trim would drop', () => {
+    expect(hasForbiddenNameChars('\uFEFFMain')).toBe(true);
+    expect(hasForbiddenNameChars('Main\uFEFF')).toBe(true);
+  });
+
+  it('is a line- and station-name problem with its own message', () => {
+    expect(lineNameProblem('Main\u202E', lines('Side'))).toBe('invalidChars');
+    expect(lineNameProblemMessage('invalidChars', 'x')).toBe(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    expect(stationNameProblem('5\u200B', ['4', '5'], 1)).toBe('invalidChars');
+    expect(stationNameProblemMessage('invalidChars', 'Main', 'x')).toBe(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    // Empty still wins over everything else.
+    expect(stationNameProblem('  ', ['4'], 0)).toBe('empty');
   });
 });

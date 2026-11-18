@@ -46,6 +46,9 @@ function setup() {
     collapsedSections: {},
     pendingSectionRename: null,
     activeDialog: null,
+    requestZoomToLine: null,
+    selectionAnnouncement: '',
+    toasts: [],
   });
   // A confirmed-local project: editing is open.
   useSpeleoStore.setState({ projectLinkKind: 'local' } as never);
@@ -110,6 +113,82 @@ describe('SectionsPanel tree', () => {
     useUIStore.getState().setSelection({ type: 'line', lineId: 3 });
     fireEvent.click(header(), { shiftKey: true });
     expect(useUIStore.getState().multiSelection.map((s) => s.lineId)).toEqual([3, 1, 2]);
+  });
+
+  it('Ctrl-click on a header toggles its lines: adds them, then takes them out again', () => {
+    useUIStore.getState().setSelection({ type: 'line', lineId: 3 });
+    fireEvent.click(header(), { ctrlKey: true });
+    expect(useUIStore.getState().multiSelection.map((s) => s.lineId)).toEqual([3, 1, 2]);
+    fireEvent.click(header(), { ctrlKey: true });
+    expect(useUIStore.getState().multiSelection.map((s) => s.lineId)).toEqual([3]);
+    // Partly selected: Ctrl adds the rest (Cmd is the same on macOS).
+    act(() => useUIStore.getState().selectAll([{ type: 'line', lineId: 2 }]));
+    fireEvent.click(header(), { metaKey: true });
+    expect(useUIStore.getState().multiSelection.map((s) => s.lineId)).toEqual([2, 1]);
+    // Shift only ever adds.
+    fireEvent.click(header(), { shiftKey: true });
+    expect(useUIStore.getState().multiSelection.map((s) => s.lineId)).toEqual([2, 1]);
+  });
+
+  it('H on a focused header hides its Section, again shows it, and says so', () => {
+    act(() => header().focus());
+    fireEvent.keyDown(header(), { key: 'h' });
+    expect(useUIStore.getState().hiddenSections).toEqual([7]);
+    expect(header()).toHaveAttribute('data-hidden-on-map', 'true');
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Upper level is hidden on the map');
+    fireEvent.keyDown(header(), { key: 'H' });
+    expect(useUIStore.getState().hiddenSections).toEqual([]);
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Upper level is shown on the map');
+    // Not on the Ungrouped header, and not with a modifier.
+    fireEvent.keyDown(ungrouped(), { key: 'h' });
+    fireEvent.keyDown(header(), { key: 'h', ctrlKey: true });
+    expect(useUIStore.getState().hiddenSections).toEqual([]);
+  });
+
+  it('the eye announces the change too', () => {
+    fireEvent.click(screen.getByTestId('section-toggle-visibility-7'));
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Upper level is hidden on the map');
+  });
+
+  it('a hidden Section frames nothing: double-click only focuses, Enter says why', () => {
+    act(() => useUIStore.getState().setSectionHidden(7, true));
+    fireEvent.doubleClick(header());
+    expect(useUIStore.getState().requestZoomToLine).toBeNull();
+    act(() => header().focus());
+    fireEvent.keyDown(header(), { key: 'Enter' });
+    expect(useUIStore.getState().requestZoomToLine).toBeNull();
+    expect(useUIStore.getState().selectionAnnouncement).toBe('Show the section on the map first');
+    expect(header()).toHaveAttribute('title', expect.stringContaining('Hidden on the map'));
+    // Shown again, double-click frames its lines.
+    act(() => useUIStore.getState().setSectionHidden(7, false));
+    fireEvent.doubleClick(header());
+    expect(useUIStore.getState().requestZoomToLine).toEqual([1, 2]);
+  });
+
+  it('leaving the rename field with an unusable name keeps the old one and says why', () => {
+    act(() => header().focus());
+    fireEvent.keyDown(header(), { key: 'F2' });
+    const input = screen.getByTestId('section-rename-input-7');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+    expect(screen.queryByTestId('section-rename-input-7')).toBeNull();
+    expect(useProjectStore.getState().updateCaveSection).not.toHaveBeenCalled();
+    expect(screen.getByTestId('section-name-7')).toHaveTextContent('Upper level');
+    expect(useUIStore.getState().toasts.map((toast) => [toast.message, toast.kind])).toEqual([
+      ['The section is still named "Upper level". A section needs a name.', 'warning'],
+    ]);
+  });
+
+  it('Enter on a name with a control or bidi character keeps the field open with the reason', () => {
+    act(() => header().focus());
+    fireEvent.keyDown(header(), { key: 'F2' });
+    const input = screen.getByTestId('section-rename-input-7');
+    fireEvent.change(input, { target: { value: 'Upper\u202Elevel' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('section-rename-error-7')).toHaveTextContent(
+      'A name cannot contain control characters or invisible formatting characters.',
+    );
+    expect(useProjectStore.getState().updateCaveSection).not.toHaveBeenCalled();
   });
 
   it('F2 renames inline; Enter commits through update_cave_section', () => {

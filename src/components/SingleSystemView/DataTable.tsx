@@ -26,7 +26,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
 import { useDataTableCredit } from './useDataTableCredit';
-import { buildStationColumns } from './dataTableStationColumns';
+import { buildStationColumns, stationRenameToSend } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
@@ -1266,9 +1266,10 @@ export default function DataTable({ lines }: DataTableProps) {
       const station = lineStations[rowIndex];
       if (!station) return;
       if (colKey === 'name') {
-        if (typeof value !== 'string') return;
+        const name = stationRenameToSend(value, station);
+        if (name === null) return;
         setSource('data-table');
-        void setStationName(station.station_ref, value);
+        void setStationName(station.station_ref, name);
         return;
       }
       if (colKey !== 'comment') return;

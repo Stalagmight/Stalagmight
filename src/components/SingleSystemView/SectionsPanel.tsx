@@ -2,7 +2,7 @@ import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { type Line, type LineId } from '../../types/project';
-import { useUIStore, type Selection } from '../../store/uiStore';
+import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { type LineMetadata } from '../../types/survey-data';
 import {
@@ -20,13 +20,15 @@ import { getErrorMessage } from '../../utils/ipc';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { UNGROUPED_GROUP_ID } from '../../store/sectionsViewSlice';
-import { createSectionWithRename } from '../common/caveSectionMenuItems';
+import { createSectionWithRename, setSectionHiddenAnnounced } from '../common/caveSectionMenuItems';
 import { calculateLineStats, GroupHeaderRow, LineRow } from './SectionsPanelRows';
 import {
   buildSectionTree,
   dropChangesSomething,
+  groupClickSelection,
   linesToCarry,
   sectionNameProblem,
+  sectionNameProblemMessage,
   treeArrowAction,
   treePositions,
   type GroupId,
@@ -98,13 +100,15 @@ export function rovingDefaultTabIndex(
  * A group header is not a selectable map item: a click only focuses it (the
  * map, Details and the data table have nothing to show for a Section, and
  * selecting all its lines would silently replace the user's selection and
- * draw a hidden Section). Shift- or Ctrl-click adds all its lines to the
- * selection instead; double-click (or Enter) frames them on the map.
+ * draw a hidden Section). Shift-click adds all its lines to the selection
+ * instead, Ctrl/Cmd-click toggles them; double-click (or Enter) frames them on
+ * the map - unless the Section is hidden, which leaves nothing to frame. `H`
+ * on a focused header hides or shows its Section.
  */
 export default function SectionsPanel({ lines }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, selectAll, hoveredLineId, hoveredShot, hoveredStation, setHoveredLineId, openDialog, enterLineFocus, triggerZoomToLine, triggerZoomToLines, showToast, hiddenSections, setSectionHidden, collapsedSections, setSectionCollapsed, pendingSectionRename, requestSectionRename } = useUIStore(
+  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, selectAll, hoveredLineId, hoveredShot, hoveredStation, setHoveredLineId, openDialog, enterLineFocus, triggerZoomToLine, triggerZoomToLines, showToast, announceSelection, hiddenSections, collapsedSections, setSectionCollapsed, pendingSectionRename, requestSectionRename } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       multiSelection: s.multiSelection,
@@ -122,8 +126,8 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
       triggerZoomToLine: s.triggerZoomToLine,
       triggerZoomToLines: s.triggerZoomToLines,
       showToast: s.showToast,
+      announceSelection: s.announceSelection,
       hiddenSections: s.hiddenSections,
-      setSectionHidden: s.setSectionHidden,
       collapsedSections: s.collapsedSections,
       setSectionCollapsed: s.setSectionCollapsed,
       pendingSectionRename: s.pendingSectionRename,
@@ -557,17 +561,17 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     }
     const problem = sectionNameProblem(value, sections, sectionId);
     if (problem) {
-      // Leaving the field with a name that cannot be used keeps the old one;
-      // Enter says why and keeps the field open.
+      const reason = sectionNameProblemMessage(problem, t);
+      // Leaving the field with a name that cannot be used keeps the old one and
+      // says so (as the data table's inline edits revert with a flash): the
+      // field is gone, so the reason goes to a toast. Enter says why at the
+      // field and keeps it open.
       if (viaBlur) {
         closeRename(sectionId, false);
+        showToast(t('caveSections.rename.kept', { name: section.name, reason }), TOAST_KEYS.RENAME, 'warning');
         return true;
       }
-      setRenameError(
-        problem.kind === 'taken'
-          ? t('caveSections.rename.taken', { name: problem.name })
-          : t(problem.kind === 'empty' ? 'caveSections.rename.empty' : 'caveSections.rename.tooLong'),
-      );
+      setRenameError(reason);
       return false;
     }
     const name = value.trim();
@@ -577,7 +581,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
       void updateCaveSection(sectionId, { name });
     }
     return true;
-  }, [sections, closeRename, blockedToast, updateCaveSection, t]);
+  }, [sections, closeRename, blockedToast, updateCaveSection, showToast, t]);
 
   const toggleCollapsed = useCallback((row: GroupRow) => {
     setSectionCollapsed(projectKey, row.group, !row.collapsed);
@@ -587,22 +591,37 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     if (e.button !== 0) return;
     setFocusedKey(row.key);
     if (!(e.shiftKey || e.ctrlKey || e.metaKey) || row.lineIds.length === 0) return;
-    // Shift/Ctrl-click adds every line of the group to the selection (read
-    // at click time: the selection may have moved since the last render).
+    // Read at click time: the selection may have moved since the last render.
     setSource('sections-panel');
-    const current = useUIStore.getState().multiSelection;
-    const have = new Set(current.filter((s) => s.type === 'line').map((s) => s.lineId));
-    const added: Selection[] = row.lineIds.filter((id) => !have.has(id)).map((id) => ({ type: 'line', lineId: id }));
+    const next = groupClickSelection(useUIStore.getState().multiSelection, row.lineIds, e.shiftKey ? 'add' : 'toggle');
     suppressRevealRef.current = true;
-    selectAll([...current, ...added]);
+    selectAll(next);
   }, [selectAll]);
+
+  // Frame a header's lines on the map (double-click, Enter). A hidden Section
+  // has nothing drawn to frame: the gesture only focuses its header (Enter
+  // says why).
+  const zoomToGroup = useCallback((row: GroupRow, viaKeyboard: boolean) => {
+    if (row.hidden) {
+      if (viaKeyboard) announceSelection(t('caveSections.menu.zoomHidden'));
+      return;
+    }
+    setSource('sections-panel');
+    triggerZoomToLines(row.lineIds);
+  }, [triggerZoomToLines, announceSelection, t]);
 
   const handleGroupDoubleClick = useCallback((row: GroupRow, e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button, input')) return;
-    setSource('sections-panel');
-    triggerZoomToLines(row.lineIds);
-  }, [triggerZoomToLines]);
+    zoomToGroup(row, false);
+  }, [zoomToGroup]);
+
+  // The eye button, the header menu's Hide / Show on Map and `H` on a
+  // focused header: a view setting, allowed in the read-only views too.
+  const handleToggleHidden = useCallback((sectionId: number, hidden: boolean) => {
+    const section = sections.find((s) => s.id === sectionId);
+    if (section) setSectionHiddenAnnounced(section, hidden, t);
+  }, [sections, t]);
 
   const openGroupContextMenu = useCallback((row: GroupRow, x: number, y: number) => {
     if (!row.section) return;
@@ -697,7 +716,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
           selectLine(row.line);
           triggerZoomToLine(row.line.id);
         } else {
-          triggerZoomToLines(row.lineIds);
+          zoomToGroup(row, true);
         }
         break;
       case ' ':
@@ -711,6 +730,14 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
         if (row.kind === 'group' && row.section) {
           handled();
           startRename(row.section.id);
+        }
+        break;
+      case 'h':
+      case 'H':
+        // Hide / show the focused header's Section on the map.
+        if (row.kind === 'group' && row.section && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          handled();
+          handleToggleHidden(row.section.id, !row.hidden);
         }
         break;
       case 'ContextMenu':
@@ -727,7 +754,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  }, [rows, focusRow, selectLine, triggerZoomToLine, triggerZoomToLines, clearSelection, setSectionCollapsed, projectKey, toggleCollapsed, startRename, openLineContextMenu, openGroupContextMenu]);
+  }, [rows, focusRow, selectLine, triggerZoomToLine, zoomToGroup, clearSelection, setSectionCollapsed, projectKey, toggleCollapsed, startRename, handleToggleHidden, openLineContextMenu, openGroupContextMenu]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the tree ENTIRELY
@@ -955,7 +982,7 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
                         onRenameCancel={() => closeRename(row.section!.id, true)}
                         onRenameInput={() => setRenameError(null)}
                         onToggleCollapsed={toggleCollapsed}
-                        onToggleHidden={setSectionHidden}
+                        onToggleHidden={handleToggleHidden}
                         onClick={handleGroupClick}
                         onDoubleClick={handleGroupDoubleClick}
                         onContextMenu={openGroupContextMenu}

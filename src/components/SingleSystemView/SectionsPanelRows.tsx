@@ -525,7 +525,7 @@ export const GroupHeaderRow = memo(function GroupHeaderRow({
       data-drop-group={dropGroupAttr(row.group)}
       data-drop-target={isDropTarget ? 'true' : undefined}
       data-hidden-on-map={row.hidden ? 'true' : undefined}
-      title={t(section ? 'caveSections.headerHint' : 'caveSections.ungroupedHint')}
+      title={t(section ? (row.hidden ? 'caveSections.headerHintHidden' : 'caveSections.headerHint') : 'caveSections.ungroupedHint')}
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualStart}px)` }}
       className={`pl-1 pr-2 py-1.5 ${index > 0 ? 'border-t border-border' : ''} cursor-pointer group outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
         isDropTarget ? 'bg-accent-20 ring-2 ring-accent ring-inset' : (isFocused ? 'bg-background-50' : 'hover:bg-accent-10')

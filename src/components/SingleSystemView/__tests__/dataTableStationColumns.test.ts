@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import i18n from '../../../i18n';
-import { buildStationColumns, type StationColumnContext } from '../dataTableStationColumns';
+import { buildStationColumns, stationRenameToSend, type StationColumnContext } from '../dataTableStationColumns';
 import type { Station } from '../../../types/project';
 
 function station(index: number, name: string, id: number): Station {
@@ -71,6 +71,23 @@ describe('stations view identity columns', () => {
     );
     expect(name.validate?.('5', station(1, '5', 41))).toBeNull();
     expect(name.validate?.('5a', station(1, '5', 41))).toBeNull();
+  });
+
+  it('refuses control and invisible formatting characters', () => {
+    const name = col('name');
+    const msg = 'A name cannot contain control characters or invisible formatting characters.';
+    for (const bad of ['5\u0007', '5\u202Eb', 'a\u200Bb', '\u2066x\u2069', '5\u200F', '\uFEFF5', 'a\u0085b']) {
+      expect(name.validate?.(bad, station(1, '5', 41))).toBe(msg);
+    }
+    expect(name.validate?.('5 b', station(1, '5', 41))).toBeNull();
+  });
+
+  it('sends a rename only when the trimmed name differs from the stored one', () => {
+    expect(stationRenameToSend('5', station(1, '5', 41))).toBeNull();
+    expect(stationRenameToSend(' 5 ', station(1, '5', 41))).toBeNull();
+    expect(stationRenameToSend('  ', station(1, '5', 41))).toBeNull();
+    expect(stationRenameToSend(null, station(1, '5', 41))).toBeNull();
+    expect(stationRenameToSend(' 5a', station(1, '5', 41))).toBe('5a');
   });
 
   it('names merged stations in the connections tooltip, never line.index', () => {
