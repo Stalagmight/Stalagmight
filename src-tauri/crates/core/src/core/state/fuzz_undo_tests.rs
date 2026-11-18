@@ -723,7 +723,9 @@
 //!
 //! * **WITHIN-RUN** (`expect_entry_prints`, every mode, on every move via
 //!   `expect_stacks`). `entry_prints[d]` records `timestamp|command_type|
-//!   description` when the app pushes the entry at depth `d`, and every later
+//!   label` (the entry's own `Command::description()`, not the displayed
+//!   description, which names things as the project holds them when listed)
+//!   when the app pushes the entry at depth `d`, and every later
 //!   reading of either stack has to agree with it, entry for entry, at the depth
 //!   the stack layout puts it at. All three are pure functions of the stored
 //!   `UndoEntry` - `Command::description()` reads the command and nothing else,
@@ -3048,7 +3050,8 @@ pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
 // Undo-entry metadata: what the history dropdown SAYS an entry is
 // ===========================================================================
 
-/// The ENTRY-INTRINSIC half of a history item: `timestamp|command_type|description`.
+/// The ENTRY-INTRINSIC half of a history item: `timestamp|command_type|label`,
+/// where `label` is the entry's own [`crate::core::Command::description`].
 ///
 /// Every one of the three is a pure function of the `UndoEntry` alone -
 /// `Command::description()` and `get_command_type()` read the stored command and
@@ -3057,14 +3060,39 @@ pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
 /// triple may be pinned PER DEPTH for the life of a run: nothing a later command
 /// does to the project can legitimately change what an already-pushed entry says.
 ///
-/// `preview_data` is deliberately NOT in here - see [`Fuzzer::history_rows`].
-fn entry_print(item: &UndoHistoryItem) -> String {
+/// The DISPLAYED `description` is not that label any more: the history names
+/// lines, stations and shots as the project holds them when it is listed
+/// (`undo/history_names.rs`), so a later rename - or an undo that brings a
+/// deleted shot back - legitimately changes it. It is compared, with
+/// `preview_data`, by the persistence half instead - see [`Fuzzer::history_rows`].
+fn entry_print(item: &UndoHistoryItem, intrinsic: &str) -> String {
     format!(
         "{}|{}|{}",
         item.timestamp.clone().unwrap_or_default(),
         item.command_type,
-        item.description
+        intrinsic
     )
+}
+
+/// Each stack's entries' own labels ([`crate::core::Command::description`]), in
+/// the order `get_undo_stack` / `get_redo_stack` list them.
+fn intrinsic_labels(state: &AppState) -> (Vec<String>, Vec<String>) {
+    state
+        .undo_stack
+        .lock()
+        .map(|stack| {
+            (
+                stack
+                    .undo_entries()
+                    .map(|e| e.command.description())
+                    .collect(),
+                stack
+                    .redo_entries()
+                    .map(|e| e.command.description())
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
 }
 
 /// EVERY field of a history item, including `preview_data`, as canonical JSON.
@@ -3919,9 +3947,9 @@ impl Fuzzer {
     /// that is pinnable and `preview_data` is not.
     fn expect_entry_prints(&self, what: &str) {
         let mut wrong: Vec<String> = Vec::new();
-        let mut compare = |side: &str, depth: usize, actual: &UndoHistoryItem| {
+        let mut compare = |side: &str, depth: usize, actual: &UndoHistoryItem, intrinsic: &str| {
             let expected = self.entry_prints.get(depth);
-            let actual = entry_print(actual);
+            let actual = entry_print(actual, intrinsic);
             if expected.is_some_and(|print| *print == actual) {
                 return;
             }
@@ -3930,11 +3958,24 @@ impl Fuzzer {
                 expected.map_or("<no entry recorded at that depth>", String::as_str),
             ));
         };
+        let (undo_labels, redo_labels) = intrinsic_labels(&self.state);
+        let label =
+            |labels: &[String], index: usize| labels.get(index).cloned().unwrap_or_default();
         for (index, item) in self.state.get_undo_stack().iter().enumerate() {
-            compare("undo", self.cursor.saturating_sub(index), item);
+            compare(
+                "undo",
+                self.cursor.saturating_sub(index),
+                item,
+                &label(&undo_labels, index),
+            );
         }
         for (index, item) in self.state.get_redo_stack().iter().enumerate() {
-            compare("redo", self.cursor + 1 + index, item);
+            compare(
+                "redo",
+                self.cursor + 1 + index,
+                item,
+                &label(&redo_labels, index),
+            );
         }
         if wrong.is_empty() {
             return;
@@ -5366,7 +5407,10 @@ impl Fuzzer {
                 .unwrap_or_default();
             // The metadata oracle's baseline for this depth, taken from the SAME
             // read: what the app says this entry is, at the instant it pushed it.
-            let print = newest.map(entry_print).unwrap_or_default();
+            let (labels, _) = intrinsic_labels(&self.state);
+            let print = newest
+                .map(|item| entry_print(item, labels.first().map_or("", String::as_str)))
+                .unwrap_or_default();
             self.entry_prints.push(print);
             self.entry_meta.push(EntryMeta {
                 command,
@@ -5436,7 +5480,12 @@ impl Fuzzer {
     /// from the same entry still sitting on top, which a stack LENGTH cannot do
     /// once the FIFO trim is active.
     fn newest_entry(&self) -> Option<String> {
-        self.state.get_undo_stack().first().map(entry_print)
+        let (labels, _) = intrinsic_labels(&self.state);
+        let intrinsic = labels.first().cloned().unwrap_or_default();
+        self.state
+            .get_undo_stack()
+            .first()
+            .map(|item| entry_print(item, &intrinsic))
     }
 
     /// Build the state findings 8, 12 and 13 need, instead of waiting for a seed

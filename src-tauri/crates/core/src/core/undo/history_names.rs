@@ -8,12 +8,18 @@
 //! name cannot be resolved (the line or shot is gone, or an entry from an
 //! older file addresses something that moved) the label falls back to its
 //! wording without the handle (`Delete shot`), never to the number.
+//!
+//! A shot is named only through the uuid an entry records
+//! (`UndoData::PreviousValues::shot_uuid`), never through the command's shot
+//! id: that id is an in-session handle the loader renumbers, so after a
+//! reload it can address a different shot. A command with no recorded uuid
+//! names the shot's line instead (`Delete shot in line "Main"`).
 
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{Command, CommentHolder, UndoData, UndoEntry};
 use crate::models::{
-    CreditTargets, LineId, Project, ShotId, ShotKind, StationAnchor, StationKey, StationRef,
+    CreditTargets, LineId, Project, ShotKind, StationAnchor, StationKey, StationRef,
 };
 
 /// One line's names, by position.
@@ -22,9 +28,7 @@ struct LineNames {
     name: String,
     /// Station names by station index.
     stations: Vec<String>,
-    /// In-session shot id -> shot index.
-    shots: HashMap<ShotId, usize>,
-    /// Shot uuid -> shot index, to resolve a stored station key.
+    /// Shot uuid -> shot index, to resolve a stored station key or a shot.
     uuids: HashMap<String, usize>,
 }
 
@@ -54,12 +58,6 @@ impl NameBook {
                 LineNames {
                     name: project.line_label(line_id).unwrap_or_default(),
                     stations,
-                    shots: line
-                        .shots
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| (s.id, i))
-                        .collect(),
                     uuids: line
                         .shots
                         .iter()
@@ -95,10 +93,10 @@ impl NameBook {
         self.station(StationRef::new(key.line_id, u32::try_from(index).ok()?))
     }
 
-    /// `Line name: from → to`.
-    pub fn shot(&self, line_id: LineId, shot_id: ShotId) -> Option<String> {
+    /// `Line name: from → to`, for the shot with `uuid`.
+    pub fn shot(&self, line_id: LineId, uuid: &str) -> Option<String> {
         let line = self.lines.get(&line_id)?;
-        let index = *line.shots.get(&shot_id)?;
+        let index = *line.uuids.get(uuid)?;
         let from = line.stations.get(index)?;
         let to = line.stations.get(index + 1)?;
         Some(format!("{}: {from} \u{2192} {to}", line.name))
@@ -170,6 +168,15 @@ pub fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
     }
 }
 
+/// What a Set Shot Kind label calls the kind.
+fn kind_word(kind: ShotKind) -> &'static str {
+    match kind {
+        ShotKind::Normal => "permanent",
+        ShotKind::Jump => "jump",
+        ShotKind::Reference => "reference",
+    }
+}
+
 /// `"Name"` for a line, quoted, or `None`.
 fn quoted(names: &NameBook, line_id: LineId) -> Option<String> {
     names.line(line_id).map(|n| format!("\"{n}\""))
@@ -180,9 +187,8 @@ fn holder(names: &NameBook, holder: &CommentHolder) -> String {
         CommentHolder::Station { station_ref } => names
             .station(*station_ref)
             .map_or_else(|| "a station".to_string(), |s| format!("station {s}")),
-        CommentHolder::Shot { line_id, shot_id } => names
-            .shot(*line_id, *shot_id)
-            .map_or_else(|| "a shot".to_string(), |s| format!("shot {s}")),
+        CommentHolder::Shot { line_id, .. } => quoted(names, *line_id)
+            .map_or_else(|| "a shot".to_string(), |n| format!("a shot in line {n}")),
     }
 }
 
@@ -200,6 +206,23 @@ pub fn describe_entry(entry: &UndoEntry, names: &NameBook) -> String {
             None => format!("Rename station \"{previous}\" to \"{name}\""),
         };
     }
+    // A shot edit whose entry recorded the shot's uuid names the shot.
+    if let UndoData::PreviousValues {
+        line_id,
+        shot_uuid: Some(uuid),
+        ..
+    } = &entry.undo_data
+    {
+        if let Some(shot) = names.shot(*line_id, uuid) {
+            match &entry.command {
+                Command::UpdateShot { .. } => return format!("Update shot {shot}"),
+                Command::SetShotKind { kind, .. } => {
+                    return format!("Mark shot {shot} as {}", kind_word(*kind));
+                }
+                _ => {}
+            }
+        }
+    }
     if let (Command::DeleteLine { line_id }, UndoData::ProjectSnapshotPair { before, .. }) =
         (&entry.command, &entry.undo_data)
     {
@@ -212,8 +235,9 @@ pub fn describe_entry(entry: &UndoEntry, names: &NameBook) -> String {
     describe(&entry.command, names)
 }
 
-/// The history label of `cmd` with names (`Update shot Main Line: 4 → 5`,
-/// `Merge stations Main Line / 0 and Side / 1`, `Delete line "Main Line"`).
+/// The history label of `cmd` with names (`Merge stations Main Line / 0 and
+/// Side / 1`, `Delete line "Main Line"`, `Update shot in line "Main Line"` -
+/// [`describe_entry`] names the shot itself when its entry recorded the uuid).
 /// Commands that address nothing positional keep [`Command::description`].
 pub fn describe(cmd: &Command, names: &NameBook) -> String {
     let station = |sr: &StationRef| names.station(*sr);
@@ -243,34 +267,18 @@ pub fn describe(cmd: &Command, names: &NameBook) -> String {
             Some(n) => format!("Create shot in line {n}"),
             None => "Create shot".to_string(),
         },
-        Command::UpdateShot {
-            line_id, shot_id, ..
-        } => match names.shot(*line_id, *shot_id) {
-            Some(s) => format!("Update shot {s}"),
+        Command::UpdateShot { line_id, .. } => match quoted(names, *line_id) {
+            Some(n) => format!("Update shot in line {n}"),
             None => "Update shot".to_string(),
         },
-        Command::DeleteShot { line_id, shot_id } => {
-            match (names.shot(*line_id, *shot_id), quoted(names, *line_id)) {
-                (Some(s), _) => format!("Delete shot {s}"),
-                (None, Some(n)) => format!("Delete shot in line {n}"),
-                (None, None) => "Delete shot".to_string(),
-            }
-        }
-        Command::SetShotKind {
-            line_id,
-            shot_id,
-            kind,
-        } => {
-            let what = match kind {
-                ShotKind::Normal => "permanent",
-                ShotKind::Jump => "jump",
-                ShotKind::Reference => "reference",
-            };
-            match names.shot(*line_id, *shot_id) {
-                Some(s) => format!("Mark shot {s} as {what}"),
-                None => format!("Mark shot as {what}"),
-            }
-        }
+        Command::DeleteShot { line_id, .. } => match quoted(names, *line_id) {
+            Some(n) => format!("Delete shot in line {n}"),
+            None => "Delete shot".to_string(),
+        },
+        Command::SetShotKind { line_id, kind, .. } => match quoted(names, *line_id) {
+            Some(n) => format!("Mark shot in line {n} as {}", kind_word(*kind)),
+            None => format!("Mark shot as {}", kind_word(*kind)),
+        },
         Command::EditShotCredit {
             targets: CreditTargets::Line { line_id },
             edit,

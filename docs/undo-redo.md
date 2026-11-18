@@ -1042,8 +1042,15 @@ for just the lines the listed entries address: hovering a "Merge stations" entry
 shows the current names. This is intentional - the preview answers "what is this
 referring to now?". A deleted line's label reads its name from the entry's
 `before` snapshot, and a station rename is labelled with the name the station
-had (from the inverse). A name that cannot be resolved falls back to the wording
-without the handle (`Delete shot`, `-` in a preview row), never to the number.
+had (from the inverse). A shot is named only through the uuid its entry
+recorded (`PreviousValues::shot_uuid`, so an Update Shot or Set Shot Kind reads
+`Update shot Main Line: 4 → 5`); a command without one names the shot's line
+(`Delete shot in line "Main Line"`), because the in-session shot id the command
+carries is renumbered by a reload and could then name another shot. A name that
+cannot be resolved falls back to the wording without the handle (`Delete shot`,
+`-` in a preview row), never to the number. The fuzz oracle that pins an
+entry's label per depth (`expect_entry_prints`) therefore pins the entry's own
+`Command::description()`, not the displayed text.
 
 ### Preview Data Generation (`core/undo/history_view.rs`)
 
