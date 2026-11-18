@@ -242,6 +242,32 @@ impl Project {
         self.resolve_held_gauge(held).is_some()
     }
 
+    /// Drop the shot-named records that name no shot the project still holds:
+    /// the `counter_parity_shots` uuids no section holds, and the held gauges
+    /// that no longer resolve - exactly what a save leaves out and a load prunes.
+    ///
+    /// Run by the edit that removed the shot (the forward epilogue every
+    /// structural edit shares), so the edit's own undo entry records the
+    /// removal and puts it back with the shot. Left to the save, the records
+    /// would vanish on a reopen with no entry to restore them, and an undo
+    /// after the reopen would bring the shot back without its record parity or
+    /// its component's held gauge. Returns whether anything was dropped.
+    pub fn prune_dangling_shot_records(&mut self) -> bool {
+        let parity_before = self.counter_parity_shots.len();
+        if parity_before > 0 {
+            let held: HashSet<&str> = self
+                .sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|shot| shot.uuid.as_deref()))
+                .collect();
+            self.counter_parity_shots
+                .retain(|uuid| held.contains(uuid.as_str()));
+        }
+        let gauges_before = self.held_gauges.len();
+        self.prune_held_gauges();
+        self.counter_parity_shots.len() != parity_before || self.held_gauges.len() != gauges_before
+    }
+
     /// Drop every held gauge that no longer names a station (its section no
     /// longer holds its shot). The save writes only the ones that resolve: a
     /// dangling entry anchors nothing. One index probe per entry.

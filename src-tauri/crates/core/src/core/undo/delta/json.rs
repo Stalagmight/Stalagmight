@@ -440,7 +440,14 @@ pub(super) fn apply_members(
                 out.insert(key.clone(), value.clone());
             }
             Edit::Del => {}
-            _ => {
+            // A member serialized only when non-empty: edit the empty value.
+            Edit::Bag { .. } => {
+                out.insert(key.clone(), apply_edit(&Value::Array(Vec::new()), edit)?);
+            }
+            Edit::Obj(_) => {
+                out.insert(key.clone(), apply_edit(&Value::Object(Map::new()), edit)?);
+            }
+            Edit::Arr(..) => {
                 return Err(format!(
                     "an edit names member {key:?}, which the source lacks"
                 ))

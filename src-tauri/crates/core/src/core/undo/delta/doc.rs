@@ -411,6 +411,18 @@ pub(super) fn apply<'a>(
                 members.insert(key.clone(), Cow::Owned(to_text(value)?));
             }
             (None, Edit::Del) => {}
+            // A member serialized only when non-empty (`counter_parity_shots`,
+            // `held_gauges`) is absent once a save or a load emptied it: edit the
+            // empty value it stands for.
+            (None, edit @ (Edit::Bag { .. } | Edit::Obj(_))) => {
+                let empty = if matches!(edit, Edit::Obj(_)) {
+                    Value::Object(serde_json::Map::new())
+                } else {
+                    Value::Array(Vec::new())
+                };
+                let value = apply_edit(&empty, edit)?;
+                members.insert(key.clone(), Cow::Owned(to_text(&value)?));
+            }
             (None, _) => {
                 return Err(format!(
                     "an edit names member {key:?}, which the source lacks"

@@ -1976,3 +1976,187 @@ fn shots_combined_into_a_shotless_section_take_its_legacy_surveyor() {
         "a reload hands nothing out again"
     );
 }
+
+/// Reverse `section`'s record parity in place, so a combine with it records
+/// counter-parity shots.
+fn flip_parity(state: &AppState, section: SectionId) {
+    let mut guard = state.project.lock().unwrap();
+    guard
+        .as_mut()
+        .unwrap()
+        .get_section_mut(section)
+        .unwrap()
+        .reverse_parity = true;
+}
+
+fn save_close_reopen(state: &AppState, path: &std::path::Path) {
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.to_path_buf())
+            })
+            .success
+    );
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path.to_path_buf()).success, "reopen");
+}
+
+/// Deleting a counter-parity shot drops its record with it, in the delete's
+/// own undo entry - so an undo after a save and a reopen (which prune a record
+/// that names no shot) still brings the shot back WITH its record parity.
+#[test]
+fn an_undone_delete_after_a_reopen_restores_the_shots_counter_parity() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("parity.stalx");
+    let (state, k, o) = state();
+    flip_parity(&state, o);
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    let project = state.get_project_state().unwrap();
+    let parity = project.counter_parity_shots.clone();
+    assert!(!parity.is_empty(), "premise: the combine flipped parity");
+    let (victim_id, victim_uuid) = project
+        .get_section(k)
+        .unwrap()
+        .shots
+        .iter()
+        .find(|s| parity.contains(s.uuid.as_deref().unwrap()))
+        .map(|s| (s.id, s.uuid.clone().unwrap()))
+        .unwrap();
+    let deleted = state.execute(Command::DeleteShot {
+        section_id: k,
+        shot_id: victim_id,
+    });
+    assert!(deleted.success, "{:?}", deleted.error);
+    assert!(
+        !state
+            .get_project_state()
+            .unwrap()
+            .counter_parity_shots
+            .contains(&victim_uuid),
+        "the delete drops the record of the shot it removed"
+    );
+    save_close_reopen(&state, &path);
+    assert!(state.undo().success);
+    assert!(
+        state
+            .get_project_state()
+            .unwrap()
+            .counter_parity_shots
+            .contains(&victim_uuid),
+        "the restored shot keeps its counter parity"
+    );
+}
+
+/// Every counter-parity record gone at once (the member disappears from the
+/// file) must not wedge an older entry that edits the set.
+#[test]
+fn an_emptied_counter_parity_set_does_not_wedge_an_older_combine() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("parity-empty.stalx");
+    let (state, k, o) = state();
+    flip_parity(&state, o);
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    let p = create(&state, "P", vec![shot(180.0, 4.0), shot(180.0, 3.0)]);
+    flip_parity(&state, p);
+    let end = state
+        .get_project_state()
+        .unwrap()
+        .get_section(k)
+        .unwrap()
+        .shots
+        .len() as u32;
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(k, end),
+        station_b: StationRef::new(p, 0),
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    assert!(state.execute_combine_sections(k, p, options()).success);
+    let before_delete = state.get_project_state().unwrap().counter_parity_shots;
+    assert!(
+        state
+            .execute(Command::DeleteSection { section_id: k })
+            .success
+    );
+    save_close_reopen(&state, &path);
+    assert!(state.undo().success, "undo of the delete");
+    assert_eq!(
+        state.get_project_state().unwrap().counter_parity_shots,
+        before_delete,
+        "the delete's undo restores every record it dropped"
+    );
+    let second = state.undo();
+    assert!(
+        second.success,
+        "undo of the second combine: {:?}",
+        second.error
+    );
+}
+
+/// A held gauge naming a deleted section is dropped by the delete and comes
+/// back with its undo, after a reopen too - so the adjusted geometry does not
+/// move.
+#[test]
+fn an_undone_section_delete_after_a_reopen_restores_its_held_gauge() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("held.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Held".to_string(),
+        location: None,
+    });
+    let o = create(&state, "O", vec![shot(90.0, 10.0)]);
+    let t = create(
+        &state,
+        "T",
+        vec![shot(0.0, 10.0), shot(270.0, 10.0), shot(180.0, 9.0)],
+    );
+    let k = create(&state, "K", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    for (a, b) in [
+        (StationRef::new(o, 1), StationRef::new(k, 0)),
+        (StationRef::new(k, 2), StationRef::new(t, 0)),
+    ] {
+        assert!(
+            state
+                .execute(Command::MergeStations {
+                    station_a: a,
+                    station_b: b
+                })
+                .success
+        );
+    }
+    assert!(
+        state
+            .execute(Command::CreateLoopClosure {
+                station_a: StationRef::new(t, 3),
+                station_b: StationRef::new(k, 1),
+                closure_strategy: crate::models::ClosureStrategy::LeastSquaresWeighted,
+            })
+            .success
+    );
+    assert!(state.execute_combine_sections(k, o, options()).success);
+    let held = state.get_project_state().unwrap().held_gauges.clone();
+    assert_eq!(held.len(), 1, "premise: the combine holds one gauge");
+    let adjusted_before = adjusted_by_position(&state);
+    assert!(
+        state
+            .execute(Command::DeleteSection {
+                section_id: held[0].section_id
+            })
+            .success
+    );
+    save_close_reopen(&state, &path);
+    assert!(state.undo().success);
+    assert_eq!(
+        state.get_project_state().unwrap().held_gauges,
+        held,
+        "the held gauge comes back with its section"
+    );
+    let adjusted_after = adjusted_by_position(&state);
+    for (station, before) in &adjusted_before {
+        let after = adjusted_after.get(station).expect("the station is back");
+        assert!(
+            (before.0 - after.0).hypot(before.1 - after.1) < 1e-6,
+            "station {station:?} moved: {before:?} -> {after:?}"
+        );
+    }
+}

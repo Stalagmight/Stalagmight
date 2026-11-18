@@ -105,6 +105,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_tile_providers",
     "command.get_undo_stack",
     "command.history_discarded",
+    "command.history_discarded_from_earlier_version",
     "command.import_dmp",
     "command.import_sections",
     "command.add_project_file",
@@ -1187,7 +1188,10 @@ mod tests {
         //       command.get_adjustment_report = 730.
         //   + 1 the Edit Station dialog's read-only preview of what a new zero
         //       datum would do (#741): command.preview_zero_datum = 731.
-        assert_eq!(EVENT_NAMES.len(), 731);
+        //   + 1 the discarded-history banner asks whether the history it reports
+        //       was an earlier version's (compact undo entries):
+        //       command.history_discarded_from_earlier_version = 732.
+        assert_eq!(EVENT_NAMES.len(), 732);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

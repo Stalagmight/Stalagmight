@@ -421,6 +421,9 @@ impl AppState {
             return;
         };
         project.settle_datum_layout(before);
+        // The same forward epilogue drops the records that name a shot the edit
+        // removed, so the edit's undo entry carries them (see the method).
+        project.prune_dangling_shot_records();
     }
 
     /// True iff the open project currently holds a Critical integrity violation.
@@ -621,6 +624,7 @@ impl AppState {
             // Same order as execute()'s epilogue: renormalise onto the new frame
             // before the solve that lands on it.
             project.settle_datum_layout(&datums_before);
+            project.prune_dangling_shot_records();
             project.resolve_offsets();
             // Repair does not go through `reconcile_geometry`, so it carries the
             // closure re-measure itself, last and off the geometry the re-solve
