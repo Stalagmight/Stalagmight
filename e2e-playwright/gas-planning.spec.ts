@@ -1610,10 +1610,10 @@ test.describe('Gas planning', () => {
     // alongside the penetration toggle and the Color dropdown.
     await expect(panel.getByTestId('export-show-line-names')).toBeVisible();
     await expect(panel.getByTestId('export-show-station-labels')).toBeVisible();
-    // Station names sits beside Station IDs; this project has no names, so it is
-    // offered disabled (it would only untick the IDs and label nothing).
+    // Station names sits beside Station IDs; every station has a name, so it is
+    // offered as soon as the project has stations.
     await expect(panel.getByTestId('export-show-station-names')).toBeVisible();
-    await expect(panel.getByTestId('export-show-station-names')).toBeDisabled();
+    await expect(panel.getByTestId('export-show-station-names')).toBeEnabled();
     await expect(panel.getByTestId('export-show-station-comments')).toBeVisible();
     await expect(panel.getByTestId('export-show-shot-comments')).toBeVisible();
     await expect(panel.getByTestId('export-show-shot-data')).toBeVisible();

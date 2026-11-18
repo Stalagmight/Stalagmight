@@ -277,17 +277,15 @@ test.describe('Station IDs / Station names', () => {
     await waitForDrawnStations(page, 1);
   });
 
-  test('Station names is offered only once the project has names', async ({ page }) => {
+  test('Station names is offered as soon as the project has stations (every station has a name)', async ({ page }) => {
     await openDisplayMenu(page);
+    const ids = page.getByTestId('display-toggle-showStationLabels');
     const names = page.getByTestId('display-toggle-showStationNames');
-    await expect(page.getByTestId('display-toggle-showStationLabels')).toHaveText(/Station IDs/);
+    await expect(ids).toHaveText(/Station IDs/);
+    await expect(ids).toHaveAttribute('title', /Station ID, the number that identifies it across the project/);
     await expect(names).toHaveText(/Station names/);
-    await expect(names).toBeDisabled();
-    await expect(names).toHaveAttribute('title', /no station names/);
-
-    await seedStationNames(page, [[0, '7'], [2, '9']]);
     await expect(names).toBeEnabled();
-    await expect(names).toHaveAttribute('title', /instead of IDs/);
+    await expect(names).toHaveAttribute('title', /instead of Station IDs/);
   });
 
   test('the two pills are one choice, and both are saved', async ({ page }) => {

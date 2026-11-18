@@ -3,8 +3,8 @@
  * Phase 1).
  *
  * `features.ts` (the stock vector-tile feature builder) and the custom label
- * tessellator both need the exact same strings ("312° 4.2m 1.8m", a station
- * index, a line name, a comment) and the exact same per-label color (depth
+ * tessellator both need the exact same strings ("312° 4.2m 1.8m", a Station
+ * ID, a line name, a comment) and the exact same per-label color (depth
  * ramp vs `labelColor`, line color, comment palette). Reimplementing either
  * on the custom path would risk a subtle A/B mismatch (precision, the
  * depth-vs-flat fallback), so both paths call THESE helpers - parity by
@@ -39,12 +39,17 @@ export function formatShotLabel(
   return `${formatFixed(azimuthIn, undefined, precision?.azimuth ?? 0)}° ${formatFixed(length, undefined, precision?.length ?? 1)}m ${formatFixed(depth, undefined, precision?.depth ?? 1)}m`;
 }
 
-/** Station-label text: the station's index, as the stock builder emits it. */
-export function formatStationLabel(stationIndex: number): string {
-  return String(stationIndex);
+/**
+ * Station-label text in IDs mode: the station's project-unique Station ID
+ * (`SurveyData.stationIds`), the number the image export draws for the same
+ * option. Never the station's position in its line, which is an internal
+ * handle (SPEC 4.1).
+ */
+export function formatStationLabel(stationId: number): string {
+  return String(stationId);
 }
 
-/** What a station label says: its ID (the index) or its name. */
+/** What a station label says: its Station ID or its name. */
 export type StationLabelText = 'id' | 'name';
 
 /** The longest station name drawn whole. Longer names are cut to one less and
@@ -55,8 +60,9 @@ export const STATION_NAME_LABEL_MAX_CHARS = 24;
  * Station-label text in names mode. Names come from the file, so they pass the
  * same sanitizer as every other place a name is shown (no control characters or
  * bidi overrides), then are trimmed and capped by code point - never splitting
- * a surrogate pair. `null` when nothing is left: an unnamed station gets no
- * label rather than falling back to its index.
+ * a surrogate pair. `null` when nothing is left (every station of a loaded
+ * project has a name, but one made only of control characters shows as
+ * nothing): such a station gets no label rather than falling back to its ID.
  */
 export function formatStationNameLabel(name: string | null | undefined): string | null {
   const clean = displayStationName(name).trim();

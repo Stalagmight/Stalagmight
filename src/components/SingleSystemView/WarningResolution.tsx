@@ -9,6 +9,8 @@ import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { warningMessageText } from '../../utils/stationIdentity';
 import { normalizeAzimuth, averageAzimuth } from '../../utils/azimuth';
 import {
   computeGhostEnd,
@@ -286,6 +288,7 @@ export function WarningResolution({
   onSkip,
 }: WarningResolutionProps) {
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   const precision = useDecimalPrecision();
   const { updateShot, deleteShot, removeLoopClosure, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
@@ -511,7 +514,7 @@ export function WarningResolution({
             ? [{
                 id: 'go-to-station',
                 label: t('detailPanel.warnings.resolveOptions.goToClosureStation', {
-                  station: `${closureStation.line_id}:${closureStation.station_index}`,
+                  station: identity.station(closureStation, true),
                 }),
                 navigate: true,
               }]
@@ -529,7 +532,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.closureId, closureStation, shot, geometryDisabled, editingBlocked, projectSaved, t, precision, identity]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered, and
   // for an inclination in/out warning `pitchDeviationDefault` (average, unless
@@ -843,7 +846,10 @@ export function WarningResolution({
 
       {/* The warning + current values */}
       <div className="px-1 mb-3">
-        <div className="text-sm text-text-primary">{warning.message}</div>
+        {/* Names the shot (`Shot Main Line: 4 → 5 ...`), never the backend's positional prefix. */}
+        <div className="text-sm text-text-primary" data-testid="warning-resolution-message">
+          {warningMessageText(identity, warning, true)}
+        </div>
         {shot && (warning.code === 'AZIMUTH_DEVIATION' || warning.code === 'INVALID_AZIMUTH') && (
           <div className="text-xs text-text-secondary mt-1">
             {t('detailPanel.labels.azimuthIn')} {az(shot.azimuth_in)} · {t('detailPanel.labels.azimuthOut')} {az(shot.azimuth_out)}

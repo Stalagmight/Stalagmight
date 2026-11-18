@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -27,6 +27,7 @@ interface GasLegendProps {
 export function GasLegend({ field, units, visible }: GasLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   // Re-render on theme change so text colors stay correct.
   useUIStore((s) => s.resolvedTheme);
   const origin = useGasPlanStore((s) => s.origin);
@@ -41,9 +42,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
   const minLabel = formatVolume(0, units);
   const maxLabel = formatVolume(field.budget_litres, units);
   const originLabel = origin
-    ? t('map.gasLegend.fromStation', {
-        id: formatStationId(origin.line_id, origin.station_index),
-      })
+    ? t('map.gasLegend.fromStation', { station: identity.station(origin, true) })
     : t('map.gasLegend.fromEntrance');
 
   return (

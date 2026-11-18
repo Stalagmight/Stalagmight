@@ -172,6 +172,9 @@ function makeFixture(): SurveyData {
   d.stationCount = 4;
   d.stationLineIds = new Uint32Array([1, 1, 1, 2]);
   d.stationIndices = new Uint32Array([0, 1, 2, 0]);
+  // Station IDs (what the IDs labels draw): one digit each, like the indices,
+  // so glyph counts stay the same, but never equal to the index.
+  d.stationIds = new Uint32Array([7, 8, 9, 6]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 100, 100, 0]);
   d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0]);
   return d;
@@ -1422,6 +1425,7 @@ describe('SurveyLabelController rerun keeps a lost virtual label hidden', () => 
     d.stationCount = 5;
     d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([7, 8, 9, 6, 5]);
     d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2, 0, 0, 0, 10, 0, -1]);
     d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
     d.shotFlags = new Uint8Array([0, 0, shotKindToFlags('Jump')]);
@@ -1488,6 +1492,7 @@ describe('SurveyLabelController jump line names below the label band', () => {
     d.stationCount = 5;
     d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([7, 8, 9, 6, 5]);
     d.stationCoords = new Float64Array([-3000, 0, 0, 0, 0, -1, 10, 0, -2, 0, 0, -1, 0, 30, -1]);
     d.stationFlags = new Uint8Array([STATION_FLAG_IS_ZERO_DATUM, 0, 0, 0, 0]);
     return params;
@@ -1604,7 +1609,7 @@ describe('SurveyLabelController station label mode (Station IDs / Station names)
     const p = namedParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    expect(stationGlyphs(layer)).toBe(4); // "0", "1", "2", "0"
+    expect(stationGlyphs(layer)).toBe(4); // the Station IDs "7", "8", "9", "6"
     const updates = layer.updateCalls;
 
     c.setStationLabelMode('name');

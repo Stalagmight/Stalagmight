@@ -59,13 +59,13 @@ function getMockUndoStack(): MockHistoryItem[] {
     },
     {
       index: 3,
-      description: 'Merge stations A1 and B2',
+      description: 'Merge stations Main Tunnel / A1 and Side Passage / B2',
       timestamp: null, // Legacy entry without timestamp
       commandType: 'merge_stations',
       previewData: {
         changes: [
-          { field: 'Station A', oldValue: null, newValue: '1:0 (Main Tunnel)' },
-          { field: 'Station B', oldValue: null, newValue: '2:1 (Side Passage)' },
+          { field: 'Station A', oldValue: null, newValue: 'Main Tunnel / A1' },
+          { field: 'Station B', oldValue: null, newValue: 'Side Passage / B2' },
         ],
         additionalChanges: 0,
       },
@@ -531,9 +531,9 @@ test.describe('Undo/Redo History Dropdown', () => {
       const previewPopup = page.getByTestId('detail-preview-popup');
       await expect(previewPopup).toBeVisible({ timeout: 1000 });
       await expect(previewPopup).toContainText('Station A:');
-      await expect(previewPopup).toContainText('1:0 (Main Tunnel)');
+      await expect(previewPopup).toContainText('Main Tunnel / A1');
       await expect(previewPopup).toContainText('Station B:');
-      await expect(previewPopup).toContainText('2:1 (Side Passage)');
+      await expect(previewPopup).toContainText('Side Passage / B2');
 
       // Should NOT contain arrow symbol (info-only rendering)
       await expect(previewPopup).not.toContainText('→');
@@ -564,7 +564,7 @@ test.describe('Undo/Redo History Dropdown', () => {
         cfg.undoStack = [
           {
             index: 0,
-            description: 'Move line 2',
+            description: 'Move line "Main Tunnel"',
             timestamp: new Date().toISOString(),
             commandType: 'move_line',
             previewData: {
@@ -612,8 +612,8 @@ test.describe('Undo/Redo History Dropdown', () => {
             commandType: 'batch',
             previewData: {
               changes: [
-                { field: 'Merge stations 1:0 and 2:1', oldValue: null, newValue: '1:0 \u2194 2:1' },
-                { field: 'Update line 1 metadata', oldValue: null, newValue: '' },
+                { field: 'Merge stations Main Tunnel / 0 and Side / 1', oldValue: null, newValue: 'Main Tunnel / 0 \u2194 Side / 1' },
+                { field: 'Update line "Main Tunnel" metadata', oldValue: null, newValue: '' },
                 { field: 'Delete line "Side"', oldValue: null, newValue: '' },
               ],
               additionalChanges: 0,
@@ -635,12 +635,12 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(previewPopup).toBeVisible({ timeout: 1000 });
 
       // Should show each sub-command description as header
-      await expect(previewPopup).toContainText('Merge stations 1:0 and 2:1');
-      await expect(previewPopup).toContainText('Update line 1 metadata');
+      await expect(previewPopup).toContainText('Merge stations Main Tunnel / 0 and Side / 1');
+      await expect(previewPopup).toContainText('Update line "Main Tunnel" metadata');
       await expect(previewPopup).toContainText('Delete line "Side"');
 
       // First item has details on a new line below the description
-      await expect(previewPopup).toContainText('1:0 \u2194 2:1');
+      await expect(previewPopup).toContainText('Main Tunnel / 0 \u2194 Side / 1');
     });
 
     test('detail preview shows "No details" for defensive null previewData', async ({ page }) => {

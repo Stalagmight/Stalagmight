@@ -78,9 +78,13 @@ export function buildSurveyData(spec: {
   data.stationIndices = new Uint32Array(spec.stations.length);
   data.stationCoords = new Float64Array(spec.stations.length * 3);
   data.stationFlags = new Uint8Array(spec.stations.length);
+  // Every station has a project-unique Station ID; offset from the global
+  // index so a test can never mistake one for the other.
+  data.stationIds = new Uint32Array(spec.stations.length);
   spec.stations.forEach((st, i) => {
     data.stationLineIds[i] = st.lineId;
     data.stationIndices[i] = st.stationIndex;
+    data.stationIds[i] = 500 + i;
     data.stationCoords[i * 3] = st.x ?? i * 10;
     data.stationCoords[i * 3 + 1] = st.y ?? 0;
   });

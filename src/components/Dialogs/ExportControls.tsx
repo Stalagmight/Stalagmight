@@ -19,6 +19,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
 import { setStationLabelOption } from '../../utils/exportOptions';
 import { hasStationNames } from '../../types/survey-data';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { ExportColorScaleControls } from './ExportColorScaleControls';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
@@ -112,16 +113,6 @@ export default function ExportControls({
       onExportingChange?.(v);
     },
     [onExportingChange],
-  );
-
-  const formatLineLabel = useCallback(
-    (line: { id: number; name: string | null }): string => {
-      const trimmedName = line.name?.trim();
-      return trimmedName && trimmedName.length > 0
-        ? `${trimmedName} (#${line.id})`
-        : t('dialogs.tmlUnanchoredWarning.sectionFallbackName', { id: line.id });
-    },
-    [t],
   );
 
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
@@ -717,7 +708,8 @@ export default function ExportControls({
             <ul className="list-disc pl-5 space-y-1 text-sm max-h-40 overflow-y-auto">
               {tmlUnanchoredSections.map((line) => (
                 <li key={line.id} data-testid={`tml-unanchored-section-item-${line.id}`}>
-                  {formatLineLabel(line)}
+                  {/* Line names are project-unique, so the name alone tells them apart. */}
+                  {lineDisplayName(line.name)}
                 </li>
               ))}
             </ul>

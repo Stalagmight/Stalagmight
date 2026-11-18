@@ -5,7 +5,7 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { formatFixed } from '../../i18n/format';
 import { gasAssumptionsSummary } from '../../utils/gasAssumptionsSummary';
 import { formatGasLength, formatPressure, formatVolume } from '../../utils/formatGas';
@@ -34,6 +34,8 @@ function formatRouteRuntime(min: number): string {
  */
 export function GasPlanPanel() {
   const { t } = useTranslation();
+  // Stations are shown by name with their line (`Main Line / 17`): names are only line-unique.
+  const identity = useIdentityLabels();
   const {
     originChosen,
     originPickArmed,
@@ -183,7 +185,7 @@ export function GasPlanPanel() {
 
   const units = gasConfig.units;
   const originLabel = origin
-    ? formatStationId(origin.line_id, origin.station_index)
+    ? identity.station(origin, true)
     : t('gasPanel.origin.entrance');
 
   // Way-point readouts, all from the engine (#298) - the panel never re-derives a
@@ -492,7 +494,7 @@ export function GasPlanPanel() {
             <div className="flex items-center gap-2">
               <span data-testid="gas-endpoint-readout" className="font-mono text-xs">
                 {endpoint
-                  ? formatStationId(endpoint.line_id, endpoint.station_index)
+                  ? identity.station(endpoint, true)
                   : t('gasPanel.route.endpointAuto')}
               </span>
               <button
@@ -515,12 +517,7 @@ export function GasPlanPanel() {
                 turnTowardEndpoint
                   ? 'gasPanel.route.endpointOutOfReach'
                   : 'gasPanel.route.endpointUnusable',
-                {
-                  id: formatStationId(
-                    endpointOutOfReach.line_id,
-                    endpointOutOfReach.station_index
-                  ),
-                }
+                { station: identity.station(endpointOutOfReach, true) }
               )}
             </p>
           )}
@@ -541,7 +538,7 @@ export function GasPlanPanel() {
                   >
                     <span className="opacity-60 w-4 text-right">{i + 1}.</span>
                     <span className="font-mono flex-1">
-                      {formatStationId(w.line_id, w.station_index)}
+                      {identity.station(w, true)}
                     </span>
                     {unresolved.waypoints[i] && (
                       <span className="text-error" data-testid={`gas-waypoint-unresolved-${i}`}>
@@ -634,7 +631,7 @@ export function GasPlanPanel() {
                   data-testid={`gas-marked-row-${i}`}
                 >
                   <span className="font-mono">
-                    {formatStationId(m.station.line_id, m.station.station_index)}
+                    {identity.station(m.station, true)}
                   </span>
                   <input
                     type="text"

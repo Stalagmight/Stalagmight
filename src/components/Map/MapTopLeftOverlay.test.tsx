@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
 import type { AdjustmentReport } from '../../types/ipc/AdjustmentReport';
 
 // `t` resolves against the REAL shipped locale file rather than a hand-copied
@@ -219,6 +220,16 @@ describe('MapTopLeftOverlay', () => {
     });
 
     it('names the GPS fix the computed view is bent to, and how far off it is (#741)', () => {
+      // The station is named with its line (`Main Line / A7`), never by its
+      // positional `line:index` handle.
+      useProjectStore.setState({
+        surveyData: null,
+        stations: [
+          { station_ref: { line_id: 2, station_index: 5 }, name: 'A7', id: 31 },
+          { station_ref: { line_id: 3, station_index: 1 }, name: '12', id: 40 },
+        ],
+        project: { lines: [{ id: 2, name: 'Main Line' }, { id: 3, name: 'Side' }] },
+      } as never);
       const fix = (line_id: number, station_index: number, gap_m: number) => ({
         station: { line_id, station_index },
         gap_m,
@@ -228,7 +239,7 @@ describe('MapTopLeftOverlay', () => {
         <MapTopLeftOverlay {...baseProps} adjustmentReport={report({ far_gps_fixes: [fix(2, 5, 43.2)] })} />
       );
       expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
-        'Bent to a GPS fix at 2:5, 43 m from its surveyed position. Check it.'
+        'Bent to a GPS fix at Main Line / A7, 43 m from its surveyed position. Check it.'
       );
       expect(screen.queryByTestId('adjustment-notice-skipped')).toBeNull();
       // The backend sorts the largest gap first; the notice names it.
@@ -239,7 +250,7 @@ describe('MapTopLeftOverlay', () => {
         />
       );
       expect(screen.getByTestId('adjustment-notice-far-gps-fix')).toHaveTextContent(
-        'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at 3:1. Check them.'
+        'Bent to 2 GPS fixes far from their surveyed positions, up to 80 m at Side / 12. Check them.'
       );
     });
 

@@ -85,7 +85,17 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     setSelection.mockReset();
     useProjectStore.setState({
       removeLoopClosure,
-      project: { loop_closures: [closure(4, 1, 2), closure(9, 3, 4)], lines: [] },
+      surveyData: null,
+      // Station names that differ from the positions, so a positional label shows.
+      stations: [
+        { station_ref: { line_id: 0, station_index: 1 }, name: 'A1', id: 11 },
+        { station_ref: { line_id: 0, station_index: 2 }, name: 'A2', id: 12 },
+        { station_ref: { line_id: 0, station_index: 3 }, name: 'A2a', id: 13 },
+      ],
+      project: {
+        loop_closures: [closure(4, 1, 2), closure(9, 3, 4)],
+        lines: [{ id: 0, name: 'Main Line', shots: [] }],
+      },
     } as never);
     useUIStore.setState({ geometryMode: 'measured', appMode: 'survey', setSelection } as never);
     // A confirmed-local project (the read-only gate fails closed on 'unknown').
@@ -98,9 +108,19 @@ describe('WarningResolution - closures across one shot (#737)', () => {
     expect(remove).toBeEnabled();
     expect(remove).toBeChecked();
     expect(screen.getByText('Remove this loop closure')).toBeInTheDocument();
-    // The station of closure 9 (the warning's), not of closure 4 on the same shot.
-    expect(screen.getByText('Go to closure station 0:3')).toBeInTheDocument();
+    // The station of closure 9 (the warning's), not of closure 4 on the same
+    // shot - by name with its line, never by its positional handle.
+    expect(screen.getByText('Go to closure station Main Line / A2a')).toBeInTheDocument();
+    expect(screen.queryByText(/0:3/)).not.toBeInTheDocument();
     expect(screen.queryByText(/ignore/i)).not.toBeInTheDocument();
+  });
+
+  it('names the shot in the warning text instead of the positional prefix', () => {
+    renderResolution(acrossOneShot);
+    const message = screen.getByTestId('warning-resolution-message');
+    // shotIndex 1 runs from station 1 to station 2 of its line.
+    expect(message.textContent).toMatch(/^Shot Main Line: A1 \u2192 A2 has both ends joined/);
+    expect(message).not.toHaveTextContent('Shot 0:2');
   });
 
   it('removes exactly the closure the warning names', async () => {

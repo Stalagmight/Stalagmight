@@ -32,6 +32,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 
 import { SegmentsTable } from './SegmentsTable';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
@@ -116,15 +117,21 @@ describe('SegmentsTable', () => {
     expect(screen.getByTestId('segment-row-2')).toHaveTextContent('Onward');
   });
 
-  it('labels the origin instead of Entrance once one is set, keeping the station id as a tooltip', () => {
+  it('labels the origin instead of Entrance once one is set, keeping the station as a tooltip', () => {
+    useProjectStore.setState({
+      surveyData: null,
+      stations: [{ station_ref: A, name: '7b', id: 90 }],
+      project: { lines: [{ id: 1, name: 'Main Line' }] },
+    } as never);
     useGasPlanStore.getState().setOrigin(A);
     render(<SegmentsTable />);
     const cell = screen.getByTestId('segment-cell-0-from');
     expect(cell).toHaveTextContent('Origin');
     expect(cell).not.toHaveTextContent('Entrance');
-    // The id stays OFF the row and reachable only as a tooltip on the label span.
-    expect(cell).not.toHaveTextContent('1:2');
-    expect(cell.querySelector('[title]')).toHaveAttribute('title', '1:2');
+    // The station stays OFF the row and reachable only as a tooltip on the label
+    // span - by name with its line, never by its positional `line:index` handle.
+    expect(cell).not.toHaveTextContent('7b');
+    expect(cell.querySelector('[title]')).toHaveAttribute('title', 'Main Line / 7b');
   });
 
   it('labels every boundary by role: origin, each way point in order, and the endpoint', () => {

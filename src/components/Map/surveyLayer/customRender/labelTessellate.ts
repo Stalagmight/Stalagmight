@@ -135,8 +135,9 @@ export interface LabelBuildContext {
   /** Theme for the Errors labels' severity colours (required with `errors`). */
   themeColors?: MapThemeColors | undefined;
   /**
-   * What station labels say. ABSENT = `'id'` (the station index). `'name'`
-   * labels each station with its name and skips unnamed stations - every other
+   * What station labels say. ABSENT = `'id'` (the Station ID, `stationIds`).
+   * `'name'` labels each station with its name and skips one whose name shows
+   * as nothing - every other
    * field of the descriptor (ordinal, flags, owner) is the same as for the ID,
    * so names declutter, decimate, dim and hide exactly like the IDs do.
    */
@@ -377,11 +378,15 @@ export function buildLabelDescriptors(
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
+      // IDs mode draws the Station ID, never the station's position in its line.
+      const stationId = data.stationIds[g];
       const stationText = !(wantStationLabel && stationInView)
         ? null
         : namesMode
           ? formatStationNameLabel(data.stationNames.get(g))
-          : formatStationLabel(stationIndex);
+          : stationId === undefined
+            ? null
+            : formatStationLabel(stationId);
       if (stationText !== null) descriptors.push({
         kind: LABEL_KIND.STATION_LABEL,
         text: stationText,

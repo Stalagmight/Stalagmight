@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFixed } from '../../i18n/format';
-import { formatStationId } from '../../utils/formatters';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
@@ -28,6 +28,7 @@ interface DistanceLegendProps {
 export function DistanceLegend({ max, visible, colorScale = null, embedded = false }: DistanceLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
+  const identity = useIdentityLabels();
   const precision = useDecimalPrecision();
   // Re-render on theme change so text colors stay correct.
   useUIStore((s) => s.resolvedTheme);
@@ -50,9 +51,7 @@ export function DistanceLegend({ max, visible, colorScale = null, embedded = fal
     : `0${t('common.units.meters')}`;
   const maxLabel = `${formatFixed(scaled ? scaled.max : max, undefined, precision.coordinates)}${t('common.units.meters')}`;
   const originLabel = origin
-    ? t('map.distanceLegend.fromStation', {
-        id: formatStationId(origin.line_id, origin.station_index),
-      })
+    ? t('map.distanceLegend.fromStation', { station: identity.station(origin, true) })
     : t('map.distanceLegend.fromEntrance');
 
   return (

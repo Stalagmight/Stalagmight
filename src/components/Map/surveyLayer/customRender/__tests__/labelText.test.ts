@@ -87,8 +87,9 @@ describe('labelText helpers (units)', () => {
     expect(emoji).toBe(`${'\u{1F30A}'.repeat(STATION_NAME_LABEL_MAX_CHARS - 1)}\u2026`);
   });
 
-  it('formats a station label as its index; line as its name (empty for null)', () => {
+  it('formats a station label as its Station ID; line as its name (empty for null)', () => {
     expect(formatStationLabel(7)).toBe('7');
+    expect(formatStationLabel(1203)).toBe('1203');
     expect(formatLineLabel('Alpha')).toBe('Alpha');
     expect(formatLineLabel(null)).toBe('');
     expect(formatCommentLabel('hi there')).toBe('hi there');

@@ -66,6 +66,8 @@ function fixture(): SurveyData {
   d.stationCount = 3;
   d.stationLineIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
+  // Station IDs differ from the indices: the IDs labels must draw these.
+  d.stationIds = new Uint32Array([7, 8, 9]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);
   d.shotComments = new Map([[0, 'shot note']]);
@@ -96,6 +98,54 @@ describe('buildLabelDescriptors', () => {
     expect(byKind(LABEL_KIND.LINE_NAME)).toHaveLength(1);
   });
 
+  it('Station IDs mode draws each station\'s Station ID, never its position in the line', () => {
+    const d = fixture();
+    // Two lines whose stations share positions 0 and 1: the index would repeat
+    // across lines, the project-unique Station ID never does.
+    d.lines = [
+      d.lines[0]!,
+      { id: 2, name: 'Beta', color: '#8e44ad', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
+    ];
+    d.shotCount = 3;
+    d.shotIds = new Uint32Array([0, 1, 0]);
+    d.shotLineIds = new Uint32Array([1, 1, 2]);
+    d.shotFlags = new Uint8Array([0, 0, 0]);
+    d.shotAzimuthIn = new Float32Array([312, 45, 90]);
+    d.shotLength = new Float32Array([4, 3, 5]);
+    d.shotDepthIn = new Float32Array([1, 2, 1]);
+    d.shotDepthOut = new Float32Array([2, 4, 1]);
+    d.stationCount = 5;
+    d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
+    d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([41, 7, 1203, 42, 0]);
+    d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2, 0, 5, 0, 5, 5, 0]);
+    d.stationFlags = new Uint8Array([0, 0, 0, 0, 0]);
+    d.stationNames = new Map([[0, 'A0'], [1, 'A1'], [2, 'A2'], [3, '0'], [4, '1']]);
+    const labels = (mode?: 'id' | 'name') =>
+      buildLabelDescriptors(d, null, 0, 0, mode ? { ...CTX, stationLabelText: mode } : CTX)
+        .filter((x) => x.kind === LABEL_KIND.STATION_LABEL)
+        .map((x) => [x.stationGlobal, x.stationIndex, x.text]);
+    // The default (and explicit 'id') text is the Station ID, while the descriptor
+    // still carries the positional index as its internal owner handle.
+    expect(labels()).toEqual([
+      [0, 0, '41'],
+      [1, 1, '7'],
+      [2, 2, '1203'],
+      [3, 0, '42'],
+      [4, 1, '0'],
+    ]);
+    expect(labels('id')).toEqual(labels());
+    // Names mode draws the names instead; the two modes never mix.
+    expect(labels('name').map(([, , text]) => text)).toEqual(['A0', 'A1', 'A2', '0', '1']);
+  });
+
+  it('a station with no Station ID gets no IDs label rather than its index', () => {
+    const d = fixture();
+    d.stationIds = new Uint32Array(0);
+    const stations = buildLabelDescriptors(d, null, 0, 0, CTX).filter((x) => x.kind === LABEL_KIND.STATION_LABEL);
+    expect(stations).toEqual([]);
+  });
+
   it('station names mode: named stations only, labelled by name, everything else as for the ID', () => {
     const d = fixture();
     d.stationNames = new Map([[0, '7'], [2, ' \u202e9 ']]);
@@ -103,7 +153,7 @@ describe('buildLabelDescriptors', () => {
     const names = buildLabelDescriptors(d, null, 0, 0, { ...CTX, stationLabelText: 'name' }).filter(
       (x) => x.kind === LABEL_KIND.STATION_LABEL,
     );
-    // g1 has no name, so it gets no label (no fallback to its index); g2's name is sanitized.
+    // g1 has no name, so it gets no label (no fallback to its ID); g2's name is sanitized.
     expect(names.map((x) => [x.stationGlobal, x.text])).toEqual([
       [0, '7'],
       [2, '9'],
@@ -204,6 +254,7 @@ describe('buildLabelDescriptors', () => {
     d.stationCount = 5;
     d.stationLineIds = new Uint32Array([1, 1, 1, 2, 2]);
     d.stationIndices = new Uint32Array([0, 1, 2, 0, 1]);
+    d.stationIds = new Uint32Array([7, 8, 9, 10, 11]);
     d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2, 0, 5, 0, 5, 5, 0]);
     d.stationFlags = new Uint8Array([0, 0, 0, 0, 0]);
     d.shotComments = new Map();
