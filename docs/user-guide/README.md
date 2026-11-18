@@ -12,6 +12,7 @@ How to use Stalagmight. Pages link to each other.
 - [Closing a loop](workflows/closing-a-loop.md)
 - [Adding comments](workflows/adding-comments.md)
 - [Combining and splitting lines](workflows/combining-and-splitting-sections.md)
+- [Grouping lines into sections](workflows/grouping-lines-into-sections.md)
 - [Exporting](workflows/exporting.md)
 - [Planning a dive](workflows/planning-a-dive.md)
 

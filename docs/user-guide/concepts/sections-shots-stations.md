@@ -21,6 +21,10 @@ order: 1
 - **Line**: a run of shots surveyed in one go, usually along one stretch of
   cave line, with its own name, color, surveyors and date. The **Sections**
   panel on the left lists the lines.
+- **Section**: a named, colored group of lines, such as one region of the
+  cave. A line is in at most one section. Sections organize the **Sections**
+  panel and can be hidden on the map. See
+  [Grouping lines into sections](../workflows/grouping-lines-into-sections.md).
 - **Merging** two stations connects the lines they are on. That is how
   separate lines become one cave. See
   [Merging stations](../workflows/merging-stations.md).

@@ -1,7 +1,7 @@
 ---
 title: Exporting
 description: "Export a map image (PNG, SVG or PDF) or the survey data (Ariane TML or TMLU, CSV, JSON), and what an Ariane file keeps of your zero datums."
-order: 10
+order: 11
 feature: import-export
 ---
 
@@ -24,7 +24,9 @@ replacing stays as it was.
 - The preview is exactly what will be written: large in the map area in Export
   mode, small under **Preview** in the dialog.
 - The image always shows the whole survey, north up, with a small margin on a
-  white background. It has no scale bar or north arrow.
+  white background. It has no scale bar or north arrow. Sections hidden on the
+  map are drawn too (see
+  [Grouping lines into sections](grouping-lines-into-sections.md)).
 - The survey is drawn as the Closures Computed View shows it (loops closed,
   bent through GPS fixes), whichever view you are in. A project with nothing to
   adjust is drawn as surveyed.

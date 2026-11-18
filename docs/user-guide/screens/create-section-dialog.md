@@ -24,6 +24,9 @@ name and the shots are now:
 - **Survey date**: when the line was surveyed. Empty by default (**No date**);
   the **Clear date** button beside a date empties it again.
 - **Color**: the line's color on the map.
+- **Section**: shown once the project has
+  [sections](../workflows/grouping-lines-into-sections.md). The line goes
+  straight into the section picked here; **No section** by default.
 - **Surveyors** and **Explorers**: lists of people. Type a name and press
   **Enter** (or `;`) to add it. Suggestions come from the project, from names
   you entered before and, for a SpeleoDB project, from its collaborators.

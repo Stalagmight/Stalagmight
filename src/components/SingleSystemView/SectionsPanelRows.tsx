@@ -653,7 +653,11 @@ function RenameField({
   }, []);
   const errorId = `section-rename-error-${sectionId}`;
   return (
-    <div onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+    <div
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      data-testid={`section-rename-${sectionId}`}
+    >
       <input
         ref={inputRef}
         type="text"

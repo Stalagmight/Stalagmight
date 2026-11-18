@@ -7,7 +7,8 @@ order: 3
 # Survey view
 
 The main window of an open project: the map, with **Sections** (the list of
-lines) on the left, **Details** on the right and **Data** at the bottom.
+lines, grouped into sections) on the left, **Details** on the right and **Data**
+at the bottom.
 
 ![Survey view](../images/survey-view.png)
 
@@ -45,6 +46,13 @@ lines) on the left, **Details** on the right and **Data** at the bottom.
 18. **Data**: tables of lines and raw shot data.
 19. **Details**: project statistics or the selected item. **Warnings**: problems
     found in the data, see the [Warnings panel](warnings-panel.md).
+
+The **Sections** panel also has **New Section**, left of **Add line** (not in
+the picture). Once the project has a section, the panel lists each section
+(color, name, number of lines and length, an eye to hide it on the map) with its
+lines under it, then the **Ungrouped** lines. Drag lines onto a section, or
+right-click one for **Move to Section**. See
+[Grouping lines into sections](../workflows/grouping-lines-into-sections.md).
 
 The left panel now has two tabs, **Sections** and **SpeleoDB**, where the
 picture shows only the **Sections** heading. **SpeleoDB** shows a SpeleoDB
