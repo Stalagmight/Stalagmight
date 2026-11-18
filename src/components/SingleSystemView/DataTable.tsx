@@ -27,6 +27,7 @@ import { buildShotColumns } from './dataTableShotColumns';
 import { CREDIT_COLUMN_KEYS, isCreditColumn } from './dataTableCreditColumns';
 import { useDataTableCredit } from './useDataTableCredit';
 import { buildStationColumns, stationRenameToSend } from './dataTableStationColumns';
+import { HEADER_HIDE_GROUPS, STATION_MENU_COLS } from './dataTableColumnGroups';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
@@ -59,37 +60,6 @@ interface DataTableProps {
 const CHROME_OFFSET_DEFAULT = 28;
 /** Floor for the computed grid height so it never collapses below a usable size. */
 const MIN_GRID_HEIGHT = 120;
-
-/** Header right-click hide targets: the clicked column's display name and the
- *  key group it hides with (L/R/U/D hide together as LRUD). */
-const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = {
-  _warnings: { nameKey: 'warnings', keys: ['_warnings'] },
-  length: { nameKey: 'length', keys: ['length'] },
-  depth_in: { nameKey: 'depthIn', keys: ['depth_in'] },
-  depth_out: { nameKey: 'depthOut', keys: ['depth_out'] },
-  left: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  right: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  up: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  down: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  kind: { nameKey: 'reference', keys: ['kind'] },
-  comment: { nameKey: 'comment', keys: ['comment'] },
-  line_id: { nameKey: 'lineId', keys: ['line_id'] },
-  shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
-};
-
-/** Stations-view column groups in the eye menu / header hide entries (plain
- *  hide - no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
- *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
-const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
-  { keys: ['name'], nameKey: 'name' },
-  { keys: ['_stationId'], nameKey: 'stationId' },
-  { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
-  { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
-  { keys: ['_depth'], nameKey: 'depth' },
-  { keys: ['_zeroDatum'], nameKey: 'zeroDatum' },
-  { keys: ['_connections'], nameKey: 'connections' },
-  { keys: ['comment'], nameKey: 'comment' },
-];
 
 /** Coordinate and station-name columns hidden by default (matches the backend
  *  serde default), used only as the pre-config-load initial state - once the

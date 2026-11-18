@@ -194,8 +194,8 @@ export function ShotColumnsMenu({
           ) : (
             <>
               {extraRows?.warnings && checkRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
-              {extraRows?.lineId && checkRow(['line_id'], t('dataTable.columnsMenu.sectionId'))}
-              {extraRows?.shotId && checkRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
+              {extraRows?.lineId && checkRow(['line_id'], t('dataTable.columnsMenu.lineName'))}
+              {extraRows?.shotId && checkRow(['shot_id'], t('dataTable.columnsMenu.shotLabel'))}
               {checkRow(['length'], t('dataTable.columnsMenu.length'), '', has('length'))}
               {angleModes?.azimuth &&
                 angleRow(

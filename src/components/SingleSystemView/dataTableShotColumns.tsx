@@ -206,13 +206,13 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     // (`line_id` / `shot_id`); no numeric id is shown. Drafts have no shot yet.
     {
       key: 'line_id',
-      header: t('dataTable.columns.sectionIdShort'),
+      header: t('dataTable.columns.lineNameShort'),
       width: 90,
       getValue: () => (lineId !== null && labels ? labels.lineName(lineId) : ''),
     },
     {
       key: 'shot_id',
-      header: t('dataTable.columns.shotIdShort'),
+      header: t('dataTable.columns.shotLabelShort'),
       width: 80,
       getValue: (_r, rowIndex) => {
         const shotIndex = shotIndexAt(rowIndex);

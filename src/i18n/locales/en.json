@@ -1854,8 +1854,8 @@
       "referenceShort": "J/R",
       "kindCycleHint": "{{current}} - click for {{next}}",
       "comment": "Comment",
-      "sectionIdShort": "Line",
-      "shotIdShort": "Shot"
+      "lineNameShort": "Line",
+      "shotLabelShort": "Shot"
     },
     "headerMenu": {
       "hide": "Hide {{name}}",
@@ -1876,8 +1876,8 @@
       "lrud": "LRUD",
       "reference": "Jump/Reference",
       "comment": "Comment",
-      "sectionId": "Line name",
-      "shotId": "Shot (from → to)"
+      "lineName": "Line name",
+      "shotLabel": "Shot (from → to)"
     },
     "viewShots": "Shots",
     "viewStations": "Stations",
@@ -2869,7 +2869,6 @@
     },
     "ariaList": "Lines list",
     "confirmDelete": "Delete this line?",
-    "defaultName": "Line {{id}}",
     "empty": {
       "action": "Import data",
       "message": "No lines yet."
