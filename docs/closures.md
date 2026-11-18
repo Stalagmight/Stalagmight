@@ -22,7 +22,8 @@ own vocabulary; only the two UI labels were renamed.)
   the project has neither a closure eligible for the solve (`Batch` / `LeastSquaresWeighted`)
   nor a GPS fix (a later zero datum in an already placed piece, #741, which the solve pulls the
   survey toward); `Move` closures are already coincident, so a project with only those shows
-  the option disabled. One helper decides this everywhere - the Display option, the auto-revert
+  the option disabled (where the view does adjust, it holds a snapped one on one point, see
+  "Snapped closures" below). One helper decides this everywhere - the Display option, the auto-revert
   to the Raw Data View, and whether the adjusted geometry is fetched at all:
   `hasAdjustmentInputs` (`src/utils/closures.ts`).
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
@@ -59,7 +60,7 @@ old destructive apply path was removed.
 | `EqualDistribution` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
 | `Batch` | Create loop closure | Records the closure only; participates in the closure-adjusted display solve. |
 | `LeastSquaresWeighted` | Closures Computed View | Weighted least-squares solve over the connected component (derived, non-destructive). |
-| `Move` | Snap-to-merge workflow | Closure created during a move; no extra distribution at create time. |
+| `Move` | Snap-to-merge workflow | Closure created during a move; no extra distribution at create time. While aligned, the Closures Computed solve ties its two stations as one point, like a merge (#736). |
 
 Removed strategies:
 - `Sequential` (no longer available; legacy string maps to `LeastSquaresWeighted`).
@@ -260,7 +261,10 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   length, it would tie the joined station to itself), and drops a closure the
   combine made identical to another one. An UNALIGNED closure between the two
   lines elsewhere stays: it becomes a closure inside one line, which the
-  least-squares solve adjusts like any other.
+  least-squares solve adjusts like any other. A torn snap there (an unaligned
+  `Move` closure) that the combine brings back within 1 cm becomes a `Batch`
+  closure instead: the next re-measure would snap it inside the combined
+  line (#736, "Snaps as the combined project measures them" below).
 - **Of closures made identical, the one the solve takes stays (#749).**
   Once the two join stations are one, two closures can tie the same two
   stations: a tie the combine tears (a merge becomes a `Batch` closure,
@@ -310,7 +314,8 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   (`project/combine_plan.rs`): merges form a forest, so on each path at most
   one merge tears, the one nearest the moving line; a snapped (aligned)
   closure across the two sides, or from a side that moves, is demoted to
-  `Batch` the same way. The loop's misclosure moves to the torn tie. With
+  `Batch` the same way, and so is a torn snap the move re-closes across the
+  two sides (#736). The loop's misclosure moves to the torn tie. With
   zero datums on both sides, the moving line's merges to its datum sides
   tear too, for the datum (`TornTieReason::ZeroDatum`; the dialog names the
   end that does not move as held), and so does a snap the move tears into
@@ -433,6 +438,63 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   by its own stations before the combine.
   Unlike a split, a combine runs no orphan-closure sweep: it joins two lines
   and never strands one on a lone closure.
+- **Snaps as the combined project measures them (#736).** `is_aligned` is a
+  measurement ("`is_aligned` is a MEASUREMENT" below) that the command's
+  epilogue (`AppState::reconcile_geometry`) takes again after the combine, and
+  since #736 it decides what the Closures Computed solve ties. A combine
+  changes both of its terms: the moving side can bring a torn snap (a `Move`
+  closure whose stations had moved apart) back within 1 cm, as when it
+  carries the misclosure that snap also carries; a dropped join hand move can
+  pull a snap apart; and the merges it tears and the two lines it makes one
+  change the merge components the double-anchor term reads. The plan used to
+  read every flag as it stood, so the epilogue snapped a closure inside the
+  combined line (seen in the campaigns on master too), or snapped a torn
+  snap that then left a loop closure across one shot the dialog never listed.
+  Now the plan asks the stamp's two questions of the combined project for
+  every `Move` closure its other rules leave as one
+  (`project/combine_alignment.rs`: each station as shown once the plan's moves
+  are made, the merge components once its merges tear and the two lines
+  are one):
+  - a torn snap re-closed where a snap would tie the combined line to
+    itself (across the two sides, or with both ends on the combined line)
+    becomes a `Batch` closure, as such a snap does. It is not snapped now,
+    so Details name it as what it is (`TornTieKind::FormerSnappedClosure`):
+    "Loop closure A to B, left from a snap whose stations had moved apart:
+    combining brings them back together, where it would snap again", in the
+    words the replaced list uses for a former snap; so do the
+    removed-across-one-shot list, a closure it replaces and the removal
+    warning (`CombineRemovedKind::FormerSnappedClosure`);
+  - a snap the combine pulls apart (past 1 cm) becomes a `Batch` closure, as
+    one the moving side pulls apart does. It is always a snap at a join
+    station, and Details say why with its own reason
+    (`TornTieReason::JoinedStationMoves`): "The joined station keeps K's
+    position as shown, so the two stations end up more than 0.01m apart."
+    The loop sentence under the list ("Otherwise the combined line would
+    be tied to itself") would be false for it where no side moves;
+  - any other keeps the alignment the combined project gives it: a torn snap
+    re-closed elsewhere (beside a merged join, where the lines merged at
+    the join point move with neither side) is a snap again, and a snap left
+    between two placed groups would be torn again. No combine reaches the
+    last: a snap has both ends in one merge component (a closure between two
+    components is made a merge on the next sweep unless both are placed, and
+    then it is never aligned), and the only merges a combine tears that leave
+    one split apart (the moving line's merges to its datum sides) take
+    every snap between the parts with them.
+
+  The model of the joined survey (`joined_sweep`) sweeps the snaps of the
+  combined project, so the anchor rule and the across-one-shot removal read
+  the alignment the combined project will have (the anchor rule's plain plan,
+  where the other side moves, asks the same of its own moves). The combine
+  then measures every flag itself, before its backstop
+  (`remeasure_closure_alignment_ids`), and checks it changed exactly the
+  plan's `TiePlan::realigned` (a `debug_assert!` failure in a debug build, an
+  error in the log in a release build), so the epilogue changes nothing after
+  a combine; the sweeps assert both after every combine. Cost: the geometry as
+  shown is read once per candidate query (`ClosureFacts`), and only when a
+  plan leaves a `Move` closure; each plan then reads it in `O(1)` per closure,
+  with one union-find over the merges for the double-anchor term. Tests:
+  `project/combine_realign_tests.rs` (one survey per case), and the campaign
+  chains pinned in `CHAINS_THE_CAMPAIGNS_FAILED_ON`.
 
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 
@@ -477,16 +539,19 @@ once per connected component that has eligible closures or a GPS fix, anchored o
 when present and otherwise on a deterministic default anchor (the lexicographically smallest
 `(line_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
+A snapped closure (aligned, see below) is not eligible, so it never makes a component adjusted,
+but the solve ties its two stations as one point wherever it runs (#736).
 
 Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
-- Build constraint groups where stations connected via merges **or closures** are in the same group.
+- Build constraint groups where stations connected via merges, eligible closures **or snapped
+  closures** are in the same group.
   A closure whose two stations would end up in one group as the two ends of one
   shot - a *closure across one shot* - is skipped first (#737): the solve keeps
   such a shot at its measured vector, so it could not close, and it used to fail
   the whole component with "inconsistent line translation".
   `Project::closures_across_one_shot` decides it with a union-find over every
-  station: all merges first, then the eligible closures in `loop_closures` order;
+  station: all merges first, then the eligible and snapped closures in `loop_closures` order;
   a closure that would put both ends of some shot into one group that were not in
   one before it is NOT united and is reported with that shot. A skipped closure
   unites nothing, so it never changes what a later closure sees. Uniting walks only
@@ -512,6 +577,53 @@ live project):
   translations to keep merged stations aligned, then compute coordinates from the clone.
 - Placement datum positions are verified to remain fixed; any movement is an error. A GPS fix
   is expected to move.
+
+### Snapped closures (#736)
+
+A *snap* is an aligned closure the solve does not already take as an eligible one
+(`Project::closure_is_snap`): in practice the `Move` closure Move Station makes when it
+drops a station onto one it is already connected to. The Raw Data View holds it rigid like
+a merge (`is_aligned` is measured, see below), so the solve ties its two stations as ONE
+point exactly as it ties a merge: they share a constraint group, the snap is an edge of the
+spur graph, and it is an attachment point for a line that is all spur. Before #736 the
+solve tied only merges and eligible closures: a snapped line hung off what it was merged
+to and moved with that point's correction while its partner stayed, so the view, Plan and
+Export pulled the pair apart (0.25 m in the issue's square).
+
+- **A snap is nothing to solve.** It never makes a component adjusted
+  (`component_has_eligible_closure`, `hasAdjustmentInputs` on the frontend): a component
+  whose only closures are snaps is shown as measured, as before.
+- **Its gap.** The stamp allows a measured gap under 1 cm. The solve's unknowns are where
+  each group is shown, so the gap is closed like any misclosure, by the shots around the
+  loop, as a merge's float residual is; the realignment then puts both stations on the
+  group's point.
+- **Across one shot.** A snap whose two knots hold the two ends of one shot (two stations
+  within 1 cm at the ends of a near-vertical shot, or a snap other closures tie to a
+  shot's ends) is skipped and reported like any closure across one shot: tied, it would
+  fail the component. Snaps take part in that sweep in list order with the eligible
+  closures, so a closure the user adds is judged against what is already there, and
+  `create_loop_closure` refuses a `Batch` closure that, through a snap, would squeeze a
+  shot. One a file carries from before #736 is skipped and reported instead.
+- **Datums and fixes.** A placement datum on either end holds both at its raw position. Two
+  placement datums tied into one group through a snap (a snap onto one, a closure from
+  there to the other) fail the component with "Multiple placement zero datums in a single
+  constraint group", as a closure between the two always did; before #736 the view tore
+  the snap by the distance between the datums instead. A GPS fix on either end pulls (or,
+  hard, holds) both.
+- **Legacy aligned closures.** An aligned `Batch` / `LeastSquaresWeighted` closure (from
+  the destructive adjust before 0.5.0) is eligible and tied already. No version wrote an
+  aligned proportional or equal one; a hand-edited file's is a snap.
+- **What mirrors it.** Combine Lines' model of the joined survey (`joined_sweep`) sweeps
+  the snaps the combined project holds: the ones it leaves snapped, and a torn snap its
+  move re-closes, with the alignment the combined project gives each `Move` closure
+  ("Snaps as the combined project measures them" above); one its dedupe drops for a later
+  closure on the same two stations is swept where that closure stands. The delete
+  commands and the gap-close preview name a snap they leave across one shot.
+
+Tests: `project/closure_snap_tests.rs` (the issue's square, one test per case above, a
+snap-free survey pinned to the view before #736 within 1e-12 m, and a seeded sweep of snaps
+over the combine sweeps' networks with hand moves and GPS fixes, checked by
+`assert_view_is_the_solve`).
 
 ### GPS fixes
 
@@ -565,8 +677,9 @@ The Closures Computed View keeps that meaning:
 - It adjusts the measured shots, never a hand move: every station is shown at its
   adjusted chain position plus its own hand move (depth included: the solve is
   horizontal, and a depth hand move is added to its station's depth in both views).
-- Every tie it holds is one point as shown: a merge, as in the Raw Data View, and a
-  closure the solve takes, whose misclosure (hand moves included) it closes.
+- Every tie it holds is one point as shown: a merge or a snapped closure, as in the Raw
+  Data View, and a closure the solve takes, whose misclosure (hand moves included) it
+  closes.
 - The station it holds a survey at (a placement zero datum, else the gauge station)
   stays where the Raw Data View shows it, hand move included, and the rest is solved
   around it. Placement itself puts the datum station AS SHOWN on its GPS
@@ -675,7 +788,8 @@ Closures are treated as co-location relationships **only after alignment** (like
 
 An aligned closure is a **rigid edge**: `get_rigid_connected_line_ids` follows it
 like a merge, the offset cascade solves through it, co-location averages station depth
-across it, and `compute_frozen_shots` freezes the shots of the loop it closes. So the
+across it, `compute_frozen_shots` freezes the shots of the loop it closes, and the
+Closures Computed solve ties its two stations as one point (#736, "Snapped closures"). So the
 flag is a claim about geometry, and it is measured rather than asserted. One predicate,
 `Project::closure_alignment_stamp`, with three terms:
 

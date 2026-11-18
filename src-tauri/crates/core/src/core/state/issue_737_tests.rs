@@ -739,16 +739,74 @@ fn the_range_preview_predicts_nothing_where_nothing_goes() {
 /// above.
 #[test]
 fn no_delete_leaves_a_new_closure_across_one_shot() {
-    let mut seed: u64 = 0x737_d1e7e;
+    let run = delete_fuzz(0x737_d1e7e, 40, false);
+    // The invariant has to be exercised, not only vacuously true.
+    assert!(
+        run.removals > 0,
+        "no case removed a closure; widen the generator"
+    );
+    assert!(run.agreed > 0, "no removal was predicted by a preview");
+}
+
+/// The same with snapped closures in the survey (#736): the solve ties a
+/// snap's two stations as one point, so a snap takes part in the knots the
+/// delete's removal reads, while the snap's alignment flag is re-measured
+/// only in the command's epilogue, after that removal. Each snap is real: a
+/// one-shot line from station x that ends exactly on station y, closed
+/// with a `Move` closure. `STALAGMIGHT_737_DELETE_CASES` widens it.
+#[test]
+fn no_delete_leaves_a_new_closure_across_one_shot_with_snaps() {
+    let cases = std::env::var("STALAGMIGHT_737_DELETE_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+    let run = delete_fuzz(0x736_05a1, cases, true);
+    eprintln!(
+        "{cases} cases: {} snaps and {} torn snaps planted, {} deletes beside a snap, \
+         {} closures removed ({} checked as needed), {} predicted",
+        run.snaps,
+        run.torn_snaps,
+        run.deletes_with_snaps,
+        run.removals,
+        run.removals_checked,
+        run.agreed
+    );
+    assert!(run.snaps > 0, "no snap was planted; widen the generator");
+    assert!(
+        run.torn_snaps > 0,
+        "no torn snap was planted; widen the generator"
+    );
+    assert!(
+        run.deletes_with_snaps > 0,
+        "no delete ran beside a snap; widen the generator"
+    );
+}
+
+#[derive(Default)]
+struct DeleteFuzz {
+    removals: usize,
+    agreed: usize,
+    snaps: usize,
+    torn_snaps: usize,
+    deletes_with_snaps: usize,
+    removals_checked: usize,
+}
+
+/// Random merged networks with random `Batch` closures (and, with `snaps`,
+/// snapped closures), then one delete - a single shot, or a range with
+/// shift. The bulk-delete preview names exactly what the delete removes, no
+/// closure is newly across one shot once the command (epilogue included)
+/// has run, and one Undo restores every closure.
+fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
+    let mut seed: u64 = seed0;
     let mut next = |m: u64| -> u64 {
         seed = seed
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         (seed >> 33) % m.max(1)
     };
-    let mut removals = 0;
-    let mut agreed = 0;
-    for _case in 0..40 {
+    let mut run = DeleteFuzz::default();
+    for _case in 0..cases {
         let mut p = Project::new("fuzz".to_string(), None);
         let mut lines: Vec<LineId> = Vec::new();
         for i in 0..(2 + next(2)) {
@@ -768,6 +826,45 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
             .iter()
             .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| st(s.id, i)))
             .collect();
+        let mut planted = 0;
+        if snaps {
+            for _ in 0..=next(2) {
+                let x = stations[next(stations.len() as u64) as usize];
+                let y = stations[next(stations.len() as u64) as usize];
+                let (Some(a), Some(b)) = (
+                    p.compute_station_raw_coords(x),
+                    p.compute_station_raw_coords(y),
+                ) else {
+                    continue;
+                };
+                // One in three is a torn snap: the line ends 1.5 to 5.5 cm
+                // off y, so the `Move` closure is measured apart (not
+                // aligned) - the shape a delete's shift can close again.
+                let torn = next(3) == 0;
+                let (mut dx, mut dy) = (b.x - a.x, b.y - a.y);
+                if torn {
+                    let off = 0.015 + next(5) as f64 * 0.01;
+                    let bearing = (next(360) as f64).to_radians();
+                    dx += off * bearing.sin();
+                    dy += off * bearing.cos();
+                }
+                let length = dx.hypot(dy);
+                if length < 0.5 {
+                    continue;
+                }
+                let azimuth = dx.atan2(dy).to_degrees().rem_euclid(360.0);
+                let s = add(&mut p, vec![shot(azimuth, length)]);
+                if p.merge_stations(st(s, 0), x).is_err() {
+                    continue;
+                }
+                match p.create_loop_closure(st(s, 1), y, ClosureStrategy::Move) {
+                    Ok(c) if c.is_aligned => planted += 1,
+                    Ok(_) if torn => run.torn_snaps += 1,
+                    _ => {}
+                }
+            }
+        }
+        run.snaps += planted;
         for _ in 0..(2 + next(4)) {
             let x = stations[next(stations.len() as u64) as usize];
             let y = stations[next(stations.len() as u64) as usize];
@@ -803,6 +900,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
         if !result.success {
             continue;
         }
+        run.deletes_with_snaps += usize::from(planted > 0);
         // The preview predicts exactly what the gap-close removed, by the same
         // pre-delete names (#737).
         if let Some(predicted) = predicted {
@@ -818,7 +916,7 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
                 .map(|w| w.message.clone())
                 .collect();
             assert_eq!(shown, removed, "preview and execute disagree");
-            agreed += usize::from(!removed.is_empty());
+            run.agreed += usize::from(!removed.is_empty());
         }
         let after = project(&state);
         for c in after.closures_across_one_shot() {
@@ -834,7 +932,38 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
             .iter()
             .filter(|w| w.code == CLOSURE_REMOVED_ACROSS_ONE_SHOT)
             .count();
-        removals += reported;
+        run.removals += reported;
+        // Every closure the delete removed as across one shot is across one
+        // shot in the project the command left (alignment re-measured by its
+        // epilogue, #736): put it back where it was in the list, re-measure,
+        // and ask. Only when every closure that went is one it reported, so
+        // a closure the orphan sweep took (#738) is not mistaken for one.
+        let gone: Vec<u64> = before
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| !after.loop_closures.iter().any(|c| c.id == *id))
+            .collect();
+        if reported > 0 && gone.len() == reported {
+            let order = |id: u64| before.loop_closures.iter().position(|c| c.id == id);
+            for &id in &gone {
+                let mut probe = after.clone();
+                let back = before.loop_closures.iter().find(|c| c.id == id).unwrap();
+                probe.loop_closures.push(back.clone());
+                probe.loop_closures.sort_by_key(|c| order(c.id));
+                probe.remeasure_closure_alignment();
+                assert!(
+                    probe
+                        .closures_across_one_shot()
+                        .iter()
+                        .any(|c| c.closure_id == id),
+                    "closure {id} was removed as across one shot, but it is not once the \
+                     command has run: {:?}",
+                    result.warnings
+                );
+                run.removals_checked += 1;
+            }
+        }
         assert!(state.undo().success);
         assert_eq!(
             serde_json::to_value(&project(&state).loop_closures).unwrap(),
@@ -842,10 +971,5 @@ fn no_delete_leaves_a_new_closure_across_one_shot() {
             "undo did not restore the closures"
         );
     }
-    // The invariant has to be exercised, not only vacuously true.
-    assert!(
-        removals > 0,
-        "no case removed a closure; widen the generator"
-    );
-    assert!(agreed > 0, "no removal was predicted by a preview");
+    run
 }

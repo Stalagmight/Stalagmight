@@ -42,6 +42,7 @@ mod adjustment_report;
 mod classify;
 mod closure_dedupe;
 mod closure_shots;
+mod combine_alignment;
 mod combine_candidate;
 mod combine_lines;
 mod combine_plan;
@@ -82,6 +83,14 @@ mod closure_hand_move_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod closure_shots_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point, and the sweep prints \
+              what it covered"
+)]
+mod closure_snap_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -129,6 +138,13 @@ mod combine_lines_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod combine_realign_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod combine_residual_tests;
@@ -160,6 +176,12 @@ mod datum_entrance_tests;
               it covered"
 )]
 mod datum_lsq_fuzz_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod datum_placement_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

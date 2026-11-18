@@ -44,7 +44,9 @@
 //! the one the component used), and when the two lines' reverse parities
 //! differ the other line's shots keep their own record parity for dive-plan
 //! pins (`Project::counter_parity_shots`). The closures the combine made or
-//! whose ends it moved apart are measured again off the final geometry.
+//! whose ends it moved apart are measured again off the final geometry, and
+//! every snap's alignment with them (#736), as the command's epilogue would:
+//! the plan predicted what that changes (`combine_alignment.rs`).
 //!
 //! Station names are unique per line, so when a name of the other line
 //! (its join station aside) is also one of the kept line's, or the kept line
@@ -66,12 +68,21 @@ use crate::{
     LineId, LoopClosure, Shot, ShotData, StationKey, StationRef,
 };
 
-use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
+use super::combine_plan::{JoinPoint, Tie, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
 use super::uuid_unique::{reminted_shot_uuid_avoiding, ShotUuidRemap};
 use super::Project;
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the last combine on this thread changed exactly the alignment
+    /// flags its plan predicted (`check_realigned_as_planned`), for the
+    /// sweeps, whose release builds skip the `debug_assert!`.
+    pub(crate) static REALIGNED_AS_PLANNED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(true) };
+}
 
 /// Everything `combine_lines` decided before it changes anything.
 struct CombineSetup {
@@ -282,7 +293,12 @@ impl Project {
         let component_gauges = self.hold_component_gauges(&[kept, other]);
         let (remeasure, torn_into) = self.prepare_combine(&setup);
         let deduped = self.join_lines(kept, other, &setup, options)?;
-        let replaced = Self::name_replaced(&deduped, &stations_before, &torn_into);
+        let replaced = Self::name_replaced(
+            &deduped,
+            &stations_before,
+            &torn_into,
+            &setup.ties.former_snaps,
+        );
         Self::check_replaced_as_planned(&replaced, &setup.ties.replaced);
         // The component's lowest id may now be a third line's (the other
         // line's id is retired): hold the component at the station the
@@ -290,6 +306,13 @@ impl Project {
         // station named by one shot reads.
         self.restore_component_gauges(&component_gauges);
         self.remeasure_closures(&remeasure);
+        // The command's epilogue re-measures every snap's alignment (#736),
+        // which decides what the Closures Computed solve ties. The combine
+        // does it first, so the backstop below and the state it returns are
+        // what the epilogue sees (it then changes nothing), and checks it
+        // changed the flags its plan predicted.
+        let realigned = self.remeasure_closure_alignment_ids();
+        self.check_realigned_as_planned(&realigned, &setup.ties.realigned);
         let mut removed: Vec<CombineRemovedClosure> = setup
             .ties
             .dropped
@@ -300,8 +323,11 @@ impl Project {
                 kind: *kind,
             })
             .collect();
-        removed
-            .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
+        removed.extend(self.remove_unpredicted_closures_across_one_shot(
+            &closures_before,
+            &torn_into,
+            &setup.ties.former_snaps,
+        ));
         // A name a third line holds renames the combined line, never that
         // third line (the command refuses one; a direct caller may not).
         self.dedupe_touched_line_names(&[kept]);
@@ -336,6 +362,40 @@ impl Project {
         }
     }
 
+    /// The backstop to the plan's alignment prediction (#736,
+    /// `combine_alignment.rs`): the alignment flags the combine's own
+    /// re-measure changed (`realigned`, in `loop_closures` order) are the ones
+    /// the plan said it would (`planned`), less any closure the combine
+    /// removed. A difference is the plan's model of the combined project
+    /// missing something, so the dialog's lists and the anchor rule read
+    /// another survey than the combine made: a `debug_assert!` failure in a
+    /// debug build, an error in the log in a release build (the flags stay
+    /// as measured).
+    fn check_realigned_as_planned(&self, realigned: &[u64], planned: &HashSet<u64>) {
+        let want: Vec<u64> = self
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| planned.contains(id))
+            .collect();
+        let as_planned = realigned == want.as_slice();
+        #[cfg(test)]
+        REALIGNED_AS_PLANNED.with(|cell| cell.set(as_planned));
+        debug_assert!(
+            as_planned,
+            "combine re-measured alignments its plan did not predict: {realigned:?}, planned \
+             {want:?}"
+        );
+        if !as_planned {
+            tracing::error!(
+                realigned = realigned.len(),
+                planned = want.len(),
+                purpose = "plan the alignment a combine leaves every snap with",
+                "Combine re-measured snap alignments its plan did not predict"
+            );
+        }
+    }
+
     /// The backstop to the plan's prediction (#746): any closure the combined
     /// project skips now but did not before the combine is one the plan's
     /// model of the joined survey missed. That is the preview/execution drift
@@ -345,12 +405,14 @@ impl Project {
     /// leaves a NEW closure across one shot, with an error in the log. Each is
     /// named by its stations before the combine and as what it was then: a
     /// closure a tie of this combine became (`torn_into`, from `tear_ties`)
-    /// by that tie, a merge or snapped closure; any other by its own stations
+    /// by that tie, a merge, a snapped closure, or a torn snap the combine
+    /// re-closes (`former`, #736); any other by its own stations
     /// (`before`), as a loop closure.
     fn remove_unpredicted_closures_across_one_shot(
         &mut self,
         before: &ClosuresBeforeEdit,
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineRemovedClosure> {
         let missed = self.closures_newly_across_one_shot(before);
         debug_assert!(
@@ -367,7 +429,7 @@ impl Project {
         );
         let ids: HashSet<u64> = missed.iter().map(|c| c.closure_id).collect();
         self.loop_closures.retain(|c| !ids.contains(&c.id));
-        Self::name_missed(&missed, torn_into)
+        Self::name_missed(&missed, torn_into, former)
     }
 
     /// Name each closure the backstop removes as the user knew it before the
@@ -375,6 +437,7 @@ impl Project {
     pub(super) fn name_missed(
         missed: &[ClosurePair],
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineRemovedClosure> {
         missed
             .iter()
@@ -382,10 +445,7 @@ impl Project {
                 Some(tie) => CombineRemovedClosure {
                     station_a: tie.a,
                     station_b: tie.b,
-                    kind: match tie.id {
-                        TieId::Merge(_) => CombineRemovedKind::Merge,
-                        TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
-                    },
+                    kind: tie.removed_kind(former),
                 },
                 None => CombineRemovedClosure {
                     station_a: c.station_a,

@@ -165,7 +165,9 @@ mod issue_649_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point, and the delete fuzz \
+              beside snaps prints what it covered"
 )]
 mod issue_737_tests;
 #[cfg(test)]

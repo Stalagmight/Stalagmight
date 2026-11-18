@@ -73,15 +73,15 @@ impl Project {
     /// [`Self::gap_close_shot_range`] followed by the same
     /// [`Self::closures_newly_across_one_shot`], here on a clone.
     ///
-    /// Skips the clone when no closure takes part in the solve (none can be
-    /// across one shot then).
+    /// Skips the clone when the solve ties no closure (none can be across one
+    /// shot then): an eligible one or a snapped one (#736).
     pub fn preview_gap_close_closure_removals(
         &self,
         line_id: LineId,
         start_pos: usize,
         end_pos: usize,
     ) -> Result<Vec<ClosurePair>, String> {
-        if !self.has_eligible_closure() {
+        if !self.has_closure_the_solve_ties() {
             return Ok(Vec::new());
         }
         self.clone()
@@ -96,7 +96,7 @@ impl Project {
         start_pos: usize,
         end_pos: usize,
     ) -> Result<Vec<ClosurePair>, String> {
-        if !self.has_eligible_closure() {
+        if !self.has_closure_the_solve_ties() {
             return Ok(Vec::new());
         }
         let before = self.closures_before_edit();
@@ -104,9 +104,7 @@ impl Project {
         Ok(self.closures_newly_across_one_shot(&before))
     }
 
-    fn has_eligible_closure(&self) -> bool {
-        self.loop_closures
-            .iter()
-            .any(|lc| Self::closure_is_eligible(lc.strategy))
+    fn has_closure_the_solve_ties(&self) -> bool {
+        self.loop_closures.iter().any(Self::closure_ties_in_solve)
     }
 }

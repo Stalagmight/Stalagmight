@@ -156,8 +156,10 @@ second anchored network tied on by a closure), combining everything the station
 menu offers, keeping either section: the fixed side never moves, the moving
 side moves by exactly the plan's shift, merges stay a forest, nothing snapped is
 left inside the combined section, a reload moves and converts nothing, and the
-closure-adjusted view stays put (compared with the coincident pairs the solve
-leaves untied, snapped closures and a side-by-side join, tied on both sides).
+closure-adjusted view stays put (compared with the coincident pair the solve
+leaves untied, a side-by-side join, tied on both sides; since #736 the solve
+ties snapped closures itself, and a snap the combine tears counts as the
+ordinary closure it becomes).
 A chain fuzzer applies random sequences of combines, splits and reverses with
 the same checks after every step.
 

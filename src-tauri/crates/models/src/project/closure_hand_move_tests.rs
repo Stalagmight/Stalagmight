@@ -403,9 +403,9 @@ fn a_survey_without_a_hand_move_keeps_its_closures_computed_view() {
 /// What the Closures Computed View solve did with a project: how many
 /// connected surveys it adjusted, and the lines of those it failed on
 /// (shown as measured instead).
-struct ViewSolve {
-    adjusted: usize,
-    failed: HashSet<LineId>,
+pub(super) struct ViewSolve {
+    pub(super) adjusted: usize,
+    pub(super) failed: HashSet<LineId>,
 }
 
 /// Union-find root of `x` in `parent`.
@@ -422,8 +422,9 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 /// The Closures Computed View of `project` is the closure solve with every
 /// station's hand move kept on it, checked without solving:
 ///
-/// - each tie group (stations merged, or tied by a closure the solve takes)
-///   is shown on one point;
+/// - each tie group (stations merged, tied by a closure the solve takes, or
+///   snapped, #736: a closure the Raw Data View holds rigid) is shown on one
+///   point;
 /// - the stations the view holds a solved survey at (its placement zero
 ///   datums, else its gauge station) are where the Raw Data View shows them,
 ///   and a hard GPS fix (#741) is shown on its GPS;
@@ -436,7 +437,7 @@ fn root(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationR
 ///
 /// Returns what the solve did: the surveys it adjusted and the lines of
 /// those it failed on (which this check skips, so a caller compares them).
-fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
+pub(super) fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
     let config = ClosureAdjustmentConfig::default();
     let adjusted = project.compute_adjusted_stations(&config);
     let view: HashMap<StationRef, (f64, f64)> = adjusted
@@ -478,7 +479,7 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
                 project
                     .loop_closures
                     .iter()
-                    .filter(|c| Project::closure_is_eligible(c.strategy))
+                    .filter(|c| Project::closure_ties_in_solve(c))
                     .filter(|c| !skipped.contains(&c.id))
                     .map(|c| (&c.station_a, &c.station_b)),
             );
@@ -640,7 +641,7 @@ fn assert_view_is_the_solve(project: &Project, what: &str) -> ViewSolve {
 /// Plant `hand` on `at`, as an older or hand-edited file carries it, and
 /// settle the offsets as opening the file does: what is merged at `at`
 /// follows it as shown.
-fn plant(project: &mut Project, at: StationRef, hand: (f64, f64, f64)) {
+pub(super) fn plant(project: &mut Project, at: StationRef, hand: (f64, f64, f64)) {
     let key = project.key_for_ref(at).unwrap();
     project.station_offsets.insert(key, hand);
     project.redrive_offsets_after_load();
@@ -859,27 +860,27 @@ fn a_hand_move_in_depth_shows_on_that_station_alone() {
 }
 
 /// xorshift64*: deterministic, no dependency.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    fn below(&mut self, n: usize) -> usize {
+    pub(super) fn below(&mut self, n: usize) -> usize {
         (self.next() % n.max(1) as u64) as usize
     }
 
-    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+    pub(super) fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
 }
 
 /// A random hand move of 0.02 mm to 0.5 m, in depth one time in three.
-fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
+pub(super) fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
     let size = match rng.below(3) {
         0 => rng.range(0.02e-3, 0.95e-3),
         1 => rng.range(0.002, 0.05),
@@ -899,7 +900,7 @@ fn random_hand(rng: &mut Rng) -> (f64, f64, f64) {
 /// survey shows its station: hard (the default accuracy, or 0) or soft (5 cm
 /// to 3 m). Nothing is added to `project`: [`add_datums`] adds them to it
 /// and to its hand-moved copies alike.
-fn choose_gps_fixes(project: &Project, rng: &mut Rng) -> Vec<ZeroDatum> {
+pub(super) fn choose_gps_fixes(project: &Project, rng: &mut Rng) -> Vec<ZeroDatum> {
     let Some(frame) = project.frame_datum().map(|zd| zd.gps) else {
         return Vec::new();
     };
@@ -942,7 +943,7 @@ fn choose_gps_fixes(project: &Project, rng: &mut Rng) -> Vec<ZeroDatum> {
 }
 
 /// Add `datums` to `project` and settle it as opening the file does.
-fn add_datums(project: &mut Project, datums: &[ZeroDatum]) {
+pub(super) fn add_datums(project: &mut Project, datums: &[ZeroDatum]) {
     project.zero_datums.extend(datums.iter().cloned());
     project.redrive_offsets_after_load();
 }

@@ -749,12 +749,19 @@ impl Project {
     /// is what `error_percentage` already means; display staleness is not a
     /// geometry lie.
     pub fn remeasure_closure_alignment(&mut self) -> usize {
+        self.remeasure_closure_alignment_ids().len()
+    }
+
+    /// [`Self::remeasure_closure_alignment`], returning the id of every
+    /// closure whose claim it changed, in `loop_closures` order: Combine
+    /// Lines checks them against what its plan predicted (#736).
+    pub(crate) fn remeasure_closure_alignment_ids(&mut self) -> Vec<u64> {
         if !self
             .loop_closures
             .iter()
             .any(|closure| closure.strategy == ClosureStrategy::Move)
         {
-            return 0;
+            return Vec::new();
         }
         let local = self.line_local_coords();
         let station_offsets = self.resolved_station_offsets();
@@ -780,12 +787,14 @@ impl Project {
             })
             .collect();
         if changes.is_empty() {
-            return 0;
+            return Vec::new();
         }
+        let mut ids = Vec::with_capacity(changes.len());
         for &(index, stamp) in &changes {
             let Some(closure) = self.loop_closures.get_mut(index) else {
                 continue;
             };
+            ids.push(closure.id);
             tracing::info!(
                 closure_id = closure.id,
                 station_a = ?closure.station_a,
@@ -797,7 +806,7 @@ impl Project {
             closure.is_aligned = stamp;
         }
         self.touch();
-        changes.len()
+        ids
     }
 
     /// Does the merge group containing `line_id` hold a zero datum?

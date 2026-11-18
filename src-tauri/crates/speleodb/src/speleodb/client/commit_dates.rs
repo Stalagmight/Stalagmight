@@ -37,17 +37,14 @@ pub(super) fn display_date(raw: &str) -> Option<String> {
     if is_wall_time(text) {
         return Some(text.to_owned());
     }
-    sdk_instant(text).map(|date| instant(date.with_timezone(&Utc)))
+    display_instant(text).map(|date| {
+        date.with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    })
 }
 
-/// `date` as [`display_date`] renders an instant.
-pub(super) fn instant(date: DateTime<Utc>) -> String {
-    date.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-/// `text` read the way the SDK reads a commit date (chrono's own `FromStr`, which
-/// its serde support uses).
-fn sdk_instant(text: &str) -> Option<DateTime<FixedOffset>> {
+/// Read an instant for the legacy display fallback, retaining its Chrono parser.
+fn display_instant(text: &str) -> Option<DateTime<FixedOffset>> {
     text.parse().ok()
 }
 
@@ -69,9 +66,9 @@ pub(super) fn is_wall_time(text: &str) -> bool {
 /// it was swapped. A missing date, or one that is not a string, is left for the
 /// SDK to refuse.
 fn set_aside(date: &mut Value) -> bool {
-    let unreadable = date
-        .as_str()
-        .is_some_and(|text| sdk_instant(text).is_none());
+    let unreadable = date.as_str().is_some_and(|text| {
+        time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).is_err()
+    });
     if unreadable {
         *date = Value::from(STAND_IN);
     }

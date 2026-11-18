@@ -1,8 +1,9 @@
 //! Loop closures that tie the two ends of ONE shot together (#737).
 //!
-//! The least-squares adjustment treats every merge and every eligible
-//! (`Batch` / `LeastSquaresWeighted`) closure as "these stations are one
-//! point" and builds constraint groups - knots - from them
+//! The least-squares adjustment treats every merge, every eligible
+//! (`Batch` / `LeastSquaresWeighted`) closure and every snapped (aligned)
+//! one (`Project::closure_is_snap`, #736) as "these stations are one point"
+//! and builds constraint groups - knots - from them
 //! (`lsq.rs`, `adjust_least_squares`). A shot whose two ends land in the same
 //! knot is skipped by the solve and keeps its measured vector, so the
 //! per-line translation check then finds two targets for one line and
@@ -34,6 +35,17 @@
 //! changes what a later closure sees. Merges are united first, without the
 //! check: a merge is a hard coincidence the user asserted, and the adjustment
 //! unites them the same way.
+//!
+//! Snapped closures (#736) take part in the same pass, in list order with
+//! the eligible ones, and are checked like them. A snap is a hard coincidence
+//! too, but unlike a merge it closes a loop, so its two knots can hold the
+//! two ends of one shot (two stations within the 1 cm alignment of each other
+//! at the ends of a near-vertical shot, or a snap whose ends other closures
+//! tie to the two ends of a shot). The solve could only keep that shot at its
+//! measured vector and fail the component, so such a snap is skipped and
+//! reported like any other. One list order, not snaps first: a closure the
+//! user adds is appended, so the verdict its creation is refused on is the
+//! verdict the solve reaches, and adding one never changes an earlier one's.
 //!
 //! Cost: one union-find over every station plus the contracted shot graph
 //! between knots ([`Knots`]): asking whether a closure collapses a shot is
@@ -285,9 +297,10 @@ impl Knots {
 }
 
 impl Project {
-    /// The knots of the current project - every merge, then every eligible
-    /// closure in vector order that does not collapse a shot - and the
-    /// closures that were skipped because they would.
+    /// The knots of the current project - every merge, then every closure
+    /// the solve ties ([`Self::closure_ties_in_solve`]: eligible or snapped)
+    /// in vector order that does not collapse a shot - and the closures that
+    /// were skipped because they would.
     pub(crate) fn closure_knots(&self) -> (Knots, Vec<ClosureAcrossOneShot>) {
         let mut knots = Knots::new(self);
         for merge in &self.station_merges {
@@ -300,7 +313,7 @@ impl Project {
         }
         let mut skipped = Vec::new();
         for closure in &self.loop_closures {
-            if !Self::closure_is_eligible(closure.strategy) {
+            if !Self::closure_ties_in_solve(closure) {
                 continue;
             }
             let (Some(a), Some(b)) = (
@@ -323,9 +336,10 @@ impl Project {
         (knots, skipped)
     }
 
-    /// Every eligible loop closure that ties the two ends of one shot
-    /// together, in `loop_closures` order. The closure-adjusted solve skips
-    /// exactly these (see the module docs for the rule).
+    /// Every loop closure the solve ties (eligible or snapped) that ties the
+    /// two ends of one shot together, in `loop_closures` order. The
+    /// closure-adjusted solve skips exactly these (see the module docs for
+    /// the rule).
     pub fn closures_across_one_shot(&self) -> Vec<ClosureAcrossOneShot> {
         self.closure_knots().1
     }
@@ -333,10 +347,11 @@ impl Project {
     /// Whether a NEW closure between `a` and `b` would tie the two ends of one
     /// shot together, and which shot `(line, shot index)` - judged against
     /// the knots the solve would use now (current merges and the eligible
-    /// closures it does not skip). Applies whatever the new closure's strategy:
-    /// a tie across one shot means nothing for a `Move` closure either. `None`
-    /// for a closure that closes a real loop, and for one whose stations are
-    /// already tied together (redundant, but harmless: it is still created).
+    /// and snapped closures it does not skip). Applies whatever the new
+    /// closure's strategy: a tie across one shot means nothing for a `Move`
+    /// closure either. `None` for a closure that closes a real loop, and for
+    /// one whose stations are already tied together (redundant, but harmless:
+    /// it is still created).
     pub fn closure_spans_one_shot(&self, a: StationRef, b: StationRef) -> Option<(LineId, usize)> {
         let (mut knots, _) = self.closure_knots();
         knots.collapsed_shot(a, b)
@@ -344,11 +359,12 @@ impl Project {
 }
 
 /// What an edit needs to know, BEFORE it runs, to name the closures it leaves
-/// across one shot (#737): which eligible closures already were (an edit only
-/// answers for what it causes), and every eligible closure's two stations as
-/// they resolve now, with the names the user reads them by then. A gap-close
-/// renumbers stations, so closure 0:1-0:5 can come out as 0:1-0:2; the user
-/// created it between `Main / 1` and `Main / 5` and is told so.
+/// across one shot (#737): which closures the solve ties already were (an
+/// edit only answers for what it causes), and every such closure's two
+/// stations as they resolve now, with the names the user reads them by then.
+/// A gap-close renumbers stations, so closure 0:1-0:5 can come out as
+/// 0:1-0:2; the user created it between `Main / 1` and `Main / 5` and is told
+/// so.
 #[derive(Debug, Clone, Default)]
 pub struct ClosuresBeforeEdit {
     across: HashSet<u64>,
@@ -379,7 +395,7 @@ impl Project {
         let ends = self
             .loop_closures
             .iter()
-            .filter(|lc| Self::closure_is_eligible(lc.strategy))
+            .filter(|lc| Self::closure_ties_in_solve(lc))
             .filter_map(|lc| {
                 Some((
                     lc.id,
