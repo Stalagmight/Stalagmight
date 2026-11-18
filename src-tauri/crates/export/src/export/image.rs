@@ -48,6 +48,9 @@ use usvg::{Options, Tree};
 
 use super::atomic_write::write_atomic;
 use super::color_scale::{depth_color, distance_color, ExportColorScale, ResolvedScale};
+#[cfg(test)]
+use super::image_labels::STATION_NAME_LABEL_MAX_CHARS;
+use super::image_labels::{point_representatives, station_name_label};
 use super::image_scope;
 use crate::models::{LineId, Project, StationRef};
 
@@ -96,46 +99,9 @@ fn sanitize_hex_color(color: &str) -> &str {
 /// excluded from `[#xE000-#xFFFD]`). Surrogates and `> U+10FFFF` cannot occur in
 /// a `char`. Note the Unicode noncharacters `U+FDD0..=U+FDEF` are NOT dropped:
 /// XML 1.0 permits them (they sit inside `[#xE000-#xFFFD]`).
-fn is_xml_illegal_char(c: char) -> bool {
+pub(super) fn is_xml_illegal_char(c: char) -> bool {
     let u = c as u32;
     (u < 0x20 && c != '\t' && c != '\n' && c != '\r') || u == 0xFFFE || u == 0xFFFF
-}
-
-/// The longest station name the export draws whole; longer names are cut to
-/// one char less and end in an ellipsis. Matches the live map's cap.
-const STATION_NAME_LABEL_MAX_CHARS: usize = 24;
-
-/// A station name as the export draws it: control characters and bidi
-/// overrides dropped (names come from the file, so they are untrusted text),
-/// trimmed, and capped at [`STATION_NAME_LABEL_MAX_CHARS`]. `None` when nothing
-/// is left, so an unnamed station gets no label rather than its index.
-///
-/// Mirrors the live map's `formatStationNameLabel` (`labelText.ts`), so the
-/// preview and the file say the same thing: it also drops the Arabic letter
-/// mark (U+061C) that `sanitize_display_text` keeps and the XML-illegal
-/// U+FFFE/U+FFFF (a name of only those would otherwise reserve space for an
-/// empty `<text>`), and trims a byte-order mark (U+FEFF) the way JavaScript's
-/// `trim` does - at both ends and again at the cut.
-fn station_name_label(name: Option<&str>) -> Option<String> {
-    let blank = |c: char| c.is_whitespace() || c == '\u{feff}';
-    let clean: String = crate::models::sanitize_display_text(name?, usize::MAX)
-        .chars()
-        .filter(|&c| c != '\u{061c}' && !is_xml_illegal_char(c))
-        .collect();
-    let clean = clean.trim_matches(blank);
-    if clean.is_empty() {
-        return None;
-    }
-    if clean.chars().count() <= STATION_NAME_LABEL_MAX_CHARS {
-        return Some(clean.to_string());
-    }
-    let mut out: String = clean
-        .chars()
-        .take(STATION_NAME_LABEL_MAX_CHARS - 1)
-        .collect();
-    out.truncate(out.trim_end_matches(blank).len());
-    out.push('\u{2026}');
-    Some(out)
 }
 
 fn escape_xml_text(s: &str) -> String {
@@ -1523,20 +1489,12 @@ fn render_svg(
                     Some(stations[i].id.to_string())
                 }
             };
-            let rank = point_label_rank(project, &stations);
-            let mut rep: HashMap<usize, usize> = HashMap::new();
-            for i in 0..n {
-                if show_station_names && names[i].is_none() {
-                    continue;
-                }
-                rep.entry(point_uf.find(i))
-                    .and_modify(|best| {
-                        if rank[i] < rank[*best] {
-                            *best = i;
-                        }
-                    })
-                    .or_insert(i);
-            }
+            let rep = point_representatives(
+                project,
+                &stations,
+                |i| point_uf.find(i),
+                |i| !show_station_names || names[i].is_some(),
+            );
             let mut selected: Vec<(usize, String)> = degree
                 .iter()
                 .filter(|&(_, &deg)| deg >= 1)
@@ -1897,41 +1855,6 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
             dist = 0.0;
         }
     }
-}
-
-/// How well each of `stations` represents a point of colocated stations in
-/// the station labels (lower is better): a station that is not its line's
-/// first, then one that is not its line's last, then the line's order in
-/// `project.lines`, then the station index (docs/SPEC.md 4.2, Labels).
-fn point_label_rank(
-    project: &Project,
-    stations: &[crate::models::Station],
-) -> Vec<(bool, bool, usize, u32)> {
-    let lines: HashMap<LineId, (usize, u32)> = project
-        .lines
-        .iter()
-        .enumerate()
-        .map(|(order, line)| {
-            let last = u32::try_from(line.shots.len()).unwrap_or(u32::MAX);
-            (line.id, (order, last))
-        })
-        .collect();
-    stations
-        .iter()
-        .map(|s| {
-            let at = s.station_ref;
-            let (order, last) = lines
-                .get(&at.line_id)
-                .copied()
-                .unwrap_or((usize::MAX, u32::MAX));
-            (
-                at.station_index == 0,
-                at.station_index == last,
-                order,
-                at.station_index,
-            )
-        })
-        .collect()
 }
 
 /// Return the angle (in screen coordinates - y axis flipped, same frame the
