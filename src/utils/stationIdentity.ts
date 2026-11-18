@@ -30,10 +30,10 @@ export interface IdentityLine {
 }
 
 export interface IdentitySource {
-  surveyData?: IdentityData | null;
+  surveyData?: IdentityData | null | undefined;
   /** Fallback when there is no SurveyData. */
-  stations?: ReadonlyArray<Station> | null;
-  lines?: ReadonlyArray<IdentityLine & { shots?: ReadonlyArray<{ id: number }> }> | null;
+  stations?: ReadonlyArray<Station> | null | undefined;
+  lines?: ReadonlyArray<IdentityLine & { shots?: ReadonlyArray<{ id: number }> }> | null | undefined;
 }
 
 interface RefIndex {
@@ -88,6 +88,20 @@ export function stationNameOf(src: IdentitySource, ref: StationRef): string {
   }
   const station = findStationIn(src.stations, ref);
   return station?.name || String(ref.station_index);
+}
+
+/** The names of every station of line `lineId`, by station index (for a rename check). */
+export function lineStationNamesOf(src: IdentitySource, lineId: number): string[] {
+  const data = src.surveyData;
+  if (data && data.stationCount > 0) {
+    const slots = refIndexOf(data).byLine.get(lineId);
+    if (slots) return Array.from(slots, (g, i) => (g === undefined ? String(i) : data.stationNames.get(g) || String(i)));
+  }
+  const names: string[] = [];
+  for (const s of src.stations ?? []) {
+    if (s.station_ref.line_id === lineId) names[s.station_ref.station_index] = s.name || String(s.station_ref.station_index);
+  }
+  return names;
 }
 
 /** The project-unique Station ID of `ref`, or null when the station is unknown. */
@@ -154,6 +168,7 @@ export function shotLabelOf(src: IdentitySource, lineId: number, shotId: number,
 /** The identity labels bound to one source; what {@link useIdentityLabels} returns. */
 export interface IdentityLabels {
   stationName: (ref: StationRef) => string;
+  lineStationNames: (lineId: number) => string[];
   stationId: (ref: StationRef) => number | null;
   lineName: (lineId: number) => string;
   station: (ref: StationRef, withLine?: boolean) => string;
@@ -164,6 +179,7 @@ export interface IdentityLabels {
 export function identityLabels(src: IdentitySource): IdentityLabels {
   return {
     stationName: (ref) => stationNameOf(src, ref),
+    lineStationNames: (lineId) => lineStationNamesOf(src, lineId),
     stationId: (ref) => stationIdOf(src, ref),
     lineName: (lineId) => lineNameOf(src, lineId),
     station: (ref, withLine) => stationLabelOf(src, ref, withLine),

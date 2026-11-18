@@ -1650,6 +1650,7 @@
       "skipAll": "Skip All"
     },
     "editStation": {
+      "nameHint": "Unique within its line. Renaming keeps the Station ID.",
       "accuracyLabel": "Accuracy (m)",
       "accuracyHint": "0 puts the computed survey exactly through this GPS. A larger number (a smartwatch is roughly 5 m) trusts the GPS less, and the survey wins most of the gap.",
       "accuracyInvalid": "Enter an accuracy from 0 to {{max}} m.",
@@ -1851,8 +1852,8 @@
       "referenceShort": "J/R",
       "kindCycleHint": "{{current}} - click for {{next}}",
       "comment": "Comment",
-      "sectionIdShort": "Sec ID",
-      "shotIdShort": "Shot ID"
+      "sectionIdShort": "Line",
+      "shotIdShort": "Shot"
     },
     "headerMenu": {
       "hide": "Hide {{name}}",
@@ -1873,8 +1874,8 @@
       "lrud": "LRUD",
       "reference": "Jump/Reference",
       "comment": "Comment",
-      "sectionId": "Line ID",
-      "shotId": "Shot ID"
+      "sectionId": "Line name",
+      "shotId": "Shot (from → to)"
     },
     "viewShots": "Shots",
     "viewStations": "Stations",
@@ -1912,6 +1913,7 @@
     "stationColumns": {
       "index": "Stn",
       "name": "Name",
+      "stationId": "Station ID",
       "x": "X",
       "y": "Y",
       "depth": "Depth",
@@ -1923,6 +1925,7 @@
     },
     "stationColumnsMenu": {
       "name": "Name",
+      "stationId": "Station ID",
       "coordsMeters": "Coordinates (m)",
       "coordsGps": "Coordinates (GPS)",
       "depth": "Depth",
@@ -1938,7 +1941,7 @@
       "edit": "Set or edit this station's zero datum"
     },
     "announcement": {
-      "shotSelected": "Selected shot {{shotId}}."
+      "shotSelected": "Selected shot {{shot}}."
     },
     "fullScreen": {
       "enter": "Full screen",
@@ -1993,7 +1996,6 @@
       "resolvedCount": "{{countFormatted}} resolved",
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
-      "location": "Line {{section}} - Shot {{shot}}",
       "markUnresolved": "Mark unresolved",
       "resolve": "Resolve",
       "openShotDetails": "Open shot {{shot}} details",
@@ -2045,7 +2047,7 @@
       }
     },
     "labels": {
-      "id": "ID",
+      "shot": "Shot",
       "name": "Name",
       "section": "Line",
       "x": "X",
@@ -2073,7 +2075,7 @@
     },
     "station": {
       "title": "Station",
-      "center": "Center map on station {{id}}",
+      "center": "Center map on station {{station}}",
       "comment": "Comment",
       "zeroDatum": "Zero datum station",
       "placementDatum": "Placement datum",
@@ -2091,7 +2093,7 @@
     },
     "shot": {
       "title": "Shot",
-      "center": "Center map on shot {{id}}",
+      "center": "Center map on shot {{shot}}",
       "inclination": "Inclination",
       "computed": "Computed",
       "lrud": "LRUD",
@@ -2103,9 +2105,8 @@
     },
     "section": {
       "title": "Line",
-      "center": "Center map on line {{id}}: {{name}}",
+      "center": "Center map on line {{name}}",
       "unnamed": "Unnamed line",
-      "display": "Line {{id}} - {{name}}",
       "statsTitle": "Line stats",
       "totalLength": "Total length",
       "shotCount": "Shots",

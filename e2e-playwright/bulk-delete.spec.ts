@@ -92,8 +92,8 @@ test.describe('Bulk delete dialog', () => {
     await expect(dialog).toContainText('Delete 2 shots (stations 1 to 3 in Main Line).');
 
     // Interior → split offered with two prefilled name inputs.
-    await expect(page.getByTestId('split-name-a')).toHaveValue('Main Line-A');
-    await expect(page.getByTestId('split-name-b')).toHaveValue('Main Line-B');
+    await expect(page.getByTestId('split-name-a')).toHaveValue('Main Line A');
+    await expect(page.getByTestId('split-name-b')).toHaveValue('Main Line B');
     await expect(page.getByTestId('bulk-delete-split')).toBeVisible();
     await expect(page.getByTestId('bulk-delete-shift')).toBeVisible();
   });

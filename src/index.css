@@ -1683,9 +1683,10 @@ button.sh-apill {
      only sets width). The element pills work for the same reason. */
   border: 1px solid var(--cc-accent);
 }
-/* The fully-qualified id after a divider, at the SAME font/size as the pill text
-   (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),
-   not a full-height border, so it doesn't span the whole line. */
+/* The line context (a line name) after a divider, at the SAME font/size as the
+   pill text (just dimmer). The divider is a SHORT centered vertical bar
+   (pseudo-element), not a full-height border, so it doesn't span the whole
+   line. Never an id: positional handles are not shown. */
 .sh-pill-id {
   position: relative;
   margin-left: 0;
@@ -1695,12 +1696,7 @@ button.sh-apill {
   padding-right: 5px;
   text-align: center;
   line-height: 1;
-  /* Monospace id, like the example's tier text: semibold (600), sized to the same
-     proportion of the label as in the spec (10.5px tier / 12.5px label = 0.84). */
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-weight: 600;
-  font-size: 0.84em;
-  letter-spacing: 0.04em;
   color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
 }
 .sh-pill-id::before {
@@ -1713,17 +1709,9 @@ button.sh-apill {
   height: 0.8em;
   background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
 }
-/* Cap-height glyphs (the monospace id, and numeric shot/station primaries) sit
-   high in their line box; nudge the text down a hair to optically center it.
-   Applied to the id text and to numeric primaries - not to lowercase line
-   names. The divider (on .sh-pill-id) stays centered. */
+/* Cap-height glyphs sit high in their line box; nudge the context text down a
+   hair to optically center it. The divider (on .sh-pill-id) stays centered. */
 .sh-pill-nudge {
   position: relative;
   top: 1px;
-}
-/* Shot/station ids (next to a cap-height digit primary) read higher than the
-   line id (next to a lowercase name), so they need a touch more downward
-   nudge to look centered. */
-.sh-pill-nudge--num {
-  top: 2px;
 }

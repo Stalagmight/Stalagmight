@@ -18,6 +18,7 @@ import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import type { ShotKind } from '../../types/ipc/ShotKind';
+import { warningMessageText, type IdentityLabels } from '../../utils/stationIdentity';
 import {
   SHOT_KIND_CLASS,
   SHOT_KIND_LABEL_KEY,
@@ -57,13 +58,16 @@ export interface ShotColumnContext {
   /** Open the Warnings tab and start resolving the given shot's issue (the
    *  warning indicator becomes a button when the shot has unresolved warnings). */
   onResolveWarning?: (shotId: number) => void;
+  /** Names for the Line and Shot columns and the warning tooltips. Without
+   *  them those columns stay blank and a warning shows its raw text. */
+  labels?: Pick<IdentityLabels, 'lineName' | 'shotAt'>;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
 
 export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
-  const { t, precision, lineId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt, onResolveWarning } = ctx;
+  const { t, precision, lineId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt, onResolveWarning, labels } = ctx;
 
   // Editable iff the view is writable AND (non-geometry, or a non-frozen shot).
   // Draft rows (no shot index) are always editable.
@@ -153,7 +157,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         const hasError = shotWarnings.some((w) => w.severity === 'error');
         const tooltip = [
           ...(frozen ? [t('dataTable.frozen')] : []),
-          ...shotWarnings.map((w) => w.message),
+          ...shotWarnings.map((w) => (labels ? warningMessageText(labels, w) : w.message)),
         ].join('\n');
         const testId = frozen ? `frozen-${lineId}-${shot.id}` : `warning-${lineId}-${shot.id}`;
         const colorClass = hasError
@@ -196,25 +200,23 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         );
       },
     },
-    // Raw identifiers (read-only, hidden by default) - for cross-referencing and
-    // copying out alongside the data.
+    // The shot's identity as text (read-only, hidden by default) - for
+    // cross-referencing and copying out alongside the data: its line's name
+    // and `from → to` (SPEC 4.2). The keys keep their persisted names
+    // (`line_id` / `shot_id`); no numeric id is shown. Drafts have no shot yet.
     {
       key: 'line_id',
       header: t('dataTable.columns.sectionIdShort'),
-      width: 60,
-      align: 'right',
-      getValue: () => lineId ?? '',
+      width: 90,
+      getValue: () => (lineId !== null && labels ? labels.lineName(lineId) : ''),
     },
     {
       key: 'shot_id',
       header: t('dataTable.columns.shotIdShort'),
-      width: 60,
-      align: 'right',
-      // The shot sub-portion of the displayed id - the 1-based position after
-      // the ':' in the pill, not the internal row id. Drafts have none yet.
+      width: 80,
       getValue: (_r, rowIndex) => {
         const shotIndex = shotIndexAt(rowIndex);
-        return shotIndex === null ? '' : shotIndex + 1;
+        return shotIndex === null || lineId === null || !labels ? '' : labels.shotAt(lineId, shotIndex);
       },
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>

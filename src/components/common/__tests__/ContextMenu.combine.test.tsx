@@ -45,7 +45,18 @@ vi.mock('../../../store/uiStore', () => ({
 const shot = (id: number) => ({ id, length: 5, azimuth_in: 0, azimuth_out: 0, depth_in: 0, depth_out: 0 });
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: () => ({
-    project: { lines: [{ id: 1, name: 'Main', shots: [shot(1), shot(2), shot(3)] }], station_merges: [] },
+    // Every line has a name (the backend seeds `Line N`); the menu names lines
+    // by it, never by id.
+    project: {
+      lines: [
+        { id: 1, name: 'Main', shots: [shot(1), shot(2), shot(3)] },
+        { id: 2, name: 'Line 2', shots: [] },
+        { id: 3, name: 'Line 3', shots: [] },
+        { id: 4, name: 'Line 4', shots: [] },
+        { id: 5, name: 'Line 5', shots: [] },
+      ],
+      station_merges: [],
+    },
     stations: [],
     setShotKind: vi.fn(),
     unmergeStations: vi.fn(),
@@ -66,7 +77,10 @@ vi.mock('../../../utils/telemetry', () => ({
   trackContextMenuAction: vi.fn(),
   trackDialogComplete: vi.fn(),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
 
 import ContextMenu from '../ContextMenu';
 

@@ -16,7 +16,7 @@ import {
   queryCombineCandidateForLines,
 } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
-import { formatShotId, formatStationIdWithName } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
@@ -268,7 +268,7 @@ export default function ContextMenu() {
     // Refused outright, or neither line can be the kept one.
     const blockedOf = (c: CombineCandidate) =>
       c.blocked_reason ?? (c.blocked_keeping_a && c.blocked_keeping_b ? c.blocked_keeping_a : null);
-    const name = (id: LineId) => project?.lines.find((s) => s.id === id)?.name?.trim() || `Line ${id}`;
+    const name = (id: LineId) => lineDisplayName(project?.lines.find((s) => s.id === id)?.name);
     const open = (c: CombineCandidate, keep: LineId) => () => {
       openDialog('combine-lines', { candidate: c, keep, preview: combinePreview(c) });
     };
@@ -625,7 +625,6 @@ export default function ContextMenu() {
             openDialog('split-line-here', {
               lineId,
               at: { type: 'station', station_index: target.ref.station_index },
-              label: formatStationIdWithName(lineId, target.ref.station_index, currentStation?.name),
             });
           },
         });
@@ -686,7 +685,7 @@ export default function ContextMenu() {
               lineId: target.lineId,
               shotId: target.shotId,
               shotLength: sourceShot?.length ?? 0,
-              lineName: line?.name ?? `Line ${target.lineId}`,
+              lineName: lineDisplayName(line?.name),
               // Only set from a map right-click; the dialog prefills the exact
               // clicked spot when present and starts blank otherwise.
               alongT: target.type === 'shot' ? target.alongT : undefined,
@@ -701,7 +700,6 @@ export default function ContextMenu() {
             openDialog('split-line-here', {
               lineId: target.lineId,
               at: { type: 'shot', shot_id: target.shotId, distance: target.alongT * sourceShot.length },
-              label: formatShotId(target.lineId, shotIndex + 1),
             });
           },
           disabled: !sourceShot || target.alongT === undefined,
@@ -792,7 +790,7 @@ export default function ContextMenu() {
             isFirst,
             isLast,
             totalShots,
-            line?.name ?? `Line ${target.lineId}`,
+            lineDisplayName(line?.name),
           );
           openDialog(dialog, data);
         },

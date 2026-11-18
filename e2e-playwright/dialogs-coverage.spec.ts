@@ -401,8 +401,9 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
     const splitA = dialog.getByTestId('split-name-a');
     const splitB = dialog.getByTestId('split-name-b');
 
-    await expect(splitA).toHaveValue('SplitTarget-A');
-    await expect(splitB).toHaveValue('SplitTarget-B');
+    // From the project's own name for the line, not the opener's copy.
+    await expect(splitA).toHaveValue('Dialog Line A');
+    await expect(splitB).toHaveValue('Dialog Line B');
   });
 });
 

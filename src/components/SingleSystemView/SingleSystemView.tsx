@@ -1,4 +1,5 @@
 import { useCollaboratorsSync } from '../../store/speleoCollaboratorsStore';
+import { lineDisplayName } from '../../utils/stationIdentity';
 import { LeftWorkspace } from './LeftWorkspace';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -456,7 +457,7 @@ export default function SingleSystemView() {
   const focusedLineExists = focusedLine !== null;
   const focusedLineName =
     focusedLineId !== null
-      ? focusedLine?.name ?? t('sections.defaultName', { id: focusedLineId })
+      ? lineDisplayName(focusedLine?.name)
       : null;
 
   // The line that owns the current selection (line / shot / station) - the

@@ -21,6 +21,8 @@ import {
 import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 import type { DatumGap } from '../../types/ipc/DatumGap';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { stationNameProblem } from '../../utils/nameValidation';
 
 const DIALOG_ID = 'edit-station';
 
@@ -33,7 +35,8 @@ export default function EditStationDialog() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData } = useUIStore();
-  const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore();
+  const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment, setStationName } = useProjectStore();
+  const labels = useIdentityLabels();
   // Every save path here mutates; the Closures Computed View and Plan/Export
   // have no server backstop, so the gate lives in the UI (useEditingBlocked).
   const editingBlocked = useEditingBlocked();
@@ -48,9 +51,9 @@ export default function EditStationDialog() {
       s.station_ref.station_index === stationRef?.station_index
   );
 
-  const line = project?.lines.find(
-    (s) => s.id === stationRef?.line_id
-  );
+  const lineName = stationRef ? labels.lineName(stationRef.line_id) : '';
+  const storedName = stationRef ? labels.stationName(stationRef) : '';
+  const stationId = stationRef ? labels.stationId(stationRef) : null;
 
   // The datum already stored on this station, if any: its role and accuracy.
   const storedDatum = project?.zero_datums.find(
@@ -70,11 +73,25 @@ export default function EditStationDialog() {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [accuracyInput, setAccuracyInput] = useState(() => String(storedAccuracy));
   const [comment, setComment] = useState('');
+  // The station's name (SPEC 4.1): required, unique within its line. Checked
+  // inline as typed; a backend refusal lands on the same field.
+  const [name, setName] = useState(storedName);
+  const [nameRefusal, setNameRefusal] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const gpsInputRef = useRef<HTMLInputElement>(null);
 
   const accuracy = parseDatumAccuracy(accuracyInput);
+
+  const nameChanged = name.trim() !== storedName;
+  const nameProblem =
+    stationRef && nameChanged ? stationNameProblem(name, labels.lineStationNames(stationRef.line_id), stationRef.station_index) : null;
+  const nameError =
+    nameProblem === 'empty'
+      ? t('identity.stationNameEmpty')
+      : nameProblem === 'duplicate'
+        ? t('identity.stationNameTaken', { line: lineName, name: name.trim() })
+        : nameRefusal;
 
   // What this datum would do, as soon as valid GPS is entered (#741).
   const preview = useZeroDatumPreview(
@@ -109,6 +126,7 @@ export default function EditStationDialog() {
     if (station) {
       setIsZeroDatumState(forceEnableZeroDatum ? true : station.is_zero_datum);
       setComment(station.comment ?? '');
+      setName(station.name || String(station.station_ref.station_index));
       if (station.gps_coordinates) {
         const initialInput = `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`;
         setGpsInput(initialInput);
@@ -162,10 +180,23 @@ export default function EditStationDialog() {
       return;
     }
 
+    if (nameProblem !== null) return;
+
     setIsLoading(true);
     setError(null);
+    setNameRefusal(null);
 
     try {
+      // Rename first: a refused name (taken meanwhile, e.g. by an undo) stops
+      // the save before anything else changes, and shows at the field.
+      if (nameChanged) {
+        const nameResult = await setStationName(stationRef, name.trim());
+        if (!nameResult.success) {
+          setNameRefusal(nameResult.error ?? t('identity.stationNameEmpty'));
+          return;
+        }
+      }
+
       const wasZeroDatum = station.is_zero_datum;
       const willBeZeroDatum = isZeroDatum;
 
@@ -279,7 +310,8 @@ export default function EditStationDialog() {
     gpsInput !== originalGpsInput ||
     (isZeroDatum && showAccuracy && accuracyInput.trim() !== String(storedAccuracy)) ||
     (isZeroDatum && entranceToSend !== undefined) ||
-    comment !== (station.comment ?? '')
+    comment !== (station.comment ?? '') ||
+    nameChanged
   ) : false;
 
   if (!station || !stationRef) {
@@ -299,19 +331,42 @@ export default function EditStationDialog() {
           </div>
         )}
 
+        <div className="space-y-1">
+          <label className="block text-sm font-medium" htmlFor="station-name">
+            {t('identity.stationName')}
+          </label>
+          <input
+            id="station-name"
+            type="text"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameRefusal(null);
+            }}
+            disabled={editingBlocked}
+            aria-invalid={nameError !== null}
+            {...(nameError ? { 'aria-describedby': 'station-name-error' } : {})}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded"
+            data-testid="station-name-input"
+          />
+          {nameError ? (
+            <p id="station-name-error" className="text-xs text-error" data-testid="station-name-error">
+              {nameError}
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary">{t('dialogs.editStation.nameHint')}</p>
+          )}
+        </div>
+
         <div className="text-sm text-text-secondary">
           Station coordinates are calculated from shots and cannot be edited directly.
         </div>
 
         <div className="space-y-3 border-t border-border pt-3">
-          <DetailRow
-            label="ID"
-            value={`${stationRef.line_id}:${stationRef.station_index}`}
-          />
-          <DetailRow
-            label="Line"
-            value={line?.name ?? `Line ${stationRef.line_id}`}
-          />
+          {stationId !== null && (
+            <DetailRow label={t('identity.stationId')} value={String(stationId)} testId="edit-station-id" />
+          )}
+          <DetailRow label="Line" value={lineName} />
           <DetailRow label="X" value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} m`} />
           <DetailRow label="Y" value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} m`} />
           <DetailRow label="Depth" value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} m`} />
@@ -323,7 +378,7 @@ export default function EditStationDialog() {
             <ul className="mt-1">
               {station.merged_with.map((ref, i) => (
                 <li key={i} className="text-sm">
-                  {ref.line_id}:{ref.station_index}
+                  {labels.station(ref, true)}
                 </li>
               ))}
             </ul>
@@ -482,8 +537,8 @@ export default function EditStationDialog() {
           <Button
             variant="primary"
             onClick={handleSave}
-            disabled={isLoading || editingBlocked}
-            title={editingBlocked ? t('dialogs.editStation.editingDisabled') : undefined}
+            disabled={isLoading || editingBlocked || nameProblem !== null}
+            title={editingBlocked ? t('dialogs.editStation.editingDisabled') : (nameError ?? undefined)}
             data-testid="edit-station-save"
           >
             {isLoading ? 'Saving...' : 'Save'}
@@ -517,11 +572,11 @@ function GapReadout({ gap }: { gap: DatumGap }) {
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
     <div className="flex justify-between text-sm">
       <span className="text-text-secondary">{label}:</span>
-      <span>{value}</span>
+      <span data-testid={testId}>{value}</span>
     </div>
   );
 }

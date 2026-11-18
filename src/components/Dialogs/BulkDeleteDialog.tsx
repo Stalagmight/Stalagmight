@@ -6,6 +6,7 @@ import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import { SplitNameFields, useSplitNames } from './SplitNameFields';
 import type { DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
@@ -29,14 +30,11 @@ export default function BulkDeleteDialog() {
   const endShotId = dialogData.endShotId as number | undefined;
   const shotCount = dialogData.shotCount as number | undefined;
   const kind = dialogData.kind as 'prefix' | 'suffix' | 'interior' | undefined;
-  const lineName = dialogData.lineName as string | undefined;
   const startStationIndex = dialogData.startStationIndex as number | undefined;
   const endStationIndex = dialogData.endStationIndex as number | undefined;
 
   const isInterior = kind === 'interior';
 
-  const [splitNameA, setSplitNameA] = useState('');
-  const [splitNameB, setSplitNameB] = useState('');
   const [impact, setImpact] = useState<DeleteShotRangeImpact | null>(null);
   const [impactError, setImpactError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,13 +65,9 @@ export default function BulkDeleteDialog() {
   // errored) - otherwise a fast click could confirm before the warning renders.
   const previewReady = impact !== null || impactError !== null;
 
-  // Prefill split names for interior ranges (mirrors the single-shot dialog).
-  useEffect(() => {
-    if (isInterior && lineName) {
-      setSplitNameA(`${lineName}-A`);
-      setSplitNameB(`${lineName}-B`);
-    }
-  }, [isInterior, lineName]);
+  // Split names for interior ranges: unique `<name> A` / `<name> B` (mirrors
+  // the single-shot dialog).
+  const split = useSplitNames(lineId, isInterior);
 
   useEffect(() => {
     if (lineId !== undefined && startShotId !== undefined && endShotId !== undefined) {
@@ -116,7 +110,7 @@ export default function BulkDeleteDialog() {
   };
 
   const handleSplit = async () => {
-    if (lineId === undefined || startShotId === undefined || endShotId === undefined) return;
+    if (!split.valid || lineId === undefined || startShotId === undefined || endShotId === undefined) return;
     setSource('dialog');
     setIsLoading(true);
     setError(null);
@@ -125,8 +119,8 @@ export default function BulkDeleteDialog() {
         lineId,
         startShotId,
         endShotId,
-        splitNameA.trim() || 'Line A',
-        splitNameB.trim() || 'Line B'
+        split.nameA,
+        split.nameB
       );
       if (result.success) {
         finish(true);
@@ -188,32 +182,12 @@ export default function BulkDeleteDialog() {
         )}
 
         {isInterior && (
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm text-text-secondary mb-1">
-                Line A name (before the range)
-              </label>
-              <input
-                type="text"
-                value={splitNameA}
-                onChange={(e) => setSplitNameA(e.target.value)}
-                className="w-full"
-                data-testid="split-name-a"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-text-secondary mb-1">
-                Line B name (after the range)
-              </label>
-              <input
-                type="text"
-                value={splitNameB}
-                onChange={(e) => setSplitNameB(e.target.value)}
-                className="w-full"
-                data-testid="split-name-b"
-              />
-            </div>
-          </div>
+          <SplitNameFields
+            {...split.fieldsProps}
+            labelA="Line A name (before the range)"
+            labelB="Line B name (after the range)"
+            disabled={isLoading}
+          />
         )}
 
         {((isInterior && removedDatums.length > 0) ||
@@ -274,7 +248,8 @@ export default function BulkDeleteDialog() {
           {isInterior && (
             <Button
               onClick={handleSplit}
-              disabled={isLoading || !previewReady}
+              disabled={isLoading || !previewReady || !split.valid}
+              title={split.error ?? undefined}
               data-testid="bulk-delete-split"
             >
               {isLoading ? 'Working…' : 'Split into Two Lines'}

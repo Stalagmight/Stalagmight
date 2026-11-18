@@ -10,7 +10,8 @@ import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
-import { formatShotId, formatStationId } from '../../utils/formatters';
+import { lineDisplayName } from '../../utils/stationIdentity';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
 import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -81,6 +82,7 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
  *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
 const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
   { keys: ['name'], nameKey: 'name' },
+  { keys: ['_stationId'], nameKey: 'stationId' },
   { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
   { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
   { keys: ['_depth'], nameKey: 'depth' },
@@ -303,7 +305,8 @@ export default function DataTable({ lines }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, setShotKind, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
+  const { updateShot, setShotKind, warnings, isShotFrozen, updateStationComment, setStationName, executeBatch, createShot, isDirty } = useProjectStore();
+  const labels = useIdentityLabels();
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
@@ -511,19 +514,18 @@ export default function DataTable({ lines }: DataTableProps) {
     const line = lines.find((s) => s.id === selection.lineId);
     if (!line) return;
 
-    // Find shot position (1-indexed) for announcement
+    // The shot's position names it by its stations for the announcement.
     const shotIndex = line.shots.findIndex((s) => s.id === selection.shotId);
     if (shotIndex === -1) return;
 
-    const shotPosition = shotIndex + 1;
     const message = t('dataTable.announcement.shotSelected', {
-      shotId: formatShotId(selection.lineId, shotPosition),
+      shot: labels.shotAt(selection.lineId, shotIndex, true),
     });
     announceSelection(message);
 
     // Update ref with new selection
     prevAnnouncedSelectionRef.current = { lineId: selection.lineId, shotId: selection.shotId };
-  }, [selection, lines, announceSelection, t]);
+  }, [selection, lines, announceSelection, t, labels]);
 
   // Shot cell-editing, selection, pan, hover and context-menu are now handled by
   // SpreadsheetGrid via the onShot* handlers defined below.
@@ -572,6 +574,12 @@ export default function DataTable({ lines }: DataTableProps) {
     // refs/comments are unchanged, so comment editing still targets measured data.
     return activeStations.filter((s) => s.station_ref.line_id === selectedLineId);
   }, [activeStations, selectedLineId, tableView]);
+  // The shown line's station names by index, for the inline rename check.
+  const lineStationNames = useMemo(() => {
+    const names: string[] = [];
+    for (const s of lineStations) names[s.station_ref.station_index] = s.name;
+    return names;
+  }, [lineStations]);
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
     setTableView(value);
@@ -1036,7 +1044,7 @@ export default function DataTable({ lines }: DataTableProps) {
       ) {
         const { shot } = only;
         const lineId = selectedLine.id;
-        const lineName = selectedLine.name ?? t('sections.defaultName', { id: lineId });
+        const lineName = labels.lineName(lineId);
         return [
           {
             label: 'Insert Station...',
@@ -1096,8 +1104,7 @@ export default function DataTable({ lines }: DataTableProps) {
       if (inRange.length === 0) return true;
 
       const total = selectedLine.shots.length;
-      const lineName =
-        selectedLine.name ?? t('sections.defaultName', { id: selectedLine.id });
+      const lineName = labels.lineName(selectedLine.id);
 
       if (inRange.length === 1) {
         const only = inRange[0]!;
@@ -1186,6 +1193,7 @@ export default function DataTable({ lines }: DataTableProps) {
         getShotWarnings,
         shotIndexAt,
         onCycleShotKind: handleCycleShotKind,
+        labels,
         onResolveWarning: (shotId: number) => {
           if (selectedLineId === null) return;
           // triggerResolveWarning opens the Warnings panel (and exits
@@ -1196,7 +1204,7 @@ export default function DataTable({ lines }: DataTableProps) {
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedLineId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning]
+    [t, precision, selectedLineId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning, labels]
   );
   // The credit columns sit just before the comment, which absorbs the leftover width.
   const shotColumns = useMemo(() => {
@@ -1234,29 +1242,36 @@ export default function DataTable({ lines }: DataTableProps) {
           onDoubleClick={() => handlePanToShot(shot)}
           data-testid={`data-table-shot-row-label-${selectedLineId}-${shot.id}`}
         >
-          <EntityBlob entity="shot">{formatShotId(selectedLineId, shotIndex + 1)}</EntityBlob>
+          <EntityBlob entity="shot">{labels.shotAt(selectedLineId, shotIndex)}</EntityBlob>
         </span>
       ) : (
         rowIndex + 1
       );
     },
-    [selectedLineId, handlePanToShot, shotIndexAt]
+    [selectedLineId, handlePanToShot, shotIndexAt, labels]
   );
 
   // --- Stations view (SpreadsheetGrid) --------------------------------------
-  // Stations are derived from shots, so only the comment is editable - a
-  // single edit per commit (set_station_comment has no batch form, so the
-  // grid gets no onBatchEdit).
+  // Stations are derived from shots, so only the name and the comment are
+  // editable - a single edit per commit (set_station_name / set_station_comment
+  // have no batch form, so the grid gets no onBatchEdit).
   const onStationEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
-      if (editingBlocked || colKey !== 'comment') return;
+      if (editingBlocked) return;
       const station = lineStations[rowIndex];
       if (!station) return;
+      if (colKey === 'name') {
+        if (typeof value !== 'string') return;
+        setSource('data-table');
+        void setStationName(station.station_ref, value);
+        return;
+      }
+      if (colKey !== 'comment') return;
       setSource('data-table');
       const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
       void updateStationComment(station.station_ref, comment);
     },
-    [editingBlocked, lineStations, updateStationComment]
+    [editingBlocked, lineStations, updateStationComment, setStationName]
   );
 
   const onStationActiveCellChange = useCallback(
@@ -1373,11 +1388,7 @@ export default function DataTable({ lines }: DataTableProps) {
 
   // The line a connected station belongs to: its name (falling back to
   // "Line N") for the pill, and a click that navigates to that line.
-  const getLineName = useCallback(
-    (lineId: number) =>
-      lines.find((s) => s.id === lineId)?.name ?? t('sections.defaultName', { id: lineId }),
-    [lines, t]
-  );
+  const getLineName = labels.lineName;
   const selectLinkedLine = useCallback(
     (lineId: number) => {
       setConnMenu(null);
@@ -1406,8 +1417,10 @@ export default function DataTable({ lines }: DataTableProps) {
         gpsOrigin: stationGpsOrigin,
         onGpsCellClick: handleGpsCellClick,
         onConnectionsCellClick: handleConnectionsCellClick,
+        labels,
+        lineStationNames,
       }),
-    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick]
+    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels, lineStationNames]
   );
 
   // Gutter shows the station's ID pill (the old index column); double-click
@@ -1421,12 +1434,10 @@ export default function DataTable({ lines }: DataTableProps) {
         }}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <EntityBlob entity="station">
-          {formatStationId(station.station_ref.line_id, station.station_ref.station_index)}
-        </EntityBlob>
+        <EntityBlob entity="station">{labels.station(station.station_ref)}</EntityBlob>
       </span>
     ),
-    [triggerCenterOnStation]
+    [triggerCenterOnStation, labels]
   );
 
   // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
@@ -1675,7 +1686,7 @@ export default function DataTable({ lines }: DataTableProps) {
               title={t('dataTable.sectionMenu')}
               options={lines.map((s) => ({
                 value: String(s.id),
-                label: s.name ?? t('sections.defaultName', { id: s.id }),
+                label: lineDisplayName(s.name),
                 dot: s.color,
               }))}
               onPick={(value) => {
@@ -1689,7 +1700,7 @@ export default function DataTable({ lines }: DataTableProps) {
               renderTrigger={({ open }) => (
                 <EntityBlob entity="line" className="min-w-0 max-w-full">
                   <span className="truncate">
-                    {selectedLine.name ?? t('sections.defaultName', { id: selectedLine.id })}
+                    {lineDisplayName(selectedLine.name)}
                   </span>
                   <PillChevron open={open} testId="data-table-line-menu" />
                 </EntityBlob>
@@ -1879,7 +1890,8 @@ export default function DataTable({ lines }: DataTableProps) {
                     <DetailLink
                       type="station"
                       target={{ lineId: ref.line_id, position: ref.station_index }}
-                      displayText={formatStationId(ref.line_id, ref.station_index)}
+                      displayText={labels.station(ref, true)}
+                      pillLabel={labels.station(ref)}
                       onSelect={() => selectLinkedStation(ref)}
                       onHoverStart={() => setHoveredStation(ref)}
                       onHoverEnd={() => setHoveredStation(null)}
@@ -1911,7 +1923,8 @@ export default function DataTable({ lines }: DataTableProps) {
                     <DetailLink
                       type="station"
                       target={{ lineId: c.station_ref.line_id, position: c.station_ref.station_index }}
-                      displayText={formatStationId(c.station_ref.line_id, c.station_ref.station_index)}
+                      displayText={labels.station(c.station_ref, true)}
+                      pillLabel={labels.station(c.station_ref)}
                       onSelect={() => selectLinkedStation(c.station_ref)}
                       onHoverStart={() => setHoveredStation(c.station_ref)}
                       onHoverEnd={() => setHoveredStation(null)}

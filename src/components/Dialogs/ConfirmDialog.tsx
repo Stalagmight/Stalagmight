@@ -7,6 +7,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { DeleteShotImpact, LineRelationships } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import { SplitNameFields, useSplitNames } from './SplitNameFields';
 
 export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
@@ -18,19 +19,9 @@ export default function ConfirmDialog() {
   const shotId = dialogData.shotId as number | undefined;
   const totalShots = dialogData.totalShots as number | undefined;
   const splitRequired = dialogData.splitRequired as boolean | undefined;
-  const lineName = dialogData.lineName as string | undefined;
 
-  // Split line names for mid-shot deletion
-  const [splitNameA, setSplitNameA] = useState('');
-  const [splitNameB, setSplitNameB] = useState('');
-
-  // Initialize split names when dialog opens
-  useEffect(() => {
-    if (splitRequired && lineName) {
-      setSplitNameA(`${lineName}-A`);
-      setSplitNameB(`${lineName}-B`);
-    }
-  }, [splitRequired, lineName]);
+  // Split line names for mid-shot deletion: unique `<name> A` / `<name> B`.
+  const split = useSplitNames(lineId, type === 'shot' && splitRequired === true);
 
   const [relationships, setRelationships] = useState<LineRelationships | null>(null);
   const [shotImpact, setShotImpact] = useState<DeleteShotImpact | null>(null);
@@ -95,11 +86,12 @@ export default function ConfirmDialog() {
     if (type === 'shot' && lineId !== undefined && shotId !== undefined) {
       if (splitRequired) {
         // Mid-line shot: delete and split line
+        if (!split.valid) return false;
         const result = await deleteShotAndSplit(
           lineId,
           shotId,
-          splitNameA.trim() || 'Line A',
-          splitNameB.trim() || 'Line B',
+          split.nameA,
+          split.nameB,
         );
         if (!result.success) {
           setDeleteError(result.error ?? 'Failed to split line');
@@ -218,28 +210,12 @@ export default function ConfirmDialog() {
         )}
 
         {type === 'shot' && splitRequired && (
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm text-text-secondary mb-1">Line A name (first half)</label>
-              <input
-                type="text"
-                value={splitNameA}
-                onChange={(e) => setSplitNameA(e.target.value)}
-                className="w-full"
-                data-testid="split-name-a"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-text-secondary mb-1">Line B name (second half)</label>
-              <input
-                type="text"
-                value={splitNameB}
-                onChange={(e) => setSplitNameB(e.target.value)}
-                className="w-full"
-                data-testid="split-name-b"
-              />
-            </div>
-          </div>
+          <SplitNameFields
+            {...split.fieldsProps}
+            labelA="Line A name (first half)"
+            labelB="Line B name (second half)"
+            disabled={isSubmitting}
+          />
         )}
 
         {removesLine && hasRelationships && (
@@ -294,7 +270,8 @@ export default function ConfirmDialog() {
             data-testid="confirm-dialog-confirm"
             variant="danger"
             onClick={handleConfirm}
-            disabled={type === 'station' || isSubmitting}
+            disabled={type === 'station' || isSubmitting || (splitRequired === true && !split.valid)}
+            title={splitRequired ? split.error ?? undefined : undefined}
             data-primary-action=""
           >
             {splitRequired ? 'Delete & Split' : 'Delete'}

@@ -74,11 +74,16 @@ export interface DetailLinkProps {
   /** Callback when hover/focus ends (for map highlighting). */
   onHoverEnd?: () => void;
   /**
-   * Short primary label for the Full-mode entity pill, shown before the dim id
-   * suffix. Used for lines (the bare name, e.g. "Main Line"); station/shot
-   * links derive their primary from the target position automatically.
+   * Short primary label for the Full-mode entity pill: the station name
+   * (`17`), the shot (`4 → 5`) or the line name. Defaults to `displayText`.
    */
   pillLabel?: string;
+  /**
+   * Dim context after a divider in the Full-mode pill: the line name of a
+   * station or shot link (`17 | Main Line`). Omitted for lines. Never an id -
+   * positional handles are not shown (SPEC 4.1).
+   */
+  pillContext?: string;
 }
 
 /**
@@ -106,7 +111,7 @@ export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): 
  * Generate an accessible aria-label for the link.
  *
  * Format: "Select [type] [displayText]"
- * Example: "Select station 2:5"
+ * Example: "Select station Main Line / 17"
  */
 export function generateAriaLabel(type: DetailLinkType, displayText: string): string {
   const trimmed = displayText.trim();
@@ -131,6 +136,7 @@ export function DetailLink({
   onHoverStart,
   onHoverEnd,
   pillLabel,
+  pillContext,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
@@ -206,19 +212,11 @@ export function DetailLink({
     ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
     : undefined;
 
-  // Pill content: a short primary label + the fully-qualified id after a divider,
-  // both at the same text size (shot "55 | 110:55", line "Main Line | 110").
-  let pillPrimary = displayText;
-  let pillId: string | null = null;
-  if (showSymbol) {
-    if (hasPosition(target)) {
-      pillPrimary = String(target.position);
-      pillId = displayText; // already the formatted "lineId:position"
-    } else {
-      pillPrimary = pillLabel ?? displayText;
-      pillId = String(target.lineId);
-    }
-  }
+  // Pill content: a short primary label + its line context after a divider,
+  // both at the same text size (station "17 | Main Line", shot "4 → 5 | Main
+  // Line", line "Main Line").
+  const pillPrimary = showSymbol ? (pillLabel ?? displayText) : displayText;
+  const pillId = showSymbol && pillContext ? pillContext : null;
 
   return (
     <button
@@ -243,10 +241,7 @@ export function DetailLink({
           <span>{pillPrimary}</span>
           {pillId !== null && (
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
-              {/* The id suffix is always cap-height digits, so it gets the same
-                  downward nudge whether the primary is a digit (shot/station) or
-                  a lowercase name (line). */}
-              <span className="sh-pill-nudge sh-pill-nudge--num">
+              <span className="sh-pill-nudge">
                 {pillId}
               </span>
             </span>

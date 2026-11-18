@@ -1,6 +1,6 @@
 import type { CommandResult } from '../types/commands';
 import type { CreditEdit, CreditTargets } from '../types/ipc.generated';
-import type { LineId, ShotId } from '../types/project';
+import type { LineId, ShotId, StationRef } from '../types/project';
 
 /** `projectStore`'s `executeCommand`: invoke, refresh on success, mark dirty. */
 export type ExecuteCommand = (
@@ -24,6 +24,12 @@ export interface ProjectShotActions {
    * email); `set_date` sets a date or, with `null`, clears it.
    */
   editShotCredit: (targets: CreditTargets, edit: CreditEdit) => Promise<CommandResult>;
+  /**
+   * Rename a station (one undo step). The backend trims the name and refuses
+   * an empty one or one another station of the line holds, with a message
+   * ("Line \"X\" already has a station named \"Y\"") the caller shows inline.
+   */
+  setStationName: (stationRef: StationRef, name: string) => Promise<CommandResult>;
 }
 
 export function createProjectShotActions(executeCommand: ExecuteCommand): ProjectShotActions {
@@ -39,6 +45,12 @@ export function createProjectShotActions(executeCommand: ExecuteCommand): Projec
         'edit_shot_credit',
         { targets, edit },
         { purpose: 'edit survey credit', fields: { targets: targets.type } },
+      ),
+    setStationName: async (stationRef, name) =>
+      executeCommand(
+        'set_station_name',
+        { stationRef, name },
+        { purpose: 'rename station', fields: { stationRef } },
       ),
   };
 }
