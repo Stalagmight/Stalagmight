@@ -143,6 +143,12 @@ describe('isLineNameRefusal', () => {
   it("recognises the backend's line-name refusals only", () => {
     expect(isLineNameRefusal('A line name cannot be empty')).toBe(true);
     expect(isLineNameRefusal('A line named "Main" already exists')).toBe(true);
+    expect(
+      isLineNameRefusal(
+        'A line name cannot contain control or invisible formatting characters (U+200E)'
+      )
+    ).toBe(true);
+    expect(isLineNameRefusal('A station name cannot contain control characters')).toBe(false);
     expect(isLineNameRefusal('Line 3 not found')).toBe(false);
     expect(isLineNameRefusal(null)).toBe(false);
     expect(isLineNameRefusal(undefined)).toBe(false);

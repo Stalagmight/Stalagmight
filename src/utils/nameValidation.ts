@@ -161,9 +161,12 @@ export function lineNameProblemMessage(problem: SplitNameProblem, name: string):
 
 /**
  * Whether a backend error is its refusal of a line name (`validate_line_name`:
- * "A line name cannot be empty", `A line named "X" already exists`), so the
+ * "A line name cannot be empty", `A line named "X" already exists`, "A line
+ * name cannot contain control or invisible formatting characters"), so the
  * dialog shows it at the name field rather than as a general failure.
  */
 export function isLineNameRefusal(error: string | null | undefined): boolean {
-  return /A line name cannot be empty|A line named ".*" already exists/.test(error ?? '');
+  return /A line name cannot (be empty|contain control)|A line named ".*" already exists/.test(
+    error ?? ''
+  );
 }
