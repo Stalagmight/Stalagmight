@@ -178,7 +178,7 @@ impl Fuzzer {
                     let UndoData::Delta(delta) = data else {
                         break;
                     };
-                    match delta.delta.apply(&state) {
+                    match delta.delta().and_then(|delta| delta.apply(&state)) {
                         Ok(next) => {
                             state = next;
                             checked += 1;

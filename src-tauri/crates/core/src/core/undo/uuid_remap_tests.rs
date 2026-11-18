@@ -441,7 +441,7 @@ fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
         panic!("premise: the pair compacts");
     };
     assert!(
-        !delta.delta.shot_uuid_mentions().is_empty(),
+        !delta.delta().unwrap().shot_uuid_mentions().is_empty(),
         "premise: the re-created shots are literals, carrying their uuids"
     );
     let mut stack = stack_of(vec![compact]);
@@ -451,7 +451,7 @@ fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
         panic!("still compact");
     };
     let live = serde_json::to_value(&project).unwrap();
-    let before = delta.delta.apply(&live).unwrap();
+    let before = delta.delta().unwrap().apply(&live).unwrap();
     let restored: Project = serde_json::from_value(before).unwrap();
     assert!(
         restored.check_structural_integrity().is_empty(),
@@ -731,11 +731,9 @@ fn a_reinstall_into_a_nearer_snapshot_that_holds_the_ids_is_renamed() {
 #[test]
 fn a_compact_entry_that_does_not_fit_the_loaded_project_drops_the_history() {
     let delta = |text: &str| {
-        UndoData::Delta(Box::new(crate::core::SnapshotDelta {
-            delta: serde_json::from_str(text).unwrap(),
-            preview: None,
-            omitted_commands: 0,
-        }))
+        UndoData::Delta(Box::new(
+            crate::core::SnapshotDelta::new(&serde_json::from_str(text).unwrap(), None).unwrap(),
+        ))
     };
     let project = two_copies();
     let renamed = ShotUuidRemap::default();

@@ -33,6 +33,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 use crate::models::LineId;
@@ -232,13 +233,28 @@ pub type DeltaError = String;
 pub(crate) type LiteralShot = (usize, usize);
 
 /// One undo entry's compact payload ([`super::UndoData::Delta`]).
+///
+/// The delta is held SERIALIZED, as the JSON its row writes: a parsed
+/// [`ProjectDelta`] - a tree of maps, vectors and `serde_json::Value`s, a
+/// one-member edit of a shot a `BTreeMap` node of its own - took 15 to 25
+/// times its JSON size on the heap (on a 20,000-shot survey, 115 KB for a
+/// Delete Line whose JSON is 7.6 KB, 1.45 MB for a 1,000-cell paste's
+/// 33 KB), while the history's byte budget counts the JSON. It is parsed
+/// where it is used ([`Self::delta`]: a step, the load's holder walk and uuid
+/// remap, the shape check of a row read back), each a few kilobytes.
+///
+/// The row is written as it always was: `d` is the delta's JSON object, not
+/// a string. A row's whole envelope goes through `serde_json::Value` on its
+/// way to and from the disk (`models::disk_names`), which parses the held
+/// text into the same object a parsed delta serializes to, and reads it back
+/// into text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotDelta {
     /// Turns the live project into the state on the other side of the entry:
     /// its `before` while the entry is on the undo stack, its `after` while it
     /// is on the redo stack. Re-encoded by every step through the entry.
     #[serde(rename = "d")]
-    pub delta: ProjectDelta,
+    delta: Box<RawValue>,
     /// What the history preview reads from the `before` state, which the
     /// entry no longer holds whole. Recorded once, at capture.
     #[serde(rename = "p", default, skip_serializing_if = "Option::is_none")]
@@ -276,6 +292,15 @@ pub enum BeforePreview {
 }
 
 impl SnapshotDelta {
+    /// The payload holding `delta`, with the facts a preview reads.
+    pub fn new(delta: &ProjectDelta, preview: Option<BeforePreview>) -> Result<Self, DeltaError> {
+        Ok(Self {
+            delta: held(delta)?,
+            preview,
+            omitted_commands: 0,
+        })
+    }
+
     /// The entry for a capture's two snapshots: the delta from `after` (the
     /// live project when the entry is pushed) to `before`.
     pub fn from_pair(
@@ -283,17 +308,43 @@ impl SnapshotDelta {
         after: &str,
         preview: Option<BeforePreview>,
     ) -> Result<Self, DeltaError> {
-        Ok(Self {
-            delta: ProjectDelta::between_texts(after, before)?,
-            preview,
-            omitted_commands: 0,
-        })
+        Self::new(&ProjectDelta::between_texts(after, before)?, preview)
     }
 
-    /// The serialized length of this payload: what it costs the history.
+    /// The delta this entry holds, parsed. Every row passed
+    /// [`ProjectDelta::check_shape`] when it was read and every encode checks
+    /// its result, so this fails only on a payload built by hand.
+    pub fn delta(&self) -> Result<ProjectDelta, DeltaError> {
+        serde_json::from_str(self.delta.get())
+            .map_err(|e| format!("an undo entry's delta cannot be read: {e}"))
+    }
+
+    /// Hold `delta` in place of the current one.
+    pub fn set_delta(&mut self, delta: &ProjectDelta) -> Result<(), DeltaError> {
+        self.delta = held(delta)?;
+        Ok(())
+    }
+
+    /// Run `edit` over the held delta and keep what it leaves when it says it
+    /// changed something (the load's uuid remap). A delta that cannot be read
+    /// or written back is left as it is.
+    pub fn edit(&mut self, edit: impl FnOnce(&mut ProjectDelta) -> bool) -> bool {
+        let Ok(mut delta) = self.delta() else {
+            return false;
+        };
+        edit(&mut delta) && self.set_delta(&delta).is_ok()
+    }
+
+    /// The serialized length of this payload: what it costs the history, and
+    /// what it holds in memory.
     pub fn encoded_len(&self) -> usize {
         serde_json::to_string(self).map_or(0, |json| json.len())
     }
+}
+
+/// `delta` as an entry holds it.
+fn held(delta: &ProjectDelta) -> Result<Box<RawValue>, DeltaError> {
+    serde_json::value::to_raw_value(delta).map_err(|e| e.to_string())
 }
 
 fn to_text(value: &Value) -> Result<String, DeltaError> {

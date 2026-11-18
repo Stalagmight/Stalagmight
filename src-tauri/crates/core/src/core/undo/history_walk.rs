@@ -90,7 +90,11 @@ impl HolderWalk {
         }
         match &entry.undo_data {
             UndoData::Delta(delta) => {
-                if let Some(next) = delta.delta.step_holders(&self.view) {
+                if let Some(next) = delta
+                    .delta()
+                    .ok()
+                    .and_then(|delta| delta.step_holders(&self.view))
+                {
                     Some(self.replace(next))
                 } else {
                     self.known = false;

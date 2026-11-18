@@ -113,7 +113,7 @@ impl UndoStack {
                 let mut touched = remap_entry(entry, &map);
                 if let UndoData::Delta(delta) = &mut entry.undo_data {
                     if walk.known {
-                        touched |= delta.delta.rename_copies(walk.view(), &rename);
+                        touched |= delta.edit(|delta| delta.rename_copies(walk.view(), &rename));
                     }
                 }
                 if touched {
@@ -370,7 +370,7 @@ fn remap_entry(entry: &mut UndoEntry, map: &ShotUuidRemap) -> bool {
         }
         UndoData::Delta(delta) => {
             let rename = |line: LineId, old: &str| map.get(line, old).map(str::to_string);
-            changed |= delta.delta.remap(&rename);
+            changed |= delta.edit(|delta| delta.remap(&rename));
         }
         _ => {}
     }

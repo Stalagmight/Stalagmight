@@ -222,8 +222,8 @@ fn a_compact_entry_round_trips_through_the_disk_vocabulary() {
             (&entry.undo_data, &back.undo_data)
         {
             deltas += 1;
-            assert_eq!(read.delta, written.delta);
-            assert!(read.delta.check_shape().is_ok());
+            assert_eq!(read.delta().unwrap(), written.delta().unwrap());
+            assert!(read.delta().unwrap().check_shape().is_ok());
             match &written.preview {
                 Some(BeforePreview::Line { .. }) => previews.0 += 1,
                 Some(BeforePreview::DeletedLines(names)) => {
@@ -343,4 +343,91 @@ fn a_saved_history_of_compact_entries_reloads_and_walks_exactly() {
             "redo to depth {depth} after the reopen"
         );
     }
+}
+
+/// What a compact entry's payload was before it was held serialized: the
+/// delta as a parsed struct. A row the history writes now must be the row this
+/// wrote, byte for byte.
+#[derive(serde::Serialize)]
+struct ParsedPayload<'a> {
+    #[serde(rename = "d")]
+    delta: crate::core::ProjectDelta,
+    #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
+    preview: &'a Option<BeforePreview>,
+    #[serde(rename = "n", skip_serializing_if = "is_zero")]
+    omitted: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// A compact entry holds its delta as JSON text, but its row is written as it
+/// always was: `d` the delta's object, translated to the disk names - not a
+/// string - so the rows already written and the ones written now are one
+/// format, and either reads back.
+#[test]
+fn a_held_delta_is_written_as_the_parsed_delta_was() {
+    let dir = TempDir::new().unwrap();
+    let state = history(dir.path());
+    let mut deltas = 0;
+    for entry in entries(&state) {
+        let UndoData::Delta(held) = &entry.undo_data else {
+            continue;
+        };
+        deltas += 1;
+        let (_, data_json) = UndoStack::serialize_entry(&entry).unwrap();
+        let mut parsed = serde_json::json!({
+            "v2": {
+                "Delta": ParsedPayload {
+                    delta: held.delta().unwrap(),
+                    preview: &held.preview,
+                    omitted: held.omitted_commands,
+                }
+            }
+        });
+        crate::models::disk_names::to_disk(&mut parsed);
+        assert_eq!(
+            data_json,
+            serde_json::to_string(&parsed).unwrap(),
+            "{}",
+            entry.command.description()
+        );
+    }
+    assert!(deltas >= 6, "only {deltas} compact entries");
+}
+
+/// A row in the format the history writes, pinned as text: it reads back to
+/// the delta it spells out and writes back byte for byte.
+#[test]
+fn a_pinned_compact_row_reads_and_writes_back_unchanged() {
+    let row = concat!(
+        r##"{"v2":{"Delta":{"d":{"f":{"next_section_id":{"s":3},"station_names":{"b":{"##,
+        r##""sd":[[2,0,"G0"],[2,1,"G1"]]}}},"s":[2,[{"k":[0,1]},{"e":{"at":1,"f":{"name":"##,
+        r##"{"s":"Gone"}},"id":1,"s":[{"c":{"at":0,"n":2,"sec":1}},{"p":[{"t":{"k":["id","##,
+        r##""length","uuid"],"r":[[100002,4.5,"9d1c2f6a-2b0e-4e3a-9c41-1f0d5a7b3e21"]]}}]}]}},"##,
+        r##"{"n":{"f":{"color":"#123456","id":2,"name":"Gone","next_shot_id":200001,"##,
+        r##""shots":[]}}}]]},"n":7,"p":{"Section":{"name":"Gone","shots":0}}}}}"##
+    );
+    let command = r#"{"type":"batch","commands":[],"label":"Pinned"}"#;
+    let entry = UndoStack::deserialize_entry(command, row).expect("the pinned row reads");
+    let held = match &entry.undo_data {
+        UndoData::Delta(held) => Some(held),
+        _ => None,
+    }
+    .expect("a compact entry");
+    assert_eq!(held.omitted_commands, 7);
+    assert!(matches!(
+        &held.preview,
+        Some(BeforePreview::Line { name: Some(name), shots: 0 }) if name == "Gone"
+    ));
+    let delta = held.delta().unwrap();
+    assert!(delta.check_shape().is_ok());
+    let written = serde_json::from_str::<Value>(row).unwrap();
+    let expected: crate::core::ProjectDelta = crate::models::disk_names::from_disk_str(
+        &serde_json::to_string(written.pointer("/v2/Delta/d").unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(delta, expected);
+    assert_eq!(UndoStack::serialize_entry(&entry).unwrap().1, row);
 }

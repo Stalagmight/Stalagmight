@@ -44,8 +44,12 @@ impl AppState {
             Ok(doc) => doc,
             Err(e) => return CommandResult::failure(format!("Failed to read project: {e}")),
         };
+        let delta = match entry.delta() {
+            Ok(delta) => delta,
+            Err(e) => return CommandResult::failure(format!("Failed to read undo entry: {e}")),
+        };
         let ids = LineIds::of_project(live);
-        let mut applied = match entry.delta.apply_doc(&live_doc, &ids) {
+        let mut applied = match delta.apply_doc(&live_doc, &ids) {
             Ok(applied) => applied,
             Err(e) => {
                 tracing::error!(
@@ -59,7 +63,7 @@ impl AppState {
         // Only a rebuilt line can differ from the live project, so the
         // gauge rules only ever have those to look at.
         let mut built = applied.built_lines_mut();
-        drop_unresolvable_carried_gauges(&mut built, live, &entry.delta.ungauged_lines());
+        drop_unresolvable_carried_gauges(&mut built, live, &delta.ungauged_lines());
         let edited = gauges_the_step_removes(&built, live);
         drop(built);
         let other_doc = match applied.into_doc() {
@@ -104,11 +108,8 @@ impl AppState {
         } else {
             &other_doc
         };
-        match ProjectDelta::between_docs(from, &live_doc) {
-            Ok(delta) => {
-                entry.delta = delta;
-                CommandResult::success()
-            }
+        match ProjectDelta::between_docs(from, &live_doc).and_then(|back| entry.set_delta(&back)) {
+            Ok(()) => CommandResult::success(),
             Err(e) => Self::roll_back_step(&mut guard, &live_text, &e),
         }
     }

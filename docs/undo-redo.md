@@ -127,6 +127,20 @@ what the snapshot restore took (32-39 ms against 29-30 ms in release).
   records those facts once, at capture (`BeforePreview`: the line's name and shot
   count, the datum's GPS, the deleted lines' names).
 
+### An entry holds its delta as text
+
+`SnapshotDelta` keeps its delta serialized (`Box<RawValue>`), the JSON its row writes,
+and parses it where it is used: a step, the load's holder walk and uuid remap, the
+shape check of a row read back. Parsed, a delta is a tree of maps and `Value`s - a
+one-member edit of a shot is a `BTreeMap` node of its own - and took 15-25 times its
+JSON size on the heap (a 1,000-cell paste 1.45 MB for 33 KB), while the byte budget
+counts the JSON. Held as text an entry's heap is its JSON (on the 20,000-shot gate,
+all entries together went from 4.1 MB to 0.32 MB for 0.30 MB of JSON), so the budget
+counts what the history holds. The row is unchanged: a row's envelope crosses the disk
+boundary through `serde_json::Value` (`disk_names`), which parses the held text into
+the object a parsed delta serialized to (`a_held_delta_is_written_as_the_parsed_delta_was`,
+`a_pinned_compact_row_reads_and_writes_back_unchanged`).
+
 ### What a compact entry keeps of its command
 
 A step never reads the entry's command: the delta holds the state on the other side.

@@ -98,7 +98,7 @@ fn parse_undo_data(undo_data_json: &str) -> Option<UndoData> {
         .ok()?
         .data;
     if let UndoData::Delta(delta) = &data {
-        if let Err(reason) = delta.delta.check_shape() {
+        if let Err(reason) = delta.delta().and_then(|delta| delta.check_shape()) {
             tracing::warn!(
                 purpose = "load persisted undo history",
                 reason = %reason,
