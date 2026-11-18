@@ -3776,12 +3776,13 @@
             "descriptionItems": [
               "Survey: edit geometry, sections, and shots on the map.",
               "Data: every section's stations and shots in one table, with an optional map pane.",
-              "Plan: gas planning over the Closures Computed View."
+              "Plan: dive and gas planning on the survey.",
+              "Export (from the menu): a map image (PNG, SVG, PDF) or the survey data (Ariane .tml/.tmlu, CSV, JSON)."
             ]
           },
           "geometry": {
             "title": "Raw Data vs Closures Computed",
-            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View shows the least-squares solve across loop closures and is read-only. Plan and Export force it. Available only when the project has eligible closures."
+            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View solves the loop closures and bends the survey through any GPS fixes; it is read-only. It is available once the project has an eligible loop closure or a GPS fix. Plan and Export use it, and show the Raw Data View when there is nothing to adjust."
           },
           "tools": {
             "title": "Tool Palette",
@@ -3793,11 +3794,29 @@
           },
           "docks": {
             "title": "The Three Docks",
-            "description": "The map is the same map in every mode. What surrounds it changes with the mode.",
+            "description": "This is the Survey layout. Plan and Export keep the map and change the panels around it; Data puts its table in their place, with the map beside it on request.",
             "descriptionItems": [
-              "Left: sections. Double-click one to frame it.",
-              "Right: detail for the selection, or the gas plan in Plan mode.",
-              "Bottom: the shot table. Double-click a row to frame it."
+              "Left: sections (Survey only). Double-click one to frame it.",
+              "Right: detail for the selection. Plan shows the gas plan here, Export the export options.",
+              "Bottom: the shot table. Double-click a row to frame it. Plan shows its gear tables here; Export hides it."
+            ]
+          },
+          "editShape": {
+            "title": "Editing the Survey's Shape",
+            "description": "Join and cut the survey in Survey mode, in the Raw Data View. One Undo reverses each.",
+            "descriptionItems": [
+              "Merge tool (M): join two stations.",
+              "Right-click a station at a section end > Combine Section With ... (or Combine Sections... where more meet) to join two sections end to end.",
+              "Right-click a middle station > Split Section Here to cut a section in two."
+            ]
+          },
+          "georeference": {
+            "title": "Placing the Survey on the Globe",
+            "description": "Right-click a station > Set Zero Datum and enter its GPS. The first zero datum of each connected piece places that piece.",
+            "descriptionItems": [
+              "More zero datums (other entrances, radiolocation points) become GPS fixes. The Closures Computed View, Plan and map export bend toward them.",
+              "Each fix has an Accuracy and an Entrance setting in Edit Station.",
+              "A warning shows when a fix is far from where the survey puts it."
             ]
           },
           "done": {
@@ -3815,13 +3834,13 @@
           },
           "zeroDatumSelection": {
             "title": "Pick the Anchor Section",
-            "description": "A zero datum ties one station to a real-world GPS position, so every other section can be placed relative to it. Pick the section that should carry it, or skip to position everything manually and set it later."
+            "description": "A zero datum ties one station to a real-world GPS position, and places the sections connected to it. Pick the section that should carry it, or skip and set it later. You can add more later (right-click a station > Set Zero Datum): the first on each connected piece places that piece, later ones become GPS fixes that bend the Closures Computed View without moving the raw survey."
           },
           "zeroDatum": {
             "title": "GPS Anchor",
             "description": "Anchor one station to real-world coordinates. Optional - you can skip it and set it later. Accepted formats:",
             "descriptionItems": [
-              "DD, DMS, DDM, UTM, MGRS, Plus Codes",
+              "DD, DMS, DDM, UTM, Plus Codes",
               "Pasted Google Maps, OpenStreetMap, or Bing links"
             ]
           },
@@ -3829,15 +3848,16 @@
             "title": "Suggested Connections",
             "description": "Stalagmight scores likely overlaps from reference shots and geometry, then proposes a station-to-station merge. Check the confidence, then confirm or skip to place manually.",
             "descriptionItems": [
-              "Overlap handling: Interpolate, Keep Original, Keep Connected, or Keep Both."
+              "Overlap handling: Interpolate, Use import data, Use existing data, or Keep both (reference)."
             ]
           },
           "segmentPlacement": {
             "title": "Placing What Did Not Connect",
             "description": "Segments with no confident match land here. Choose per segment:",
             "descriptionItems": [
+              "Suggested connection: offered when you skipped one; use it after all.",
               "From existing station: anchor to a station you pick.",
-              "Place on map: position it by hand.",
+              "Manual placement: pick a station, then Place on map to position it by hand.",
               "Do not place: skip this segment entirely."
             ]
           }
@@ -3850,7 +3870,7 @@
             "title": "Click to Place, Hover to Snap",
             "description": "Click the map to drop the section; position can be refined later. Hovering near an existing station snaps and merges the two at placement time.",
             "descriptionItems": [
-              "Drag to pan, scroll to zoom.",
+              "Ctrl+drag or middle-drag to pan, scroll to zoom.",
               "Once this guide closes, Esc reopens the placement options and metadata."
             ]
           }
