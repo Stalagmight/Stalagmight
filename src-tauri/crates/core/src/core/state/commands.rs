@@ -1002,6 +1002,9 @@ impl AppState {
             // a provably-no-op forward command, such as reversing a shot-less
             // section, also drops the redo branch. "A successful forward command
             // invalidates redo" outranks preserving redo across a no-op.)
+            // A snapshot pair becomes its compact delta here, outside the
+            // stack's lock: the conversion diffs two whole projects.
+            let final_undo_data = final_undo_data.compact(&cmd);
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 if matches!(final_undo_data, UndoData::None) {
                     tracing::debug!(

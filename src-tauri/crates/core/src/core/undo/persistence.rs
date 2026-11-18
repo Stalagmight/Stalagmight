@@ -7,6 +7,46 @@ use crate::models::{Project, SectionId, ShotId};
 /// the entry records one, and the in-session id it was recorded with.
 type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 
+/// The envelope every persisted undo payload is written in:
+/// `{"v2": <UndoData>}`.
+///
+/// It marks the compact history format ([`UndoData::Delta`]), and it is what
+/// keeps an OLDER build safe. A build before it reads `undo_data_json` as a
+/// bare externally tagged `UndoData`, skips a row it cannot parse - silently -
+/// and keeps every other row. A compact entry is a delta against the state the
+/// entry above it leaves, so a history with one entry skipped undoes the rest
+/// onto the wrong project. Under this key NO row parses there (an unknown
+/// variant), so an older build opens the file with an empty history and the
+/// survey intact, and its next save rewrites the tables in its own format.
+///
+/// In the other direction this build keeps nothing it cannot read as the
+/// envelope: a history written before it (whole-project snapshot pairs) is
+/// dropped on open, both stacks, by decision (the snapshot pairs are what made
+/// large files large).
+#[derive(serde::Serialize)]
+struct PersistedOut<'a> {
+    #[serde(rename = "v2")]
+    data: &'a UndoData,
+}
+
+#[derive(serde::Deserialize)]
+struct PersistedIn {
+    #[serde(rename = "v2")]
+    data: UndoData,
+}
+
+/// A persisted payload, or `None` when it is not one this format wrote: a
+/// row from an older build, or a corrupt one.
+fn parse_undo_data(undo_data_json: &str) -> Option<UndoData> {
+    serde_json::from_str::<PersistedIn>(undo_data_json)
+        .ok()
+        .map(|row| row.data)
+}
+
+fn write_undo_data(undo_data: &UndoData) -> Option<String> {
+    serde_json::to_string(&PersistedOut { data: undo_data }).ok()
+}
+
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
     /// tuple shape `Database::save_undo_stack_with_timestamps` takes.
@@ -43,7 +83,7 @@ impl UndoStack {
     /// Serialize an entry to JSON.
     pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
         let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        let undo_data_json = write_undo_data(&entry.undo_data)?;
         Some((command_json, undo_data_json))
     }
 
@@ -52,7 +92,7 @@ impl UndoStack {
         entry: &UndoEntry,
     ) -> Option<(String, String, Option<String>)> {
         let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        let undo_data_json = write_undo_data(&entry.undo_data)?;
         let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
         Some((command_json, undo_data_json, timestamp_str))
     }
@@ -60,7 +100,7 @@ impl UndoStack {
     /// Deserialize a legacy entry without a timestamp.
     pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
         let command = Self::deserialize_command(command_json)?;
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        let undo_data = parse_undo_data(undo_data_json)?;
         Some(UndoEntry {
             command_bytes: None,
             command,
@@ -76,7 +116,7 @@ impl UndoStack {
         timestamp_str: Option<&str>,
     ) -> Option<UndoEntry> {
         let command = Self::deserialize_command(command_json)?;
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        let undo_data = parse_undo_data(undo_data_json)?;
         let timestamp = match timestamp_str {
             Some(raw) => Some(DateTime::parse_from_rfc3339(raw).ok()?.with_timezone(&Utc)),
             None => None,
@@ -348,18 +388,42 @@ impl UndoStack {
     pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
         self.clear();
 
+        let rows = entries.len();
+        let mut unreadable = 0;
         let mut dropped: Vec<String> = Vec::new();
         for (command_json, undo_data_json) in entries {
-            if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
-                if Self::is_applicable(&entry) {
-                    self.push_undo_tracked(entry);
-                } else {
-                    dropped.push(entry.command.description());
-                }
+            match Self::deserialize_entry(&command_json, &undo_data_json) {
+                Some(entry) if Self::is_applicable(&entry) => self.push_undo_tracked(entry),
+                Some(entry) => dropped.push(entry.command.description()),
+                None => unreadable += 1,
             }
         }
         Self::warn_dropped_unapplicable(&dropped);
+        if unreadable > 0 {
+            self.drop_history_with_a_hole(unreadable, rows);
+        }
         self.enforce_depth_limit();
+    }
+
+    /// Drop the whole history because `unreadable` of its `rows` could not be
+    /// read: a history written by an older build (whole-project snapshots, not
+    /// [`PersistedOut`]), or a corrupt row.
+    ///
+    /// All of it, not just the unreadable rows. A compact entry is a delta
+    /// against the state the entry nearer the live project leaves, so with one
+    /// skipped every entry beyond it would undo onto the wrong project. An older
+    /// build's history is dropped whole by decision as well: it is the history
+    /// of whole-project snapshot pairs this format replaces.
+    fn drop_history_with_a_hole(&mut self, unreadable: usize, rows: usize) {
+        tracing::warn!(
+            unreadable,
+            rows,
+            purpose = "load persisted undo history",
+            "Dropped the persisted undo history: some rows were not written in this build's \
+             format (an older build's history, or a damaged row), and a history with an entry \
+             missing would undo onto the wrong project"
+        );
+        self.clear();
     }
 
     /// Load persisted undo and redo data with timestamps.
@@ -370,6 +434,8 @@ impl UndoStack {
     ) {
         self.clear();
 
+        let rows = undo_entries.len() + redo_entries.len();
+        let mut unreadable = 0;
         if !Self::undo_timestamps_are_valid(&undo_entries) {
             tracing::warn!(
                 entries = undo_entries.len(),
@@ -380,16 +446,14 @@ impl UndoStack {
         } else {
             let mut dropped: Vec<String> = Vec::new();
             for (command_json, undo_data_json, timestamp_str) in undo_entries {
-                if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                match Self::deserialize_entry_with_timestamp(
                     &command_json,
                     &undo_data_json,
                     timestamp_str.as_deref(),
                 ) {
-                    if Self::is_applicable(&entry) {
-                        self.push_undo_tracked(entry);
-                    } else {
-                        dropped.push(entry.command.description());
-                    }
+                    Some(entry) if Self::is_applicable(&entry) => self.push_undo_tracked(entry),
+                    Some(entry) => dropped.push(entry.command.description()),
+                    None => unreadable += 1,
                 }
             }
             Self::warn_dropped_unapplicable(&dropped);
@@ -418,16 +482,20 @@ impl UndoStack {
             );
         } else {
             for (command_json, undo_data_json, timestamp_str) in redo_entries {
-                if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                match Self::deserialize_entry_with_timestamp(
                     &command_json,
                     &undo_data_json,
                     timestamp_str.as_deref(),
                 ) {
-                    self.push_redo_tracked(entry);
+                    Some(entry) => self.push_redo_tracked(entry),
+                    None => unreadable += 1,
                 }
             }
         }
 
+        if unreadable > 0 {
+            self.drop_history_with_a_hole(unreadable, rows);
+        }
         self.enforce_depth_limit();
     }
 }

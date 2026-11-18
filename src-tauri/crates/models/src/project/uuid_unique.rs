@@ -405,7 +405,11 @@ fn remap_string_field(
     true
 }
 
-fn remap_station_keys_json(
+/// The station-key half of [`remap_project_json`], for a JSON fragment that
+/// is not a whole project (a compact undo payload's literal values): every
+/// object holding `section_id` and an `anchor` of `{"AfterShot": id}`,
+/// anywhere in `value`.
+pub fn remap_station_keys_json(
     value: &mut serde_json::Value,
     rename: &dyn Fn(SectionId, &str) -> Option<String>,
 ) -> bool {

@@ -32,6 +32,9 @@ impl UndoStack {
             // Exact: these hold the serialized project already.
             UndoData::ProjectSnapshot(json) => json.len(),
             UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
+            // Exact too: measured by serializing, which is cheap because the
+            // payload is only what the entry changed.
+            UndoData::Delta(delta) => delta.encoded_len(),
             UndoData::PreviousValues {
                 values_json,
                 previous_offsets,

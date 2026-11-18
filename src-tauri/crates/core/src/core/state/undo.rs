@@ -84,7 +84,10 @@ impl AppState {
         // IMPORTANT: No early returns after this point - all paths must flow
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
-        let mut result = match &entry.undo_data {
+        let mut result = if let UndoData::Delta(delta) = &mut entry.undo_data {
+            self.step_through_delta(delta)
+        } else {
+            match &entry.undo_data {
             UndoData::InverseCommand(inverse_cmd) => {
                 // Execute the inverse command (without pushing to undo stack)
                 self.execute_without_undo(inverse_cmd.clone())
@@ -593,6 +596,8 @@ impl AppState {
             }
 
             UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
+            UndoData::Delta(_) => CommandResult::failure("A compact entry steps above".to_string()),
+        }
         };
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
@@ -666,7 +671,12 @@ impl AppState {
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
-        let mut result = match &entry.undo_data {
+        let mut result = if let UndoData::Delta(delta) = &mut entry.undo_data {
+            // A compact entry restores the recorded state on its other side, as
+            // the snapshot pair it replaces did, rather than re-executing.
+            self.step_through_delta(delta)
+        } else {
+            match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
                 Ok(mut proj) => {
                     if Self::restore_snapshot_into_with(&mut proj, after.as_str(), edited.as_ref())
@@ -1035,6 +1045,7 @@ impl AppState {
                     Err(e) => CommandResult::failure(e),
                 }
             }
+        }
         };
 
         // Epilogue: push back to undo stack on success, push back to redo stack on failure

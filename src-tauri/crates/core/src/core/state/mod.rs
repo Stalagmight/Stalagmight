@@ -48,6 +48,7 @@ mod speleodb_session;
 mod speleodb_sidecars;
 mod speleodb_write_guard;
 mod undo;
+mod undo_delta;
 mod undo_capture;
 mod undo_policy;
 mod undo_restore;

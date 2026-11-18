@@ -6233,7 +6233,14 @@ fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
                 location: None,
             })
             .unwrap(),
-            serde_json::to_string(&UndoData::InverseCommand(Command::CloseProject)).unwrap(),
+            UndoStack::serialize_entry(&UndoEntry {
+                command_bytes: None,
+                command: Command::CloseProject,
+                undo_data: UndoData::InverseCommand(Command::CloseProject),
+                timestamp: None,
+            })
+            .unwrap()
+            .1,
             Some(stamp.to_rfc3339()),
         )
     };
@@ -10679,8 +10686,8 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
         );
     }
 
-    // Now delete the section and verify DeleteSection uses ProjectSnapshotPair
-    // (changed from SectionSnapshot to support cleanup of orphaned merges/closures/offsets)
+    // Now delete the section and verify DeleteSection records a compact delta
+    // (captured as a snapshot pair, to support cleanup of orphaned merges/closures/offsets)
     state.execute(Command::DeleteSection { section_id });
 
     {
@@ -10688,8 +10695,8 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
-            "ProjectSnapshotPair",
-            "DeleteSection should use ProjectSnapshotPair, got {}",
+            "Delta",
+            "DeleteSection should record a compact delta, got {}",
             undo_data.variant_name()
         );
     }
@@ -11065,8 +11072,8 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         );
     }
 
-    // Now delete the shot and verify DeleteShot uses ProjectSnapshotPair
-    // (changed from ShotSnapshot to handle station ref shifting correctly)
+    // Now delete the shot and verify DeleteShot records a compact delta
+    // (captured as a snapshot pair, to handle station ref shifting correctly)
     state.execute(Command::DeleteShot {
         section_id,
         shot_id,
@@ -11077,8 +11084,8 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
-            "ProjectSnapshotPair",
-            "DeleteShot should use ProjectSnapshotPair, got {}",
+            "Delta",
+            "DeleteShot should record a compact delta, got {}",
             undo_data.variant_name()
         );
     }

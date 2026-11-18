@@ -11,13 +11,16 @@ use crate::models::{
 
 mod added_content;
 mod budget;
+pub mod delta;
 mod history_credit;
+mod history_walk;
 pub mod history_view;
 mod persistence;
 pub(crate) mod snapshot_fixes;
 mod uuid_remap;
 
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
+pub use delta::{BeforePreview, ProjectDelta, SnapshotDelta};
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -452,7 +455,19 @@ pub enum UndoData {
     /// (e.g., batch operations that create sections with dynamic IDs)
     /// - before: Snapshot before the operation (used for undo)
     /// - after: Snapshot after the operation (used for redo)
+    ///
+    /// A CAPTURE shape only: [`UndoData::compact`] turns every pair into a
+    /// [`UndoData::Delta`] before it is pushed, so a live stack holds one only
+    /// if the conversion failed (it never has).
     ProjectSnapshotPair { before: String, after: String },
+
+    /// A snapshot pair as an entry holds it: only what differs between the
+    /// two states, as the edit that turns the LIVE project into the state on
+    /// the other side of this entry - the `before` while the entry is on the
+    /// undo stack, the `after` while it is on the redo stack. Each step
+    /// re-encodes the way back from the two states it has in hand. See
+    /// [`SnapshotDelta`] and `docs/undo-redo.md`.
+    Delta(Box<SnapshotDelta>),
 
     /// Per-shot survey credit before and after an `EditShotCredit`, or an
     /// `UpdateSectionMetadata` that set the legacy surveyor/date on every shot.
@@ -550,9 +565,38 @@ impl UndoData {
             self,
             UndoData::ProjectSnapshot(_)
                 | UndoData::ProjectSnapshotPair { .. }
+                | UndoData::Delta(_)
                 | UndoData::SectionSnapshot { .. }
                 | UndoData::ShotSnapshot { .. }
         )
+    }
+
+    /// This payload as an entry holds it: a [`UndoData::ProjectSnapshotPair`]
+    /// becomes the [`UndoData::Delta`] towards its `before`, and every other
+    /// payload is returned as it is.
+    ///
+    /// Called where a capture is pushed, outside the stack's lock: the
+    /// conversion parses and diffs two whole projects. A pair that cannot be
+    /// converted (its halves are not serialized projects, which a capture never
+    /// produces) is kept as a pair, which still steps correctly.
+    #[must_use]
+    pub fn compact(self, command: &Command) -> Self {
+        let UndoData::ProjectSnapshotPair { before, after } = self else {
+            return self;
+        };
+        let preview = history_view::before_preview(command, &before);
+        match SnapshotDelta::from_pair(&before, &after, preview) {
+            Ok(delta) => UndoData::Delta(Box::new(delta)),
+            Err(e) => {
+                tracing::error!(
+                    command = %command.description(),
+                    reason = %e,
+                    purpose = "store an undo entry compactly",
+                    "Could not encode a snapshot pair as a delta; keeping the pair"
+                );
+                UndoData::ProjectSnapshotPair { before, after }
+            }
+        }
     }
 
     /// Return a short, safe variant name for logging (no payload data)
@@ -572,6 +616,7 @@ impl UndoData {
             UndoData::StationMoveInfo { .. } => "StationMoveInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
+            UndoData::Delta(_) => "Delta",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
             UndoData::ShotCredits { .. } => "ShotCredits",
             UndoData::None => "None",
@@ -727,6 +772,9 @@ impl UndoStack {
 
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
+        // Production callers compact before taking the lock; this catches the
+        // rest, so no snapshot pair is ever held.
+        let undo_data = undo_data.compact(&command);
         let entry = UndoEntry {
             // Measured once, HERE, and never again: this runs per edit, while
             // `estimated_size` runs on every trim after every edit. See the field's doc.
@@ -1614,11 +1662,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_persisted_skips_invalid() {
+    fn test_load_from_persisted_drops_a_history_with_an_unreadable_row() {
         let mut stack = UndoStack::new();
 
         // Real undo data, so the only thing that can drop this entry is the
-        // malformed-JSON skip this test is about.
+        // unreadable rows this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
             command_bytes: None,
             command: test_create_section_command("Valid"),
@@ -1627,16 +1675,23 @@ mod tests {
         })
         .unwrap();
 
-        let entries = vec![
+        stack.load_from_persisted(vec![valid_entry.clone()]);
+        assert_eq!(stack.len(), 1, "a readable history loads");
+
+        // A compact entry is a delta against the entry above it, so a history
+        // with a hole would undo onto the wrong project: all of it goes.
+        stack.load_from_persisted(vec![
             ("invalid json".to_string(), "{}".to_string()),
-            valid_entry,
+            valid_entry.clone(),
             ("{}".to_string(), "also invalid".to_string()),
-        ];
+        ]);
+        assert_eq!(stack.len(), 0);
 
-        stack.load_from_persisted(entries);
-
-        // Only the valid entry should be loaded
-        assert_eq!(stack.len(), 1);
+        // So does a history written by an older build (a bare payload).
+        let legacy = serde_json::to_string(&UndoData::InverseCommand(test_delete_section_command(1)))
+            .unwrap();
+        stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
+        assert_eq!(stack.len(), 0);
     }
 
     /// A stack persisted before the forward guard existed can carry an entry with
@@ -3251,7 +3306,7 @@ mod tests {
         // charged the overhead whatever its command was.
         let restored = UndoStack::deserialize_entry_with_timestamp(
             r#"{"type":"close_project"}"#,
-            r#""None""#,
+            r#"{"v2":"None"}"#,
             None,
         )
         .unwrap();

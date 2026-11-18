@@ -70,6 +70,41 @@ pub(crate) fn serialize_split(project: &mut Project) -> serde_json::Result<Strin
     })
 }
 
+/// `AppState::serialize_project_snapshot`, as a JSON value rather than text:
+/// the same machine-local `file_path` cleared, the same fixes split out, so
+/// `serde_json::from_str` of that text and this agree exactly (floats
+/// included - `serde_json::to_value` keeps the bits the text round-trips).
+/// What a delta is encoded over and applied to, built without the clone the
+/// text form needs.
+pub(crate) fn snapshot_value(project: &Project) -> serde_json::Result<serde_json::Value> {
+    use serde_json::Value;
+    let mut value = serde_json::to_value(project)?;
+    let Value::Object(members) = &mut value else {
+        return Ok(value);
+    };
+    if project.file_path.is_some() {
+        members.insert("file_path".to_string(), Value::Null);
+    }
+    let roles = project.datum_roles();
+    if roles.contains(&Some(DatumRole::GpsFix)) {
+        if let Some(Value::Array(datums)) = members.get_mut("zero_datums") {
+            let mut fixes = Vec::new();
+            let mut kept = Vec::with_capacity(datums.len());
+            for (position, (datum, role)) in std::mem::take(datums).into_iter().zip(roles).enumerate()
+            {
+                if role == Some(DatumRole::GpsFix) {
+                    fixes.push(serde_json::json!({ "position": position, "datum": datum }));
+                } else {
+                    kept.push(datum);
+                }
+            }
+            *datums = kept;
+            members.insert(FIXES_KEY.to_string(), Value::Array(fixes));
+        }
+    }
+    Ok(value)
+}
+
 /// Whether `project` holds a GPS fix, so a snapshot of it must split.
 pub(crate) fn holds_fix(project: &Project) -> bool {
     project.datum_roles().contains(&Some(DatumRole::GpsFix))

@@ -1051,18 +1051,18 @@ impl AppState {
         }
     }
 
-    /// Push a snapshot-pair undo entry onto the undo stack.
+    /// Push the undo entry for a command captured as two snapshots: stored as
+    /// the compact delta between them ([`crate::core::UndoData::compact`]),
+    /// converted before the stack's lock is taken.
     pub(super) fn push_snapshot_undo(
         &self,
         cmd: crate::core::Command,
         before: String,
         after: String,
     ) {
+        let data = crate::core::UndoData::ProjectSnapshotPair { before, after }.compact(&cmd);
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(
-                cmd,
-                crate::core::UndoData::ProjectSnapshotPair { before, after },
-            );
+            undo_stack.push_with_data(cmd, data);
         }
     }
 }

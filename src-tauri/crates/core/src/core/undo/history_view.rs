@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use ts_rs::TS;
 
+use super::BeforePreview;
 use crate::core::{Command, UndoData, UndoEntry};
 use crate::models::{SectionId, ShotKind, ShotUpdates};
 
@@ -108,6 +109,46 @@ fn format_station_key_with_name(
         format!("{key} ({name})")
     } else {
         key.to_string()
+    }
+}
+
+/// The two rows a Delete Section entry previews: the section's name and its
+/// shot count, both going away.
+fn deleted_section_preview(name: Option<&str>, shots: usize) -> PreviewData {
+    PreviewData {
+        changes: vec![
+            FieldChange {
+                field: "Name".to_string(),
+                old_value: name.unwrap_or("unnamed").to_string(),
+                new_value: String::new(),
+            },
+            FieldChange {
+                field: "Shots".to_string(),
+                old_value: shots.to_string(),
+                new_value: "0".to_string(),
+            },
+        ],
+        additional_changes: 0,
+    }
+}
+
+/// What the preview of `command` will need from its `before` snapshot, read
+/// while the snapshot still exists: [`UndoData::compact`] then drops it.
+/// `None` for every command whose preview reads nothing from it.
+pub(crate) fn before_preview(command: &Command, before: &str) -> Option<BeforePreview> {
+    match command {
+        Command::DeleteSection { section_id } => {
+            let snapshot = SnapshotPreview::parse(before)?;
+            let section = snapshot.section(*section_id)?;
+            Some(BeforePreview::Section {
+                name: section.name.clone(),
+                shots: section.shots.len(),
+            })
+        }
+        Command::RemoveZeroDatum { station_ref } => Some(BeforePreview::Datum(
+            SnapshotPreview::parse(before).and_then(|snapshot| snapshot.datum_gps(*station_ref)),
+        )),
+        _ => None,
     }
 }
 
@@ -601,29 +642,20 @@ fn derive_preview_data(
 
         // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
         (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
-            if let Some(snapshot) = SnapshotPreview::parse(before) {
-                snapshot.section(*section_id).map(|section| PreviewData {
-                    changes: vec![
-                        FieldChange {
-                            field: "Name".to_string(),
-                            old_value: section
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| "unnamed".to_string()),
-                            new_value: String::new(),
-                        },
-                        FieldChange {
-                            field: "Shots".to_string(),
-                            old_value: section.shots.len().to_string(),
-                            new_value: "0".to_string(),
-                        },
-                    ],
-                    additional_changes: 0,
-                })
-            } else {
-                None
-            }
+            SnapshotPreview::parse(before).and_then(|snapshot| {
+                snapshot
+                    .section(*section_id)
+                    .map(|section| deleted_section_preview(section.name.as_deref(), section.shots.len()))
+            })
         }
+
+        // DeleteSection - the compact entry recorded the same two facts at capture.
+        (Command::DeleteSection { .. }, UndoData::Delta(delta)) => match &delta.preview {
+            Some(BeforePreview::Section { name, shots }) => {
+                Some(deleted_section_preview(name.as_deref(), *shots))
+            }
+            _ => None,
+        },
 
         // DeleteShot - show length and azimuth from ShotSnapshot
         (Command::DeleteShot { .. }, UndoData::ShotSnapshot { shot_data, .. }) => {
@@ -869,6 +901,19 @@ fn derive_preview_data(
         ) => {
             let previous_gps = SnapshotPreview::parse(before)
                 .and_then(|snapshot| snapshot.datum_gps(*station_ref));
+            Some(PreviewData {
+                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
+                additional_changes: 0,
+            })
+        }
+
+        // RemoveZeroDatum - the compact entry recorded the removed datum's GPS at
+        // capture, read out of the same `before` half the arm above reads.
+        (Command::RemoveZeroDatum { station_ref }, UndoData::Delta(delta)) => {
+            let previous_gps = match &delta.preview {
+                Some(BeforePreview::Datum(gps)) => *gps,
+                _ => None,
+            };
             Some(PreviewData {
                 changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
                 additional_changes: 0,

@@ -88,10 +88,17 @@ fn command() -> Command {
     Command::DeleteSection { section_id: 1 }
 }
 
+/// A stack holding `entries` exactly as given - as a loaded history holds
+/// them. (`push_with_data` would compact a snapshot pair into a delta.)
 fn stack_of(entries: Vec<UndoData>) -> UndoStack {
     let mut stack = UndoStack::new();
     for data in entries {
-        stack.push_with_data(command(), data);
+        stack.push_undo(UndoEntry {
+            command: command(),
+            undo_data: data,
+            timestamp: Some(Utc::now()),
+            command_bytes: None,
+        });
     }
     stack
 }
@@ -464,6 +471,50 @@ fn a_copy_only_the_history_still_holds_is_renamed_so_undo_cannot_repeat_an_id() 
     );
     let kept: Project = serde_json::from_str(after).unwrap();
     assert_eq!(kept.sections[0].shots[0].uuid.as_deref(), Some(X[0]));
+}
+
+/// The compact form of the test above: the delete's entry is a delta whose
+/// re-created section COPIES its shots from section 0 (the same ids, so the
+/// encoder shares them), and the remap pins the renamed ids onto the copies.
+#[test]
+fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
+    let mut project = two_copies();
+    project.sections.retain(|s| s.id == 0);
+    project.rebuild_section_index();
+    project.rebuild_shot_uuid_index();
+    let renamed = project.make_shot_uuids_project_unique();
+    assert!(renamed.is_empty());
+
+    let compact = UndoData::ProjectSnapshotPair {
+        before: legacy_snapshot(),
+        after: serde_json::to_string(&project).unwrap(),
+    }
+    .compact(&command());
+    let UndoData::Delta(delta) = &compact else {
+        panic!("premise: the pair compacts");
+    };
+    assert!(
+        delta.delta.shot_uuid_mentions().is_empty(),
+        "premise: the re-created shots are copies, carrying no uuid of their own"
+    );
+    let mut stack = stack_of(vec![compact]);
+    assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);
+
+    let UndoData::Delta(delta) = only_entry(&stack) else {
+        panic!("still compact");
+    };
+    let live = serde_json::to_value(&project).unwrap();
+    let before = delta.delta.apply(&live).unwrap();
+    let restored: Project = serde_json::from_value(before).unwrap();
+    assert!(
+        restored.check_structural_integrity().is_empty(),
+        "undoing the delete must not bring a repeated id back"
+    );
+    assert_eq!(
+        restored.sections[1].shots[0].uuid.as_deref(),
+        Some(new_id(X[0]).as_str())
+    );
+    assert_eq!(restored.sections[0].shots[0].uuid.as_deref(), Some(X[0]));
 }
 
 #[test]
