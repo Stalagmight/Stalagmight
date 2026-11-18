@@ -1321,6 +1321,30 @@ fn a_combine_removes_a_closure_its_join_puts_across_one_shot() {
     assert_eq!(project.loop_closures.len(), 1, "the torn merge's closure");
 }
 
+/// A loop closure left from a snap (#736) that a combine removes across one
+/// shot is named as what it is, not as a snapped closure, in the warning the
+/// toast shows, as the Combine dialog names it.
+#[test]
+fn a_removed_former_snap_is_named_as_the_loop_closure_left_from_a_snap() {
+    let labels = std::collections::HashMap::from([(1, "K".to_string()), (2, "O".to_string())]);
+    let removed = crate::models::CombineRemovedClosure {
+        station_a: StationRef::new(1, 2),
+        station_b: StationRef::new(2, 0),
+        kind: crate::models::CombineRemovedKind::FormerSnappedClosure,
+    };
+    let warnings = super::command_combine_sections::combine_removed_warnings(&[removed], &labels);
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|w| w.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Removed loop closure K 1:2 to O 2:0, left from a snap whose stations had moved \
+             apart: combining the sections left its two stations at the two ends of one shot."
+        ]
+    );
+}
+
 /// A placement datum on K's end and a GPS fix on O's start, the merged join
 /// stations (#741 D2): the combine is refused and changes nothing, so the two
 /// datums never share one station, and Remove Zero Datum on either station

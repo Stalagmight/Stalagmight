@@ -60,7 +60,7 @@ use crate::{
     LoopClosure, SectionEnd, SectionId, Shot, ShotData, StationKey, StationRef,
 };
 
-use super::combine_plan::{JoinPoint, Tie, TieId, TiePlan};
+use super::combine_plan::{JoinPoint, Tie, TiePlan};
 use super::gauge::captured_gauge;
 use super::reverse::shot_run_displacement;
 use super::station_rekey::take_naming;
@@ -286,7 +286,12 @@ impl Project {
         let component_gauges = self.hold_component_gauges(&[kept, other]);
         let (remeasure, torn_into) = self.prepare_combine(&setup);
         let deduped = self.join_sections(kept, other, &setup, options)?;
-        let replaced = Self::name_replaced(&deduped, &stations_before, &torn_into);
+        let replaced = Self::name_replaced(
+            &deduped,
+            &stations_before,
+            &torn_into,
+            &setup.ties.former_snaps,
+        );
         Self::check_replaced_as_planned(&replaced, &setup.ties.replaced);
         // The component's lowest id may now be a third section's (the other
         // section's id is retired): hold the component at the station the
@@ -311,8 +316,11 @@ impl Project {
                 kind: *kind,
             })
             .collect();
-        removed
-            .extend(self.remove_unpredicted_closures_across_one_shot(&closures_before, &torn_into));
+        removed.extend(self.remove_unpredicted_closures_across_one_shot(
+            &closures_before,
+            &torn_into,
+            &setup.ties.former_snaps,
+        ));
         self.touch();
         Ok(CombineOutcome {
             removed_across_one_shot: removed,
@@ -387,12 +395,14 @@ impl Project {
     /// leaves a NEW closure across one shot, with an error in the log. Each is
     /// named by its stations before the combine and as what it was then: a
     /// closure a tie of this combine became (`torn_into`, from `tear_ties`)
-    /// by that tie, a merge or snapped closure; any other by its own stations
+    /// by that tie, a merge, a snapped closure, or a torn snap the combine
+    /// re-closes (`former`, #736); any other by its own stations
     /// (`before`), as a loop closure.
     fn remove_unpredicted_closures_across_one_shot(
         &mut self,
         before: &ClosuresBeforeEdit,
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineRemovedClosure> {
         let missed = self.closures_newly_across_one_shot(before);
         debug_assert!(
@@ -409,7 +419,7 @@ impl Project {
         );
         let ids: HashSet<u64> = missed.iter().map(|c| c.closure_id).collect();
         self.loop_closures.retain(|c| !ids.contains(&c.id));
-        Self::name_missed(&missed, torn_into)
+        Self::name_missed(&missed, torn_into, former)
     }
 
     /// Name each closure the backstop removes as the user knew it before the
@@ -417,6 +427,7 @@ impl Project {
     pub(super) fn name_missed(
         missed: &[ClosurePair],
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineRemovedClosure> {
         missed
             .iter()
@@ -424,10 +435,7 @@ impl Project {
                 Some(tie) => CombineRemovedClosure {
                     station_a: tie.a,
                     station_b: tie.b,
-                    kind: match tie.id {
-                        TieId::Merge(_) => CombineRemovedKind::Merge,
-                        TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
-                    },
+                    kind: tie.removed_kind(former),
                 },
                 None => CombineRemovedClosure {
                     station_a: c.station_a,

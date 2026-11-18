@@ -1103,15 +1103,20 @@ pub(super) fn check_combined(
                 || (a, b) == (Some(torn.station_b), Some(torn.station_a))
         };
         match torn.kind {
-            TornTieKind::SnappedClosure => {
+            TornTieKind::SnappedClosure | TornTieKind::FormerSnappedClosure => {
                 for closure in &mut tied.loop_closures {
                     let ends = (
                         before.resolve_key(&closure.station_a),
                         before.resolve_key(&closure.station_b),
                     );
-                    // A snap, or a torn snap the combine re-closes (#736).
-                    let snap = closure.is_aligned || closure.strategy == ClosureStrategy::Move;
-                    if snap && same(ends.0, ends.1) {
+                    // A snap, or a torn snap the combine re-closes (#736),
+                    // named as which it is.
+                    let fits = if torn.kind == TornTieKind::SnappedClosure {
+                        closure.is_aligned
+                    } else {
+                        closure.strategy == ClosureStrategy::Move && !closure.is_aligned
+                    };
+                    if fits && same(ends.0, ends.1) {
                         closure.strategy = ClosureStrategy::Batch;
                     }
                 }
@@ -1170,7 +1175,7 @@ pub(super) fn check_combined(
         }
     };
     check_eligible_ties_kept(before, after, candidate, kept, &home, what);
-    check_torn_reasons(after, plan, kept, other, what);
+    check_torn_reasons(after, plan, (kept, other), [k_join, o_join], &home, what);
     // Every snap the combined survey keeps is on one point in its view (#736).
     super::closure_snap_tests::assert_snaps_held(after, what);
     // Where the view solves the survey neither before nor after, it shows
@@ -1273,11 +1278,15 @@ pub(super) fn check_combined(
 /// reach the combined section through the side that stays, by a snapped
 /// closure the shift leaves alone. A snap a moving side tears into a part a
 /// datum merge is torn from is torn for the datum, not for a loop (#756).
+/// One torn because the joined station moves (#736) is a snap at one of the
+/// two join stations (`join`) whose two stations, at their homes in the
+/// combined project (`home`), are more than 1 cm apart.
 fn check_torn_reasons(
     after: &Project,
     plan: &crate::CombinePlan,
-    kept: SectionId,
-    other: SectionId,
+    (kept, other): (SectionId, SectionId),
+    join: [StationRef; 2],
+    home: &dyn Fn(StationRef) -> StationRef,
     what: &str,
 ) {
     let rigid: Vec<(SectionId, SectionId)> = after
@@ -1287,6 +1296,23 @@ fn check_torn_reasons(
         .filter(|(x, y)| x != y)
         .collect();
     for tie in &plan.torn_ties {
+        if tie.reason == TornTieReason::JoinedStationMoves {
+            assert!(
+                tie.kind == TornTieKind::SnappedClosure
+                    && (join.contains(&tie.station_a) || join.contains(&tie.station_b)),
+                "{what}: {tie:?} is torn because the joined station moves, and is no snap there"
+            );
+            let apart = dist(
+                xy(after, home(tie.station_a)),
+                xy(after, home(tie.station_b)),
+            );
+            assert!(
+                apart >= Project::MERGE_ALIGNMENT_INVARIANT_M,
+                "{what}: {tie:?} is torn because the joined station moves, and its stations are \
+                 {apart:.4} m apart"
+            );
+            continue;
+        }
         if tie.reason != TornTieReason::ZeroDatum {
             let home = |s: SectionId| if s == other { kept } else { s };
             let (a, b) = (
@@ -1510,11 +1536,18 @@ pub(super) fn check_replaced(
                 .station_merges
                 .iter()
                 .any(|m| same(before, &m.station_a, &m.station_b, a, b)),
-            CombineRemovedKind::SnappedClosure => plan.torn_ties.iter().any(|t| {
-                t.kind == TornTieKind::SnappedClosure
-                    && ((t.station_a, t.station_b) == (a, b)
-                        || (t.station_b, t.station_a) == (a, b))
-            }),
+            CombineRemovedKind::SnappedClosure | CombineRemovedKind::FormerSnappedClosure => {
+                let kind = if r.by_kind == CombineRemovedKind::SnappedClosure {
+                    TornTieKind::SnappedClosure
+                } else {
+                    TornTieKind::FormerSnappedClosure
+                };
+                plan.torn_ties.iter().any(|t| {
+                    t.kind == kind
+                        && ((t.station_a, t.station_b) == (a, b)
+                            || (t.station_b, t.station_a) == (a, b))
+                })
+            }
             CombineRemovedKind::LoopClosure => before.loop_closures.iter().any(|c| {
                 Project::closure_is_eligible(c.strategy)
                     && same(before, &c.station_a, &c.station_b, a, b)
@@ -1580,14 +1613,18 @@ pub(super) fn check_removed_across_one_shot(
                     (Some(a), Some(b)) if same(a, b, r)
                 )
             }),
-            CombineRemovedKind::SnappedClosure | CombineRemovedKind::LoopClosure => {
+            CombineRemovedKind::SnappedClosure
+            | CombineRemovedKind::FormerSnappedClosure
+            | CombineRemovedKind::LoopClosure => {
                 before.loop_closures.iter().any(|c| {
-                    // A snapped closure is one now, or a torn snap the
-                    // combine re-closes (#736).
-                    let fits = if r.kind == CombineRemovedKind::SnappedClosure {
-                        c.is_aligned || c.strategy == ClosureStrategy::Move
-                    } else {
-                        Project::closure_is_eligible(c.strategy) && !c.is_aligned
+                    // A snapped closure is one now; a former snap is a torn
+                    // snap the combine re-closes (#736).
+                    let fits = match r.kind {
+                        CombineRemovedKind::SnappedClosure => c.is_aligned,
+                        CombineRemovedKind::FormerSnappedClosure => {
+                            c.strategy == ClosureStrategy::Move && !c.is_aligned
+                        }
+                        _ => Project::closure_is_eligible(c.strategy) && !c.is_aligned,
                     };
                     fits && !skipped_before.contains(&c.id)
                         && matches!(
@@ -1949,7 +1986,13 @@ fn count_realignments(before: &Project, after: &Project, plan: &crate::CombinePl
     let reclosed_torn = plan
         .torn_ties
         .iter()
-        .filter(|t| t.kind == TornTieKind::SnappedClosure && torn_snap(t.station_a, t.station_b))
+        .filter(|t| t.kind == TornTieKind::FormerSnappedClosure)
+        .inspect(|t| {
+            assert!(
+                torn_snap(t.station_a, t.station_b),
+                "{t:?} is named a former snap and is no torn snap"
+            );
+        })
         .count();
     let flags: HashMap<u64, bool> = after
         .loop_closures
@@ -4098,7 +4141,7 @@ fn the_backstop_names_a_missed_closure_by_the_tie_it_came_from() {
             },
         ];
         assert_eq!(
-            Project::name_missed(&missed, &torn_into),
+            Project::name_missed(&missed, &torn_into, &HashSet::new()),
             vec![
                 CombineRemovedClosure {
                     station_a: x_to_o_tie.a,

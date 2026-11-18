@@ -15,13 +15,17 @@
 //! - **A torn snap the combine re-closes** (apart before, within 1 cm after)
 //!   where a snap would tie the combined section to itself (across the two
 //!   sides, or with both ends on the combined section) is torn, as such a snap
-//!   is: it becomes an ordinary closure and the dialog lists it. Left as it
-//!   was, it would snap again inside the combined section. Re-closed anywhere
-//!   else it is a snap again, and the plan's model of the joined survey
-//!   (`Project::joined_sweep`) ties it as one.
+//!   is: it becomes an ordinary closure and the dialog lists it, as the loop
+//!   closure left from a snap it is now (`TornTieKind::FormerSnappedClosure`,
+//!   and `CombineRemovedKind::FormerSnappedClosure` where it names one). Left
+//!   as it was, it would snap again inside the combined section. Re-closed
+//!   anywhere else it is a snap again, and the plan's model of the joined
+//!   survey (`Project::joined_sweep`) ties it as one.
 //! - **A snap the combine pulls apart** (past 1 cm after: a dropped hand move
 //!   takes one of its stations away from the other) is torn, as a snap the
-//!   moving side pulls apart is.
+//!   moving side pulls apart is, and the dialog says why
+//!   (`TornTieReason::JoinedStationMoves`): the joined station keeps the
+//!   other join station's position as shown.
 //! - **A snap the combine leaves between two placed groups** (still within
 //!   1 cm, but a torn merge or the join puts a zero datum on each side) is a
 //!   torn snap from then on, as the stamp would make it after any edit; the
@@ -211,6 +215,14 @@ pub(crate) struct Realignment {
     /// re-closes where it would tie the combined section to itself, and a
     /// snap it pulls apart.
     pub torn: Vec<u64>,
+    /// Of `torn`, the torn snaps it re-closes: the dialog names each as the
+    /// loop closure left from a snap it is now, not as a snapped closure.
+    pub former: HashSet<u64>,
+    /// Of `torn`, the snaps it pulls apart at a join station: the joined
+    /// station keeps the other join station's position as shown, and that is
+    /// what takes the two stations apart (in practice every snap it pulls
+    /// apart; anything else is a gap within float dust of 1 cm).
+    pub at_joined_station: HashSet<u64>,
     /// The ones it keeps whose alignment changes, by id: a torn snap it
     /// re-closes elsewhere (a snap again), and a snap it leaves between two
     /// placed groups (a torn snap again).
@@ -249,6 +261,7 @@ impl Project {
         let shown = facts.shown(self);
         let mut components = ComponentsAfter::new(self, join, torn, shown);
         let combined = |s: SectionId| s == join.kept || s == join.other;
+        let joined_station = |at: StationRef| at == join.join_k || at == join.join_o;
         for closure in left {
             let gap = match (
                 landing.lands(self, shown, closure.a),
@@ -267,6 +280,7 @@ impl Project {
                         || (combined(a) && combined(b));
                     if ties_itself {
                         realignment.torn.push(closure.id);
+                        realignment.former.insert(closure.id);
                     } else {
                         realignment.flipped.insert(closure.id);
                     }
@@ -274,7 +288,12 @@ impl Project {
                 (true, false) if close => {
                     realignment.flipped.insert(closure.id);
                 }
-                (true, false) => realignment.torn.push(closure.id),
+                (true, false) => {
+                    realignment.torn.push(closure.id);
+                    if joined_station(closure.a) || joined_station(closure.b) {
+                        realignment.at_joined_station.insert(closure.id);
+                    }
+                }
                 _ => {}
             }
         }

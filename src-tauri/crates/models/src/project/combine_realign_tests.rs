@@ -136,8 +136,9 @@ fn reclosed_across_the_sides() -> (Project, [SectionId; 4]) {
 /// shift brings C's end back onto B's, where the `Move` closure would be
 /// aligned again by the next re-measure and tie the combined section to
 /// itself through B and C. It becomes an ordinary loop closure, as a snap
-/// there does, and the dialog lists it. Before, the plan left it alone and
-/// the command's epilogue snapped it.
+/// there does, and the dialog lists it as the loop closure left from a snap
+/// it is, not as a snapped closure. Before, the plan left it alone and the
+/// command's epilogue snapped it.
 #[test]
 fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closure() {
     let (project, [k, o, b, c]) = reclosed_across_the_sides();
@@ -154,7 +155,7 @@ fn a_torn_snap_the_shift_recloses_across_the_two_sides_becomes_an_ordinary_closu
     let torn = torn_between(&plan, st(b, 1), st(c, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
         (torn.kind, torn.reason),
-        (TornTieKind::SnappedClosure, TornTieReason::Loop)
+        (TornTieKind::FormerSnappedClosure, TornTieReason::Loop)
     );
     let now = closure_between(&after, st(b, 1), st(c, 1)).unwrap();
     assert_eq!(
@@ -204,7 +205,7 @@ fn a_torn_snap_the_shift_recloses_inside_the_combined_section_becomes_an_ordinar
     let torn = torn_between(&plan, st(o, 1), st(k, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
         (torn.kind, torn.reason),
-        (TornTieKind::SnappedClosure, TornTieReason::Loop)
+        (TornTieKind::FormerSnappedClosure, TornTieReason::Loop)
     );
     // O's end is the combined section's station 3 now.
     let now = closure_between(&after, st(k, 3), st(k, 1)).unwrap();
@@ -307,8 +308,10 @@ fn pulled_apart() -> (Project, [SectionId; 3]) {
 /// station keeps K's hand move (none), so O's start lands on K's end, 0.5 m
 /// from S's end, which stays. The next re-measure would find the snap torn;
 /// the plan tears it into an ordinary loop closure instead, as it tears a
-/// snap a moving side pulls apart, and the dialog lists it. Before, the plan
-/// swept it as a snap and the epilogue tore it unannounced.
+/// snap a moving side pulls apart, and the dialog lists it with that reason
+/// (the joined station moves), not as a tie that would tie the combined
+/// section to itself. Before, the plan swept it as a snap and the epilogue
+/// tore it unannounced.
 #[test]
 fn a_snap_a_dropped_hand_move_pulls_apart_becomes_an_ordinary_closure() {
     let (project, [k, o, s]) = pulled_apart();
@@ -324,7 +327,10 @@ fn a_snap_a_dropped_hand_move_pulls_apart_becomes_an_ordinary_closure() {
     let torn = torn_between(&plan, st(o, 0), st(s, 1)).unwrap_or_else(|| panic!("{plan:?}"));
     assert_eq!(
         (torn.kind, torn.reason),
-        (TornTieKind::SnappedClosure, TornTieReason::Loop)
+        (
+            TornTieKind::SnappedClosure,
+            TornTieReason::JoinedStationMoves
+        )
     );
     let now = closure_between(&after, st(k, 1), st(s, 1)).unwrap();
     assert_eq!(

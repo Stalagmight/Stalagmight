@@ -244,8 +244,13 @@ impl Project {
                 };
                 let (by_station_a, by_station_b, by_kind) = match model.get(stays)? {
                     (_, Origin::Merge(tie)) => (tie.a, tie.b, CombineRemovedKind::Merge),
-                    (_, Origin::Closure(by, true)) => {
+                    // A tie the combine tears: a snap, or a torn snap it
+                    // re-closes (#736).
+                    (_, Origin::Closure(by, true)) if by.aligned => {
                         (by.a, by.b, CombineRemovedKind::SnappedClosure)
+                    }
+                    (_, Origin::Closure(by, true)) => {
+                        (by.a, by.b, CombineRemovedKind::FormerSnappedClosure)
                     }
                     (_, Origin::Closure(by, false)) => {
                         (by.a, by.b, CombineRemovedKind::LoopClosure)
@@ -280,12 +285,14 @@ impl Project {
     /// Name what [`Self::dedupe_closures_in`] replaced as the plan does
     /// ([`Self::closures_replaced`]): each closure by its stations before the
     /// combine (`before`, by id), the replacing one by the tie it came from
-    /// when the combine tore one into it (`torn_into`), else by its own
-    /// stations before, as a loop closure already there.
+    /// when the combine tore one into it (`torn_into`, a torn snap of
+    /// `former` named as such, #736), else by its own stations before, as a
+    /// loop closure already there.
     pub(super) fn name_replaced(
         replaced: &[(LoopClosure, LoopClosure)],
         before: &HashMap<u64, (StationRef, StationRef)>,
         torn_into: &HashMap<u64, Tie>,
+        former: &HashSet<u64>,
     ) -> Vec<CombineReplacedClosure> {
         replaced
             .iter()
@@ -293,11 +300,7 @@ impl Project {
                 let &(station_a, station_b) = before.get(&gone.id)?;
                 let (by_station_a, by_station_b, by_kind) = if let Some(tie) = torn_into.get(&by.id)
                 {
-                    let kind = match tie.id {
-                        TieId::Merge(_) => CombineRemovedKind::Merge,
-                        TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
-                    };
-                    (tie.a, tie.b, kind)
+                    (tie.a, tie.b, tie.removed_kind(former))
                 } else {
                     let &(a, b) = before.get(&by.id)?;
                     (a, b, CombineRemovedKind::LoopClosure)

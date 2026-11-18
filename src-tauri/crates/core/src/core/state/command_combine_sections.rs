@@ -35,6 +35,9 @@ pub(super) fn combine_removed_warnings(
                 CombineRemovedKind::SnappedClosure => {
                     format!("the snapped closure between {a} and {b}")
                 }
+                CombineRemovedKind::FormerSnappedClosure => {
+                    format!("loop closure {a} to {b}, left from a snap whose stations had moved apart")
+                }
                 CombineRemovedKind::LoopClosure => format!("loop closure {a} to {b}"),
             };
             ValidationWarning {

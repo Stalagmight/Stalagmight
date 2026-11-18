@@ -104,6 +104,20 @@ pub(crate) struct Tie {
     pub b: StationRef,
 }
 
+impl Tie {
+    /// What this tie of a plan was before the combine, as the dialog names
+    /// it when it is removed or takes a closure's place: a merge, a snapped
+    /// closure, or one of `former` (`TiePlan::former_snaps`, #736), a torn
+    /// snap the combine re-closes.
+    pub(crate) fn removed_kind(&self, former: &HashSet<u64>) -> CombineRemovedKind {
+        match self.id {
+            TieId::Merge(_) => CombineRemovedKind::Merge,
+            TieId::Closure(id) if former.contains(&id) => CombineRemovedKind::FormerSnappedClosure,
+            TieId::Closure(_) => CombineRemovedKind::SnappedClosure,
+        }
+    }
+}
+
 /// A loop closure with its two resolved stations and whether the solve takes
 /// its strategy, for the anchor rule's solve check, and its strategy and
 /// alignment, for naming one the combine replaces (#749).
@@ -273,6 +287,12 @@ pub(crate) struct TiePlan {
     /// two placed groups. The combine re-measures every flag and checks it
     /// changed exactly these, less any it removed.
     pub realigned: HashSet<u64>,
+    /// The torn snaps of `torn` the combine re-closes (#736): not snapped
+    /// now, so the dialog names each as the loop closure left from a snap.
+    pub former_snaps: HashSet<u64>,
+    /// The snaps of `torn` a join station takes apart (#736): the joined
+    /// station keeps the other join station's position as shown.
+    pub pulled_apart: HashSet<u64>,
 }
 
 type Adjacency = HashMap<SectionId, Vec<(SectionId, TieId)>>;
@@ -707,6 +727,8 @@ impl Project {
         let fixed_side = reach(&adjacency, fixed, moving);
         let Realignment {
             torn: retorn,
+            former: former_snaps,
+            at_joined_station: pulled_apart,
             flipped: realigned,
         } = self.plan_realignment(&landing, &torn, &side, &fixed_side, facts);
         torn.extend(retorn.iter().map(|id| TieId::Closure(*id)));
@@ -759,6 +781,8 @@ impl Project {
                 replaced,
                 dropped_hand_move,
                 realigned,
+                former_snaps,
+                pulled_apart,
                 ..TiePlan::default()
             });
         }
@@ -783,6 +807,8 @@ impl Project {
             dropped_hand_move,
             joined_moved,
             realigned,
+            former_snaps,
+            pulled_apart,
         })
     }
 
@@ -1045,9 +1071,13 @@ impl Project {
                     TieId::Closure(id) if skipped_now.contains(&id) => None,
                     // Made ordinary by this combine, or a snap in the
                     // combined project (#736): one it leaves snapped, or a
-                    // torn snap it re-closes, named as the snap it becomes.
-                    TieId::Closure(_) if snaps.contains(&tie.id) || swept == Swept::Snap => {
-                        Some(CombineRemovedKind::SnappedClosure)
+                    // torn snap it re-closes, named as what it is now.
+                    TieId::Closure(id) if snaps.contains(&tie.id) || swept == Swept::Snap => {
+                        Some(if closures.iter().any(|c| c.id == id && !c.aligned) {
+                            CombineRemovedKind::FormerSnappedClosure
+                        } else {
+                            CombineRemovedKind::SnappedClosure
+                        })
                     }
                     TieId::Closure(_) => Some(CombineRemovedKind::LoopClosure),
                 };
@@ -1156,12 +1186,17 @@ impl Project {
                     station_b: tie.b,
                     kind: match tie.id {
                         TieId::Merge(_) => TornTieKind::Merge,
+                        TieId::Closure(id) if plan.former_snaps.contains(&id) => {
+                            TornTieKind::FormerSnappedClosure
+                        }
                         TieId::Closure(_) => TornTieKind::SnappedClosure,
                     },
-                    reason: if plan.held_by_datum.contains(&tie.id) {
-                        TornTieReason::ZeroDatum
-                    } else {
-                        TornTieReason::Loop
+                    reason: match tie.id {
+                        id if plan.held_by_datum.contains(&id) => TornTieReason::ZeroDatum,
+                        TieId::Closure(id) if plan.pulled_apart.contains(&id) => {
+                            TornTieReason::JoinedStationMoves
+                        }
+                        _ => TornTieReason::Loop,
                     },
                 })
                 .collect(),
