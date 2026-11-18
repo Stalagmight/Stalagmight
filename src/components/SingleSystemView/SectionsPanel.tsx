@@ -587,13 +587,15 @@ export default function SectionsPanel({ lines }: SectionsPanelProps) {
     if (e.button !== 0) return;
     setFocusedKey(row.key);
     if (!(e.shiftKey || e.ctrlKey || e.metaKey) || row.lineIds.length === 0) return;
-    // Shift/Ctrl-click adds every line of the group to the selection.
+    // Shift/Ctrl-click adds every line of the group to the selection (read
+    // at click time: the selection may have moved since the last render).
     setSource('sections-panel');
-    const have = new Set(selectedLineIds);
+    const current = useUIStore.getState().multiSelection;
+    const have = new Set(current.filter((s) => s.type === 'line').map((s) => s.lineId));
     const added: Selection[] = row.lineIds.filter((id) => !have.has(id)).map((id) => ({ type: 'line', lineId: id }));
     suppressRevealRef.current = true;
-    selectAll([...multiSelection, ...added]);
-  }, [selectAll, multiSelection, selectedLineIds]);
+    selectAll([...current, ...added]);
+  }, [selectAll]);
 
   const handleGroupDoubleClick = useCallback((row: GroupRow, e: React.MouseEvent) => {
     if (e.button !== 0) return;
