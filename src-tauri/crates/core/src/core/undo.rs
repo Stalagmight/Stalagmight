@@ -13,6 +13,7 @@ mod added_content;
 mod budget;
 mod created_station;
 mod history_credit;
+pub mod history_names;
 pub mod history_view;
 mod persistence;
 pub(crate) mod snapshot_fixes;

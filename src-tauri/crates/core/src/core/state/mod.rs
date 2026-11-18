@@ -321,6 +321,12 @@ mod split_line_tests;
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod station_identity_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod station_names_import_tests;
 #[cfg(test)]
 #[expect(

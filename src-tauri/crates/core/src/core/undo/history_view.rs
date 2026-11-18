@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use serde::Serialize;
 use ts_rs::TS;
 
+use super::history_names::{describe, describe_entry, NameBook};
 use crate::core::{Command, UndoData, UndoEntry};
 use crate::models::{LineId, ShotKind, ShotUpdates};
 
@@ -86,30 +85,33 @@ fn get_command_type(command: &Command) -> String {
     }
 }
 
-/// Helper to format a station ref with its line name when available
-fn format_station_with_name(
-    station_ref: &crate::models::StationRef,
-    line_names: &HashMap<LineId, Option<String>>,
-) -> String {
-    if let Some(Some(name)) = line_names.get(&station_ref.line_id) {
-        format!("{station_ref} ({name})")
-    } else {
-        station_ref.to_string()
-    }
+/// What a preview row shows for a station no name can be read for (its line
+/// is gone): never the positional handle.
+const UNKNOWN_STATION: &str = "-";
+
+/// A station as the user reads it, `Line name / station name`.
+fn format_station_with_name(station_ref: &crate::models::StationRef, names: &NameBook) -> String {
+    names
+        .station(*station_ref)
+        .unwrap_or_else(|| UNKNOWN_STATION.to_string())
 }
 
 /// Like [`format_station_with_name`] but for a stored [`StationKey`] (e.g. a
-/// captured loop closure in undo data), where no project is in scope to resolve
-/// the anchor to a positional index - the key's own `Display` is used.
-fn format_station_key_with_name(
-    key: &crate::models::StationKey,
-    line_names: &HashMap<LineId, Option<String>>,
-) -> String {
-    if let Some(Some(name)) = line_names.get(&key.line_id) {
-        format!("{key} ({name})")
-    } else {
-        key.to_string()
-    }
+/// captured loop closure in undo data).
+fn format_station_key_with_name(key: &crate::models::StationKey, names: &NameBook) -> String {
+    names
+        .station_key(key)
+        .unwrap_or_else(|| UNKNOWN_STATION.to_string())
+}
+
+/// The name of line `line_id` in a recorded project snapshot (a deleted
+/// line's history label), read without building the project.
+pub(super) fn snapshot_line_name(snapshot_json: &str, line_id: LineId) -> Option<String> {
+    SnapshotPreview::parse(snapshot_json)?
+        .line(line_id)?
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// The slice of a persisted project snapshot the preview arms that read one
@@ -227,11 +229,12 @@ impl SnapshotPreview {
 fn zero_datum_removal_rows(
     station_ref: crate::models::StationRef,
     previous_gps: Option<&crate::models::GpsCoordinates>,
+    names: &NameBook,
 ) -> Vec<FieldChange> {
     let mut changes = vec![FieldChange {
         field: "Station".to_string(),
         old_value: String::new(),
-        new_value: station_ref.to_string(),
+        new_value: format_station_with_name(&station_ref, names),
     }];
     if let Some(gps) = previous_gps {
         changes.push(FieldChange {
@@ -268,15 +271,12 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 
 /// Derive a compact detail string from just the command data (for batch sub-commands).
 /// Returns None for commands where no useful details can be extracted from the command alone.
-fn derive_command_details(
-    cmd: &Command,
-    line_names: &HashMap<LineId, Option<String>>,
-) -> Option<String> {
+fn derive_command_details(cmd: &Command, line_names: &NameBook) -> Option<String> {
     match cmd {
         Command::MoveLine { line_id, offset } => {
             let mut parts = Vec::new();
-            if let Some(Some(name)) = line_names.get(line_id) {
-                parts.push(name.clone());
+            if let Some(name) = line_names.line(*line_id) {
+                parts.push(name.to_string());
             }
             parts.push(offset.display_offset());
             Some(parts.join(", "))
@@ -298,8 +298,8 @@ fn derive_command_details(
             closure_strategy,
         } => Some(format!(
             "{} \u{2194} {}, {}",
-            station_a,
-            station_b,
+            format_station_with_name(station_a, line_names),
+            format_station_with_name(station_b, line_names),
             closure_strategy.as_str()
         )),
         Command::RemoveLoopClosure { closure_id } => Some(format!("Closure #{closure_id}")),
@@ -342,10 +342,7 @@ fn derive_command_details(
 }
 
 /// Derive preview data from an undo entry based on command type and undo data
-fn derive_preview_data(
-    entry: &UndoEntry,
-    line_names: &HashMap<LineId, Option<String>>,
-) -> Option<PreviewData> {
+fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<PreviewData> {
     match (&entry.command, &entry.undo_data) {
         // UpdateShot - show changed fields from PreviousValues
         (Command::UpdateShot { updates, .. }, UndoData::PreviousValues { values_json, .. }) => {
@@ -695,13 +692,13 @@ fn derive_preview_data(
                 old_value: String::new(),
                 new_value: offset.display_offset(),
             }];
-            if let Some(Some(name)) = line_names.get(line_id) {
+            if let Some(name) = line_names.line(*line_id) {
                 changes.insert(
                     0,
                     FieldChange {
                         field: "Line".to_string(),
                         old_value: String::new(),
-                        new_value: name.clone(),
+                        new_value: name.to_string(),
                     },
                 );
             }
@@ -819,7 +816,11 @@ fn derive_preview_data(
                 FieldChange {
                     field: "Stations".to_string(),
                     old_value: String::new(),
-                    new_value: format!("{station_a} \u{2194} {station_b}"),
+                    new_value: format!(
+                        "{} \u{2194} {}",
+                        format_station_with_name(station_a, line_names),
+                        format_station_with_name(station_b, line_names)
+                    ),
                 },
                 FieldChange {
                     field: "Strategy".to_string(),
@@ -865,7 +866,7 @@ fn derive_preview_data(
             let previous_gps = SnapshotPreview::parse(before)
                 .and_then(|snapshot| snapshot.datum_gps(*station_ref));
             Some(PreviewData {
-                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
+                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref(), line_names),
                 additional_changes: 0,
             })
         }
@@ -877,7 +878,7 @@ fn derive_preview_data(
             Command::RemoveZeroDatum { station_ref },
             UndoData::ZeroDatumInfo { previous_gps, .. },
         ) => Some(PreviewData {
-            changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
+            changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref(), line_names),
             additional_changes: 0,
         }),
 
@@ -917,7 +918,7 @@ fn derive_preview_data(
                 .map(|cmd| {
                     let details = derive_command_details(cmd, line_names).unwrap_or_default();
                     FieldChange {
-                        field: cmd.description(),
+                        field: describe(cmd, line_names),
                         old_value: String::new(),
                         new_value: details,
                     }
@@ -957,7 +958,7 @@ fn derive_preview_data(
             changes: vec![FieldChange {
                 field: "Action".to_string(),
                 old_value: String::new(),
-                new_value: entry.command.description(),
+                new_value: describe_entry(entry, line_names),
             }],
             additional_changes: 0,
         }),
@@ -968,12 +969,12 @@ fn derive_preview_data(
 pub fn entry_to_history_item(
     entry: &UndoEntry,
     index: usize,
-    line_names: &HashMap<LineId, Option<String>>,
+    line_names: &NameBook,
 ) -> UndoHistoryItem {
     UndoHistoryItem {
         index,
         description: super::history_credit::description(entry)
-            .unwrap_or_else(|| entry.command.description()),
+            .unwrap_or_else(|| describe_entry(entry, line_names)),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),
         preview_data: derive_preview_data(entry, line_names),
@@ -990,8 +991,27 @@ mod tests {
     use chrono::Utc;
     use std::collections::HashMap;
 
-    fn empty_names() -> HashMap<LineId, Option<String>> {
-        HashMap::new()
+    fn empty_names() -> NameBook {
+        NameBook::default()
+    }
+
+    /// The names of a synthetic project whose lines (ids 0, 1, ...) carry
+    /// `lines[i]` as their name and one shot each, stations seeded `0`, `1`.
+    fn names_of(lines: &[&str]) -> NameBook {
+        let mut project = crate::models::Project::new("Names".to_string(), None);
+        for name in lines {
+            project.add_line(LineData {
+                name: Some((*name).to_string()),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        project.ensure_station_identities();
+        let ids: Vec<LineId> = project.lines.iter().map(|l| l.id).collect();
+        NameBook::of(&project, ids)
     }
 
     #[test]
@@ -1146,7 +1166,7 @@ mod tests {
                 shot_id: Some(0),
                 shot_uuid: None,
                 values_json: r#"{"length": 10.0, "azimuth_in": 45.0}"#.to_string(),
-                previous_offsets: std::collections::HashMap::new(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };
@@ -1163,9 +1183,7 @@ mod tests {
 
     #[test]
     fn test_derive_preview_data_merge_stations_with_names() {
-        let mut names = HashMap::new();
-        names.insert(0, Some("Main Passage".to_string()));
-        names.insert(1, Some("Side Tunnel".to_string()));
+        let names = names_of(&["Main Passage", "Side Tunnel"]);
 
         let entry = UndoEntry {
             command_bytes: None,
@@ -1185,9 +1203,9 @@ mod tests {
         let preview = derive_preview_data(&entry, &names).unwrap();
         assert_eq!(preview.changes.len(), 2);
         assert_eq!(preview.changes[0].field, "Station A");
-        assert_eq!(preview.changes[0].new_value, "0:0 (Main Passage)");
+        assert_eq!(preview.changes[0].new_value, "Main Passage / 0");
         assert_eq!(preview.changes[1].field, "Station B");
-        assert_eq!(preview.changes[1].new_value, "1:0 (Side Tunnel)");
+        assert_eq!(preview.changes[1].new_value, "Side Tunnel / 0");
     }
 
     #[test]
@@ -1207,9 +1225,10 @@ mod tests {
             timestamp: None,
         };
 
+        // No names to read (the lines are gone): never the positional handle.
         let preview = derive_preview_data(&entry, &empty_names()).unwrap();
-        assert_eq!(preview.changes[0].new_value, "0:0");
-        assert_eq!(preview.changes[1].new_value, "1:0");
+        assert_eq!(preview.changes[0].new_value, "-");
+        assert_eq!(preview.changes[1].new_value, "-");
     }
 
     #[test]
@@ -1243,8 +1262,7 @@ mod tests {
 
     #[test]
     fn test_derive_preview_data_move_line() {
-        let mut names = HashMap::new();
-        names.insert(2, Some("East Wing".to_string()));
+        let names = names_of(&["A", "B", "East Wing"]);
 
         let entry = UndoEntry {
             command_bytes: None,
@@ -1339,10 +1357,10 @@ mod tests {
             timestamp: None,
         };
 
-        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        let preview = derive_preview_data(&entry, &names_of(&["A", "B", "C"])).unwrap();
         assert_eq!(preview.changes[0].field, "Stations");
-        assert!(preview.changes[0].new_value.contains("1:0"));
-        assert!(preview.changes[0].new_value.contains("2:3"));
+        // Line 2 has one shot, so station 3 is not there: never the handle.
+        assert_eq!(preview.changes[0].new_value, "B / 0 \u{2194} -");
         assert_eq!(preview.changes[1].field, "Strategy");
         assert_eq!(preview.changes[1].new_value, "ProportionalByLength");
     }
@@ -1515,18 +1533,23 @@ mod tests {
             timestamp: None,
         };
 
-        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        // Lines 0..=3, one shot each: shot 100_000 is line 1's first.
+        let names = names_of(&["Zero", "One", "Two", "Three"]);
+        let preview = derive_preview_data(&entry, &names).unwrap();
         // All 4 sub-commands shown (no truncation)
         assert_eq!(preview.changes.len(), 4);
         assert_eq!(preview.additional_changes, 0);
-        // Each field is the sub-command description
-        assert_eq!(preview.changes[0].field, "Delete shot 1:3");
+        // Each field is the sub-command description, by name; a shot the
+        // project does not hold falls back to its line.
+        assert_eq!(preview.changes[0].field, "Delete shot in line \"One\"");
         assert!(preview.changes[0].new_value.is_empty()); // no details for delete without undo data
-        assert_eq!(preview.changes[1].field, "Merge stations 1:0 and 2:0");
-        assert!(preview.changes[1].new_value.contains("1:0"));
-        assert!(preview.changes[1].new_value.contains("2:0"));
-        assert_eq!(preview.changes[2].field, "Move line 3");
-        assert_eq!(preview.changes[2].new_value, "5.0m N");
+        assert_eq!(
+            preview.changes[1].field,
+            "Merge stations One / 0 and Two / 0"
+        );
+        assert_eq!(preview.changes[1].new_value, "One / 0 \u{2194} Two / 0");
+        assert_eq!(preview.changes[2].field, "Move line \"Three\"");
+        assert_eq!(preview.changes[2].new_value, "Three, 5.0m N");
         assert_eq!(preview.changes[3].field, "Close project");
         assert!(preview.changes[3].new_value.is_empty());
     }
@@ -1567,7 +1590,7 @@ mod tests {
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r#"{"name":"Old Name"}"#.to_string(),
-                previous_offsets: std::collections::HashMap::new(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };
@@ -1601,7 +1624,7 @@ mod tests {
                 shot_uuid: None,
                 values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##
                     .to_string(),
-                previous_offsets: std::collections::HashMap::new(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };
@@ -1645,7 +1668,7 @@ mod tests {
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),
-                previous_offsets: std::collections::HashMap::new(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };

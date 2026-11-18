@@ -1,3 +1,4 @@
+use crate::core::undo::history_names::{referenced_lines, NameBook};
 use crate::core::{Command, CommandResult, ReversedLine, UndoData, UndoEntry};
 use crate::models::{LineId, LineIdentity, LineUpdates, Shot, ShotId, ShotUpdates};
 
@@ -1362,62 +1363,54 @@ impl AppState {
 
     /// Get the undo stack as a list of history items for the UI
     pub fn get_undo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
-        // Build a lightweight line name lookup map, then release the project lock
-        // before acquiring the undo_stack lock (avoids holding both simultaneously)
-        let line_names: std::collections::HashMap<u32, Option<String>> = self
-            .project
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(|p| p.lines.iter().map(|s| (s.id, s.name.clone())).collect())
-            })
-            .unwrap_or_default();
-
-        self.undo_stack
-            .lock()
-            .map(|stack| {
-                stack
-                    .undo_entries()
-                    .enumerate()
-                    .map(|(idx, entry)| {
-                        crate::core::undo::history_view::entry_to_history_item(
-                            entry,
-                            idx,
-                            &line_names,
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.history_items(false)
     }
 
     /// Get the redo stack as a list of history items for the UI
     pub fn get_redo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
-        let line_names: std::collections::HashMap<u32, Option<String>> = self
+        self.history_items(true)
+    }
+
+    /// The undo (or redo) stack as history items, labelled with the names the
+    /// project holds now ([`NameBook`]). Never holds the project and the stack
+    /// locks at once: the lines the entries address are read off the stack,
+    /// their names off the project, then the items off the stack again.
+    fn history_items(&self, redo: bool) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
+        let lines: std::collections::HashSet<LineId> = self
+            .undo_stack
+            .lock()
+            .map(|stack| {
+                let mut lines = std::collections::HashSet::new();
+                let entries: Box<dyn Iterator<Item = &UndoEntry>> = if redo {
+                    Box::new(stack.redo_entries())
+                } else {
+                    Box::new(stack.undo_entries())
+                };
+                for entry in entries {
+                    referenced_lines(&entry.command, &mut lines);
+                }
+                lines
+            })
+            .unwrap_or_default();
+        let names = self
             .project
             .lock()
             .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(|p| p.lines.iter().map(|s| (s.id, s.name.clone())).collect())
-            })
+            .and_then(|guard| guard.as_ref().map(|p| NameBook::of(p, lines)))
             .unwrap_or_default();
 
         self.undo_stack
             .lock()
             .map(|stack| {
-                stack
-                    .redo_entries()
+                let entries: Box<dyn Iterator<Item = &UndoEntry>> = if redo {
+                    Box::new(stack.redo_entries())
+                } else {
+                    Box::new(stack.undo_entries())
+                };
+                entries
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::core::undo::history_view::entry_to_history_item(
-                            entry,
-                            idx,
-                            &line_names,
-                        )
+                        crate::core::undo::history_view::entry_to_history_item(entry, idx, &names)
                     })
                     .collect()
             })
