@@ -1744,7 +1744,9 @@ it, for the section it shows as kept, before the user confirms:
   again. A snapped closure whose stations had come apart (more than 1 cm)
   counts as snapped when the combine brings them back together there, so it
   becomes an ordinary loop closure too rather than snapping again inside the
-  combined section, and so does a snapped closure the combine pulls apart
+  combined section; Details name it as the loop closure left from a snap. So
+  does a snapped closure the combine pulls apart, where the joined station
+  keeps the other join station's position as shown, and Details say so
   (#736). When both sides are anchored by zero datums, the moving side's merge
   towards its own datum becomes a closure too (a closure may tie two anchored
   groups; a merge may not). Where two loop closures end up tying the same two

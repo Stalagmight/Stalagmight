@@ -457,10 +457,20 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
   are one):
   - a torn snap re-closed where a snap would tie the combined section to
     itself (across the two sides, or with both ends on the combined section)
-    becomes a `Batch` closure, as such a snap does, and Details list it as a
-    snapped closure that becomes a loop closure;
+    becomes a `Batch` closure, as such a snap does. It is not snapped now,
+    so Details name it as what it is (`TornTieKind::FormerSnappedClosure`):
+    "Loop closure A to B, left from a snap whose stations had moved apart:
+    combining brings them back together, where it would snap again", in the
+    words the replaced list uses for a former snap; so do the
+    removed-across-one-shot list, a closure it replaces and the removal
+    warning (`CombineRemovedKind::FormerSnappedClosure`);
   - a snap the combine pulls apart (past 1 cm) becomes a `Batch` closure, as
-    one the moving side pulls apart does, listed the same way;
+    one the moving side pulls apart does. It is always a snap at a join
+    station, and Details say why with its own reason
+    (`TornTieReason::JoinedStationMoves`): "The joined station keeps K's
+    position as shown, so the two stations end up more than 0.01m apart."
+    The loop sentence under the list ("Otherwise the combined section would
+    be tied to itself") would be false for it where no side moves;
   - any other keeps the alignment the combined project gives it: a torn snap
     re-closed elsewhere (beside a merged join, where the sections merged at
     the join point move with neither side) is a snap again, and a snap left
