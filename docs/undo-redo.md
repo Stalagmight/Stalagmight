@@ -127,17 +127,17 @@ records is folded in like a snapshot half (its ids, its repeats), and a COPIED s
 whose id the remap renames gets the new id pinned as an edit on the copy
 (`ProjectDelta::rename_copies`), since a copy carries no uuid of its own.
 
-### Persisted rows, and older builds
+### Persisted rows, and older histories
 
-Every row's `undo_data_json` is written as `{"v2": <UndoData>}`. An older build (0.5.5
-and before) reads the column as a bare `UndoData` and skips - silently - any row it
-cannot parse while keeping the rest; with compact entries that would undo onto the
-wrong project, because each delta is relative to the state the entry above it leaves.
-Under the envelope NO row parses there, so an older build opens a file saved by this
-one with an empty history and the survey intact, and its next save rewrites the tables
-in its own format. In the other direction this build drops a history it cannot read
-whole (`drop_history_with_a_hole`): a history written before compact entries (by
-decision - its snapshot pairs are what made large files large) and a damaged row alike.
+Every row's `undo_data_json` is written as `{"v2": <UndoData>}`, which marks the compact
+format. Each delta is relative to the state the entry above it leaves, so a history is
+only usable whole: this build drops a history it cannot read whole
+(`drop_history_with_a_hole`) - a history written before compact entries (by decision:
+its snapshot pairs are what made large files large, and the undo history keeps no
+compatibility with older builds or histories) and a damaged row alike. The
+discarded-history banner says which: an earlier version's history "was not kept", a
+damaged one "could not be read". An older build that opens a file saved by this one
+cannot parse the envelope, so it skips every row and sees an empty history.
 
 ### The size gate
 
@@ -690,7 +690,7 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - Only the last N entries are persisted (configurable limit), except in the hybrid mode below
 - Persistence is synchronous to avoid race conditions with concurrent readers
 - Serialization failures are logged but don't block the save
-- Every payload is written in the `{"v2": ...}` envelope, and a history with ANY row this build cannot read is dropped whole (see [Compact entries](#persisted-rows-and-older-builds)): a compact entry is relative to the one above it, so a skipped row would undo the rest onto the wrong project
+- Every payload is written in the `{"v2": ...}` envelope, and a history with ANY row this build cannot read is dropped whole (see [Compact entries](#persisted-rows-and-older-histories)): a compact entry is relative to the one above it, so a skipped row would undo the rest onto the wrong project
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 

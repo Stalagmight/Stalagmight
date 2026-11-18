@@ -7,22 +7,6 @@ use crate::models::{Project, SectionId, ShotId};
 /// the entry records one, and the in-session id it was recorded with.
 type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 
-/// The envelope every persisted undo payload is written in:
-/// `{"v2": <UndoData>}`.
-///
-/// It marks the compact history format ([`UndoData::Delta`]), and it is what
-/// keeps an OLDER build safe. A build before it reads `undo_data_json` as a
-/// bare externally tagged `UndoData`, skips a row it cannot parse - silently -
-/// and keeps every other row. A compact entry is a delta against the state the
-/// entry above it leaves, so a history with one entry skipped undoes the rest
-/// onto the wrong project. Under this key NO row parses there (an unknown
-/// variant), so an older build opens the file with an empty history and the
-/// survey intact, and its next save rewrites the tables in its own format.
-///
-/// In the other direction this build keeps nothing it cannot read as the
-/// envelope: a history written before it (whole-project snapshot pairs) is
-/// dropped on open, both stacks, by decision (the snapshot pairs are what made
-/// large files large).
 /// Why a loaded history was dropped whole (see `drop_history_with_a_hole`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDropped {
@@ -63,6 +47,17 @@ impl Unread {
     }
 }
 
+/// The envelope every persisted undo payload is written in:
+/// `{"v2": <UndoData>}`.
+///
+/// It marks the compact history format ([`UndoData::Delta`]). A compact entry is
+/// a delta against the state the entry above it leaves, so a history is only
+/// usable whole: this build keeps nothing it cannot read as the envelope, and a
+/// history written before compact entries (whole-project snapshot pairs) is
+/// dropped on open, both stacks, rather than mixed with deltas. The undo
+/// history keeps no compatibility with older builds or older histories; an
+/// older build that does open such a file skips every row (it cannot parse the
+/// envelope) and sees an empty history.
 #[derive(serde::Serialize)]
 struct PersistedOut<'a> {
     #[serde(rename = "v2")]
