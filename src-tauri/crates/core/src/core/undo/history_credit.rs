@@ -2,7 +2,7 @@
 //! (`UndoData::ShotCredits`).
 
 use super::history_view::{FieldChange, PreviewData};
-use super::{ShotCreditChange, UndoData, UndoEntry};
+use super::{ShotCreditRun, UndoData, UndoEntry};
 use crate::core::Command;
 use crate::models::{
     dedupe_people, join_names, CreditEdit, CreditEditKind, LineId, Person, SurveyCredit,
@@ -19,7 +19,7 @@ pub(super) fn description(entry: &UndoEntry) -> Option<String> {
     else {
         return None;
     };
-    let n = changes.len();
+    let n = shot_count(changes);
     Some(format!(
         "{} ({n} shot{})",
         edit.label(),
@@ -27,7 +27,14 @@ pub(super) fn description(entry: &UndoEntry) -> Option<String> {
     ))
 }
 
-fn union(changes: &[ShotCreditChange], pick: impl Fn(&ShotCreditChange) -> &[Person]) -> String {
+/// How many shots `changes` covers.
+fn shot_count(changes: &[ShotCreditRun]) -> usize {
+    changes
+        .iter()
+        .fold(0usize, |n, run| n.saturating_add(run.len))
+}
+
+fn union(changes: &[ShotCreditRun], pick: impl Fn(&ShotCreditRun) -> &[Person]) -> String {
     let people = dedupe_people(
         changes
             .iter()
@@ -41,10 +48,7 @@ fn union(changes: &[ShotCreditChange], pick: impl Fn(&ShotCreditChange) -> &[Per
     }
 }
 
-fn date_range(
-    changes: &[ShotCreditChange],
-    pick: impl Fn(&ShotCreditChange) -> &SurveyCredit,
-) -> String {
+fn date_range(changes: &[ShotCreditRun], pick: impl Fn(&ShotCreditRun) -> &SurveyCredit) -> String {
     let dates: Vec<_> = changes.iter().filter_map(|c| pick(c).date).collect();
     match (dates.iter().min(), dates.iter().max()) {
         (Some(lo), Some(hi)) if lo == hi => lo.to_string(),
@@ -55,7 +59,7 @@ fn date_range(
 
 /// The hover preview of an `EditShotCredit`: the touched roles' names before
 /// and after (the union over the changed shots), the date range, the count.
-pub(super) fn credit_preview(edit: &CreditEdit, changes: &[ShotCreditChange]) -> PreviewData {
+pub(super) fn credit_preview(edit: &CreditEdit, changes: &[ShotCreditRun]) -> PreviewData {
     let kind = edit.kind();
     let all = matches!(kind, CreditEditKind::Mixed | CreditEditKind::Nothing);
     let mut rows = Vec::new();
@@ -84,7 +88,7 @@ pub(super) fn credit_preview(edit: &CreditEdit, changes: &[ShotCreditChange]) ->
     rows.push(FieldChange {
         field: "Shots".to_string(),
         old_value: String::new(),
-        new_value: changes.len().to_string(),
+        new_value: shot_count(changes).to_string(),
     });
     PreviewData {
         changes: rows,
@@ -96,7 +100,7 @@ pub(super) fn credit_preview(edit: &CreditEdit, changes: &[ShotCreditChange]) ->
 /// recorded other fields, plus the surveyor names and earliest date the shots
 /// carried before.
 pub(super) fn legacy_line_values(
-    changes: &[ShotCreditChange],
+    changes: &[ShotCreditRun],
     line_values: Option<&(LineId, String)>,
 ) -> String {
     let mut prev = line_values

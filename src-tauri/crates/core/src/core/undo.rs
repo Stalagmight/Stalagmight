@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LineData, LineId, LineIdentity, LoopClosure, ShotData, ShotId, StationRef,
-    SurveyCredit,
+    CreditTargets, GpsCoordinates, LineData, LineId, LineIdentity, LoopClosure, ShotData, ShotId,
+    StationRef, SurveyCredit,
 };
 
 mod added_content;
@@ -70,6 +70,21 @@ fn stored_command(command: Command, data: &mut UndoData) -> Command {
         (command @ Command::CreateLine { .. }, UndoData::CreatedLineSnapshot { .. }) => {
             without_line_shots(command)
         }
+        // An `EditShotCredit` that names its shots keeps none of them: they
+        // are in-session ids, which a reload renumbers, and the entry's runs
+        // hold what it changed by position. Its redo writes those runs, and
+        // the history counts its shots from them (`history_credit`). Kept, a
+        // thousand shots were 15 KB of command.
+        (
+            Command::EditShotCredit {
+                targets: CreditTargets::Shots { .. },
+                edit,
+            },
+            UndoData::ShotCredits { .. },
+        ) => Command::EditShotCredit {
+            targets: CreditTargets::Shots { shots: Vec::new() },
+            edit,
+        },
         (Command::Batch { commands, label }, UndoData::Delta(delta)) => {
             let total = commands.len();
             let (commands, omitted) = trimmed_batch(commands);
@@ -241,92 +256,174 @@ pub struct UndoEntry {
     pub command_bytes: Option<usize>,
 }
 
-/// One shot's survey credit across a credit edit, addressed by the uuid that
-/// survives a save (see [`UndoData::ShotCredits`]).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ShotCreditChange {
+/// Consecutive shots of one line whose survey credit one edit changed from
+/// the same `before` to the same `after` (see [`UndoData::ShotCredits`]).
+///
+/// Addressed by POSITION, which a save persists (the shots' order; their
+/// in-session ids are renumbered by every load), and checked against the uuid
+/// of the run's first shot. A credit edit over a whole line or a thousand-shot
+/// selection is then a run per line and per previous credit, not a uuid per
+/// shot: about 54 bytes a shot, most of it uuids, was what made such an edit
+/// pass 1% of a 20,000-shot file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShotCreditRun {
     pub line_id: LineId,
-    /// The shot's persistent uuid; the executor mints one for a shot that had
-    /// none, so every recorded change is addressable after a reload.
-    pub shot_uuid: String,
+    /// The run's first shot, by its position in the line. `None` for a run
+    /// read from a row written before positions were recorded: one shot,
+    /// found by [`Self::anchor`] alone.
+    pub start: Option<usize>,
+    /// How many consecutive shots the run covers, from `start`.
+    pub len: usize,
+    /// The uuid of the run's first shot when the edit ran. A step writes the
+    /// run only where the shot at `start` still holds it.
+    pub anchor: String,
     pub before: SurveyCredit,
     pub after: SurveyCredit,
-    /// The IN-SESSION id, only meaningful between `generate_undo_data` and
-    /// `finalize_undo_data` of the one `execute()` that recorded it. Never
-    /// persisted: the loader renumbers ids.
-    #[serde(skip)]
-    pub shot_id: ShotId,
 }
 
-/// `ShotCredits::changes` as the history stores it: runs of shots that share a
-/// line, a `before` and an `after` credit, written once per run with the
-/// shots' uuids. A credit edit over a whole line usually gives every shot the
-/// same credit from the same one, so this is one credit pair and a list of ids
-/// rather than two credits per shot. Read back to the same `Vec` in order.
-mod grouped_credit_changes {
+impl ShotCreditRun {
+    /// The one shot at `position` of `line_id`, as a capture records it
+    /// before the runs are joined ([`join_credit_runs`]).
+    pub fn shot(line_id: LineId, position: usize, uuid: String, credit: SurveyCredit) -> Self {
+        Self {
+            line_id,
+            start: Some(position),
+            len: 1,
+            anchor: uuid,
+            before: credit.clone(),
+            after: credit,
+        }
+    }
+
+    /// Whether `next` is the shot after this run, in the same line, changed
+    /// the same way.
+    fn continued_by(&self, next: &Self) -> bool {
+        self.line_id == next.line_id
+            && self
+                .start
+                .zip(next.start)
+                .is_some_and(|(start, next)| start.checked_add(self.len) == Some(next))
+            && self.before == next.before
+            && self.after == next.after
+    }
+}
+
+/// `changes` (single shots or runs, in any order) as the fewest runs: sorted
+/// by line and position, each run extended while the next shot follows it
+/// with the same credits. A run read from an older row (no position) stays
+/// as it is.
+#[must_use]
+pub fn join_credit_runs(mut changes: Vec<ShotCreditRun>) -> Vec<ShotCreditRun> {
+    changes.sort_by_key(|run| (run.line_id, run.start));
+    let mut out: Vec<ShotCreditRun> = Vec::with_capacity(changes.len());
+    for run in changes {
+        match out.last_mut() {
+            Some(last) if last.continued_by(&run) => last.len += run.len,
+            _ => out.push(run),
+        }
+    }
+    out.shrink_to_fit();
+    out
+}
+
+/// `ShotCredits::changes` as the history stores it: every distinct
+/// (`before`, `after`) pair once (`c`), and the runs as `[line, start, len,
+/// anchor uuid, pair]` (`r`). A credit edit over a whole line usually gives
+/// every shot the same credit from the same one, so this is one credit pair
+/// and one short row per line. Read back to the same runs in order.
+///
+/// A row written before positions were recorded (a list of `{s, b, a, u}`
+/// groups, a uuid per shot) still reads: each uuid is a one-shot run found by
+/// its uuid.
+mod credit_runs {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::ShotCreditChange;
+    use super::ShotCreditRun;
     use crate::models::{LineId, SurveyCredit};
 
     #[derive(Serialize)]
-    struct RunOut<'a> {
-        s: LineId,
-        b: &'a SurveyCredit,
-        a: &'a SurveyCredit,
-        u: Vec<&'a str>,
+    struct Out<'a> {
+        c: Vec<(&'a SurveyCredit, &'a SurveyCredit)>,
+        r: Vec<(LineId, usize, usize, &'a str, usize)>,
     }
 
     #[derive(Deserialize)]
-    struct RunIn {
+    struct LegacyGroup {
         s: LineId,
         b: SurveyCredit,
         a: SurveyCredit,
         u: Vec<String>,
     }
 
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum In {
+        Runs {
+            c: Vec<(SurveyCredit, SurveyCredit)>,
+            r: Vec<(LineId, usize, usize, String, usize)>,
+        },
+        Legacy(Vec<LegacyGroup>),
+    }
+
     pub(super) fn serialize<S: Serializer>(
-        changes: &[ShotCreditChange],
+        runs: &[ShotCreditRun],
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        let mut runs: Vec<RunOut<'_>> = Vec::new();
-        for change in changes {
-            match runs.last_mut() {
-                Some(run)
-                    if run.s == change.line_id
-                        && *run.b == change.before
-                        && *run.a == change.after =>
-                {
-                    run.u.push(&change.shot_uuid);
+        let mut pairs: Vec<(&SurveyCredit, &SurveyCredit)> = Vec::new();
+        let mut rows = Vec::with_capacity(runs.len());
+        for run in runs {
+            let pair = (&run.before, &run.after);
+            let index = match pairs.iter().position(|p| *p == pair) {
+                Some(index) => index,
+                None => {
+                    pairs.push(pair);
+                    pairs.len() - 1
                 }
-                _ => runs.push(RunOut {
-                    s: change.line_id,
-                    b: &change.before,
-                    a: &change.after,
-                    u: vec![&change.shot_uuid],
-                }),
-            }
+            };
+            // A run without a position (an older row's) is written as one at
+            // the position no line reaches, which reads back as one found by
+            // its anchor.
+            let start = run.start.unwrap_or(usize::MAX);
+            rows.push((run.line_id, start, run.len, run.anchor.as_str(), index));
         }
-        runs.serialize(serializer)
+        Out { c: pairs, r: rows }.serialize(serializer)
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<Vec<ShotCreditChange>, D::Error> {
-        let runs = Vec::<RunIn>::deserialize(deserializer)?;
-        Ok(runs
-            .into_iter()
-            .flat_map(|run| {
-                let RunIn { s, b, a, u } = run;
-                u.into_iter().map(move |shot_uuid| ShotCreditChange {
-                    line_id: s,
-                    shot_uuid,
-                    before: b.clone(),
-                    after: a.clone(),
-                    shot_id: 0,
+    ) -> Result<Vec<ShotCreditRun>, D::Error> {
+        match In::deserialize(deserializer)? {
+            In::Runs { c, r } => r
+                .into_iter()
+                .map(|(line_id, start, len, anchor, pair)| {
+                    let (before, after) = c.get(pair).cloned().ok_or_else(|| {
+                        serde::de::Error::custom("a credit run names a credit pair past the list")
+                    })?;
+                    Ok(ShotCreditRun {
+                        line_id,
+                        start: (start != usize::MAX).then_some(start),
+                        len,
+                        anchor,
+                        before,
+                        after,
+                    })
                 })
-            })
-            .collect())
+                .collect(),
+            In::Legacy(groups) => Ok(groups
+                .into_iter()
+                .flat_map(|group| {
+                    let LegacyGroup { s, b, a, u } = group;
+                    u.into_iter().map(move |anchor| ShotCreditRun {
+                        line_id: s,
+                        start: None,
+                        len: 1,
+                        anchor,
+                        before: b.clone(),
+                        after: a.clone(),
+                    })
+                })
+                .collect()),
+        }
     }
 }
 
@@ -585,18 +682,20 @@ pub enum UndoData {
     /// [`SnapshotDelta`] and `docs/undo-redo.md`.
     Delta(Box<SnapshotDelta>),
 
-    /// Per-shot survey credit before and after an `EditShotCredit`, or an
-    /// `UpdateLineMetadata` that set the legacy surveyor/date on every shot.
+    /// Survey credit before and after an `EditShotCredit`, or an
+    /// `UpdateLineMetadata` that set the legacy surveyor/date on every shot,
+    /// as runs of consecutive shots changed the same way ([`ShotCreditRun`]).
     ///
-    /// Undo writes `before` back onto each shot, resolved by uuid; redo writes
-    /// `after` (an `EditShotCredit`) or re-executes the command (an
-    /// `UpdateLineMetadata`, which addresses its line by its stable id).
-    /// A shot that no longer resolves is skipped with a warning rather than
-    /// failing the step: a credit edit is metadata, and a failed undo would wedge
-    /// every entry beneath it.
+    /// Undo writes `before` back onto each run's shots, found by position and
+    /// checked by the uuid of the run's first shot; redo writes `after` (an
+    /// `EditShotCredit`) or re-executes the command (an `UpdateLineMetadata`,
+    /// which addresses its line by its stable id). A run that no longer
+    /// resolves is skipped with a warning rather than failing the step: a
+    /// credit edit is metadata, and a failed undo would wedge every entry
+    /// beneath it.
     ShotCredits {
-        #[serde(with = "grouped_credit_changes")]
-        changes: Vec<ShotCreditChange>,
+        #[serde(with = "credit_runs")]
+        changes: Vec<ShotCreditRun>,
         /// `UpdateLineMetadata` only: the line and its OTHER previous
         /// values (a `LineUpdates` JSON with no surveyor/date), put back by
         /// the undo exactly as `PreviousValues` does.

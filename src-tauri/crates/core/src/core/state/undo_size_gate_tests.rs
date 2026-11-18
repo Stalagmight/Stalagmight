@@ -72,8 +72,9 @@ fn line_data(line: usize, shots: usize) -> LineData {
 /// start tied to a station of its parent, a loop closure every 25 lines, a
 /// GPS datum at the entrance, a Section grouping the first ten lines, plus an
 /// unmerged 30-shot island and a 1-shot line hanging off the end of the root
-/// line (so the two can combine).
-fn survey(lines: usize) -> Project {
+/// line (so the two can combine). With `long`, an unmerged line of that many
+/// shots too, before the island.
+fn survey(lines: usize, long: Option<usize>) -> Project {
     let mut project = Project::new("Gate".to_string(), None);
     for s in 0..lines {
         project.add_line(line_data(s, SHOTS_PER_LINE));
@@ -107,6 +108,9 @@ fn survey(lines: usize) -> Project {
     for id in ids.iter().take(10) {
         project.set_line_section(*id, Some(upper));
     }
+    if let Some(shots) = long {
+        project.add_line(line_data(8_000, shots));
+    }
     project.add_line(line_data(9_000, 30));
     let leaf = project.add_line(line_data(9_001, 1)).id;
     project
@@ -126,14 +130,20 @@ struct Gate {
     lines: Vec<LineId>,
     island: LineId,
     leaf: LineId,
+    /// The long line, when the survey has one.
+    long: Option<LineId>,
     /// The survey's one Section.
     section: SectionId,
 }
 
 fn open(lines: usize) -> Gate {
+    open_with(lines, None)
+}
+
+fn open_with(lines: usize, long: Option<usize>) -> Gate {
     let dir = TempDir::new().unwrap();
     let path: PathBuf = dir.path().join("gate.stalx");
-    let project = survey(lines);
+    let project = survey(lines, long);
     Database::open(&path)
         .unwrap()
         .save_project(&project)
@@ -149,6 +159,7 @@ fn open(lines: usize) -> Gate {
     let mut lines: Vec<LineId> = live.lines.iter().map(|s| s.id).collect();
     let leaf = lines.pop().unwrap();
     let island = lines.pop().unwrap();
+    let long = long.map(|_| lines.pop().unwrap());
     let section = live.sections.first().expect("the survey's Section").id;
     Gate {
         state,
@@ -157,6 +168,7 @@ fn open(lines: usize) -> Gate {
         lines,
         island,
         leaf,
+        long,
         section,
     }
 }
@@ -607,6 +619,38 @@ fn large_actions() -> Vec<(&'static str, Action)> {
     ]
 }
 
+/// `Surveyor` set on `targets`.
+fn credit_edit(g: &Gate, targets: CreditTargets) -> crate::core::CommandResult {
+    g.state.execute(Command::EditShotCredit {
+        targets,
+        edit: CreditEdit {
+            set_surveyors: Some(vec![Person {
+                name: "Surveyor".to_string(),
+                email: None,
+            }]),
+            ..Default::default()
+        },
+    })
+}
+
+/// Credit edits over a long line and a selection of a thousand shots, on the
+/// 20,000-shot survey with a 2,000-shot line added.
+fn large_credit_actions() -> Vec<(&'static str, Action)> {
+    vec![
+        ("edit credit (2,000-shot line)", |g| {
+            let line_id = g.long.expect("the survey's long line");
+            credit_edit(g, CreditTargets::Line { line_id })
+        }),
+        ("edit credit (1,000 shots, 40 lines)", |g| {
+            let mut shots = Vec::new();
+            for line in &g.lines[220..260] {
+                shots.extend(g.shot_ids(*line)[10..35].iter().map(|id| (*line, *id)));
+            }
+            credit_edit(g, CreditTargets::Shots { shots })
+        }),
+    ]
+}
+
 /// The project as the undo fuzzer compares it (`canonical_snapshot`): what no
 /// history move restores - `modified_at`, the monotonic id allocators - left out.
 fn state_text(state: &AppState) -> String {
@@ -724,13 +768,16 @@ fn report(text: &str) {
 }
 
 fn gate(lines: usize, label: &str, exact: bool, large: bool) {
-    let gate = open(lines);
     let mut actions = actions();
     if large {
         actions.extend(large_actions());
     }
-    let (rows, failed) = measure(&gate, exact, actions);
-    let mut text = table(label, &gate, &rows);
+    gate_actions(&open(lines), label, exact, actions);
+}
+
+fn gate_actions(gate: &Gate, label: &str, exact: bool, actions: Vec<(&'static str, Action)>) {
+    let (rows, failed) = measure(gate, exact, actions);
+    let mut text = table(label, gate, &rows);
     for failure in &failed {
         let _ = writeln!(text, "  NOT MEASURED {failure}");
     }
@@ -756,6 +803,16 @@ fn every_undo_entry_is_a_small_fraction_of_a_5k_shot_file() {
 #[test]
 fn every_undo_entry_is_a_small_fraction_of_a_20k_shot_file() {
     gate(400, "20k shots", false, true);
+}
+
+#[test]
+fn a_large_credit_edit_is_a_small_fraction_of_a_20k_shot_file() {
+    gate_actions(
+        &open_with(400, Some(2_000)),
+        "20k shots and a 2,000-shot line, credit edits",
+        true,
+        large_credit_actions(),
+    );
 }
 
 /// A paste's entry grows with the cells it changed, not with the commands

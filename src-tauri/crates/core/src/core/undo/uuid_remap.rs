@@ -499,11 +499,13 @@ fn visit_entry(
             changed |= f(*line_id, uuid);
         }
         UndoData::ClosureInfo { closure, .. } => changed |= visit_closure(closure, f),
+        // A run names its shots by position; only its first shot's uuid,
+        // the anchor checked on apply, is an id to translate.
         UndoData::ShotCredits { changes, .. } => {
-            for change in changes {
-                let mut uuid = Some(std::mem::take(&mut change.shot_uuid));
-                changed |= f(change.line_id, &mut uuid);
-                change.shot_uuid = uuid.unwrap_or_default();
+            for run in changes {
+                let mut uuid = Some(std::mem::take(&mut run.anchor));
+                changed |= f(run.line_id, &mut uuid);
+                run.anchor = uuid.unwrap_or_default();
             }
         }
         UndoData::AddedProjectContent(content) => {

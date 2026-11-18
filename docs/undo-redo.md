@@ -44,7 +44,7 @@ Commands go through a two-phase capture during execution:
 | `SegmentMoveInfo` | MoveSegment | Restore line offsets directly | Reapply offset to affected lines |
 | `ProjectSnapshotPair` | A CAPTURE shape only: Batch, DeleteLine, DeleteShot, ReverseLine, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Line Here and Combine Lines (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) capture one, and `UndoData::compact` stores it as a `Delta` before it is pushed | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `Delta` | Every entry captured as a `ProjectSnapshotPair` (see [Compact entries](#compact-entries-deltas-instead-of-snapshots)) | Apply the delta to the live project, restore the result, re-encode the way back | The same, the other way |
-| `ShotCredits` | EditShotCredit, and an UpdateLineMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a line edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateLineMetadata: execute the original command |
+| `ShotCredits` | EditShotCredit, and an UpdateLineMetadata that sets the legacy surveyor/date | Write each recorded run's `before` credit back onto its shots (see [Credit runs](#credit-runs)); a run that does not resolve is skipped with a warning, never a wedge; for a line edit, then put its other previous values back | EditShotCredit: write each run's `after` credit. UpdateLineMetadata: execute the original command |
 | `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same line, shot and closure ids |
 | `CaveSections` | the Section commands (#327): Create/Update/Delete CaveSection, MoveLinesToCaveSection, ApplyCaveSectionColor | Restore the recorded `before`: the whole Section list and id counter, and the membership and colour of each line the command changed (a line no longer present is skipped) | Restore the recorded `after` the same way - never a re-execution, so a re-created Section keeps its id |
 | `None` | Non-undoable commands | N/A | N/A |
@@ -140,6 +140,21 @@ and an unlabelled batch is given its `Batch of N commands` label before any is d
 A `CreateLine` sub-command loses its shots, which the delta carries. On a
 20,000-shot survey a 1,000-cell paste went from 116.5 KB to 33-36 KB, three quarters of
 it the 1,000 `UpdateShot`s nothing read.
+
+### Credit runs
+
+A credit edit records `ShotCreditRun`s, not a uuid per shot: each run is consecutive
+shots of one line changed from the same credit to the same credit, addressed by the
+position of its first shot (persisted, as the shots' order is; the in-session ids are
+not) and checked by that shot's uuid, the run's anchor. A step writes a run only where
+the shot at its position still holds the anchor. The row writes each distinct
+(before, after) pair once and a run as `[line, start, len, anchor, pair]`, so an edit
+over a whole line is one short row whatever the line's length, and a selection costs a
+row per line and per previous credit. The load's uuid remap renames the anchors. A row
+written before runs (a uuid per shot) still reads, each uuid a one-shot run found by
+uuid. The stored `EditShotCredit` keeps no explicit targets: they are in-session ids,
+and the runs hold what changed. On a 20,000-shot survey an edit over a 2,000-shot line
+went from 78 KB to 331 B, over 1,000 shots in 40 lines from 59 KB to 2.4 KB.
 
 ### The load's uuid remap walks a holder view
 

@@ -76,7 +76,8 @@ impl UndoStack {
                     + refs * 256
                     + (content.line_offsets.len() + content.moved_offsets.len()) * BYTES_PER_OFFSET
             }
-            // Two credits per touched shot, each a handful of names.
+            // Two credits per run of shots changed alike, each a handful of
+            // names, and the run's anchor uuid.
             UndoData::ShotCredits {
                 changes,
                 line_values,

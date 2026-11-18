@@ -317,8 +317,10 @@ fn the_undo_record_addresses_shots_by_uuid_and_survives_json() {
     let UndoData::ShotCredits { changes, .. } = &undo_data else {
         panic!("expected ShotCredits, got {}", undo_data.variant_name());
     };
-    assert_eq!(changes.len(), 2);
-    assert!(changes.iter().all(|c| !c.shot_uuid.is_empty()));
+    // Both shots of the line, changed alike: one run, anchored on the first.
+    assert_eq!(changes.len(), 1);
+    assert_eq!((changes[0].start, changes[0].len), (Some(0), 2));
+    assert!(!changes[0].anchor.is_empty());
     let json = serde_json::to_string(&undo_data).unwrap();
     assert!(
         !json.contains("shot_id"),
@@ -328,7 +330,7 @@ fn the_undo_record_addresses_shots_by_uuid_and_survives_json() {
     let UndoData::ShotCredits { changes: back, .. } = back else {
         panic!("round trip changed the variant");
     };
-    assert_eq!(back.len(), 2);
+    assert_eq!(back, *changes);
     assert_eq!(back[0].after, credit(&[], &["Ex"], None));
 }
 
@@ -665,6 +667,162 @@ fn a_credit_edit_undoes_after_save_and_reopen() {
     assert_eq!(credits(&state, sid), after);
 }
 
+/// A selection across lines - out of order, with gaps, over shots with
+/// different previous credits - is recorded as runs of consecutive shots
+/// changed alike, one credit pair each written once, and it undoes and
+/// redoes exactly after a save and a reopen, where every shot id is new and
+/// only the positions and the anchors' uuids carry over.
+#[test]
+fn a_credit_edit_over_runs_undoes_exactly_after_save_and_reopen() {
+    let _config = crate::test_helpers::isolated_config();
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("runs.stalx");
+    let (lines, before, after) = {
+        let state = state_with_project();
+        let lines: Vec<LineId> = (0..3)
+            .map(|_| create_line(&state, None, (1..=12).map(|i| shot(f64::from(i))).collect()))
+            .collect();
+        // Shots 4..8 of the middle line start from another credit.
+        let middle = shot_ids(&state, lines[1]);
+        assert!(
+            state
+                .execute(Command::EditShotCredit {
+                    targets: CreditTargets::Shots {
+                        shots: middle[4..8].iter().map(|id| (lines[1], *id)).collect(),
+                    },
+                    edit: CreditEdit {
+                        set_surveyors: Some(vec![person("Earlier")]),
+                        ..Default::default()
+                    },
+                })
+                .success
+        );
+        let mut targets: Vec<(LineId, ShotId)> = Vec::new();
+        for line in lines.iter().rev() {
+            let ids = shot_ids(&state, *line);
+            // Two runs per line with a gap between, the second listed first.
+            targets.extend(ids[7..11].iter().rev().map(|id| (*line, *id)));
+            targets.extend(ids[1..6].iter().map(|id| (*line, *id)));
+        }
+        let before: Vec<Vec<SurveyCredit>> = lines.iter().map(|l| credits(&state, *l)).collect();
+        assert!(
+            state
+                .execute(Command::EditShotCredit {
+                    targets: CreditTargets::Shots { shots: targets },
+                    edit: CreditEdit {
+                        add_surveyors: Some(vec![person("Runs")]),
+                        set_date: Some(day(9)),
+                        ..Default::default()
+                    },
+                })
+                .success
+        );
+        let after: Vec<Vec<SurveyCredit>> = lines.iter().map(|l| credits(&state, *l)).collect();
+        {
+            let stack = state.undo_stack.lock().unwrap();
+            let entry = stack.undo_entries().next().unwrap();
+            let UndoData::ShotCredits { changes, .. } = &entry.undo_data else {
+                panic!(
+                    "expected ShotCredits, got {}",
+                    entry.undo_data.variant_name()
+                );
+            };
+            // Lines 0 and 2: shots 1..6 and 7..11. Line 1: its shots 1..6
+            // split at 4 by the earlier credit, and 7 (earlier) apart from
+            // 8..11.
+            let shape: Vec<(LineId, Option<usize>, usize)> = changes
+                .iter()
+                .map(|r| (r.line_id, r.start, r.len))
+                .collect();
+            assert_eq!(
+                shape,
+                vec![
+                    (lines[0], Some(1), 5),
+                    (lines[0], Some(7), 4),
+                    (lines[1], Some(1), 3),
+                    (lines[1], Some(4), 2),
+                    (lines[1], Some(7), 1),
+                    (lines[1], Some(8), 3),
+                    (lines[2], Some(1), 5),
+                    (lines[2], Some(7), 4),
+                ]
+            );
+            let (_, payload) = crate::core::UndoStack::serialize_entry(entry).unwrap();
+            assert_eq!(
+                payload.matches("\"Earlier\"").count(),
+                2,
+                "each credit pair is written once: {payload}"
+            );
+        }
+        let saved = state.save_project(Some(path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        (lines, before, after)
+    };
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+    let now = |state: &AppState| -> Vec<Vec<SurveyCredit>> {
+        lines.iter().map(|l| credits(state, *l)).collect()
+    };
+    assert_eq!(now(&state), after);
+    assert!(state.undo().success);
+    assert_eq!(now(&state), before);
+    assert!(state.redo().success);
+    assert_eq!(now(&state), after);
+    assert!(state.undo().success);
+    assert_eq!(now(&state), before);
+}
+
+/// A run whose first shot no longer holds its anchor is not written: the
+/// state is not the one the entry was recorded against, and writing by
+/// position would credit other shots. A row written before positions were
+/// recorded (a uuid per shot) still reads and still finds its shots by uuid.
+#[test]
+fn a_credit_run_checks_its_anchor_and_an_older_row_still_reads() {
+    use crate::core::ShotCreditRun;
+
+    let state = state_with_project();
+    let id = create_line(&state, None, vec![shot(1.0), shot(2.0), shot(3.0)]);
+    let uuids: Vec<String> = state
+        .get_project_state()
+        .unwrap()
+        .get_line(id)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone().unwrap())
+        .collect();
+    let marked = credit(&["Marked"], &[], None);
+    let stale = ShotCreditRun {
+        line_id: id,
+        start: Some(1),
+        len: 2,
+        anchor: uuids[0].clone(),
+        before: SurveyCredit::default(),
+        after: marked.clone(),
+    };
+    assert!(state.write_recorded_credits(&[stale], true).success);
+    assert_eq!(credits(&state, id), vec![SurveyCredit::default(); 3]);
+
+    let older = format!(
+        r#"{{"ShotCredits":{{"changes":[{{"s":{id},"b":{{}},"a":{{"surveyors":[{{"name":"Marked"}}]}},"u":["{}","{}"]}}]}}}}"#,
+        uuids[2], uuids[0]
+    );
+    let UndoData::ShotCredits { changes, .. } = serde_json::from_str::<UndoData>(&older).unwrap()
+    else {
+        panic!("an older row reads as ShotCredits");
+    };
+    assert_eq!(changes.len(), 2);
+    assert!(changes
+        .iter()
+        .all(|run| run.start.is_none() && run.len == 1));
+    assert!(state.write_recorded_credits(&changes, true).success);
+    assert_eq!(
+        credits(&state, id),
+        vec![marked.clone(), SurveyCredit::default(), marked]
+    );
+}
+
 #[test]
 fn a_shotless_line_keeps_its_surveyor_until_its_first_shot_takes_it() {
     let state = state_with_project();
@@ -766,7 +924,7 @@ fn a_legacy_surveyor_edit_of_uuidless_shots_undoes_exactly() {
 /// normalized, like every other way into a shot.
 #[test]
 fn a_replayed_undo_credit_is_normalized() {
-    use crate::core::ShotCreditChange;
+    use crate::core::ShotCreditRun;
     use crate::models::{MAX_PEOPLE_PER_ROLE, MAX_PERSON_TEXT_CHARS};
 
     let state = state_with_project();
@@ -794,12 +952,13 @@ fn a_replayed_undo_credit_is_normalized() {
         ],
         date: day(9),
     };
-    let change = ShotCreditChange {
+    let change = ShotCreditRun {
         line_id: id,
-        shot_uuid: uuid,
+        start: Some(0),
+        len: 1,
+        anchor: uuid,
         before: SurveyCredit::default(),
         after: recorded,
-        shot_id: 0,
     };
     assert!(state.write_recorded_credits(&[change], true).success);
     let stored = &credits(&state, id)[0];
