@@ -243,6 +243,18 @@ pub struct SnapshotDelta {
     /// entry no longer holds whole. Recorded once, at capture.
     #[serde(rename = "p", default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<BeforePreview>,
+    /// How many sub-commands of the entry's `Batch` its stored command
+    /// leaves out (`undo::trimmed_batch`): a step never reads them, and the
+    /// history preview counts them. Zero for every other entry.
+    ///
+    /// FORMAT EVOLUTION (additive): absent in rows written before it existed,
+    /// whose batches are stored whole.
+    #[serde(rename = "n", default, skip_serializing_if = "is_zero")]
+    pub omitted_commands: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// The facts a history preview reads from an entry's `before` state.
@@ -274,6 +286,7 @@ impl SnapshotDelta {
         Ok(Self {
             delta: ProjectDelta::between_texts(after, before)?,
             preview,
+            omitted_commands: 0,
         })
     }
 

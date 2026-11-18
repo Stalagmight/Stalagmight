@@ -734,6 +734,7 @@ fn a_compact_entry_that_does_not_fit_the_loaded_project_drops_the_history() {
         UndoData::Delta(Box::new(crate::core::SnapshotDelta {
             delta: serde_json::from_str(text).unwrap(),
             preview: None,
+            omitted_commands: 0,
         }))
     };
     let project = two_copies();

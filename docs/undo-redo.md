@@ -127,6 +127,20 @@ what the snapshot restore took (32-39 ms against 29-30 ms in release).
   records those facts once, at capture (`BeforePreview`: the line's name and shot
   count, the datum's GPS, the deleted lines' names).
 
+### What a compact entry keeps of its command
+
+A step never reads the entry's command: the delta holds the state on the other side.
+So a `Batch` stored with a delta is cut down (`trimmed_batch` in `core/undo.rs`): its
+first 20 sub-commands (the preview lists 8 and counts the rest), then every later
+sub-command that reverses a line, which the reverse settle after a step reads
+(`Command::reversed_line_ids`; a sub-command that reverses nothing adds nothing to the
+batch's net reverses). The delta records how many it left out
+(`SnapshotDelta::omitted_commands`), so the preview's "+N more" still counts them all,
+and an unlabelled batch is given its `Batch of N commands` label before any is dropped.
+A `CreateLine` sub-command loses its shots, which the delta carries. On a
+20,000-shot survey a 1,000-cell paste went from 116.5 KB to 33-36 KB, three quarters of
+it the 1,000 `UpdateShot`s nothing read.
+
 ### The load's uuid remap walks a holder view
 
 A snapshot half was a whole recorded state; a delta is not. `uuid_remap.rs` therefore
@@ -187,7 +201,10 @@ synthetic 5,000- and a 20,000-shot survey (tree-merged lines, loop closures, a d
 an unmerged island) and fails if any entry - on the undo stack, and again on the redo
 stack once undone - is more than 1% of the saved `.stalx`. Actions that bring whole-file
 data in (Add `.stalx`, an import, Merge Projects) are exempt; the station-name,
-Station ID and Section commands are measured with the rest. Run it with
+Station ID and Section commands are measured with the rest. The 20,000-shot survey
+also runs edits of a thousand shots or stations at once (a 1,000-cell paste, 1,000
+station names pasted), and `a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell`
+holds a paste to a fixed part plus at most 40 bytes per changed cell. Run it with
 `STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the table; on the 5,000-shot survey the
 largest entries are a New Line snapped onto a station and into a Section (0.76%, the
 new line itself) and a line delete (0.73%, the deleted line with its stations' names

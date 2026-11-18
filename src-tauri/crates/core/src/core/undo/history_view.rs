@@ -92,7 +92,7 @@ fn get_command_type(command: &Command) -> String {
 }
 
 /// The most sub-commands a batch's preview lists before it counts the rest.
-const BATCH_PREVIEW_ROWS: usize = 8;
+pub(super) const BATCH_PREVIEW_ROWS: usize = 8;
 
 /// What a preview row shows for a station no name can be read for (its line
 /// is gone): never the positional handle.
@@ -988,9 +988,14 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
 
         // Batch - list its sub-commands with their details: the first
         // BATCH_PREVIEW_ROWS, then a count (an import records one per line,
-        // merge and move). A line the batch deleted is named from the
+        // merge and move) that includes the ones a compact entry's stored
+        // command left out. A line the batch deleted is named from the
         // entry's before-snapshot, as a Delete Line entry's label is.
         (Command::Batch { commands, .. }, undo_data) => {
+            let omitted = match undo_data {
+                UndoData::Delta(delta) => delta.omitted_commands,
+                _ => 0,
+            };
             let changes: Vec<FieldChange> = commands
                 .iter()
                 .take(BATCH_PREVIEW_ROWS)
@@ -1014,7 +1019,7 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
                 .collect();
             Some(PreviewData {
                 changes,
-                additional_changes: commands.len().saturating_sub(BATCH_PREVIEW_ROWS),
+                additional_changes: (commands.len() + omitted).saturating_sub(BATCH_PREVIEW_ROWS),
             })
         }
 
@@ -1673,6 +1678,90 @@ mod tests {
         // An entry from before labels keeps its old wording.
         let old = entry_to_history_item(&entry(None), 0, &names);
         assert_eq!(old.description, "Batch of 12 commands");
+    }
+
+    /// A compact entry stores a long batch cut down: its first sub-commands
+    /// and every reverse, with the rest counted. The history lists the same
+    /// rows and the same total, the label counts every sub-command, and the
+    /// reverse settle reads the same net reverses.
+    #[test]
+    fn a_compact_entry_stores_a_long_batch_trimmed_and_previews_every_command() {
+        let mut project = crate::models::Project::new("Trim".to_string(), None);
+        for name in ["Main", "Side"] {
+            project.add_line(LineData {
+                name: Some(name.to_string()),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        let before = serde_json::to_string(&project).unwrap();
+        project.name = "Trimmed".to_string();
+        let after = serde_json::to_string(&project).unwrap();
+        let mut commands: Vec<Command> = (0..1_000)
+            .map(|i| Command::MoveLine {
+                line_id: i % 2,
+                offset: Coordinates::new(0.0, 1.0, 0.0),
+            })
+            .collect();
+        commands[500] = Command::ReverseLine {
+            line_id: 1,
+            swap_left_right: false,
+        };
+        commands[700] = Command::ReverseLine {
+            line_id: 0,
+            swap_left_right: true,
+        };
+        commands[3] = Command::CreateLine {
+            name: Some("New".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#fff".to_string(),
+            direction: None,
+            shots: vec![ShotData::default(); 30],
+            cave_section_id: None,
+        };
+        let batch = Command::Batch {
+            commands,
+            label: None,
+        };
+        let reversed = batch.reversed_line_ids();
+        let mut stack = crate::core::UndoStack::new();
+        stack.push_with_data(batch, UndoData::ProjectSnapshotPair { before, after });
+        let entry = stack.undo_entries().next().unwrap();
+        let (commands, label) = match &entry.command {
+            Command::Batch { commands, label } => Some((commands, label)),
+            _ => None,
+        }
+        .unwrap();
+        let omitted = match &entry.undo_data {
+            UndoData::Delta(delta) => Some(delta.omitted_commands),
+            _ => None,
+        }
+        .unwrap();
+        assert_eq!(commands.len(), super::super::KEPT_BATCH_COMMANDS + 2);
+        assert_eq!(omitted, 1_000 - commands.len());
+        assert_eq!(label.as_deref(), Some("Batch of 1000 commands"));
+        assert!(matches!(
+            &commands[3],
+            Command::CreateLine { shots, .. } if shots.is_empty()
+        ));
+        assert_eq!(entry.command.reversed_line_ids(), reversed);
+        let names = names_of(&["Main", "Side"]);
+        let item = entry_to_history_item(entry, 0, &names);
+        assert_eq!(item.description, "Batch of 1000 commands");
+        let preview = item.preview_data.unwrap();
+        assert_eq!(preview.changes.len(), BATCH_PREVIEW_ROWS);
+        assert_eq!(preview.additional_changes, 1_000 - BATCH_PREVIEW_ROWS);
+        // Persisted and read back, the count rides along.
+        let (command_json, data_json) = crate::core::UndoStack::serialize_entry(entry).unwrap();
+        let read = crate::core::UndoStack::deserialize_entry(&command_json, &data_json).unwrap();
+        let preview = entry_to_history_item(&read, 0, &names)
+            .preview_data
+            .unwrap();
+        assert_eq!(preview.additional_changes, 1_000 - BATCH_PREVIEW_ROWS);
     }
 
     #[test]

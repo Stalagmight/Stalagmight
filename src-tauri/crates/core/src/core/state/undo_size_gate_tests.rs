@@ -557,6 +557,56 @@ fn actions() -> Vec<(&'static str, Action)> {
     ]
 }
 
+/// A data-table paste of one LRUD cell into every shot of `lines`: a batch
+/// of one `UpdateShot` per shot, each value different.
+fn paste_left(g: &Gate, lines: &[LineId]) -> crate::core::CommandResult {
+    let mut commands = Vec::new();
+    for line in lines {
+        for shot_id in g.shot_ids(*line) {
+            let k = commands.len();
+            commands.push(Command::UpdateShot {
+                line_id: *line,
+                shot_id,
+                updates: ShotUpdates {
+                    left: Some(Some(1.0 + k as f64 * 0.01)),
+                    ..Default::default()
+                },
+            });
+        }
+    }
+    g.state.execute(Command::Batch {
+        commands,
+        label: None,
+    })
+}
+
+/// Edits of a thousand shots or stations at once, measured on the
+/// 20,000-shot survey only: on the smaller one a thousand shots are a fifth
+/// of the survey, and an entry that holds what they changed is no small
+/// fraction of the file.
+fn large_actions() -> Vec<(&'static str, Action)> {
+    vec![
+        ("paste 1,000 cells (batch)", |g| {
+            paste_left(g, &g.lines[180..200])
+        }),
+        ("rename 1,000 stations (batch)", |g| {
+            let mut commands = Vec::new();
+            for line in &g.lines[200..220] {
+                for index in 1..=SHOTS_PER_LINE as u32 {
+                    commands.push(Command::SetStationName {
+                        station_ref: StationRef::new(*line, index),
+                        name: format!("P{line}.{index}"),
+                    });
+                }
+            }
+            g.state.execute(Command::Batch {
+                commands,
+                label: None,
+            })
+        }),
+    ]
+}
+
 /// The project as the undo fuzzer compares it (`canonical_snapshot`): what no
 /// history move restores - `modified_at`, the monotonic id allocators - left out.
 fn state_text(state: &AppState) -> String {
@@ -568,10 +618,14 @@ fn state_text(state: &AppState) -> String {
 /// since a small entry that restores the wrong project is no saving at all.
 /// (The fuzzer's comparison costs most of the run on the larger survey, whose
 /// entries take the same paths, so only the smaller one asks for it.)
-fn measure(gate: &Gate, exact: bool) -> (Vec<Row>, Vec<String>) {
+fn measure(
+    gate: &Gate,
+    exact: bool,
+    actions: Vec<(&'static str, Action)>,
+) -> (Vec<Row>, Vec<String>) {
     let mut rows = Vec::new();
     let mut failed = Vec::new();
-    for (action, run) in actions() {
+    for (action, run) in actions {
         let depth = gate.state.undo_stack.lock().unwrap().len();
         let state = |gate: &Gate| exact.then(|| state_text(&gate.state));
         let before = state(gate);
@@ -669,9 +723,13 @@ fn report(text: &str) {
     }
 }
 
-fn gate(lines: usize, label: &str, exact: bool) {
+fn gate(lines: usize, label: &str, exact: bool, large: bool) {
     let gate = open(lines);
-    let (rows, failed) = measure(&gate, exact);
+    let mut actions = actions();
+    if large {
+        actions.extend(large_actions());
+    }
+    let (rows, failed) = measure(&gate, exact, actions);
     let mut text = table(label, &gate, &rows);
     for failure in &failed {
         let _ = writeln!(text, "  NOT MEASURED {failure}");
@@ -692,10 +750,49 @@ fn gate(lines: usize, label: &str, exact: bool) {
 
 #[test]
 fn every_undo_entry_is_a_small_fraction_of_a_5k_shot_file() {
-    gate(100, "5k shots", true);
+    gate(100, "5k shots", true, false);
 }
 
 #[test]
 fn every_undo_entry_is_a_small_fraction_of_a_20k_shot_file() {
-    gate(400, "20k shots", false);
+    gate(400, "20k shots", false, true);
+}
+
+/// A paste's entry grows with the cells it changed, not with the commands
+/// that changed them: past a fixed part (the label, the first sub-commands
+/// the history previews) every changed cell costs at most
+/// `BYTES_PER_CELL`, on the undo stack and on the redo stack, from 250 cells
+/// to 2,000.
+#[test]
+fn a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell() {
+    /// What a batch entry holds whatever its size: the stored command's
+    /// first sub-commands and label, the envelope.
+    const FIXED_BYTES: usize = 4_000;
+    /// One changed LRUD cell: its copy's offset and the value it held.
+    const BYTES_PER_CELL: usize = 40;
+    let gate = open(100);
+    let mut report_text = String::from("paste entry per changed cell (5k shots)\n");
+    for lines in [5, 40] {
+        let lines = &gate.lines[10..10 + lines];
+        let cells = lines.len() * SHOTS_PER_LINE;
+        let before = state_text(&gate.state);
+        assert!(paste_left(&gate, lines).success, "paste {cells} cells");
+        let (_, undo_bytes) = newest(&gate.state, false);
+        assert!(gate.state.undo().success);
+        assert_eq!(state_text(&gate.state), before, "the undo of {cells} cells");
+        let (_, redo_bytes) = newest(&gate.state, true);
+        let _ = writeln!(
+            report_text,
+            "  {cells:>5} cells: undo {undo_bytes:>6} redo {redo_bytes:>6} ({:.1} B/cell)",
+            undo_bytes.max(redo_bytes) as f64 / cells as f64
+        );
+        for (side, bytes) in [("undo", undo_bytes), ("redo", redo_bytes)] {
+            assert!(
+                bytes <= FIXED_BYTES + BYTES_PER_CELL * cells,
+                "a {cells}-cell paste's {side} entry is {bytes} bytes, past \
+                 {FIXED_BYTES} + {BYTES_PER_CELL} per cell"
+            );
+        }
+    }
+    report(&report_text);
 }

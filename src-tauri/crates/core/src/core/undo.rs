@@ -61,20 +61,44 @@ where
 /// an undo), and that record is what its redo restores; the command's own
 /// shots are read by nothing after the push (the history shows the name). Kept
 /// they would double the entry of every line created with data.
-fn stored_command(command: Command, data: &UndoData) -> Command {
+///
+/// A `Batch` stored with a compact payload ([`UndoData::Delta`]) is cut down
+/// the same way ([`trimmed_batch`]): a step never reads the command, so all
+/// that is left of it is what the history shows and what a step settles.
+fn stored_command(command: Command, data: &mut UndoData) -> Command {
     match (command, data) {
-        (
-            Command::CreateLine {
-                name,
-                surveyor,
-                date,
-                color,
-                direction,
-                shots: _,
-                cave_section_id,
-            },
-            UndoData::CreatedLineSnapshot { .. },
-        ) => Command::CreateLine {
+        (command @ Command::CreateLine { .. }, UndoData::CreatedLineSnapshot { .. }) => {
+            without_line_shots(command)
+        }
+        (Command::Batch { commands, label }, UndoData::Delta(delta)) => {
+            let total = commands.len();
+            let (commands, omitted) = trimmed_batch(commands);
+            // The fallback label counts every sub-command, so it is worded
+            // before any is left out.
+            let label = match label {
+                None if omitted > 0 => Some(format!("Batch of {total} commands")),
+                label => label,
+            };
+            delta.omitted_commands += omitted;
+            Command::Batch { commands, label }
+        }
+        (command, _) => command,
+    }
+}
+
+/// `command` without a `CreateLine`'s shots, which an entry that records the
+/// line elsewhere never reads; every other command as it is.
+fn without_line_shots(command: Command) -> Command {
+    match command {
+        Command::CreateLine {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots: _,
+            cave_section_id,
+        } => Command::CreateLine {
             name,
             surveyor,
             date,
@@ -83,8 +107,42 @@ fn stored_command(command: Command, data: &UndoData) -> Command {
             shots: Vec::new(),
             cave_section_id,
         },
-        (command, _) => command,
+        command => command,
     }
+}
+
+/// How many sub-commands of a batch a compact entry keeps for the history: its
+/// preview lists the first [`history_view::BATCH_PREVIEW_ROWS`] and counts the
+/// rest ([`SnapshotDelta::omitted_commands`] holds the ones left out). A
+/// margin over that, not every one: a 1,000-cell paste is 1,000 `UpdateShot`s,
+/// three times the payload that actually undoes it.
+const KEPT_BATCH_COMMANDS: usize = 20;
+
+const _: () = assert!(KEPT_BATCH_COMMANDS >= history_view::BATCH_PREVIEW_ROWS);
+
+/// A compact entry's batch as it is stored, and how many sub-commands it left
+/// out. A step through a [`UndoData::Delta`] never reads the command: the
+/// delta holds the state on the other side. What still reads it is the
+/// history (the label, recorded when the batch ran; the preview, its first
+/// rows), the log line, and the reverse settle after a step
+/// (`AppState::settle_reversed_lines`, through
+/// [`Command::reversed_line_ids`]). So the first [`KEPT_BATCH_COMMANDS`] are
+/// kept, and after them every sub-command that reverses a line, in order:
+/// the settle reads the batch's net reverses, and a sub-command that reverses
+/// nothing adds nothing to them, so leaving it out keeps them exactly.
+///
+/// A `CreateLine` sub-command loses its shots: the delta carries the line it
+/// made, and the history shows only its name.
+fn trimmed_batch(commands: Vec<Command>) -> (Vec<Command>, usize) {
+    let total = commands.len();
+    let kept: Vec<Command> = commands
+        .into_iter()
+        .enumerate()
+        .filter(|(i, cmd)| *i < KEPT_BATCH_COMMANDS || !cmd.reversed_line_ids().is_empty())
+        .map(|(_, cmd)| without_line_shots(cmd))
+        .collect();
+    let omitted = total - kept.len();
+    (kept, omitted)
 }
 
 /// Default maximum number of undo entries to keep in memory
@@ -853,8 +911,8 @@ impl UndoStack {
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
         // Production callers compact before taking the lock; this catches the
         // rest, so no snapshot pair is ever held.
-        let undo_data = undo_data.compact(&command);
-        let command = stored_command(command, &undo_data);
+        let mut undo_data = undo_data.compact(&command);
+        let command = stored_command(command, &mut undo_data);
         let entry = UndoEntry {
             // Measured once, HERE, and never again: this runs per edit, while
             // `estimated_size` runs on every trim after every edit. See the field's doc.
