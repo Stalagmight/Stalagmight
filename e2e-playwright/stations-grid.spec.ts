@@ -11,9 +11,11 @@ import {
 /**
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
  *
- * Stations are derived from shots, so X/Y/Depth are read-only and only the
- * comment is editable (one set_station_comment per commit - no batch). The
- * station ID pill lives in the row gutter ("1:0"); the GPS cell opens the
+ * Stations are derived from shots, so X/Y/Depth and the Station ID are
+ * read-only; the name (set_station_name, unique within the line) and the
+ * comment (set_station_comment) are editable, one command per commit - no
+ * batch. The station's name pill lives in the row gutter ("0"); never a
+ * positional `line:index` id (SPEC 4.1). The GPS cell opens the
  * Edit Station dialog: add-zero-datum mode (GPS input enabled + focused) for
  * plain stations, plain edit mode when the station already is a zero datum.
  * The eye menu and the header right-click menu show plain per-column hide
@@ -42,6 +44,22 @@ async function getLineId(page: Page): Promise<number> {
     const e2e = (window as any).__E2E_TEST__;
     return e2e.projectStore.getState().project.lines[0].id as number;
   });
+}
+
+async function getStationName(page: Page, lineId: number, stationIndex: number): Promise<string | null> {
+  return page.evaluate(
+    ({ lineId, stationIndex }) => {
+      const e2e = (window as any).__E2E_TEST__;
+      const station = e2e.projectStore
+        .getState()
+        .stations.find(
+          (s: any) =>
+            s.station_ref.line_id === lineId && s.station_ref.station_index === stationIndex
+        );
+      return (station?.name as string | undefined) ?? null;
+    },
+    { lineId, stationIndex }
+  );
 }
 
 async function getStationComment(page: Page, lineId: number, stationIndex: number): Promise<string | null> {
@@ -96,12 +114,20 @@ test.describe('Stations grid', () => {
     await openStationsView(page);
   });
 
-  test('gutter shows station ID pills; X/Y/Depth are read-only', async ({ page }) => {
+  test('gutter shows station name pills and a read-only Station ID column; X/Y/Depth are read-only', async ({ page }) => {
     const lineId = await getLineId(page);
 
-    // The index pill moved into the row gutter ("1:0" ... "1:3").
-    await expect(page.getByTestId('grid-gutter-0')).toHaveText(`${lineId}:0`);
-    await expect(page.getByTestId('grid-gutter-3')).toHaveText(`${lineId}:3`);
+    // The gutter names each station (seeded from its index: "0" ... "3").
+    await expect(page.getByTestId('grid-gutter-0')).toHaveText('0');
+    await expect(page.getByTestId('grid-gutter-3')).toHaveText('3');
+
+    // The Station ID column shows the project-unique id (the mock derives it
+    // from the line and index) and never opens the editor.
+    await expect(page.getByTestId('grid-header-_stationId')).toBeVisible();
+    await expect(page.getByTestId('grid-cell-0-_stationId')).toHaveText(String(lineId * 100_000));
+    await expect(page.getByTestId('grid-cell-3-_stationId')).toHaveText(String(lineId * 100_000 + 3));
+    await page.getByTestId('grid-cell-1-_stationId').dblclick();
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
 
     // X/Y start hidden; the "Coordinates (m)" eye-menu entry shows the pair.
     await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
@@ -125,9 +151,10 @@ test.describe('Stations grid', () => {
     await page.keyboard.press('Escape');
   });
 
-  test('the name column shows each station name and is read-only', async ({ page }) => {
+  test('the name column shows each station name and renames through set_station_name', async ({ page }) => {
     const lineId = await getLineId(page);
-    // Names as a DMP import records them (MNemo station numbers); station 2 has none.
+    // Names as a DMP import records them (MNemo station numbers); station 2
+    // keeps the name seeded from its index.
     await page.evaluate(async (lineId) => {
       const setName = (window as any).__MOCK_SET_STATION_NAME__;
       setName(lineId, 0, '7');
@@ -144,13 +171,38 @@ test.describe('Stations grid', () => {
     await expect(page.getByTestId('grid-header-name')).toBeVisible();
     await expect(page.getByTestId('grid-cell-0-name')).toHaveText('7');
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
-    await expect(page.getByTestId('grid-cell-2-name')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-2-name')).toHaveText('2');
     await expect(page.getByTestId('grid-cell-3-name')).toHaveText('10');
-    // The positional id stays in the gutter beside it.
-    await expect(page.getByTestId('grid-gutter-1')).toHaveText(`${lineId}:1`);
+    // The gutter pill shows the same name.
+    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8');
 
+    // A name another station of the line holds is refused inline: the editor
+    // stays open and nothing is sent.
     await page.getByTestId('grid-cell-1-name').dblclick();
-    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+    const editor = page.getByTestId('grid-cell-editor');
+    await expect(editor).toBeVisible();
+    await editor.fill('10');
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeVisible();
+    expect(await getStationName(page, lineId, 1)).toBe('8');
+
+    // A free name commits through set_station_name and survives the refresh.
+    await editor.fill('8b');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
+    await expect(page.getByTestId('grid-gutter-1')).toHaveText('8b');
+    expect(await getStationName(page, lineId, 1)).toBe('8b');
+
+    // Undo gives the old name back; redo the new one.
+    await page.evaluate(async () => {
+      await (window as any).__E2E_TEST__.projectStore.getState().undo();
+    });
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
+    await page.evaluate(async () => {
+      await (window as any).__E2E_TEST__.projectStore.getState().redo();
+    });
+    await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8b');
   });
 
   test('comment edits commit via set_station_comment and survive the refresh', async ({ page }) => {

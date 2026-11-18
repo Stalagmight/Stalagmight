@@ -198,16 +198,10 @@ test.describe('Syntactic Highlighting', () => {
     expect(pill.borderStyle).toBe('solid');
     expect(pill.borderWidth).toBeGreaterThan(0);
     expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
-    // The fully-qualified id (e.g. "1:1"), monospace, after a short ::before divider.
-    const linkId = page.locator('[data-testid$="-link-id"]').first();
-    await expect(linkId).toBeVisible();
-    expect((await linkId.textContent())?.trim()).toMatch(/^\d+:\d+$/);
-    const idStyle = await linkId.evaluate((el) => ({
-      font: getComputedStyle(el).fontFamily,
-      dividerW: getComputedStyle(el, '::before').width,
-    }));
-    expect(idStyle.font.toLowerCase()).toMatch(/mono/);
-    expect(parseFloat(idStyle.dividerW)).toBeGreaterThan(0);
+    // The pill names its target (a station name, "0"), never a positional
+    // `line:index` id; a same-line link carries no line suffix either.
+    expect((await linkPill.textContent())?.trim()).not.toMatch(/\d+:\d+/);
+    await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {

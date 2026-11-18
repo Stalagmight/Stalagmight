@@ -126,7 +126,6 @@ export default function EditStationDialog() {
     if (station) {
       setIsZeroDatumState(forceEnableZeroDatum ? true : station.is_zero_datum);
       setComment(station.comment ?? '');
-      setName(station.name || String(station.station_ref.station_index));
       if (station.gps_coordinates) {
         const initialInput = `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`;
         setGpsInput(initialInput);
@@ -139,6 +138,12 @@ export default function EditStationDialog() {
   useEffect(() => {
     setAccuracyInput(String(storedAccuracy));
   }, [storedAccuracy]);
+
+  // Follow the stored name only when it changes (a rename elsewhere, an undo):
+  // a refresh after a refused save must not throw away what was typed.
+  useEffect(() => {
+    setName(storedName);
+  }, [storedName]);
 
   // Focus GPS input when dialog is opened from "Set Zero Datum" action.
   useEffect(() => {

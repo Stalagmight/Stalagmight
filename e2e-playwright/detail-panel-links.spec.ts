@@ -810,8 +810,8 @@ test.describe('Detail Panel Links', () => {
 
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
-      expect(ariaLabel).toContain('Center map on shot');
-      expect(ariaLabel).toContain(`${mainLineId}:1`);
+      // Named by its line and its two stations, never by ids (SPEC 4.2).
+      expect(ariaLabel).toBe('Center map on shot Main Tunnel: 0 \u2192 1');
 
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
@@ -870,8 +870,7 @@ test.describe('Detail Panel Links', () => {
 
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
-      expect(ariaLabel).toContain('Center map on station');
-      expect(ariaLabel).toContain(`${mainLineId}:0`);
+      expect(ariaLabel).toBe('Center map on station Main Tunnel / 0');
 
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
@@ -1146,18 +1145,24 @@ test.describe('Detail Panel Links', () => {
 
       const shotIds = await getShotIdsForLine(page, mainLineId);
       await selectShot(page, mainLineId, shotIds[0]!);
-      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toContainText(`${mainLineId}:0 · 7`);
-      await expect(page.getByTestId(`station-${mainLineId}-1-link`)).toContainText(`${mainLineId}:1 · 8`);
+      // The shot's ends are named, never `line:index`; the aria-label adds the line.
+      await expect(page.getByTestId('shot-detail-label')).toHaveText('Shot:7 \u2192 8');
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveText('7');
+      await expect(page.getByTestId(`station-${mainLineId}-0-link`)).toHaveAttribute('aria-label', 'Select station Main Tunnel / 7');
+      await expect(page.getByTestId(`station-${mainLineId}-1-link`)).toHaveText('8');
 
       await selectStation(page, mainLineId, 1);
       await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
-      // The merge partner is named too: this is where two lines' numbers meet.
-      await expect(page.getByTestId(`station-${sideLineId}-0-link`)).toContainText(`${sideLineId}:0 · 0`);
+      // The merge partner is named with its line: this is where two lines meet.
+      const partner = page.getByTestId(`station-${sideLineId}-0-link`);
+      await expect(partner).toHaveAttribute('aria-label', 'Select station Side Passage / 0');
+      await expect(partner).toContainText('0');
+      await expect(partner).toContainText('Side Passage');
 
-      // A station without a name has no Name row.
+      // Every station has a name: one never renamed keeps the one seeded from its index.
       await selectStation(page, mainLineId, 2);
-      await expect(page.getByTestId('station-detail')).toBeVisible();
-      await expect(page.getByTestId('station-detail-name')).toHaveCount(0);
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:2');
+      await expect(page.getByTestId('station-detail-line')).toHaveText('Line:Main Tunnel');
     });
   });
 
@@ -1239,15 +1244,16 @@ test.describe('Detail Panel Links', () => {
       // Select shot at index 0
       await selectShot(page, mainLineId, firstShotId);
 
-      // Verify Start Station link shows position 0 (0-indexed)
+      // The start station is station 0, named "0" (seeded from its index).
       const startLink = page.getByTestId(`station-${mainLineId}-0-link`);
       await expect(startLink).toBeVisible();
-      await expect(startLink).toContainText(`${mainLineId}:0`); // pill shows "pos | lineId:0"
+      await expect(startLink).toHaveText('0');
+      await expect(startLink).toHaveAttribute('aria-label', 'Select station Main Tunnel / 0');
 
-      // Verify End Station link shows position 1 (0-indexed)
+      // The end station is station 1, named "1".
       const endLink = page.getByTestId(`station-${mainLineId}-1-link`);
       await expect(endLink).toBeVisible();
-      await expect(endLink).toContainText(`${mainLineId}:1`); // pill shows "pos | lineId:1"
+      await expect(endLink).toHaveText('1');
     });
 
     test('verifies station at index 0 has no previous shot', async ({ page }) => {
