@@ -7,6 +7,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useGridLabels } from '../../hooks/useGridLabels';
+import { useIdentityLabels } from '../../hooks/useIdentityLabels';
+import { warningMessageText } from '../../utils/stationIdentity';
 import {
   hasAzimuthDiscrepancy,
   hasPitchDiscrepancy,
@@ -257,12 +259,15 @@ export function ShotTableEditor({
   // with the Warnings panel and with the backend's own analysis of the same shots.
   const projectValidation = useProjectStore((s) => s.project?.validation);
   const projectWarnings = useProjectStore((s) => s.warnings);
+  const identity = useIdentityLabels();
 
   /** The project's unresolved warnings for one shot, split by severity. The data
    *  table's warning column reads exactly this; without it the editor showed only
    *  its own two threshold checks and the column sat empty on shots the data
    *  table flagged. A row added here has no backend warnings yet - it does not
-   *  exist as far as the last analysis is concerned. */
+   *  exist as far as the last analysis is concerned. Each names its shot by its
+   *  stations (`Shot 4 → 5 has zero length`), never by the backend's positional
+   *  prefix. */
   const backendWarningsFor = useCallback(
     (shot: EditableShot): { errors: string[]; warnings: string[]; codes: Set<string> } => {
       const empty = { errors: [], warnings: [], codes: new Set<string>() };
@@ -272,12 +277,12 @@ export function ShotTableEditor({
       const codes = new Set<string>();
       for (const w of projectWarnings) {
         if (w.lineId !== lineId || w.shotId !== shot.id || w.isResolved) continue;
-        (w.severity === 'error' ? errors : warnings).push(w.message);
+        (w.severity === 'error' ? errors : warnings).push(warningMessageText(identity, w));
         codes.add(w.code);
       }
       return { errors, warnings, codes };
     },
-    [projectWarnings, lineId]
+    [projectWarnings, lineId, identity]
   );
 
   const effectiveValidation: ValidationConfig = {

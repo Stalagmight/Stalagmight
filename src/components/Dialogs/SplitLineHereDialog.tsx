@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -6,7 +6,8 @@ import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { formatLength } from '../../utils/formatStats';
-import { formatStationId } from '../../utils/formatters';
+import { defaultSplitNames, lineNameProblemMessage, splitNameProblems } from '../../utils/nameValidation';
+import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
 import { getNextLineColor } from '../../utils/colors';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { previewSplitLine } from '../../utils/splitLine';
@@ -19,9 +20,9 @@ import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 
-/** A station by the id the user knows it by, as a pill at the Full level. */
-function StationId({ station }: { station: StationRef }) {
-  return <EntityBlob entity="station">{formatStationId(station.line_id, station.station_index)}</EntityBlob>;
+/** A station by its line and name (`Main Line / 17`), as a pill at the Full level. */
+function StationLabel({ station, label }: { station: StationRef; label: (ref: StationRef) => string }) {
+  return <EntityBlob entity="station">{label(station)}</EntityBlob>;
 }
 
 /**
@@ -31,15 +32,18 @@ function StationId({ station }: { station: StationRef }) {
 export default function SplitLineHereDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, clearSelection, resolvedTheme } = useUIStore();
-  const { splitLine, project, stations, config } = useProjectStore();
+  const { splitLine, project, stations, surveyData, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
+  const labels = useMemo(
+    () => identityLabels({ surveyData, stations, lines: project?.lines ?? null }),
+    [surveyData, stations, project?.lines]
+  );
 
   const lineId = dialogData.lineId as number | undefined;
   const at = dialogData.at as SplitAt | undefined;
-  const label = (dialogData.label as string | undefined) ?? '';
 
   const line = project?.lines.find((s) => s.id === lineId);
-  const lineName = line?.name ?? `Line ${lineId ?? ''}`;
+  const lineName = lineDisplayName(line?.name);
   const lineColor = line?.color ?? '#3b82f6';
 
   const shotIndex = at?.type === 'shot' ? (line?.shots.findIndex((s) => s.id === at.shot_id) ?? -1) : -1;
@@ -65,8 +69,10 @@ export default function SplitLineHereDialog() {
   const hasComment = Boolean(splitStation?.comment);
   const isDatum = splitStation?.is_zero_datum ?? false;
 
-  const [nameA, setNameA] = useState(`${lineName}-A`);
-  const [nameB, setNameB] = useState(`${lineName}-B`);
+  // `<name> A` / `<name> B`, neither taken by another line nor by each other.
+  const [defaults] = useState(() => defaultSplitNames(line?.name, project?.lines, lineId));
+  const [nameA, setNameA] = useState(defaults.a);
+  const [nameB, setNameB] = useState(defaults.b);
   const [colorA, setColorA] = useState(lineColor);
   // Half B is a new line, so it defaults to the colour a new line gets
   // (the next palette colour no line uses), which is never half A's.
@@ -82,7 +88,12 @@ export default function SplitLineHereDialog() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isValid = nameA.trim().length > 0 && nameB.trim().length > 0;
+  // Half A keeps the line (and may keep its name); B becomes a new line. Both
+  // must be named, not after another line, and not after each other.
+  const problems = splitNameProblems(nameA, nameB, project?.lines, lineId);
+  const errorA = problems.a ? lineNameProblemMessage(problems.a, nameA) : null;
+  const errorB = problems.b ? lineNameProblemMessage(problems.b, nameB) : null;
+  const isValid = !errorA && !errorB;
 
   // A loop closure from before the cut to past it, with nothing else tying the
   // halves, becomes a merge and moves one half: say so before the user confirms.
@@ -134,12 +145,18 @@ export default function SplitLineHereDialog() {
       `${movedName} ${formatLength(preview.moved_m, lengthUnit, 2)} to close ${closures === 1 ? 'it' : 'them'}.`
     : null;
 
+  // The split point by name: the shot `4 → 5`, or the station `17`.
   const summary =
-    at?.type === 'shot' && shot
+    at?.type === 'shot' && shot && lineId !== undefined
       ? `Splitting ${lineName} ${formatLength(at.distance, lengthUnit, 2)} (${Math.round(
           (at.distance / shot.length) * 100
-        )}%) along shot ${label}`
-      : `Splitting ${lineName} at station ${label}`;
+        )}%) along shot ${labels.shotAt(lineId, shotIndex)}`
+      : `Splitting ${lineName} at station ${
+          at?.type === 'station' && lineId !== undefined
+            ? labels.station({ line_id: lineId, station_index: at.station_index })
+            : ''
+        }`;
+  const stationWithLine = (ref: StationRef) => labels.station(ref, true);
 
   const handleConfirm = async () => {
     if (isSubmitting || isStale || !isValid || lineId === undefined || !at) return;
@@ -207,29 +224,46 @@ export default function SplitLineHereDialog() {
     name: string,
     setName: (v: string) => void,
     color: string,
-    setColor: (v: string) => void
+    setColor: (v: string) => void,
+    problem: string | null
   ) => (
-    <div className="flex items-end gap-2">
-      <div className="flex-1">
-        <label className="block text-sm text-text-secondary mb-1">{title}</label>
+    <div>
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="block text-sm text-text-secondary mb-1" htmlFor={`split-here-name-${key}`}>
+            {title}
+          </label>
+          <input
+            id={`split-here-name-${key}`}
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full"
+            disabled={isSubmitting}
+            aria-invalid={problem !== null}
+            {...(problem ? { 'aria-describedby': `split-here-name-${key}-error` } : {})}
+            data-testid={`split-here-name-${key}`}
+          />
+        </div>
         <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="w-full"
+          type="color"
+          value={color}
+          onChange={(e) => setColor(e.target.value)}
+          className="w-8 h-8 rounded cursor-pointer border border-border"
+          aria-label={`${title} colour`}
           disabled={isSubmitting}
-          data-testid={`split-here-name-${key}`}
+          data-testid={`split-here-color-${key}`}
         />
       </div>
-      <input
-        type="color"
-        value={color}
-        onChange={(e) => setColor(e.target.value)}
-        className="w-8 h-8 rounded cursor-pointer border border-border"
-        aria-label={`${title} colour`}
-        disabled={isSubmitting}
-        data-testid={`split-here-color-${key}`}
-      />
+      {problem && (
+        <p
+          id={`split-here-name-${key}-error`}
+          className="mt-1 text-sm text-error"
+          data-testid={`split-here-name-${key}-error`}
+        >
+          {problem}
+        </p>
+      )}
     </div>
   );
 
@@ -251,8 +285,8 @@ export default function SplitLineHereDialog() {
         </p>
 
         <div className="space-y-3">
-          {half('a', 'Line A name (first half)', nameA, setNameA, colorA, setColorA)}
-          {half('b', 'Line B name (second half)', nameB, setNameB, colorB, setColorB)}
+          {half('a', 'Line A name (first half)', nameA, setNameA, colorA, setColorA, errorA)}
+          {half('b', 'Line B name (second half)', nameB, setNameB, colorB, setColorB, errorB)}
         </div>
 
         {hasComment &&
@@ -267,14 +301,16 @@ export default function SplitLineHereDialog() {
             {moveNote && <p data-testid="split-here-closure-move">{moveNote}</p>}
             {removed.map((closure, i) => (
               <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-removed-${i}`}>
-                Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
-                removed: its two stations become one point.
+                Loop closure <StationLabel station={closure.station_a} label={stationWithLine} /> to{' '}
+                <StationLabel station={closure.station_b} label={stationWithLine} /> is removed: its two stations
+                become one point.
               </p>
             ))}
             {alreadyOnePoint.map((closure, i) => (
               <p key={`${closure.closure_id.toString()}-${i}`} data-testid={`split-here-closure-already-${i}`}>
-                Loop closure <StationId station={closure.station_a} /> to <StationId station={closure.station_b} /> is
-                removed: its two stations are already one point.
+                Loop closure <StationLabel station={closure.station_a} label={stationWithLine} /> to{' '}
+                <StationLabel station={closure.station_b} label={stationWithLine} /> is removed: its two stations
+                are already one point.
               </p>
             ))}
           </div>
@@ -300,6 +336,7 @@ export default function SplitLineHereDialog() {
             variant="primary"
             onClick={handleConfirm}
             disabled={isSubmitting || isStale || !isValid}
+            title={errorA ?? errorB ?? undefined}
             data-primary-action=""
             data-testid="split-here-confirm"
           >

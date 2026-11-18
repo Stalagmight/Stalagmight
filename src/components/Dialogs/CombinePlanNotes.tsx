@@ -25,7 +25,8 @@ interface CombinePlanNotesProps {
   otherQuality: number | undefined;
   lengthUnit: LengthUnit;
   lineName: (id: LineId) => string;
-  stationLabel: (ref: StationRef) => string;
+  /** A station by name (`17`); with `withLine`, `Main Line / 17`. */
+  stationLabel: (ref: StationRef, withLine?: boolean) => string;
 }
 
 /**
@@ -134,7 +135,7 @@ export function CombinePlanNotes({
       text: t('dialogs.combineSections.joinedMoves', {
         names: listNames(joined.lines),
         count: joined.lines.length,
-        station: stationLabel(joined.station),
+        station: stationLabel(joined.station, true),
         distance: formatLength(joined.shift_m, lengthUnit, joined.shift_m <= COMBINE_SIDE_BY_SIDE_M ? 4 : 2),
       }),
     });
@@ -289,7 +290,7 @@ const REPLACED_BY_KEY: Record<CombineRemovedKind, string> = {
   loop_closure: 'replacedByClosure',
 };
 
-/** A line as a link pill (name and id), selecting it on click. */
+/** A line as a link pill (its name), selecting it on click. */
 function LinePill({ id, name }: { id: LineId; name: string }) {
   return (
     <DetailLink
@@ -307,8 +308,8 @@ function LinePill({ id, name }: { id: LineId; name: string }) {
 
 /**
  * One end of a tie the combine turns into a loop closure: its line and its
- * station as the link pills the Details panel uses. Hovering the station
- * rings it on the map behind the dialog.
+ * station (by name, beside its line's pill) as the link pills the Details
+ * panel uses. Hovering the station rings it on the map behind the dialog.
  */
 function TieEnd({
   at,

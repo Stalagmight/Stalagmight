@@ -2,35 +2,47 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import {
+  defaultSplitNames,
+  lineNameProblemMessage,
+  splitNameProblems,
+} from '../../utils/nameValidation';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
 export default function SplitLineDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { deleteShotAndSplit } = useProjectStore();
+  const { deleteShotAndSplit, project } = useProjectStore();
 
   const lineId = dialogData.lineId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
-  const lineName = dialogData.lineName as string | undefined;
+  const lines = project?.lines;
+  // The project's own name for the line; the opener's copy only as a fallback.
+  const lineName = lines?.find((l) => l.id === lineId)?.name ?? (dialogData.lineName as string | undefined);
 
-  const defaultNameA = lineName ? `${lineName}-A` : 'Line-A';
-  const defaultNameB = lineName ? `${lineName}-B` : 'Line-B';
+  const defaults = defaultSplitNames(lineName, lines, lineId);
 
-  const [nameA, setNameA] = useState(defaultNameA);
-  const [nameB, setNameB] = useState(defaultNameB);
+  const [nameA, setNameA] = useState(defaults.a);
+  const [nameB, setNameB] = useState(defaults.b);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Re-initialize names when lineName changes
   useEffect(() => {
-    setNameA(lineName ? `${lineName}-A` : 'Line-A');
-    setNameB(lineName ? `${lineName}-B` : 'Line-B');
-  }, [lineName]);
+    const next = defaultSplitNames(lineName, useProjectStore.getState().project?.lines, lineId);
+    setNameA(next.a);
+    setNameB(next.b);
+  }, [lineName, lineId]);
 
-  const isDirty = nameA !== defaultNameA || nameB !== defaultNameB;
+  const isDirty = nameA !== defaults.a || nameB !== defaults.b;
 
-  const isValid = nameA.trim().length > 0 && nameB.trim().length > 0;
+  // Half A keeps the line (and may keep its name); B becomes a new line. Both
+  // must be named, not after another line, and not after each other.
+  const problems = splitNameProblems(nameA, nameB, lines, lineId);
+  const errorA = problems.a ? lineNameProblemMessage(problems.a, nameA) : null;
+  const errorB = problems.b ? lineNameProblemMessage(problems.b, nameB) : null;
+  const isValid = !errorA && !errorB;
 
   const handleConfirm = async () => {
     if (lineId === undefined || shotId === undefined || !isValid) return;
@@ -57,6 +69,30 @@ export default function SplitLineDialog() {
 
   const handleClose = isLoading ? () => {} : closeDialog;
 
+  const nameField = (key: 'a' | 'b', label: string, value: string, set: (v: string) => void, problem: string | null) => (
+    <div>
+      <label className="block text-sm text-text-secondary mb-1" htmlFor={`split-name-${key}`}>
+        {label}
+      </label>
+      <input
+        id={`split-name-${key}`}
+        type="text"
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        className="w-full"
+        aria-invalid={problem !== null}
+        {...(problem ? { 'aria-describedby': `split-name-${key}-error` } : {})}
+        data-testid={`split-name-${key}`}
+        disabled={isLoading}
+      />
+      {problem && (
+        <p id={`split-name-${key}-error`} className="mt-1 text-sm text-error" data-testid={`split-name-${key}-error`}>
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <DialogWrapper
       title="Delete Shot & Split Line"
@@ -72,34 +108,14 @@ export default function SplitLineDialog() {
         </p>
 
         {error && (
-          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm" data-testid="split-line-error">
             {error}
           </div>
         )}
 
         <div className="space-y-3">
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Line A name (first half)</label>
-            <input
-              type="text"
-              value={nameA}
-              onChange={(e) => setNameA(e.target.value)}
-              className="w-full"
-              data-testid="split-name-a"
-              disabled={isLoading}
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Line B name (second half)</label>
-            <input
-              type="text"
-              value={nameB}
-              onChange={(e) => setNameB(e.target.value)}
-              className="w-full"
-              data-testid="split-name-b"
-              disabled={isLoading}
-            />
-          </div>
+          {nameField('a', 'Line A name (first half)', nameA, setNameA, errorA)}
+          {nameField('b', 'Line B name (second half)', nameB, setNameB, errorB)}
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
@@ -110,6 +126,7 @@ export default function SplitLineDialog() {
             variant="danger"
             onClick={handleConfirm}
             disabled={isLoading || !isValid}
+            title={errorA ?? errorB ?? undefined}
             data-testid="split-confirm"
           >
             {isLoading ? 'Splitting...' : 'Delete & Split'}

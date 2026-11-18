@@ -76,8 +76,8 @@ test.describe('Line Split Dialog', () => {
     const nameA = page.getByTestId('split-name-a');
     const nameB = page.getByTestId('split-name-b');
 
-    await expect(nameA).toHaveValue('Main Line-A');
-    await expect(nameB).toHaveValue('Main Line-B');
+    await expect(nameA).toHaveValue('Main Line A');
+    await expect(nameB).toHaveValue('Main Line B');
   });
 
   test('both name inputs are pre-filled from line name', async ({ page }) => {
@@ -101,6 +101,7 @@ test.describe('Line Split Dialog', () => {
 
     await nameA.fill('');
     await expect(confirmBtn).toBeDisabled();
+    await expect(page.getByTestId('split-name-a-error')).toHaveText('A line needs a name.');
   });
 
   test('empty name B disables confirm button', async ({ page }) => {
@@ -112,6 +113,27 @@ test.describe('Line Split Dialog', () => {
 
     await nameB.fill('');
     await expect(confirmBtn).toBeDisabled();
+    await expect(page.getByTestId('split-name-b-error')).toHaveText('A line needs a name.');
+  });
+
+  test('the same name twice disables confirm and says why; the line gives its own name up', async ({ page }) => {
+    const { lineId, shotId, lineName } = await getIds(page);
+    await openSplitDialog(page, lineId, shotId, lineName);
+
+    const nameA = page.getByTestId('split-name-a');
+    const nameB = page.getByTestId('split-name-b');
+    const confirmBtn = page.getByTestId('split-confirm');
+
+    await nameA.fill('Upstream');
+    await nameB.fill('Upstream');
+    await expect(page.getByTestId('split-name-b-error')).toHaveText('The two lines need different names.');
+    await expect(confirmBtn).toBeDisabled();
+    await expect(confirmBtn).toHaveAttribute('title', 'The two lines need different names.');
+
+    // The split line gives up its name to half A, so half B may take it.
+    await nameB.fill('Main Line');
+    await expect(page.getByTestId('split-name-b-error')).toHaveCount(0);
+    await expect(confirmBtn).toBeEnabled();
   });
 
   test('custom names can be entered', async ({ page }) => {

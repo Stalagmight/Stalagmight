@@ -30,14 +30,22 @@ export function queryCombineCandidateForLines(a: LineId, b: LineId): Promise<Com
 
 /**
  * The combined line's default name: the kept line's, except that the two
- * halves of a split (`X-A` and `X-B`, either kept) give back `X`.
+ * halves of a split (`X A` and `X B`, or the older `X-A` and `X-B`, either
+ * kept) give back `X`.
  */
 export function defaultCombinedName(keptName: string, otherName: string): string {
-  const half = /^(.*)-([AB])$/;
+  const half = /^(.*)([ -])([AB])$/;
   const kept = half.exec(keptName);
   const other = half.exec(otherName);
-  if (kept && other && kept[1] === other[1] && kept[2] !== other[2] && kept[1]!.trim().length > 0) {
-    return kept[1]!;
+  if (
+    kept &&
+    other &&
+    kept[1] === other[1] &&
+    kept[2] === other[2] &&
+    kept[3] !== other[3] &&
+    kept[1]!.trim().length > 0
+  ) {
+    return kept[1]!.trim();
   }
   return keptName;
 }

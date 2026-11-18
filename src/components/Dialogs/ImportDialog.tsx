@@ -53,6 +53,12 @@ import { CreditPeopleFields } from '../common/CreditFields';
 import { OptionalDateInput } from '../common/OptionalDateInput';
 import { listPeopleProps, type CreditLists } from '../common/LineMetadataForm';
 import { personKey } from '../../utils/people';
+import {
+  isLineNameRefusal,
+  lineNameProblem,
+  lineNameProblemMessage,
+  nextFreeLineName,
+} from '../../utils/nameValidation';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -84,12 +90,24 @@ export default function ImportDialog() {
   const gridLabels = useGridLabels('dataTable.shotNoun');
   const numberLocale = getNumberFormatLocale();
 
-  // Restore form state when reopening after placement cancel
-  const saved = dialogData as { savedFormState?: SavedFormState } | undefined;
+  // Restore form state when reopening after placement cancel, or after the
+  // backend refused the line (`submitError`: another window or an undo took
+  // the name while the line was being placed).
+  const saved = dialogData as { savedFormState?: SavedFormState; submitError?: string } | undefined;
   const restored = saved?.savedFormState;
 
-  // Form state
-  const [name, setName] = useState<string>(restored?.name ?? '');
+  // Form state. A line must have a name, unique in the project: a new one
+  // starts as the first free `Line N`.
+  const [initialName] = useState<string>(() => restored?.name ?? nextFreeLineName(project?.lines));
+  const [name, setName] = useState<string>(initialName);
+  const [submitError, setSubmitError] = useState<string | null>(saved?.submitError ?? null);
+  const nameProblem = lineNameProblem(name, project?.lines);
+  // Checked here first; a refusal the backend still made is shown in the same place.
+  const nameError = nameProblem
+    ? lineNameProblemMessage(nameProblem, name)
+    : submitError && isLineNameRefusal(submitError)
+      ? submitError
+      : null;
   // Surveyors / explorers of every shot entered here, prefilled with the ones
   // the last line of this session was created or imported with.
   const [initialPeople] = useState<CreditLists>(() => restored?.people ?? lastUsedCredit);
@@ -388,7 +406,19 @@ export default function ImportDialog() {
   );
 
   const submit = useMemo(() => summarizeSubmit(drafts), [drafts]);
-  const submitAllowed = canSubmit(submit) && !editingBlocked;
+  const submitAllowed = canSubmit(submit) && !editingBlocked && nameError === null;
+  const blocker = editingBlocked
+    ? t('newSection.readOnly')
+    : submit.incompleteRows.length > 0
+      ? t('newSection.incomplete', {
+          count: submit.incompleteRows.length,
+          rows: submit.incompleteRows.join(', '),
+        })
+      : submit.completeCount === 0
+        ? t('newSection.empty')
+        : submitError && !isLineNameRefusal(submitError)
+          ? submitError
+          : '';
 
   const handleSubmit = () => {
     if (!submitAllowed) return;
@@ -398,7 +428,7 @@ export default function ImportDialog() {
         ? { surveyors: people.surveyors, explorers: people.explorers, date: date || null }
         : null;
     const lineData: LineData = {
-      name: name || null,
+      name: name.trim(),
       surveyor: null,
       date: null,
       color,
@@ -426,13 +456,19 @@ export default function ImportDialog() {
       0, // align station 0 to cursor
       // onComplete: create line, merge if snapped or move to position
       async (result: PlacementResult) => {
-        if (result.snappedToStation) {
-          await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move');
-        } else {
-          const cmdResult = await createLine(lineData);
-          if (cmdResult.success && cmdResult.line_id != null) {
-            await moveLine(cmdResult.line_id, result.position);
-          }
+        const cmdResult = result.snappedToStation
+          ? await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move')
+          : await createLine(lineData);
+        if (!cmdResult.success) {
+          // Refused (the name was taken meanwhile): back to the form, with why.
+          openDialog('import', {
+            savedFormState: formState,
+            submitError: cmdResult.error ?? t('editGate.commandFailed'),
+          });
+          return;
+        }
+        if (!result.snappedToStation && cmdResult.line_id != null) {
+          await moveLine(cmdResult.line_id, result.position);
         }
       },
       // onCancel: reopen dialog with saved form state
@@ -451,7 +487,7 @@ export default function ImportDialog() {
     (role) => people[role].map(personKey).join('\n') !== initialPeople[role].map(personKey).join('\n')
   );
   const isDirty =
-    name !== '' || peopleChanged || peopleTyping || date !== '' || drafts.some((d) => !isBlankDraft(d));
+    name !== initialName || peopleChanged || peopleTyping || date !== '' || drafts.some((d) => !isBlankDraft(d));
   const peopleProps = listPeopleProps(
     people,
     (role, next) => setPeople((prev) => ({ ...prev, [role]: next(prev[role]) })),
@@ -472,17 +508,28 @@ export default function ImportDialog() {
         <div className="shrink-0 space-y-3">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-text-secondary mb-1">
+              <label className="block text-sm text-text-secondary mb-1" htmlFor="new-line-name">
                 {t('newSection.labels.name')}
               </label>
               <input
+                id="new-line-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setSubmitError(null);
+                }}
                 className="w-full"
                 placeholder={t('newSection.placeholders.name')}
+                aria-invalid={nameError !== null}
+                {...(nameError ? { 'aria-describedby': 'new-line-name-error' } : {})}
                 data-testid="line-name-input"
               />
+              {nameError && (
+                <p id="new-line-name-error" className="mt-1 text-sm text-error" data-testid="line-name-error">
+                  {nameError}
+                </p>
+              )}
             </div>
             <div className="flex gap-4">
               <div className="min-w-0 flex-1">
@@ -602,16 +649,7 @@ export default function ImportDialog() {
         {/* Actions */}
         <div className="flex shrink-0 items-center justify-between gap-4 border-t border-border pt-4">
           <p className="text-sm text-error" data-testid="import-line-blocker">
-            {editingBlocked
-              ? t('newSection.readOnly')
-              : submit.incompleteRows.length > 0
-                ? t('newSection.incomplete', {
-                    count: submit.incompleteRows.length,
-                    rows: submit.incompleteRows.join(', '),
-                  })
-                : submit.completeCount === 0
-                  ? t('newSection.empty')
-                  : ''}
+            {blocker}
           </p>
           <div className="flex gap-2">
             <Button onClick={closeDialog} data-testid="import-line-cancel">
@@ -621,6 +659,7 @@ export default function ImportDialog() {
               variant="primary"
               onClick={handleSubmit}
               disabled={!submitAllowed}
+              title={nameError ?? (blocker || undefined)}
               data-testid="import-line-create"
             >
               {t('newSection.create')}

@@ -47,7 +47,7 @@ function renderWithShots(count: number) {
   useUIStore.setState({
     dialogData: {
       savedFormState: {
-        name: '',
+        name: 'Line 1',
         people: { surveyors: [], explorers: [] },
         date: '',
         color: LINE_COLORS[0]!,

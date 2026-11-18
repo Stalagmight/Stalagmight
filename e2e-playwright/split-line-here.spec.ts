@@ -59,8 +59,8 @@ async function confirmSplit(page: Page) {
   await page.getByRole('button', { name: 'Split Line Here' }).click();
   const dialog = page.getByTestId('split-line-here-dialog');
   await expect(dialog).toBeVisible();
-  await expect(page.getByTestId('split-here-name-a')).toHaveValue('Main-A');
-  await expect(page.getByTestId('split-here-name-b')).toHaveValue('Main-B');
+  await expect(page.getByTestId('split-here-name-a')).toHaveValue('Main A');
+  await expect(page.getByTestId('split-here-name-b')).toHaveValue('Main B');
   await page.getByTestId('split-here-confirm').click();
   await expect(dialog).not.toBeVisible();
 }
@@ -72,8 +72,8 @@ test.describe('Split Line Here (#335)', () => {
     await confirmSplit(page);
 
     await expect.poll(async () => (await readLines(page)).map((s) => [s.name, s.shots.length])).toEqual([
-      ['Main-A', 2],
-      ['Main-B', 2],
+      ['Main A', 2],
+      ['Main B', 2],
     ]);
   });
 
@@ -84,8 +84,8 @@ test.describe('Split Line Here (#335)', () => {
     await confirmSplit(page);
 
     await expect.poll(async () => (await readLines(page)).map((s) => [s.name, s.shots.length])).toEqual([
-      ['Main-A', 2],
-      ['Main-B', 3],
+      ['Main A', 2],
+      ['Main B', 3],
     ]);
     const call = await page.evaluate(() => {
       const calls = ((window as any).__MOCK_SPLIT_LINE_CALLS__ ?? []) as Array<any>;
@@ -126,7 +126,7 @@ test.describe('Split Line Here (#335)', () => {
 
   test('names the loop closure the split removes before it splits (#738)', async ({ page }) => {
     // The preview (the split run on a copy in the backend) reports one closure that
-    // becomes a merge and moves Main-B, and a second one to the same point that the
+    // becomes a merge and moves Main B, and a second one to the same point that the
     // merge leaves tying that point to itself, named by the stations it was created with.
     const line = await seedFourShotLine(page);
     await page.evaluate((id) => {
@@ -149,11 +149,12 @@ test.describe('Split Line Here (#335)', () => {
     await expect(page.getByTestId('split-line-here-dialog')).toBeVisible();
 
     await expect(page.getByTestId('split-here-closure-move')).toHaveText(
-      'Main-B is tied to Main-A only by loop closures, so the split turns one of them into a merge and moves ' +
-        'Main-B 0.10m to close it.'
+      'Main B is tied to Main A only by loop closures, so the split turns one of them into a merge and moves ' +
+        'Main B 0.10m to close it.'
     );
     await expect(page.getByTestId('split-here-closure-removed-0')).toHaveText(
-      `Loop closure ${line.id}:4 to ${line.id}:1 is removed: its two stations become one point.`
+      // By line and station name, never the positional handle.
+      'Loop closure Main / 4 to Main / 1 is removed: its two stations become one point.'
     );
     // Still the user's call.
     await page.getByTestId('split-here-confirm').click();
@@ -186,7 +187,7 @@ test.describe('Split Line Here (#335)', () => {
       ({ id, shot }) =>
         (window as any).__E2E_TEST__.projectStore
           .getState()
-          .deleteShotAndSplit(id, shot, 'Main-A', 'Main-B') as Promise<{ success: boolean }>,
+          .deleteShotAndSplit(id, shot, 'Main A', 'Main B') as Promise<{ success: boolean }>,
       { id: line.id, shot: line.shots[1]!.id }
     );
     expect(split.success).toBe(true);

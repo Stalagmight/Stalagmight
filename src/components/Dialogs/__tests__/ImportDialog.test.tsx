@@ -10,7 +10,7 @@
  *
  * `.tsx` so vitest runs it under jsdom.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 
 // jsdom measures every box as 0 tall, so the real virtualizer renders no rows
@@ -66,7 +66,7 @@ function renderWithDrafts(drafts: ShotDraft[]) {
   useUIStore.setState({
     dialogData: {
       savedFormState: {
-        name: '',
+        name: 'Line 1',
         people: { surveyors: [], explorers: [] },
         date: '',
         color: LINE_COLORS[0]!,
@@ -210,5 +210,114 @@ describe('ImportDialog J/R cell', () => {
     cycleKind(1); // back to Normal - the row holds nothing again
     expect(byTestId('import-line-create')).toBeEnabled();
     expect(byTestId('import-line-blocker')).toHaveTextContent('');
+  });
+});
+
+describe('ImportDialog line name (required, unique in the project)', () => {
+  const complete = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
+  const withLines = (...names: string[]) =>
+    useProjectStore.setState({
+      project: { lines: names.map((name, i) => ({ id: i + 1, name, color: '#123456', shots: [] })) } as never,
+    });
+  const nameInput = () => byTestId('line-name-input') as HTMLInputElement;
+  const queryTestId = (id: string) => document.body.querySelector(`[data-testid="${id}"]`);
+  // The cases below stub store actions; the next case gets the real ones back.
+  const { openDialog, startPlacementMode } = useUIStore.getState();
+  const { createLine } = useProjectStore.getState();
+  afterEach(() => {
+    useUIStore.setState({ openDialog, startPlacementMode });
+    useProjectStore.setState({ createLine });
+  });
+
+  it('starts on the first free "Line N"', () => {
+    withLines('Line 1', 'Main', 'Line 3');
+    render(<ImportDialog />);
+    expect(nameInput()).toHaveValue('Line 2');
+    expect(queryTestId('line-name-error')).toBeNull();
+  });
+
+  it('keeps the name a restored form had', () => {
+    withLines('Line 1');
+    renderWithDrafts([draft(1, complete)]);
+    expect(nameInput()).toHaveValue('Line 1');
+  });
+
+  it('says a name is needed and disables Create while it is empty', () => {
+    renderWithDrafts([draft(1, complete)]);
+    fireEvent.change(nameInput(), { target: { value: '   ' } });
+    expect(byTestId('line-name-error')).toHaveTextContent('A line needs a name.');
+    expect(nameInput()).toHaveAttribute('aria-invalid', 'true');
+    expect(byTestId('import-line-create')).toBeDisabled();
+    expect(byTestId('import-line-create')).toHaveAttribute('title', 'A line needs a name.');
+  });
+
+  it("refuses another line's name, trimmed, and lets Create go once it is free", () => {
+    withLines('Main', 'Side');
+    renderWithDrafts([draft(1, complete)]);
+    fireEvent.change(nameInput(), { target: { value: ' Main ' } });
+    const taken = 'A line named "Main" already exists. Line names must be unique in the project.';
+    expect(byTestId('line-name-error')).toHaveTextContent(taken);
+    expect(byTestId('import-line-create')).toBeDisabled();
+    expect(byTestId('import-line-create')).toHaveAttribute('title', taken);
+    fireEvent.change(nameInput(), { target: { value: 'Main 2' } });
+    expect(queryTestId('line-name-error')).toBeNull();
+    expect(byTestId('import-line-create')).toBeEnabled();
+  });
+
+  it('sends the trimmed name', () => {
+    let placed: { name: string | null } | null = null;
+    useUIStore.setState({
+      startPlacementMode: ((data: { name: string | null }) => {
+        placed = data;
+      }) as never,
+    });
+    renderWithDrafts([draft(1, complete)]);
+    fireEvent.change(nameInput(), { target: { value: '  Upstream  ' } });
+    fireEvent.click(byTestId('import-line-create'));
+    expect(placed).toMatchObject({ name: 'Upstream' });
+  });
+
+  it('reopens the form with the refusal when the backend refuses the name after placement', async () => {
+    const refusal = 'A line named "Line 1" already exists';
+    let complete_: ((result: unknown) => Promise<void>) | undefined;
+    const openDialog = vi.fn();
+    useUIStore.setState({
+      openDialog: openDialog as never,
+      startPlacementMode: ((_data: unknown, _align: number, onComplete: (r: unknown) => Promise<void>) => {
+        complete_ = onComplete;
+      }) as never,
+    });
+    const createLine = vi.fn(async () => ({ success: false, error: refusal }));
+    useProjectStore.setState({ createLine: createLine as never });
+    renderWithDrafts([draft(1, complete)]);
+    fireEvent.click(byTestId('import-line-create'));
+    await complete_?.({ position: { x: 0, y: 0 }, snappedToStation: null });
+    expect(createLine).toHaveBeenCalled();
+    expect(openDialog).toHaveBeenCalledWith('import', {
+      savedFormState: expect.objectContaining({ name: 'Line 1' }),
+      submitError: refusal,
+    });
+  });
+
+  it('shows a refusal it was reopened with at the name, until the name changes', () => {
+    useUIStore.setState({
+      dialogData: {
+        savedFormState: {
+          name: 'Line 1',
+          people: { surveyors: [], explorers: [] },
+          date: '',
+          color: LINE_COLORS[0]!,
+          drafts: [draft(1, complete)],
+          nextKey: 2,
+        },
+        submitError: 'A line named "Line 1" already exists',
+      },
+    });
+    render(<ImportDialog />);
+    expect(byTestId('line-name-error')).toHaveTextContent('A line named "Line 1" already exists');
+    expect(byTestId('import-line-create')).toBeDisabled();
+    fireEvent.change(nameInput(), { target: { value: 'Line 9' } });
+    expect(queryTestId('line-name-error')).toBeNull();
+    expect(byTestId('import-line-create')).toBeEnabled();
   });
 });

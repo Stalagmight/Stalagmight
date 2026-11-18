@@ -14,6 +14,15 @@ describe('defaultCombinedName', () => {
   it('gives the two halves of a split their original name back, whichever is kept', () => {
     expect(defaultCombinedName('Main-A', 'Main-B')).toBe('Main');
     expect(defaultCombinedName('Main-B', 'Main-A')).toBe('Main');
+    // The split's default names now: `<name> A` / `<name> B`.
+    expect(defaultCombinedName('Main Line A', 'Main Line B')).toBe('Main Line');
+    expect(defaultCombinedName('Main Line B', 'Main Line A')).toBe('Main Line');
+  });
+
+  it('needs both halves named the same way', () => {
+    expect(defaultCombinedName('Main A', 'Main-B')).toBe('Main A');
+    expect(defaultCombinedName('Main A', 'Side B')).toBe('Main A');
+    expect(defaultCombinedName(' A', ' B')).toBe(' A');
   });
 
   it('keeps the kept line name otherwise', () => {

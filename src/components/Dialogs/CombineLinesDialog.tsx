@@ -1,25 +1,23 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { formatStationIdWithName } from '../../utils/formatters';
+import { identityLabels, lineDisplayName } from '../../utils/stationIdentity';
+import { lineNameProblem, lineNameProblemMessage, nextFreeLineName } from '../../utils/nameValidation';
 import { formatLength } from '../../utils/formatStats';
 import { defaultConfig } from '../../types/config';
 import { combinePlanFor, defaultCombinedName } from '../../utils/combineLines';
 import type { CombineCandidate } from '../../types/ipc/CombineCandidate';
 import type { CombinePick } from '../../types/ipc/CombinePick';
-import type { Line, LineId, StationRef } from '../../types/project';
+import type { LineId, StationRef } from '../../types/project';
 import type { CreditedPerson, Shot } from '../../types/ipc.generated';
 import { formatCreditDateRange, shotCredit, summarizeCredits } from '../../utils/lineCredit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { CombinePlanNotes } from './CombinePlanNotes';
-
-const lineLabel = (line: Line | undefined, id: number) =>
-  line?.name?.trim() ? line.name : `Line ${id}`;
 
 /**
  * Who the combined line credits, and when: every shot keeps its own
@@ -74,7 +72,7 @@ function CombinedCreditSummary({ shots }: { shots: Array<Pick<Shot, 'credit'>> }
 export default function CombineLinesDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { combineLines, project, stations, config } = useProjectStore();
+  const { combineLines, project, stations, surveyData, config } = useProjectStore();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const candidate = dialogData.candidate as CombineCandidate | undefined;
 
@@ -98,39 +96,43 @@ export default function CombineLinesDialog() {
   const other = keepB ? lineA : lineB;
   const keptId = (keepB ? candidate?.line_b : candidate?.line_a) ?? 0;
   const otherId = (keepB ? candidate?.line_a : candidate?.line_b) ?? 0;
-  const keptName = lineLabel(kept, keptId);
-  const otherName = lineLabel(other, otherId);
+  const labels = useMemo(
+    () => identityLabels({ surveyData, stations, lines: project?.lines ?? null }),
+    [surveyData, stations, project?.lines]
+  );
+  const keptName = lineDisplayName(kept?.name);
+  const otherName = lineDisplayName(other?.name);
 
-  // From the RAW names: an unnamed kept line defaults to unnamed (the field
-  // shows the "Line N" label as its placeholder), not to that label.
-  const defaultName = defaultCombinedName(kept?.name ?? '', other?.name ?? '');
+  // The two lines become the combined one, so neither of their names is a
+  // clash; every other line's is.
+  const otherLines = (project?.lines ?? []).filter((l) => l.id !== keptId && l.id !== otherId);
+  // The kept line's name, or the split's base name when these are its two
+  // halves - unless another line already holds that; then the kept line's.
+  const derivedName = defaultCombinedName(kept?.name ?? '', other?.name ?? '');
+  const defaultName = !lineNameProblem(derivedName, otherLines)
+    ? derivedName
+    : !lineNameProblem(kept?.name ?? '', otherLines)
+      ? (kept?.name ?? '').trim()
+      : nextFreeLineName(project?.lines);
   const [name, setName] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(null);
   const [swapLr, setSwapLr] = useState(true);
   const [commentPick, setCommentPick] = useState<CombinePick>('kept');
-  const [namePick, setNamePick] = useState<CombinePick>('kept');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Untouched fields follow the kept line when the user swaps.
   const shownName = name ?? defaultName;
   const shownColor = color ?? kept?.color ?? '#3b82f6';
+  const nameProblem = lineNameProblem(shownName, otherLines);
+  const nameError = nameProblem ? lineNameProblemMessage(nameProblem, shownName) : null;
 
   const join = keepB ? candidate?.station_b : candidate?.station_a;
-  const joinName = join
-    ? stations.find(
-        (s) => s.station_ref.line_id === join.line_id && s.station_ref.station_index === join.station_index
-      )?.name
-    : undefined;
-  const joinLabel = join ? formatStationIdWithName(join.line_id, join.station_index, joinName) : '';
-  const stationLabel = (ref: StationRef) =>
-    formatStationIdWithName(
-      ref.line_id,
-      ref.station_index,
-      stations.find(
-        (s) => s.station_ref.line_id === ref.line_id && s.station_ref.station_index === ref.station_index
-      )?.name
-    );
+  // The join station by its line and name: `Main Line / 17`.
+  const joinLabel = join ? labels.station(join, true) : '';
+  // A tie's station beside its line pill: the name alone (`17`); with
+  // `withLine`, `Main Line / 17`.
+  const stationLabel = (ref: StationRef, withLine = false) => labels.station(ref, withLine);
   const plan = candidate ? combinePlanFor(candidate, keptId) : undefined;
   const keptShots = (keepB ? candidate?.shot_count_b : candidate?.shot_count_a) ?? 0;
   const otherShots = (keepB ? candidate?.shot_count_a : candidate?.shot_count_b) ?? 0;
@@ -152,13 +154,12 @@ export default function CombineLinesDialog() {
   const keptText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? b : a) ?? '';
   const otherText = (a: string | null | undefined, b: string | null | undefined) => (keepB ? a : b) ?? '';
   const commentConflict = Boolean(candidate?.comment_a && candidate?.comment_b);
-  const nameConflict = Boolean(candidate?.station_name_a && candidate?.station_name_b);
   const blocked =
     candidate?.blocked_reason ?? (keepB ? candidate?.blocked_keeping_b : candidate?.blocked_keeping_a) ?? null;
-  const lineName = (id: LineId) => lineLabel(project?.lines.find((s) => s.id === id), id);
+  const lineName = (id: LineId) => labels.lineName(id);
   const listNames = (ids: LineId[]) => ids.map(lineName).join(', ');
   const handleConfirm = async () => {
-    if (isSubmitting || isStale || blocked) return;
+    if (isSubmitting || isStale || blocked || nameError) return;
     if (isEditingBlockedNow()) {
       setError('Editing is disabled in the current view.');
       return;
@@ -172,7 +173,9 @@ export default function CombineLinesDialog() {
         color: shownColor,
         swap_lr: swapLr,
         comment_pick: commentConflict ? commentPick : 'kept',
-        name_pick: nameConflict ? namePick : 'kept',
+        // Ignored: the joined station keeps the kept line's name (names are
+        // unique per line); still sent, the options' shape is unchanged.
+        name_pick: 'kept',
         // The join this dialog shows: two lines can meet at more than one
         // place (a loop of two), and the backend must not pick another.
         ...(keptEnd && otherEnd ? { join: { kept: keptEnd, other: otherEnd } } : {}),
@@ -193,7 +196,7 @@ export default function CombineLinesDialog() {
   };
 
   const pickChoice = (
-    key: 'comment' | 'name',
+    key: 'comment',
     legend: string,
     value: CombinePick,
     onChange: (pick: CombinePick) => void,
@@ -265,10 +268,11 @@ export default function CombineLinesDialog() {
               id="combine-name"
               type="text"
               value={shownName}
-              placeholder={`${keptName} (leave empty to keep it unnamed)`}
               onChange={(e) => setName(e.target.value)}
               className="w-full"
               disabled={isSubmitting}
+              aria-invalid={nameError !== null}
+              {...(nameError ? { 'aria-describedby': 'combine-name-error' } : {})}
               data-testid="combine-name"
             />
           </div>
@@ -282,6 +286,11 @@ export default function CombineLinesDialog() {
             data-testid="combine-color"
           />
         </div>
+        {nameError && (
+          <p id="combine-name-error" className="-mt-2 text-sm text-error" data-testid="combine-name-error">
+            {nameError}
+          </p>
+        )}
 
         {candidate?.reverses && (
           <div className="text-sm" data-testid="combine-reverse-notice">
@@ -303,11 +312,6 @@ export default function CombineLinesDialog() {
             ['kept', keptText(candidate?.comment_a, candidate?.comment_b)],
             ['other', otherText(candidate?.comment_a, candidate?.comment_b)],
             ['both', 'Both'],
-          ])}
-        {nameConflict &&
-          pickChoice('name', 'The join station has two names. Keep:', namePick, setNamePick, [
-            ['kept', keptText(candidate?.station_name_a, candidate?.station_name_b)],
-            ['other', otherText(candidate?.station_name_a, candidate?.station_name_b)],
           ])}
 
         {/* Everything informational, folded: what moves, what becomes a loop
@@ -402,7 +406,8 @@ export default function CombineLinesDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isSubmitting || isStale || Boolean(blocked)}
+            disabled={isSubmitting || isStale || Boolean(blocked) || nameError !== null}
+            title={nameError ?? undefined}
             data-primary-action=""
             data-testid="combine-confirm"
           >

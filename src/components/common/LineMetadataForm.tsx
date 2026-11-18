@@ -14,6 +14,7 @@ import { HelpTooltip } from './HelpTooltip';
 import { Select } from './Select';
 import { CreditDateInput, CreditPeopleFields, type CreditPeopleFieldsProps } from './CreditFields';
 import type { PeopleInputValue } from './PeopleInput';
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Person } from '../../types/ipc.generated';
 import type { CreditDateAggregate, CreditRole } from '../../utils/creditEdit';
@@ -72,6 +73,11 @@ export function listPeopleProps(
 
 export interface LineMetadataFormProps {
   name: string;
+  /**
+   * Why the name cannot be used (empty, or another line's), shown under the
+   * field; the host also keeps its submit disabled. See `nameValidation.ts`.
+   */
+  nameError?: string | null;
   people: LinePeopleProps;
   /** Lay the two people fields side by side (a wide dialog). */
   peopleColumns?: boolean;
@@ -113,6 +119,7 @@ export interface LineMetadataFormProps {
 
 export function LineMetadataForm({
   name,
+  nameError = null,
   people,
   peopleColumns = false,
   date,
@@ -136,21 +143,32 @@ export function LineMetadataForm({
   creditUnavailable = false,
 }: LineMetadataFormProps) {
   const { t } = useTranslation();
+  const nameId = useId();
   const creditDisabled = disabled || creditUnavailable;
   return (
     <div className="space-y-3" data-testid="line-metadata-form">
       {showName && (
         <div>
-          <label className="block text-sm text-text-secondary mb-1">{t('common.labels.name')}</label>
+          <label className="block text-sm text-text-secondary mb-1" htmlFor={nameId}>
+            {t('common.labels.name')}
+          </label>
           <input
+            id={nameId}
             type="text"
             value={name}
             onChange={(e) => onNameChange(e.target.value)}
             className="w-full px-3 py-2 bg-background border border-border rounded"
             placeholder={t('sectionMetadata.placeholders.name')}
             disabled={disabled}
+            aria-invalid={nameError !== null}
+            {...(nameError ? { 'aria-describedby': `${nameId}-error` } : {})}
             data-testid="line-name-input"
           />
+          {nameError && (
+            <p id={`${nameId}-error`} className="mt-1 text-sm text-error" data-testid="line-name-error">
+              {nameError}
+            </p>
+          )}
         </div>
       )}
 

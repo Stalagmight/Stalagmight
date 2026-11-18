@@ -49,11 +49,19 @@ const creditedLines = () => [
   },
 ];
 let lines: Array<{ id: number; name: string; color: string; direction: string; shots: MockShot[] }> = [];
+/** Lines 8 and 9, which the ties below reach, under the names the backend seeds. */
+const withSeeded = () => [
+  ...lines,
+  ...[8, 9]
+    .filter((id) => !lines.some((l) => l.id === id))
+    .map((id) => ({ id, name: `Line ${id}`, color: '#999999', direction: 'in', shots: [] })),
+];
+let stations: Array<{ station_ref: { line_id: number; station_index: number }; name: string }> = [];
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: () => ({
     combineLines,
-    stations: [],
-    project: { lines },
+    stations,
+    project: { lines: withSeeded() },
   }),
 }));
 
@@ -132,13 +140,16 @@ describe('CombineLinesDialog', () => {
     blocked = false;
     combineLines.mockResolvedValue({ success: true });
     lines = creditedLines();
+    stations = [];
     dialogData = { candidate: candidate() };
   });
 
   it('summarises the join and defaults the name and colour from the kept line', () => {
+    stations = [{ station_ref: { line_id: 2, station_index: 3 }, name: 'A3' }];
     render(<CombineLinesDialog />);
+    // The join station by its line and name, never its position.
     expect(screen.getByTestId('combine-summary')).toHaveTextContent(
-      'Combining Main-A (3 shots) and Main-B (2 shots) at station 2:3'
+      'Combining Main-A (3 shots) and Main-B (2 shots) at station Main-A / A3'
     );
     expect(screen.getByTestId('combine-name')).toHaveValue('Main');
     expect(screen.getByTestId('combine-color')).toHaveValue('#111111');
@@ -168,7 +179,7 @@ describe('CombineLinesDialog', () => {
   it('swaps the kept line, and the untouched defaults follow it', async () => {
     render(<CombineLinesDialog />);
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
-    expect(screen.getByTestId('combine-summary')).toHaveTextContent('Combining Main-B (2 shots) and Main-A (3 shots) at station 5:0');
+    expect(screen.getByTestId('combine-summary')).toHaveTextContent('Combining Main-B (2 shots) and Main-A (3 shots) at station Main-B / 0');
     expect(screen.getByTestId('combine-color')).toHaveValue('#222222');
     expect(screen.getByTestId('combine-plan')).toHaveTextContent('Main-A will be added before Main-B.');
     expect(screen.getByTestId('combine-direction-note')).toHaveTextContent('(Out)');
@@ -191,31 +202,69 @@ describe('CombineLinesDialog', () => {
     expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ swap_lr: false });
   });
 
-  it('asks about the join comment and name only when both stations have different ones', async () => {
+  it('asks about the join comment when both stations have one, never about its name', async () => {
+    // The joined station keeps the kept line's name (names are unique per
+    // line), so even a candidate that still carried both names offers no choice.
     dialogData = {
       candidate: candidate({ comment_a: 'restriction', comment_b: 'sump', station_name_a: 'S1', station_name_b: 'B0' }),
     };
     render(<CombineLinesDialog />);
     expect(screen.getByTestId('combine-comment-pick-kept').parentElement).toHaveTextContent('restriction');
     expect(screen.getByTestId('combine-comment-pick-other').parentElement).toHaveTextContent('sump');
-    expect(screen.queryByTestId('combine-name-pick-both')).toBeNull();
+    expect(screen.queryByTestId('combine-name-pick')).toBeNull();
     fireEvent.click(screen.getByTestId('combine-comment-pick-both'));
-    fireEvent.click(screen.getByTestId('combine-name-pick-other'));
     fireEvent.click(screen.getByTestId('combine-confirm'));
     await waitFor(() => expect(combineLines).toHaveBeenCalled());
-    expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ comment_pick: 'both', name_pick: 'other' });
+    expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ comment_pick: 'both', name_pick: 'kept' });
   });
 
-  it('leaves an unnamed kept line unnamed instead of naming it "Line N"', async () => {
+  it('defaults the split halves to their base name, and the new split names too', () => {
+    lines = creditedLines().map((s) => ({ ...s, name: s.id === 2 ? 'Main A' : 'Main B' }));
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-name')).toHaveValue('Main');
+  });
+
+  it("falls back to the kept line's name when another line holds the base name", () => {
+    lines = [
+      ...creditedLines().map((s) => ({ ...s, name: s.id === 2 ? 'Main A' : 'Main B' })),
+      { id: 7, name: 'Main', color: '#333333', direction: 'in', shots: [] },
+    ];
+    render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-name')).toHaveValue('Main A');
+    expect(screen.queryByTestId('combine-name-error')).toBeNull();
+  });
+
+  it('gives an unnamed kept line a fresh "Line N" instead of leaving it unnamed', () => {
     lines = creditedLines().map((s) => (s.id === 2 ? { ...s, name: null as unknown as string } : s));
     render(<CombineLinesDialog />);
+    expect(screen.getByTestId('combine-name')).toHaveValue('Line 1');
+    expect(screen.getByTestId('combine-summary')).toHaveTextContent('Combining Unnamed line (3 shots)');
+  });
+
+  it("refuses an empty name or another line's, but not either combined line's", async () => {
+    render(<CombineLinesDialog />);
     const field = screen.getByTestId('combine-name');
-    expect(field).toHaveValue('');
-    expect(field).toHaveAttribute('placeholder', expect.stringContaining('Line 2'));
-    expect(screen.getByTestId('combine-confirm')).toBeEnabled();
-    fireEvent.click(screen.getByTestId('combine-confirm'));
+    const confirm = screen.getByTestId('combine-confirm');
+
+    fireEvent.change(field, { target: { value: ' ' } });
+    expect(screen.getByTestId('combine-name-error')).toHaveTextContent('A line needs a name.');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(confirm).toBeDisabled();
+    expect(confirm).toHaveAttribute('title', 'A line needs a name.');
+
+    fireEvent.change(field, { target: { value: 'Line 9' } });
+    expect(screen.getByTestId('combine-name-error')).toHaveTextContent('A line named "Line 9" already exists.');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(combineLines).not.toHaveBeenCalled();
+
+    // The other line's name is free: it stops existing once combined.
+    fireEvent.change(field, { target: { value: ' Main-B ' } });
+    expect(screen.queryByTestId('combine-name-error')).toBeNull();
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
     await waitFor(() => expect(combineLines).toHaveBeenCalled());
-    expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ name: '' });
+    expect(combineLines.mock.calls[0]?.[2]).toMatchObject({ name: 'Main-B' });
   });
 
   it('counts one shot as "1 shot" everywhere', () => {
@@ -226,7 +275,7 @@ describe('CombineLinesDialog', () => {
     ];
     render(<CombineLinesDialog />);
     expect(screen.getByTestId('combine-summary')).toHaveTextContent(
-      'Combining Main-A (3 shots) and Main-B (1 shot) at station 2:3'
+      'Combining Main-A (3 shots) and Main-B (1 shot) at station Main-A / 3'
     );
     expect(screen.getByTestId('combine-credit-surveyors')).toHaveTextContent('Ann (3 shots), Bob (2 shots)');
     expect(screen.getByTestId('combine-credit-explorers')).toHaveTextContent('Explorers: Cid (1 shot)');
@@ -341,7 +390,7 @@ describe('CombineLinesDialog', () => {
     // Each end of a torn tie is a line pill and a station pill, the link
     // pills of the Details panel, read here by their accessible names.
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The merge of [line Main-B] [station 5:2] and [line Line 9] [station 9:1]',
+      'The merge of [line Main-B] [station 2] and [line Line 9] [station 1]',
     ]);
     expect(screen.queryByTestId('combine-note-kept-moves')).toBeNull();
 
@@ -351,8 +400,8 @@ describe('CombineLinesDialog', () => {
       'Main-B is the one that moves, because a zero datum holds Main-A in place.'
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [line Main-A] [station 2:0] and [line Line 9] [station 9:0]',
-      'The merge of [line Main-B] [station 5:2] and [line Line 8] [station 8:0] . [line Line 8] is held by a zero datum and stays where it is.',
+      'The snapped closure between [line Main-A] [station 0] and [line Line 9] [station 0]',
+      'The merge of [line Main-B] [station 2] and [line Line 8] [station 0] . [line Line 8] is held by a zero datum and stays where it is.',
     ]);
     // Hovering a station pill rings it on the map; clicking selects it.
     fireEvent.mouseEnter(screen.getAllByTestId('combine-tie-station-5-2')[0]!);
@@ -407,7 +456,7 @@ describe('CombineLinesDialog', () => {
     expect(screen.queryByTestId('combine-note-torn')).toBeNull();
     expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^This connection is removed:/);
     expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
-      'The merge of [line Line 9] [station 9:1] and [line Main-B] [station 5:0] : as a loop ' +
+      'The merge of [line Line 9] [station 1] and [line Main-B] [station 0] : as a loop ' +
         'closure it would join the two ends of one shot.',
     ]);
     expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(
@@ -421,9 +470,9 @@ describe('CombineLinesDialog', () => {
     );
     expect(screen.getByTestId('combine-note-removed')).toHaveTextContent(/^These 2 connections are removed:/);
     expect(screen.getAllByTestId(/^combine-removed-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [line Line 9] [station 9:1] and [line Main-B] [station 5:0] : ' +
+      'The snapped closure between [line Line 9] [station 1] and [line Main-B] [station 0] : ' +
         'as an ordinary closure it would join the two ends of one shot.',
-      'Loop closure [line Main-A] [station 2:1] to [line Main-B] [station 5:0] : it would join the ' +
+      'Loop closure [line Main-A] [station 1] to [line Main-B] [station 0] : it would join the ' +
         'two ends of one shot.',
     ]);
     expect(screen.getByTestId('combine-removed-why')).toHaveTextContent(
@@ -510,9 +559,9 @@ describe('CombineLinesDialog', () => {
     expect(screen.queryByTestId('combine-note-removed')).toBeNull();
     expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^This closure is replaced:/);
     expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
-      'Loop closure [line Main-B] [station 5:2] to [line Main-B] [station 5:0] , an older kind the ' +
-        'Closures Computed View does not adjust. The merge of [line Main-A] [station 2:1] and ' +
-        '[line Main-B] [station 5:2] becomes a loop closure on the same two stations and takes its place.',
+      'Loop closure [line Main-B] [station 2] to [line Main-B] [station 0] , an older kind the ' +
+        'Closures Computed View does not adjust. The merge of [line Main-A] [station 1] and ' +
+        '[line Main-B] [station 2] becomes a loop closure on the same two stations and takes its place.',
     ]);
     expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent(
       'Two loop closures on the same two stations would count one loop twice, so the combine keeps the one ' +
@@ -522,13 +571,13 @@ describe('CombineLinesDialog', () => {
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
     expect(screen.getByTestId('combine-note-replaced')).toHaveTextContent(/^These 2 closures are replaced:/);
     expect(screen.getAllByTestId(/^combine-replaced-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [line Main-B] [station 5:2] and [line Main-B] [station 5:0] : its ' +
+      'The snapped closure between [line Main-B] [station 2] and [line Main-B] [station 0] : its ' +
         'two stations will no longer share one depth. The snapped closure between [line Main-A] ' +
-        '[station 2:1] and [line Main-B] [station 5:2] becomes an ordinary loop closure on the same two ' +
+        '[station 1] and [line Main-B] [station 2] becomes an ordinary loop closure on the same two ' +
         'stations and takes its place.',
-      'Loop closure [line Main-B] [station 5:3] to [line Main-A] [station 2:0] , left from a snap whose ' +
+      'Loop closure [line Main-B] [station 3] to [line Main-A] [station 0] , left from a snap whose ' +
         'stations have since moved apart; the Closures Computed View does not adjust it. Loop closure ' +
-        '[line Main-B] [station 5:3] to [line Main-A] [station 2:1] , already there, ties the same ' +
+        '[line Main-B] [station 3] to [line Main-A] [station 1] , already there, ties the same ' +
         'two stations and takes its place.',
     ]);
     expect(screen.getByTestId('combine-replaced-why')).toHaveTextContent('Undo brings these back.');
@@ -673,13 +722,13 @@ describe('CombineLinesDialog', () => {
       'Main-B moves 11.50m horizontally so the two ends meet, closing the loop here.'
     );
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The merge of [line Main-B] [station 5:2] and [line Line 9] [station 9:0] . [line Line 9] is held by a zero datum and stays where it is.',
-      'The snapped closure between [line Line 9] [station 9:1] and [line Main-B] [station 5:1] . [line Line 9] is held by a zero datum and stays where it is.',
+      'The merge of [line Main-B] [station 2] and [line Line 9] [station 0] . [line Line 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [line Line 9] [station 1] and [line Main-B] [station 1] . [line Line 9] is held by a zero datum and stays where it is.',
     ]);
     expect(screen.queryByTestId('combine-torn-why')).toBeNull();
     fireEvent.click(screen.getByTestId('combine-swap-kept'));
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [line Line 9] [station 9:1] and [line Main-B] [station 5:1] . [line Line 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [line Line 9] [station 1] and [line Main-B] [station 1] . [line Line 9] is held by a zero datum and stays where it is.',
     ]);
     expect(screen.queryByTestId('combine-torn-why')).toBeNull();
   });
@@ -709,8 +758,8 @@ describe('CombineLinesDialog', () => {
     ];
     render(<CombineLinesDialog />);
     expect(screen.getAllByTestId(/^combine-torn-tie-/).map(tieText)).toEqual([
-      'The snapped closure between [line Main-B] [station 5:1] and [line Line 9] [station 9:1] . [line Line 9] is held by a zero datum and stays where it is.',
-      'The snapped closure between [line Main-B] [station 5:0] and [line Side] [station 7:1]',
+      'The snapped closure between [line Main-B] [station 1] and [line Line 9] [station 1] . [line Line 9] is held by a zero datum and stays where it is.',
+      'The snapped closure between [line Main-B] [station 0] and [line Side] [station 1]',
     ]);
     expect(screen.getByTestId('combine-torn-why').textContent).toBe(
       "The loop's misclosure moves to the new closure, and the Closures Computed View adjusts it like any other loop."
@@ -763,7 +812,7 @@ describe('CombineLinesDialog', () => {
     };
     render(<CombineLinesDialog />);
     expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
-      'Side is merged at 5:0 and moves 0.30m with the joined station, so it stays merged to it.'
+      'Side is merged at Main-B / 0 and moves 0.30m with the joined station, so it stays merged to it.'
     );
     const order = Array.from(screen.getByTestId('combine-plan-notes').querySelectorAll('li')).map((li) =>
       li.getAttribute('data-testid')
@@ -797,7 +846,7 @@ describe('CombineLinesDialog', () => {
     };
     render(<CombineLinesDialog />);
     expect(screen.getByTestId('combine-note-joined-moves')).toHaveTextContent(
-      'Side is merged at 5:0 and moves 0.0006m with the joined station, so it stays merged to it.'
+      'Side is merged at Main-B / 0 and moves 0.0006m with the joined station, so it stays merged to it.'
     );
     expect(screen.getByTestId('combine-note-torn')).toBeInTheDocument();
   });

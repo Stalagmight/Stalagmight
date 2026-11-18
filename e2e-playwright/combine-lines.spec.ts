@@ -89,16 +89,16 @@ test.describe('Combine Lines', () => {
     await page.getByTestId('split-here-confirm').click();
     await waitForNoDialogs(page);
     await expect.poll(() => lineShape(page)).toEqual([
-      ['Main-A', 2],
-      ['Main-B', 2],
+      ['Main A', 2],
+      ['Main B', 2],
     ]);
 
     // The first half's end is the join: the item is offered there.
     await openContextMenu(page, { type: 'station', ref: { line_id: main!.id, station_index: 2 } });
-    await combineWith(page, 'Main-B');
+    await combineWith(page, 'Main B');
     const dialog = page.getByTestId('combine-lines-dialog');
     await expect(dialog).toBeVisible();
-    await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main-A \(2 shots\) and Main-B \(2 shots\) at station/);
+    await expect(page.getByTestId('combine-summary')).toHaveText(/Combining Main A \(2 shots\) and Main B \(2 shots\) at station Main A \/ 2$/);
     await expect(page.getByTestId('combine-name')).toHaveValue('Main');
     // The combined survey credit is summarised from both halves' shots, in
     // the folded Details.
@@ -114,8 +114,8 @@ test.describe('Combine Lines', () => {
 
     await undo(page);
     await expect.poll(() => lineShape(page)).toEqual([
-      ['Main-A', 2],
-      ['Main-B', 2],
+      ['Main A', 2],
+      ['Main B', 2],
     ]);
   });
 

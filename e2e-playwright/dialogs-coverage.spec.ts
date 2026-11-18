@@ -591,8 +591,9 @@ test.describe('Dialog Coverage - Split Line', () => {
 
     const nameA = dialog.getByTestId('split-name-a');
     const nameB = dialog.getByTestId('split-name-b');
-    await expect(nameA).toHaveValue('SplitTarget-A');
-    await expect(nameB).toHaveValue('SplitTarget-B');
+    // From the project's own name for the line, not the opener's copy.
+    await expect(nameA).toHaveValue('Dialog Line A');
+    await expect(nameB).toHaveValue('Dialog Line B');
 
     await nameA.fill('');
     await nameB.fill('');

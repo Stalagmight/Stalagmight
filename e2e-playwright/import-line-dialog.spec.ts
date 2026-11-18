@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject } from './helpers/app';
+import { setupMockedPage, createProject, seedProjectWithLines, waitForNoDialogs } from './helpers/app';
 
 /**
  * Coverage ported from the retired WDIO `import-line-dialog` spec (#120),
@@ -84,6 +84,39 @@ test.describe('Import / Create Line dialog', () => {
     // Cancel from a clean form closes the dialog.
     await dialog.getByRole('button', { name: /^Cancel$/i }).click();
     await expect(page.getByTestId('import-line-dialog')).toBeHidden({ timeout: 5000 });
+  });
+
+  test('starts on the first free "Line N" and refuses an empty or taken name', async ({ page }) => {
+    // Line names are required and unique in the project (SPEC 4.1).
+    await seedProjectWithLines(page, [
+      {
+        name: 'Line 1',
+        direction: 'in',
+        shots: [{ azimuth_in: 10, azimuth_out: 190, length: 10, depth_in: 0, depth_out: -1 }],
+      },
+    ]);
+    await waitForNoDialogs(page);
+    await openImportLineDialog(page);
+    const nameInput = page.getByTestId('line-name-input');
+    const create = page.getByTestId('import-line-create');
+    await expect(nameInput).toHaveValue('Line 2');
+    await fillShotRow(page, 0, '10');
+    await expect(create).toBeEnabled();
+
+    await nameInput.fill('  ');
+    await expect(page.getByTestId('line-name-error')).toHaveText('A line needs a name.');
+    await expect(create).toBeDisabled();
+    await expect(create).toHaveAttribute('title', 'A line needs a name.');
+
+    await nameInput.fill('Line 1');
+    await expect(page.getByTestId('line-name-error')).toHaveText(
+      'A line named "Line 1" already exists. Line names must be unique in the project.'
+    );
+    await expect(create).toBeDisabled();
+
+    await nameInput.fill('Upstream');
+    await expect(page.getByTestId('line-name-error')).toHaveCount(0);
+    await expect(create).toBeEnabled();
   });
 
   test('accepts a line name in the name field', async ({ page }) => {

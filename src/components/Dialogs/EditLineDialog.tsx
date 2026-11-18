@@ -21,6 +21,7 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useLineCreditDraft } from './useLineCreditDraft';
+import { isLineNameRefusal, lineNameProblem, lineNameProblemMessage } from '../../utils/nameValidation';
 
 export default function EditLineDialog() {
   const { t } = useTranslation();
@@ -42,8 +43,18 @@ export default function EditLineDialog() {
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Form state
-  const [name, setName] = useState('');
+  // Form state. Seeded from the line at once, so a named line never shows the
+  // empty-name error for the frame before the init effect runs.
+  const [name, setName] = useState(() => line?.name ?? '');
+  // The backend's refusal of the name (another window or an undo took it).
+  const [nameRefusal, setNameRefusal] = useState<string | null>(null);
+  // Required and unique in the project; the line's own name is no clash.
+  const nameProblem = lineNameProblem(name, project?.lines, lineId);
+  const nameError = nameProblem ? lineNameProblemMessage(nameProblem, name) : nameRefusal;
+  const handleNameChange = useCallback((value: string) => {
+    setName(value);
+    setNameRefusal(null);
+  }, []);
   // Surveyors, explorers and the date live on every shot: a pending edit of
   // all of them, applied on Save as one undo step (see useLineCreditDraft).
   const credit = useLineCreditDraft(line);
@@ -336,17 +347,16 @@ export default function EditLineDialog() {
 
   const confirmSplitMidDelete = useCallback(() => {
     if (!pendingMidDelete || lineId === undefined) return;
-    const targetName = line?.name ?? `Line ${lineId}`;
     setSource('dialog');
     openDialog('split-line', {
       lineId,
       shotId: pendingMidDelete.shotId,
-      lineName: targetName,
+      lineName: line?.name ?? null,
     });
   }, [pendingMidDelete, lineId, line, openDialog]);
 
   const handleSave = async () => {
-    if (lineId === undefined) return;
+    if (lineId === undefined || nameError !== null) return;
 
     setIsLoading(true);
     setError(null);
@@ -362,7 +372,7 @@ export default function EditLineDialog() {
       // new credit. Surveyors, explorers and the date never go through the
       // line update (its legacy surveyor/date would SET every shot).
       const metadataChanged = !line || isLineMetadataChanged({ name, color, direction, quality }, line);
-      const updates = { name: name.trim() || null, color, direction, quality };
+      const updates = { name: name.trim(), color, direction, quality };
       const creditCommand = creditEdit
         ? ({ type: 'edit_shot_credit', targets: { type: 'line', line_id: lineId }, edit: creditEdit } as const)
         : null;
@@ -375,7 +385,8 @@ export default function EditLineDialog() {
               ? await editShotCredit(creditCommand.targets, creditCommand.edit)
               : null;
       if (result && !result.success) {
-        setError(result.error ?? 'Failed to update line');
+        if (isLineNameRefusal(result.error)) setNameRefusal(result.error ?? null);
+        else setError(result.error ?? 'Failed to update line');
         return;
       }
       if (creditCommand) credit.reset();
@@ -506,6 +517,7 @@ export default function EditLineDialog() {
         <div className={expanded ? 'min-h-0 shrink overflow-y-auto' : undefined}>
         <LineMetadataForm
           name={name}
+          nameError={nameError}
           people={credit.people}
           peopleColumns
           date=""
@@ -515,7 +527,7 @@ export default function EditLineDialog() {
           color={color}
           direction={direction}
           quality={quality}
-          onNameChange={setName}
+          onNameChange={handleNameChange}
           onColorChange={setColor}
           onQualityChange={setQuality}
           onDirectionChange={setDirection}
@@ -635,7 +647,10 @@ export default function EditLineDialog() {
           <Button
             variant="primary"
             onClick={handleSave}
-            disabled={isLoading || editingBlocked || pendingMidDelete !== null || incompleteRows.length > 0}
+            disabled={
+              isLoading || editingBlocked || pendingMidDelete !== null || incompleteRows.length > 0 || nameError !== null
+            }
+            title={nameError ?? undefined}
             data-testid="edit-line-save"
           >
             {isLoading ? t('editSection.saving') : t('editSection.save')}

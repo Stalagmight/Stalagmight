@@ -6,6 +6,7 @@
  * inline and disable its submit before the round trip. A backend refusal is
  * still surfaced, because another window or an undo can change the names.
  */
+import i18n from '../i18n';
 
 /** Why a name cannot be used: none given, or another line / station has it. */
 export type NameProblem = 'empty' | 'duplicate';
@@ -69,4 +70,64 @@ export function uniqueLineName(
     const candidate = `${trimmed} (${n})`;
     if (!taken.has(candidate)) return candidate;
   }
+}
+
+/** A problem with one of the two names a split gives its halves. */
+export type SplitNameProblem = NameProblem | 'same';
+
+type NamedLines = ReadonlyArray<{ id: number; name: string | null }> | null | undefined;
+
+/**
+ * The names a split of line `lineId` (named `lineName`) offers its halves:
+ * `<name> A` and `<name> B`, each made unique against the other lines and
+ * against each other. Half A keeps the line, so the line's own name is free.
+ */
+export function defaultSplitNames(
+  lineName: string | null | undefined,
+  lines: NamedLines,
+  lineId: number | null | undefined,
+): { a: string; b: string } {
+  const others = (lines ?? []).filter((l) => l.id !== lineId);
+  const base = (lineName ?? '').trim() || 'Line';
+  const a = uniqueLineName(`${base} A`, others);
+  const b = uniqueLineName(`${base} B`, others, [a]);
+  return { a, b };
+}
+
+/**
+ * What is wrong with the names typed for a split's two halves, per field.
+ * Each must be a usable line name (the split line excluded: half A keeps it
+ * and its old name goes), and the two must differ (said on B).
+ */
+export function splitNameProblems(
+  nameA: string,
+  nameB: string,
+  lines: NamedLines,
+  lineId: number | null | undefined,
+): { a: SplitNameProblem | null; b: SplitNameProblem | null } {
+  const a = lineNameProblem(nameA, lines, lineId);
+  const b = lineNameProblem(nameB, lines, lineId);
+  const same = a === null && b === null && nameA.trim() === nameB.trim();
+  return { a, b: same ? 'same' : b };
+}
+
+/** The inline message for a line-name problem; `name` is the name typed. */
+export function lineNameProblemMessage(problem: SplitNameProblem, name: string): string {
+  switch (problem) {
+    case 'empty':
+      return i18n.t('identity.lineNameEmpty');
+    case 'duplicate':
+      return i18n.t('identity.lineNameTaken', { name: name.trim() });
+    case 'same':
+      return i18n.t('identity.lineNamesSame');
+  }
+}
+
+/**
+ * Whether a backend error is its refusal of a line name (`validate_line_name`:
+ * "A line name cannot be empty", `A line named "X" already exists`), so the
+ * dialog shows it at the name field rather than as a general failure.
+ */
+export function isLineNameRefusal(error: string | null | undefined): boolean {
+  return /A line name cannot be empty|A line named ".*" already exists/.test(error ?? '');
 }
