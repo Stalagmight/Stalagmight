@@ -44,6 +44,7 @@ fn state() -> (AppState, LineId) {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![shot(5.0), shot(7.0), shot(3.0)],
+        cave_section_id: None,
     });
     (state, created.line_id.unwrap())
 }
@@ -237,6 +238,7 @@ fn a_shot_from_another_line_is_refused() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![shot(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -288,6 +290,7 @@ fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
         color: "#ff0000".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(created.success, "{:?}", created.error);
     created.line_id.unwrap()

@@ -1032,6 +1032,7 @@ mod tests {
                 color: "#fff".to_string(),
                 direction: None,
                 shots: vec![],
+                cave_section_id: None,
             }),
             "create_line"
         );
@@ -1103,6 +1104,7 @@ mod tests {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![],
+                cave_section_id: None,
             },
             undo_data: UndoData::None,
             timestamp: Some(Utc::now()),

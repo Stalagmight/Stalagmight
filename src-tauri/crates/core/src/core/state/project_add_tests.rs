@@ -371,6 +371,7 @@ fn open_target(dir: &Path, georeferenced: bool) -> (AppState, PathBuf) {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![shot("ignored-by-create", 180.0, 6.0, 2.0)],
+        cave_section_id: None,
     });
     assert!(created.success, "an earlier edit for the stack");
     save(&state);

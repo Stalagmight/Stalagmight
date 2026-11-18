@@ -380,6 +380,7 @@ fn worker(
                     color: (*rng.pick(COLORS)).to_string(),
                     direction: None,
                     shots,
+                    cave_section_id: None,
                 });
             }
             4 => {

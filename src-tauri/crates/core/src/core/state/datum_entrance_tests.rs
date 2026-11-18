@@ -39,6 +39,7 @@ fn line() -> (AppState, StationRef) {
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
             shots,
+            cave_section_id: None,
         })
         .line_id
         .unwrap();

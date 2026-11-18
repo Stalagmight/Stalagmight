@@ -177,6 +177,7 @@ impl Steps<'_> {
                 color: "#336699".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots,
+                cave_section_id: None,
             },
         );
         result.line_id.expect("CreateLine returns the new id")
@@ -680,6 +681,7 @@ fn legacy_disk_vectors_dump() {
             color: "#999999".to_string(),
             direction: None,
             shots: Vec::new(),
+            cave_section_id: None,
         })
     });
     let legacy = legacy.line_id.expect("legacy line id");
@@ -989,6 +991,7 @@ fn legacy_disk_vectors_dump() {
                     color: "#abcdef".to_string(),
                     direction: None,
                     shots: shots(2, 15.0, 3.0, "Bea"),
+                    cave_section_id: None,
                 },
                 Command::UpdateShot {
                     line_id: b,

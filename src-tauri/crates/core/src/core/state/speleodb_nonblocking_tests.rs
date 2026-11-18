@@ -227,6 +227,7 @@ fn an_edit(name: &str) -> Command {
         color: "#336699".to_owned(),
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     }
 }
 

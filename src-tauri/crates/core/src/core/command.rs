@@ -56,6 +56,12 @@ pub enum Command {
         #[serde(default)]
         direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
+        /// The Section (#327) the new line joins, in the same undo step - the
+        /// New Line dialog's target Section. A Section that no longer exists
+        /// refuses the command before anything changes. Absent (ungrouped) on
+        /// every entry written before it existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cave_section_id: Option<SectionId>,
     },
     DeleteLine {
         line_id: LineId,
@@ -1162,6 +1168,7 @@ mod tests {
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
                 true,
             ),
@@ -1643,6 +1650,7 @@ mod tests {
                     color: "#fff".to_string(),
                     direction: Some(SurveyDirection::In),
                     shots: vec![shot_data.clone()],
+                    cave_section_id: None,
                 },
                 "Create line 'Main'",
             ),

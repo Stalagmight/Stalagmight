@@ -90,6 +90,7 @@ impl AppState {
                 color: String::new(),
                 direction: None,
                 shots: Vec::new(),
+                cave_section_id: None,
             }],
         };
         self.push_snapshot_undo(label, before_snapshot, after_snapshot);

@@ -468,6 +468,7 @@ impl Chain {
                 color: "#123456".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots: shots(&mut rng, n),
+                cave_section_id: None,
             });
             assert!(r.success, "{:?}", r.error);
         }

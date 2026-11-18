@@ -181,6 +181,7 @@ fn a_snap_into_a_part_a_zero_datum_holds_tears_for_the_datum_through_the_command
             color: "#ff0000".to_string(),
             direction: None,
             shots,
+            cave_section_id: None,
         });
         assert!(created.success, "{:?}", created.error);
         created.line_id.unwrap()

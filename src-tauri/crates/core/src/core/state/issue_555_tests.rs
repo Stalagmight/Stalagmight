@@ -65,6 +65,7 @@ fn create_one_line(state: &AppState) -> CommandResult {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![shot(5.0)],
+        cave_section_id: None,
     })
 }
 

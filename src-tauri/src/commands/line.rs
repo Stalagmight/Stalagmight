@@ -48,17 +48,15 @@ pub(crate) fn create_line_impl(
     if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
         return refusal;
     }
-    state.create_line_in_cave_section(
-        Command::CreateLine {
-            name,
-            surveyor,
-            date,
-            color,
-            direction,
-            shots,
-        },
+    state.execute(Command::CreateLine {
+        name,
+        surveyor,
+        date,
+        color,
+        direction,
+        shots,
         cave_section_id,
-    )
+    })
 }
 
 /// Update line metadata

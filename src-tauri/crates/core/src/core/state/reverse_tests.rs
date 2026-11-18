@@ -90,6 +90,7 @@ fn state_with_line() -> (AppState, LineId) {
             shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
             shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
         ],
+        cave_section_id: None,
     });
     let line_id = created.line_id.unwrap();
     (state, line_id)
@@ -505,6 +506,7 @@ fn import_one(reverse: bool, placement: fn(LineId) -> ImportPlacement) -> Vec<Co
             color: "#ff6b6b".to_string(),
             direction: None,
             shots: vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -766,6 +768,7 @@ fn batched_multi_line_reverse_is_atomic_and_undoes_in_one_step() {
         color: "#ff6b6b".to_string(),
         direction: None,
         shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
+        cave_section_id: None,
     });
     let second_id = second.line_id.unwrap();
 
@@ -861,6 +864,7 @@ fn reversing_a_shotless_line_leaves_the_undo_stack_usable() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![shot(0.0, 10.0, 0.0, 2.0)],
+        cave_section_id: None,
     });
     assert!(created.success);
 
@@ -872,6 +876,7 @@ fn reversing_a_shotless_line_leaves_the_undo_stack_usable() {
         color: "#ff6b6b".to_string(),
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     });
     let empty_id = empty.line_id.unwrap();
     let reversed = state.execute(Command::ReverseLine {
@@ -1048,6 +1053,7 @@ fn reversing_a_merge_anchored_line_moves_nothing_through_the_full_execute() {
             direction: None,
             // Starts at the main line's station-1 depth so the merge is clean.
             shots: vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -1233,6 +1239,7 @@ fn reverse_reports_every_renumbered_line_through_batch_undo_and_redo() {
             color: "#ff6b6b".to_string(),
             direction: None,
             shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -1427,6 +1434,7 @@ fn batch_a_b_a_reports_only_b() {
             color: "#ff6b6b".to_string(),
             direction: None,
             shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -1605,6 +1613,7 @@ fn reversing_a_shotless_line_leaves_redo_and_the_dirty_bit_alone() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: Vec::new(),
+            cave_section_id: None,
         })
         .line_id
         .unwrap();

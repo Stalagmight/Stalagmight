@@ -405,6 +405,7 @@ fn draw(state: &AppState, rng: &mut Rng) -> Option<Move> {
                 },
                 direction: None,
                 shots: (0..rng.below(3)).map(|_| hostile_shot(rng)).collect(),
+                cave_section_id: None,
             }),
         },
         9 => Move {

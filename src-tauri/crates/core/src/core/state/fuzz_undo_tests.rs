@@ -1787,6 +1787,7 @@ pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> 
                 SurveyDirection::Out
             }),
             shots,
+            cave_section_id: None,
         });
         assert!(result.success, "CreateLine failed: {:?}", result.error);
         ids.push(result.line_id.expect("CreateLine returned no id"));
@@ -4702,6 +4703,7 @@ impl Fuzzer {
                     color: color.clone(),
                     direction: None,
                     shots: shots.clone(),
+                    cave_section_id: None,
                 }),
             )),
             Op::CreateShot {
@@ -5521,6 +5523,7 @@ impl Fuzzer {
             color: (*self.rng.pick(COLORS)).to_string(),
             direction: None,
             shots,
+            cave_section_id: None,
         });
         let Some(line_id) = created.line_id else {
             self.fail(
@@ -5754,6 +5757,7 @@ impl Fuzzer {
             color: (*self.rng.pick(COLORS)).to_string(),
             direction: None,
             shots,
+            cave_section_id: None,
         });
         let line_id = created.line_id;
         self.forced(
@@ -8350,6 +8354,7 @@ fn measure_adjusted_solve_determinism() {
                 color: COLORS[0].to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             })
             .line_id
             .expect("CreateLine returned no id")

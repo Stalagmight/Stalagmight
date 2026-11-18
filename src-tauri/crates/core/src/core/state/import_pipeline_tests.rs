@@ -679,6 +679,7 @@ fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip()
             pitch_out: Some(0.0),
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     assert!(create.success, "line create failed: {:?}", create.error);
 
@@ -796,6 +797,7 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
                 depth_out: 100.0,
                 ..Default::default()
             }],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();

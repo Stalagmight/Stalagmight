@@ -53,6 +53,7 @@ fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
         color: format!("#{:06x}", name.len() * 0x11_1111 % 0xff_ffff),
         direction: None,
         shots,
+        cave_section_id: None,
     }))
     .line_id
     .unwrap()
@@ -461,17 +462,15 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
     let state = new_state();
     let id = create_section(&state, "Upper level", &[]);
     let create = |section| {
-        state.create_line_in_cave_section(
-            Command::CreateLine {
-                name: Some("New".to_string()),
-                surveyor: None,
-                date: None,
-                color: "#123456".to_string(),
-                direction: None,
-                shots: vec![shot(10.0, 4.0)],
-            },
-            section,
-        )
+        state.execute(Command::CreateLine {
+            name: Some("New".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#123456".to_string(),
+            direction: None,
+            shots: vec![shot(10.0, 4.0), shot(20.0, 3.0)],
+            cave_section_id: section,
+        })
     };
     assert!(!create(Some(99)).success, "a missing section is refused");
     assert_eq!(state.get_undo_stack().len(), 1);
@@ -479,10 +478,41 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
     assert_eq!(section_of(&state, line), Some(id));
     assert_eq!(state.get_undo_stack().len(), 2, "one step");
     assert_eq!(last_label(&state), "Create line 'New'");
+    // Every new station has its Station ID and its name straight away: the
+    // create runs `execute()`'s identity epilogue like any other command.
+    let identity = |state: &AppState| -> Vec<(Option<u32>, Option<String>)> {
+        let p = project(state);
+        (0..3)
+            .map(|i| {
+                let at = StationRef::new(line, i);
+                (
+                    p.station_id_at(at),
+                    p.station_name_at(at).map(str::to_string),
+                )
+            })
+            .collect()
+    };
+    let created = identity(&state);
+    let ids: std::collections::HashSet<u32> = created.iter().filter_map(|(id, _)| *id).collect();
+    assert_eq!(ids.len(), 3, "every station has its own id: {created:?}");
+    assert!(
+        created
+            .iter()
+            .all(|(_, name)| name.as_deref().is_some_and(|n| !n.is_empty())),
+        "every station has a name: {created:?}"
+    );
     undo(&state);
     assert!(project(&state).get_line(line).is_none());
     redo(&state);
     assert_eq!(section_of(&state, line), Some(id));
+    assert_eq!(
+        identity(&state),
+        created,
+        "redo puts back the same ids and names"
+    );
+    undo(&state);
+    redo(&state);
+    assert_eq!(identity(&state), created);
     // Without a section it is a plain create.
     let plain = ok(create(None)).line_id.unwrap();
     assert_eq!(section_of(&state, plain), None);

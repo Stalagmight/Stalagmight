@@ -27,6 +27,7 @@ fn create_line(state: &AppState, name: &str) -> LineId {
                     ..Default::default()
                 })
                 .collect(),
+            cave_section_id: None,
         })
         .line_id
         .unwrap()

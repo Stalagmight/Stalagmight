@@ -467,6 +467,7 @@ fn test_undo_redo_chain() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     stack.push(Command::CreateShot {
         line_id: 0,
@@ -507,6 +508,7 @@ fn test_undo_stack_limit() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         });
     }
 
@@ -526,6 +528,7 @@ fn test_undo_clears_redo_stack() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Undo
@@ -541,6 +544,7 @@ fn test_undo_clears_redo_stack() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     assert!(!stack.can_redo());
 }
@@ -557,6 +561,7 @@ fn test_batch_command_structure() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
         undo_data: UndoData::ProjectSnapshot("{}".to_string()),
         timestamp: None,
@@ -585,6 +590,7 @@ fn test_undo_persistence() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
         UndoData::InverseCommand(Command::DeleteLine { line_id: 0 }),
     );

@@ -653,6 +653,7 @@ impl World {
                     depth_out: 6.5,
                     ..Default::default()
                 }],
+                cave_section_id: None,
             })),
             ("save", _, _) => brief_result(&project::save_project_impl(state, None)),
             ("save-as", Some(p), _) => brief_result(&project::save_project_impl(state, Some(p))),

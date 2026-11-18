@@ -192,7 +192,7 @@ impl AppState {
     /// Section `cave_section_id` (#327), inside the same undo step: a New
     /// Line placed by snapping onto a station is ONE undo, Section included.
     /// A Section that no longer exists refuses the whole step before anything
-    /// changes, as `create_line_in_cave_section` does.
+    /// changes, as `CreateLine` does (`create_line_command`).
     pub fn execute_create_and_merge_in_cave_section(
         &self,
         name: Option<String>,
@@ -312,6 +312,7 @@ impl AppState {
                     color,
                     direction,
                     shots,
+                    cave_section_id,
                 },
                 Command::MergeStations {
                     station_a: import_station_ref,
@@ -1044,6 +1045,7 @@ impl AppState {
                 color: config.color.clone(),
                 direction: config.direction,
                 shots: line_data.shots.clone(),
+                cave_section_id: None,
             });
 
             // Step 2: Apply placement

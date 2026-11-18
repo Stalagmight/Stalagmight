@@ -37,6 +37,7 @@ fn create(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
         color: "#ff0000".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(created.success, "{:?}", created.error);
     created.line_id.unwrap()

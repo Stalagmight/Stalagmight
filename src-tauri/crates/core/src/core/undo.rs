@@ -954,6 +954,7 @@ mod tests {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         }
     }
 
@@ -2758,6 +2759,7 @@ mod tests {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             },
             UndoData::None,
         );

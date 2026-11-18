@@ -35,6 +35,7 @@ fn line(state: &AppState, name: &str, count: usize) -> LineId {
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
             shots,
+            cave_section_id: None,
         })
         .line_id
         .unwrap()

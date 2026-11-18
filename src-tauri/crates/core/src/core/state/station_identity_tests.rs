@@ -32,6 +32,7 @@ fn create_line(state: &AppState, name: &str, shots: usize) -> LineId {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: (0..shots).map(|_| shot(90.0, 10.0)).collect(),
+        cave_section_id: None,
     });
     assert!(result.success, "{:?}", result.error);
     result.line_id.unwrap()

@@ -892,6 +892,7 @@ fn prelude_command(state: &AppState, rng: &mut Rng) {
                 color: (*rng.pick(COLORS)).to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             });
         }
         1 => {
@@ -1962,6 +1963,7 @@ fn pair_create_with_shots_vs_appends(
         color: color.clone(),
         direction: None,
         shots: shots.clone(),
+        cave_section_id: None,
     });
     if !bulk.success {
         return None;
@@ -1973,6 +1975,7 @@ fn pair_create_with_shots_vs_appends(
         color,
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     });
     let line_id = empty.line_id?;
     for shot in shots {

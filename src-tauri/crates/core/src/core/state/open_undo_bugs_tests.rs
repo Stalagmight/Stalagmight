@@ -81,6 +81,7 @@ fn create_line(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId {
         color: "#3388FF".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(result.success, "CreateLine failed: {:?}", result.error);
     result.line_id.expect("CreateLine returned no line id")
@@ -3783,6 +3784,7 @@ fn redo_after_reload_clears_the_line_field_it_cleared() {
             color: "#3388FF".to_string(),
             direction: None,
             shots: vec![shot(0.0, 5.0)],
+            cave_section_id: None,
         });
         assert!(created.success, "CreateLine failed: {:?}", created.error);
         line_id = created.line_id.expect("CreateLine returned no id");
@@ -3869,6 +3871,7 @@ fn the_history_preview_still_reports_a_cleared_field() {
             color: "#3388FF".to_string(),
             direction: None,
             shots: vec![shot(0.0, 5.0)],
+            cave_section_id: None,
         });
         assert!(created.success, "CreateLine failed: {:?}", created.error);
         let line_id = created.line_id.expect("CreateLine returned no id");

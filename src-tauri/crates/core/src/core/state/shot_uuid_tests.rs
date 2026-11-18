@@ -978,6 +978,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![smuggling_shot.clone()],
+            cave_section_id: None,
         }],
     });
     assert!(batched.success, "{:?}", batched.error);
@@ -1014,6 +1015,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
             depth_out: 5.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     assert!(created.success, "{:?}", created.error);
     let project = state.get_project_state().unwrap();
@@ -1542,6 +1544,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
                     ..Default::default()
                 },
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -1640,6 +1643,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
                     ..Default::default()
                 },
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();

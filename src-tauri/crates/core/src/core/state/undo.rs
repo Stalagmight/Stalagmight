@@ -1086,6 +1086,26 @@ impl AppState {
         result
     }
 
+    /// Put one side of a Section command's record into the open project.
+    fn restore_cave_sections(&self, side: &crate::core::CaveSectionsState) -> CommandResult {
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(project) = guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+        let missing = side.restore_into(project);
+        if missing > 0 {
+            tracing::warn!(
+                missing,
+                purpose = "restore section memberships",
+                "Section history names lines the project no longer holds; skipped them"
+            );
+        }
+        CommandResult::success()
+    }
+
     // === Keeping a re-creating entry's identity current ===
 
     /// Re-read the live line a `CreatedLineSnapshot` entry re-creates, and
@@ -1114,26 +1134,6 @@ impl AppState {
     /// A no-op for every other variant, and for an entry whose line is
     /// already gone (the undo is about to fail anyway), which keeps the recorded
     /// payload rather than degrading it.
-    /// Put one side of a Section command's record into the open project.
-    fn restore_cave_sections(&self, side: &crate::core::CaveSectionsState) -> CommandResult {
-        let mut guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(project) = guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-        let missing = side.restore_into(project);
-        if missing > 0 {
-            tracing::warn!(
-                missing,
-                purpose = "restore section memberships",
-                "Section history names lines the project no longer holds; skipped them"
-            );
-        }
-        CommandResult::success()
-    }
-
     fn refresh_created_line_identity(&self, entry: &mut UndoEntry) {
         let UndoData::CreatedLineSnapshot {
             line_id,

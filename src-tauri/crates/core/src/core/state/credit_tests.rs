@@ -57,6 +57,7 @@ fn create_line(state: &AppState, surveyor: Option<&str>, shots: Vec<ShotData>) -
         color: "#123456".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(r.success, "{:?}", r.error);
     r.line_id.unwrap()

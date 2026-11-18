@@ -72,26 +72,19 @@ impl AppState {
                 color,
                 direction,
                 shots,
-            } => self.create_line(LineData {
-                name: name.clone(),
-                surveyor: surveyor.clone(),
-                date: *date,
-                color: color.clone(),
-                direction: *direction,
-                quality: 1.0,
-                // Batch sub-commands arrive verbatim off IPC (#423): strip
-                // uuids here like `execute`'s own CreateLine arm does -
-                // never in `AppState::create_line`, which the importers
-                // share with legitimately-adopted identities.
-                shots: shots
-                    .iter()
-                    .cloned()
-                    .map(|mut s| {
-                        s.uuid = None;
-                        s
-                    })
-                    .collect(),
-            }),
+                cave_section_id,
+            } => self.create_line_command(
+                LineData {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: *date,
+                    color: color.clone(),
+                    direction: *direction,
+                    quality: 1.0,
+                    shots: shots.clone(),
+                },
+                *cave_section_id,
+            ),
             Command::DeleteLine { line_id } => self.delete_line(*line_id),
             Command::UpdateLineMetadata { line_id, updates } => {
                 self.update_line(*line_id, updates.clone())

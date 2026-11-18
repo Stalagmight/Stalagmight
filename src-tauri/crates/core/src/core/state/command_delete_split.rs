@@ -313,6 +313,7 @@ impl AppState {
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
             ],
         };
@@ -600,6 +601,7 @@ impl AppState {
                     color: String::new(),
                     direction: None,
                     shots: Vec::new(),
+                    cave_section_id: None,
                 },
             ],
         };

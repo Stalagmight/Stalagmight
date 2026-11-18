@@ -366,6 +366,7 @@ pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
                 color: (*rng.pick(COLORS)).to_string(),
                 direction: None,
                 shots,
+                cave_section_id: None,
             });
         }
         1 => {

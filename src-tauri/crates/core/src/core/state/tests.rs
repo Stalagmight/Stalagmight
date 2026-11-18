@@ -924,6 +924,7 @@ fn a_second_save_with_no_new_edit_still_persists_the_undo_history() {
                     length: 5.0,
                     ..Default::default()
                 }],
+                cave_section_id: None,
             })
             .success
     );
@@ -1216,6 +1217,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -1227,6 +1229,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(9.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -2654,6 +2657,7 @@ fn test_create_line() {
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
 
     assert!(result.success);
@@ -2685,6 +2689,7 @@ fn get_adjusted_stations_caches_and_invalidates() {
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     // Two consecutive calls return the same result (second served from cache).
@@ -2704,6 +2709,7 @@ fn get_adjusted_stations_caches_and_invalidates() {
         color: "#222222".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let adj2 = state
         .get_adjusted_stations()
@@ -2737,6 +2743,7 @@ fn distance_field_from_origin_over_appstate() {
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = state.get_project_state().unwrap().lines[0].id;
     let origin = StationRef::new(line_id, 0);
@@ -2772,6 +2779,7 @@ fn repair_invalidates_adjusted_cache() {
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     // Populate the adjusted cache.
@@ -2813,6 +2821,7 @@ fn unmerge_converts_orphaned_bridge_closure() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -2824,6 +2833,7 @@ fn unmerge_converts_orphaned_bridge_closure() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -2917,6 +2927,7 @@ fn move_line_and_segment_reject_non_finite_offset() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -2969,6 +2980,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots: vec![test_shot_data(5.0)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap();
@@ -2980,6 +2992,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
                 color: "#222222".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots: vec![test_shot_data(5.0)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap();
@@ -3053,6 +3066,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3064,6 +3078,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3142,6 +3157,7 @@ fn a_snapshot_restore_is_bit_exact() {
             pitch_out: Some(pitch),
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     let before = state.get_project_state().unwrap();
     assert_eq!(
@@ -3254,6 +3270,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3265,6 +3282,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3372,6 +3390,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3383,6 +3402,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3454,6 +3474,7 @@ fn undo_merge_restores_aligned_closure_line_outside_merge_groups() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3465,6 +3486,7 @@ fn undo_merge_restores_aligned_closure_line_outside_merge_groups() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3476,6 +3498,7 @@ fn undo_merge_restores_aligned_closure_line_outside_merge_groups() {
             color: "#333333".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3555,6 +3578,7 @@ fn undo_move_station_restores_pitch_and_adjacent_shots() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3640,6 +3664,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
                 test_shot_data(5.0),
                 test_shot_data(5.0),
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3651,6 +3676,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3729,6 +3755,7 @@ fn split_line_does_not_promote_a_bridge_closure_across_two_anchored_components()
                     heading_shot(azimuth, 5.0),
                     heading_shot(azimuth, 5.0),
                 ],
+                cave_section_id: None,
             })
             .line_id
             .unwrap()
@@ -3835,6 +3862,7 @@ fn create_line_rejects_non_finite_geometry() {
         color: "#ffffff".to_string(),
         direction: None,
         shots: vec![bad],
+        cave_section_id: None,
     });
     assert!(!r.success, "create_line must reject non-finite geometry");
     assert_eq!(
@@ -3859,6 +3887,7 @@ fn move_station_rejects_non_finite_offset() {
             color: "#ffffff".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3891,6 +3920,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3903,6 +3933,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -3965,6 +3996,7 @@ fn test_create_line_returns_id() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     assert!(result.success);
@@ -3978,6 +4010,7 @@ fn test_create_line_returns_id() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     assert!(result2.success);
@@ -3995,6 +4028,7 @@ fn test_create_line_no_project() {
         color: "#000000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     assert!(!result.success);
@@ -4017,6 +4051,7 @@ fn test_delete_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4057,6 +4092,7 @@ fn test_update_line_metadata() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4095,6 +4131,7 @@ fn test_create_shot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4129,6 +4166,7 @@ fn test_update_shot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4171,6 +4209,7 @@ fn test_delete_shot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4201,6 +4240,7 @@ fn test_delete_first_shot_preserves_station_positions() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -4275,6 +4315,7 @@ fn test_delete_shot_rewires_merges() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -4287,6 +4328,7 @@ fn test_delete_shot_rewires_merges() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -4299,6 +4341,7 @@ fn test_delete_shot_rewires_merges() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(8.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5054,6 +5097,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
             test_shot_data(10.0),
             test_shot_data(5.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -5138,6 +5182,7 @@ fn test_split_shot_at_distance_preserves_downstream_geometry() {
                 ..Default::default()
             },
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -5365,6 +5410,7 @@ fn delete_shot_does_not_shift_independent_component() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5376,6 +5422,7 @@ fn delete_shot_does_not_shift_independent_component() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5474,6 +5521,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5485,6 +5533,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5569,6 +5618,7 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5580,6 +5630,7 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(8.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -5684,6 +5735,7 @@ fn test_set_shot_kind() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -5723,6 +5775,7 @@ fn test_undo_create_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     assert_eq!(state.get_project_state().unwrap().lines.len(), 1);
@@ -5750,6 +5803,7 @@ fn test_undo_delete_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -5782,6 +5836,7 @@ fn test_undo_update_shot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -5827,6 +5882,7 @@ fn test_redo_create_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     state.undo();
@@ -5887,6 +5943,7 @@ fn test_redo_cleared_on_new_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     state.undo();
@@ -5900,6 +5957,7 @@ fn test_redo_cleared_on_new_command() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     assert!(!state.can_redo());
@@ -6123,6 +6181,7 @@ fn test_project_modification_tracking() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     let after_line = state.get_project_state().unwrap().modified_at;
@@ -6150,6 +6209,7 @@ fn test_is_undoable_commands() {
         color: "#000000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     }));
     assert!(AppState::is_undoable(&Command::DeleteLine { line_id: 0 }));
     assert!(AppState::is_undoable(&Command::CreateShot {
@@ -7053,6 +7113,7 @@ fn test_batch_create_lines() {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![test_shot_data(5.0)],
+                cave_section_id: None,
             },
             Command::CreateLine {
                 name: Some("Second".to_string()),
@@ -7061,6 +7122,7 @@ fn test_batch_create_lines() {
                 color: "#00ff00".to_string(),
                 direction: None,
                 shots: vec![test_shot_data(7.0)],
+                cave_section_id: None,
             },
         ],
     });
@@ -7091,6 +7153,7 @@ fn test_batch_fails_on_first_error() {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![],
+                cave_section_id: None,
             },
             Command::DeleteLine { line_id: 999 },
         ],
@@ -7117,6 +7180,7 @@ fn test_merge_stations_same_line_fails() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7152,6 +7216,7 @@ fn test_set_and_remove_zero_datum() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7195,6 +7260,7 @@ fn test_remove_nonexistent_zero_datum() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7225,6 +7291,7 @@ fn test_move_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7274,6 +7341,7 @@ fn test_move_line_undo_redo() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7333,6 +7401,7 @@ fn move_line_moves_the_whole_merged_group_and_sticks() {
         color: color.to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     };
     let a = state.execute(mk("A", "#ff0000")).line_id.unwrap();
     let b = state.execute(mk("B", "#00ff00")).line_id.unwrap();
@@ -7439,6 +7508,7 @@ fn test_create_line_rejects_zero_length_shot() {
             depth_out: 10.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     assert!(!result.success);
@@ -7467,6 +7537,7 @@ fn test_undo_delete_shot_restores_at_correct_position() {
             test_shot_data(7.0),
             test_shot_data(9.0),
         ],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7512,6 +7583,7 @@ fn test_multiple_undo_redo_sequence() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         });
     }
 
@@ -7557,6 +7629,7 @@ fn test_execute_create_line_command() {
             test_shot_data(15.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
 
     assert!(result.success);
@@ -7594,6 +7667,7 @@ fn test_execute_merge_stations_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
     let line_a_id = result_a.line_id.unwrap();
 
@@ -7604,6 +7678,7 @@ fn test_execute_merge_stations_command() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        cave_section_id: None,
     });
     let line_b_id = result_b.line_id.unwrap();
 
@@ -7650,6 +7725,7 @@ fn test_execute_set_zero_datum_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7694,6 +7770,7 @@ fn test_undo_set_zero_datum_restores_line_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -7704,6 +7781,7 @@ fn test_undo_set_zero_datum_restores_line_offsets() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_b = result_b.line_id.unwrap();
 
@@ -7834,6 +7912,7 @@ fn test_execute_update_shot_command() {
             comment: None,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -7894,6 +7973,7 @@ fn test_update_shot_rejects_non_finite_nested_field_atomically() {
             length: 5.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
@@ -7945,6 +8025,7 @@ fn test_update_shot_rejects_positive_infinity() {
             length: 5.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
@@ -8111,6 +8192,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
                 test_shot_data(5.0),
                 test_shot_data(5.0),
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -8123,6 +8205,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
             color: "#333333".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -8391,6 +8474,7 @@ fn test_execute_delete_shot_command() {
             test_shot_data(7.0),
             test_shot_data(9.0),
         ],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -8444,6 +8528,7 @@ fn test_execute_create_shot_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -8492,6 +8577,7 @@ fn test_execute_delete_line_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_a_id = result_a.line_id.unwrap();
 
@@ -8502,6 +8588,7 @@ fn test_execute_delete_line_command() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(7.0)],
+        cave_section_id: None,
     });
     let line_b_id = result_b.line_id.unwrap();
 
@@ -8554,6 +8641,7 @@ fn test_execute_update_line_metadata_command() {
         color: "#ff0000".to_string(),
         direction: Some(SurveyDirection::In),
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -8604,6 +8692,7 @@ fn test_execute_command_no_project_open() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
         Command::DeleteLine { line_id: 0 },
         Command::UpdateLineMetadata {
@@ -8666,6 +8755,7 @@ fn test_execute_commands_with_invalid_ids() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -8713,6 +8803,7 @@ fn test_undo_delete_shot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -8754,6 +8845,7 @@ fn test_undo_merge_stations() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
     let line_a_id = result_a.line_id.unwrap();
 
@@ -8764,6 +8856,7 @@ fn test_undo_merge_stations() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        cave_section_id: None,
     });
     let line_b_id = result_b.line_id.unwrap();
 
@@ -8814,6 +8907,7 @@ fn test_multiple_undo_sequence() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     state.execute(Command::CreateLine {
@@ -8823,6 +8917,7 @@ fn test_multiple_undo_sequence() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     state.execute(Command::CreateLine {
@@ -8832,6 +8927,7 @@ fn test_multiple_undo_sequence() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     assert_eq!(state.get_project_state().unwrap().lines.len(), 3);
@@ -8880,6 +8976,7 @@ fn test_redo_clears_on_new_command() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Undo it
@@ -8894,6 +8991,7 @@ fn test_redo_clears_on_new_command() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Redo should no longer be available
@@ -8937,6 +9035,7 @@ fn test_undo_stack_limits() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         });
     }
 
@@ -9086,6 +9185,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Push an invalid entry on top (will fail on undo)
@@ -9143,6 +9243,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         },
         undo_data: UndoData::None,
         timestamp: None,
@@ -9202,6 +9303,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![],
+            cave_section_id: None,
         });
     }
 
@@ -9308,6 +9410,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     state.execute(Command::CreateLine {
         name: Some("Line B".to_string()),
@@ -9316,6 +9419,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     // Undo both: redo stack bottom-to-top = [LineB, LineA]
@@ -9504,6 +9608,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9606,6 +9711,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9726,6 +9832,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9784,6 +9891,7 @@ fn test_undo_create_loop_closure() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9794,6 +9902,7 @@ fn test_undo_create_loop_closure() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_b = result_b.line_id.unwrap();
 
@@ -9861,6 +9970,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9871,6 +9981,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_b = result_b.line_id.unwrap();
 
@@ -9915,6 +10026,7 @@ fn test_create_loop_closure_deferred_strategy_is_rejected() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(6.0)],
+        cave_section_id: None,
     });
     let line_id = result.line_id.unwrap();
 
@@ -9961,6 +10073,7 @@ fn test_undo_unmerge_restores_removed_closures() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_a = result_a.line_id.unwrap();
 
@@ -9971,6 +10084,7 @@ fn test_undo_unmerge_restores_removed_closures() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_b = result_b.line_id.unwrap();
 
@@ -10073,6 +10187,7 @@ fn test_move_station_updates_shot_data() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10156,6 +10271,7 @@ fn test_move_station_zero_updates_line_offset() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10226,6 +10342,7 @@ fn test_move_station_undo() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10297,6 +10414,7 @@ fn test_move_station_redo() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10359,6 +10477,7 @@ fn test_station_offset_applied_in_coordinates() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10422,6 +10541,7 @@ fn test_create_line_undo_redo_preserves_id() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        cave_section_id: None,
     });
 
     let original_line_id = create_result.line_id.unwrap();
@@ -10478,6 +10598,7 @@ fn test_create_line_double_undo_redo_cycle() {
             test_shot_data(7.0),
             test_shot_data(11.0),
         ],
+        cave_section_id: None,
     });
 
     let original_line_id = create_result.line_id.unwrap();
@@ -10527,6 +10648,7 @@ fn test_create_line_undo_redo_then_edit() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10569,6 +10691,7 @@ fn test_create_line_undo_redo_then_delete() {
         color: "#ff00ff".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10602,6 +10725,7 @@ fn test_create_line_created_snapshot_distinct_from_line_snapshot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(1.0)],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -10650,6 +10774,7 @@ fn test_delete_line_undo_redo_still_works() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let line_id = create_result.line_id.unwrap();
@@ -10693,6 +10818,7 @@ fn test_create_shot_undo_redo_preserves_id() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -10754,6 +10880,7 @@ fn test_create_shot_mid_line_undo_redo_preserves_position() {
             test_shot_data(2.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -10825,6 +10952,7 @@ fn test_create_shot_double_undo_redo_cycle() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -10875,6 +11003,7 @@ fn test_create_shot_undo_redo_then_edit() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -10924,6 +11053,7 @@ fn test_create_shot_undo_redo_then_delete() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -10966,6 +11096,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -11024,6 +11155,7 @@ fn test_insert_shot_before_first_position_and_undo_redo() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -11098,6 +11230,7 @@ fn test_prepend_shot_undo_preserves_geometry() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -11164,6 +11297,7 @@ fn test_create_shot_rejects_both_after_and_before() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -11198,6 +11332,7 @@ fn test_delete_shot_undo_redo_still_works() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_id = line_result.line_id.unwrap();
 
@@ -11243,6 +11378,7 @@ fn test_check_merge_connectivity_both_zero_datums_allowed() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11253,6 +11389,7 @@ fn test_check_merge_connectivity_both_zero_datums_allowed() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11301,6 +11438,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11311,6 +11449,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11350,6 +11489,7 @@ fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11360,6 +11500,7 @@ fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11391,6 +11532,7 @@ fn test_check_merge_connectivity_connected_creates_loop() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11401,6 +11543,7 @@ fn test_check_merge_connectivity_connected_creates_loop() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11445,6 +11588,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11455,6 +11599,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11465,6 +11610,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let c = result_c.line_id.unwrap();
 
@@ -11578,6 +11724,7 @@ fn test_transitive_closures_in_computed_stations() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(8.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11589,6 +11736,7 @@ fn test_transitive_closures_in_computed_stations() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11600,6 +11748,7 @@ fn test_transitive_closures_in_computed_stations() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let c = result_c.line_id.unwrap();
 
@@ -11773,6 +11922,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let a = result_a.line_id.unwrap();
 
@@ -11783,6 +11933,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let b = result_b.line_id.unwrap();
 
@@ -11800,6 +11951,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let c = result_c.line_id.unwrap();
 
@@ -11934,6 +12086,7 @@ fn test_move_segment() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -11944,6 +12097,7 @@ fn test_move_segment() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sid_b = r2.line_id.unwrap();
 
@@ -12021,6 +12175,7 @@ fn test_move_segment_undo_redo() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -12031,6 +12186,7 @@ fn test_move_segment_undo_redo() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sid_b = r2.line_id.unwrap();
 
@@ -12174,6 +12330,7 @@ fn test_move_segment_unaligned_closure_independent() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -12184,6 +12341,7 @@ fn test_move_segment_unaligned_closure_independent() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sid_b = r2.line_id.unwrap();
 
@@ -12274,6 +12432,7 @@ fn test_move_segment_aligned_closure_connectivity() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -12284,6 +12443,7 @@ fn test_move_segment_aligned_closure_connectivity() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sid_b = r2.line_id.unwrap();
 
@@ -12382,6 +12542,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -12393,6 +12554,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -12473,6 +12635,7 @@ fn test_move_segment_isolated() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -12483,6 +12646,7 @@ fn test_move_segment_isolated() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sid_b = r2.line_id.unwrap();
 
@@ -12556,6 +12720,7 @@ fn test_move_segment_accumulates() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sid_a = r1.line_id.unwrap();
 
@@ -12652,6 +12817,7 @@ fn test_batch_rollback_on_failure() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let _existing_id = r1.line_id.unwrap();
 
@@ -12669,6 +12835,7 @@ fn test_batch_rollback_on_failure() {
                 color: "#00ff00".to_string(),
                 direction: None,
                 shots: vec![],
+                cave_section_id: None,
             },
             // Move a nonexistent line - should fail
             Command::MoveLine {
@@ -12750,6 +12917,7 @@ fn test_split_line_basic() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     assert!(create_result.success);
     let line_id = create_result.line_id.unwrap();
@@ -12807,6 +12975,7 @@ fn test_split_preserves_metadata() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -12856,6 +13025,7 @@ fn test_split_recalculates_offset_b() {
             shot_data_with_azimuth(5.0, 90.0, 90.0),  // East (deleted)
             shot_data_with_azimuth(8.0, 90.0, 90.0),  // East
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -12906,6 +13076,7 @@ fn test_split_remaps_merges() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_a_id = create_a.line_id.unwrap();
 
@@ -12916,6 +13087,7 @@ fn test_split_remaps_merges() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let line_b_id = create_b.line_id.unwrap();
 
@@ -12979,6 +13151,7 @@ fn test_split_remaps_closures() {
             test_shot_data(3.0),
             test_shot_data(4.0),
         ],
+        cave_section_id: None,
     });
     let sec_a_id = create_a.line_id.unwrap();
 
@@ -12989,6 +13162,7 @@ fn test_split_remaps_closures() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_b_id = create_b.line_id.unwrap();
 
@@ -13073,6 +13247,7 @@ fn test_delete_range_split_interior() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let (s2, s3) = {
@@ -13129,6 +13304,7 @@ fn test_delete_range_split_preserves_after_position() {
             shot_data_with_azimuth(7.0, 90.0, 90.0),  // deleted
             shot_data_with_azimuth(8.0, 90.0, 90.0),  // after
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let (s1, s2) = {
@@ -13170,6 +13346,7 @@ fn test_delete_range_shift_interior() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let (s2, s3) = {
@@ -13216,6 +13393,7 @@ fn test_delete_range_prefix_shift() {
             shot_data_with_azimuth(8.0, 90.0, 90.0),
             shot_data_with_azimuth(6.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let before_abs = {
@@ -13264,6 +13442,7 @@ fn test_delete_range_suffix_shift() {
             shot_data_with_azimuth(8.0, 90.0, 90.0),
             shot_data_with_azimuth(6.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let head_before = {
@@ -13312,6 +13491,7 @@ fn test_delete_range_split_remaps_merge() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_c = state.execute(Command::CreateLine {
@@ -13321,6 +13501,7 @@ fn test_delete_range_split_remaps_merge() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_c = create_c.line_id.unwrap();
     // Merge A:5 (-> new line index 1 after split [2..=3], split_station 4) with C:0.
@@ -13382,6 +13563,7 @@ fn test_delete_range_preserves_interior_merge_connectivity() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_p = state.execute(Command::CreateLine {
@@ -13391,6 +13573,7 @@ fn test_delete_range_preserves_interior_merge_connectivity() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_p = create_p.line_id.unwrap();
     let create_q = state.execute(Command::CreateLine {
@@ -13400,6 +13583,7 @@ fn test_delete_range_preserves_interior_merge_connectivity() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_q = create_q.line_id.unwrap();
     assert!(
@@ -13466,6 +13650,7 @@ fn test_delete_range_shift_blocked_aborts() {
             test_shot_data(3.0),
             test_shot_data(4.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -13475,6 +13660,7 @@ fn test_delete_range_shift_blocked_aborts() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // Form a loop directly (A:0-B:0 and A:4-B:1). MergeStations refuses the second
@@ -13530,6 +13716,7 @@ fn test_delete_range_undo_redo_roundtrip() {
             shot_data_with_azimuth(8.0, 135.0, 135.0),
             shot_data_with_azimuth(6.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let before_abs = {
@@ -13589,6 +13776,7 @@ fn test_preview_delete_shot_range_classifies_kind() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let proj = state.get_project_state().unwrap();
@@ -13648,6 +13836,7 @@ fn test_delete_range_split_rejects_non_interior() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     let ids: Vec<ShotId> = {
@@ -13710,6 +13899,7 @@ fn test_delete_range_interior_shift_blocked_by_tail_datum() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Datum on station 3 = end_pos+1 for the interior range [1..=2].
@@ -13776,6 +13966,7 @@ fn test_delete_range_prefix_shift_blocked_by_datum() {
             test_shot_data(3.0),
             test_shot_data(4.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     state.execute(Command::SetZeroDatum {
@@ -13834,6 +14025,7 @@ fn test_delete_range_preview_surfaces_interior_split_datum() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Datum on station 2 - strictly interior to the range [1..=2] (interior set {2}).
@@ -13881,6 +14073,7 @@ fn test_delete_range_preview_reports_replacement_merge() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_p = state.execute(Command::CreateLine {
@@ -13890,6 +14083,7 @@ fn test_delete_range_preview_reports_replacement_merge() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_p = create_p.line_id.unwrap();
     let create_q = state.execute(Command::CreateLine {
@@ -13899,6 +14093,7 @@ fn test_delete_range_preview_reports_replacement_merge() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_q = create_q.line_id.unwrap();
     assert!(
@@ -13956,6 +14151,7 @@ fn test_delete_range_prefix_shift_not_blocked_by_internal_loop() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Same-line merge A:0 <-> A:2 (a loop through shots 0,1). MergeStations
@@ -14025,6 +14221,7 @@ fn test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor() {
             shot_data_with_azimuth(8.0, 90.0, 90.0),
             shot_data_with_azimuth(6.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -14034,6 +14231,7 @@ fn test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![shot_data_with_azimuth(4.0, 90.0, 90.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // B is datum-bearing and merged to A's END station (station 5) - the doomed tail.
@@ -14104,6 +14302,7 @@ fn test_delete_range_preview_surfaces_interior_split_comment() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Comment on interior station 2 of the range [1..=2].
@@ -14154,6 +14353,7 @@ fn test_delete_range_preview_sorts_the_removed_comments() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: (0..8).map(|i| test_shot_data(2.0 + f64::from(i))).collect(),
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     for idx in 1..=6u32 {
@@ -14216,6 +14416,7 @@ fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -14225,6 +14426,7 @@ fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // Merge on station 4 = end_pos+1 for the interior range [2..=3].
@@ -14279,6 +14481,7 @@ fn test_delete_range_interior_shift_not_blocked_by_closure_loop() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -14288,6 +14491,7 @@ fn test_delete_range_interior_shift_not_blocked_by_closure_loop() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // Head A:2 <-> B via a merge; tail A:5 <-> B via a LOOP CLOSURE. So for the
@@ -14358,6 +14562,7 @@ fn test_delete_range_blocked_interior_impact_describes_split() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -14367,6 +14572,7 @@ fn test_delete_range_blocked_interior_impact_describes_split() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // Datum on interior station A:3 blocks the gap-close (it would drop the datum).
@@ -14440,6 +14646,7 @@ fn test_delete_range_shift_does_not_displace_free_floating_merged_line() {
             shot_data_with_azimuth(8.0, 90.0, 90.0),
             shot_data_with_azimuth(6.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create.line_id.unwrap();
     let create_b = state.execute(Command::CreateLine {
@@ -14449,6 +14656,7 @@ fn test_delete_range_shift_does_not_displace_free_floating_merged_line() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![shot_data_with_azimuth(4.0, 45.0, 45.0)],
+        cave_section_id: None,
     });
     let sec_b = create_b.line_id.unwrap();
     // B is free-floating (NO datum), merged to A's END station (A:5) - the doomed tail.
@@ -14516,6 +14724,7 @@ fn delete_range_shift_leaves_a_promoted_closure_aligned() {
                 shot_data_with_azimuth(10.0, 0.0, 0.0),
                 shot_data_with_azimuth(10.0, 0.0, 0.0),
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -14527,6 +14736,7 @@ fn delete_range_shift_leaves_a_promoted_closure_aligned() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![shot_data_with_azimuth(10.0, 90.0, 90.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -14538,6 +14748,7 @@ fn delete_range_shift_leaves_a_promoted_closure_aligned() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![shot_data_with_azimuth(10.0, 270.0, 270.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -14622,6 +14833,7 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_e = state.execute(Command::CreateLine {
@@ -14631,6 +14843,7 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_e = create_e.line_id.unwrap();
     // Head side A:1 <-> E:0. A:4 (= end_pos+1 for range [2..=3]) <-> E:1 is
@@ -14703,6 +14916,7 @@ fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
             test_shot_data(6.0),
             test_shot_data(8.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_p = state.execute(Command::CreateLine {
@@ -14712,6 +14926,7 @@ fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_p = create_p.line_id.unwrap();
     let create_q = state.execute(Command::CreateLine {
@@ -14721,6 +14936,7 @@ fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let sec_q = create_q.line_id.unwrap();
     // P:0 <-> head A:2, Q:0 <-> tail A:5 (valid merges).
@@ -14804,6 +15020,7 @@ fn test_delete_range_shift_undo_redo_roundtrip() {
             shot_data_with_azimuth(6.0, 90.0, 90.0),
             shot_data_with_azimuth(4.0, 90.0, 90.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = create_a.line_id.unwrap();
     let create_p = state.execute(Command::CreateLine {
@@ -14813,6 +15030,7 @@ fn test_delete_range_shift_undo_redo_roundtrip() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![shot_data_with_azimuth(4.0, 90.0, 90.0)],
+        cave_section_id: None,
     });
     let sec_p = create_p.line_id.unwrap();
     let create_q = state.execute(Command::CreateLine {
@@ -14822,6 +15040,7 @@ fn test_delete_range_shift_undo_redo_roundtrip() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![shot_data_with_azimuth(4.0, 90.0, 90.0)],
+        cave_section_id: None,
     });
     let sec_q = create_q.line_id.unwrap();
     // P and Q bridge ONLY through interior A:3 (removed by the range) - the
@@ -14925,6 +15144,7 @@ fn test_delete_range_prefix_shift_surfaces_comment() {
             test_shot_data(3.0),
             test_shot_data(4.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Comment on station 1 (removed by the prefix range [0..=1]).
@@ -14976,6 +15196,7 @@ fn test_delete_range_interior_shift_surfaces_boundary_comment() {
             test_shot_data(4.0),
             test_shot_data(6.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create.line_id.unwrap();
     // Comment on station 4 = end_pos+1 for the interior range [2..=3]. The split
@@ -15028,6 +15249,7 @@ fn test_split_remaps_station_offsets() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15091,6 +15313,7 @@ fn test_split_undo_restores_original() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15149,6 +15372,7 @@ fn test_split_redo_resplits() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15203,6 +15427,7 @@ fn test_split_rejects_edge_shot() {
             test_shot_data(7.0),
             test_shot_data(3.0),
         ],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15253,6 +15478,7 @@ fn test_delete_last_shot_removes_line() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     assert!(create_result.success);
     let line_id = create_result.line_id.unwrap();
@@ -15289,6 +15515,7 @@ fn test_delete_last_shot_fails_if_multiple_shots() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        cave_section_id: None,
     });
     assert!(create_result.success);
     let line_id = create_result.line_id.unwrap();
@@ -15318,6 +15545,7 @@ fn test_delete_last_shot_undo_restores() {
         color: "#aabbcc".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15368,6 +15596,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15410,6 +15639,7 @@ fn test_delete_last_shot_cleans_up_merges() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_a_id = create_a.line_id.unwrap();
 
@@ -15420,6 +15650,7 @@ fn test_delete_last_shot_cleans_up_merges() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let line_b_id = create_b.line_id.unwrap();
 
@@ -15475,6 +15706,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = create_result.line_id.unwrap();
 
@@ -15525,6 +15757,7 @@ fn test_delete_last_shot_cleans_up_closures() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_a_id = create_a.line_id.unwrap();
 
@@ -15535,6 +15768,7 @@ fn test_delete_last_shot_cleans_up_closures() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0), test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let line_b_id = create_b.line_id.unwrap();
 
@@ -15604,6 +15838,7 @@ fn test_delete_last_shot_undo_restores_references() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_a_id = create_a.line_id.unwrap();
 
@@ -15614,6 +15849,7 @@ fn test_delete_last_shot_undo_restores_references() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let line_b_id = create_b.line_id.unwrap();
 
@@ -15746,6 +15982,7 @@ fn test_delete_line_undo_restores_relationships() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let sec_a = sec_a_result.line_id.unwrap();
 
@@ -15756,6 +15993,7 @@ fn test_delete_line_undo_restores_relationships() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let sec_b = sec_b_result.line_id.unwrap();
 
@@ -15923,6 +16161,7 @@ fn setup_merged_project() -> (AppState, u32, u32) {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        cave_section_id: None,
     });
     let sec_a = result_a.line_id.unwrap();
 
@@ -15934,6 +16173,7 @@ fn setup_merged_project() -> (AppState, u32, u32) {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(15.0), test_shot_data(25.0)],
+        cave_section_id: None,
     });
     let sec_b = result_b.line_id.unwrap();
 
@@ -15997,6 +16237,7 @@ fn test_insert_before_shifts_zero_datum() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        cave_section_id: None,
     });
     let sec_id = result.line_id.unwrap();
 
@@ -16047,6 +16288,7 @@ fn test_insert_before_shifts_station_offset() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        cave_section_id: None,
     });
     let sec_id = result.line_id.unwrap();
 
@@ -16103,6 +16345,7 @@ fn test_insert_before_shifts_loop_closure() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(12.0)],
+        cave_section_id: None,
     });
     let sec_c = result_c.line_id.unwrap();
 
@@ -16414,6 +16657,7 @@ fn test_insert_before_pos0_adjusts_line_offsets() {
             directional_shot_data(0.0, 10.0),
             directional_shot_data(0.0, 5.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = result.line_id.unwrap();
 
@@ -16544,6 +16788,7 @@ fn test_insert_before_pos0_adjusts_merged_line_offsets() {
             directional_shot_data(0.0, 10.0),
             directional_shot_data(0.0, 5.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = result_a.line_id.unwrap();
 
@@ -16555,6 +16800,7 @@ fn test_insert_before_pos0_adjusts_merged_line_offsets() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![directional_shot_data(90.0, 8.0)],
+        cave_section_id: None,
     });
     let sec_b = result_b.line_id.unwrap();
 
@@ -16647,6 +16893,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![directional_shot_data(0.0, 10.0)],
+        cave_section_id: None,
     });
     let sec_a = result.line_id.unwrap();
 
@@ -16772,6 +17019,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
             directional_shot_data(0.0, 10.0),
             directional_shot_data(0.0, 5.0),
         ],
+        cave_section_id: None,
     });
     let sec_a = result.line_id.unwrap();
 
@@ -16902,6 +17150,7 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let save_path = temp_dir.path().join("project.stalx");
@@ -16935,6 +17184,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
 
     // First save
@@ -16950,6 +17200,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
 
     // Save again - should succeed and update the file
@@ -16979,6 +17230,7 @@ fn test_save_project_persists_undo_redo_stacks() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     // Create another line, then undo it (creates redo entry)
@@ -16989,6 +17241,7 @@ fn test_save_project_persists_undo_redo_stacks() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     state.undo();
 
@@ -17034,6 +17287,7 @@ fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
         color: "#ff0000".to_owned(),
         direction: None,
         shots: vec![test_shot_data(2.0)],
+        cave_section_id: None,
     });
     state.undo();
 
@@ -17078,6 +17332,7 @@ fn unreadable_undo_markers_save_without_history() {
             color: "#ff0000".to_owned(),
             direction: None,
             shots: Vec::new(),
+            cave_section_id: None,
         },
         UndoData::None,
     );
@@ -17089,6 +17344,7 @@ fn unreadable_undo_markers_save_without_history() {
             color: "#00ff00".to_owned(),
             direction: None,
             shots: Vec::new(),
+            cave_section_id: None,
         },
         UndoData::None,
     );
@@ -17299,6 +17555,7 @@ fn persisted_split_snapshot_carries_no_local_filesystem_path() {
         color: "#123456".to_string(),
         direction: None,
         shots: vec![test_shot_data(10.0)],
+        cave_section_id: None,
     });
     let line_id = created.line_id.unwrap();
     let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
@@ -17335,6 +17592,7 @@ fn persisted_delete_last_snapshot_carries_no_local_filesystem_path() {
         color: "#654321".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = created.line_id.unwrap();
     let shot_id = state.get_project_state().unwrap().lines[0].shots[0].id;
@@ -17400,6 +17658,7 @@ fn full_mode_save_persists_both_stacks() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     state.execute(Command::CreateLine {
         name: Some("Undone".to_string()),
@@ -17408,6 +17667,7 @@ fn full_mode_save_persists_both_stacks() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     state.undo();
     assert!(
@@ -17459,6 +17719,7 @@ fn test_open_project_clears_previous_state() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let path_a = temp_dir.path().join("a.stalx");
     state.save_project(Some(path_a.clone()));
@@ -17475,6 +17736,7 @@ fn test_open_project_clears_previous_state() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(3.0)],
+        cave_section_id: None,
     });
     state.execute(Command::CreateLine {
         name: Some("SecB2".to_string()),
@@ -17483,6 +17745,7 @@ fn test_open_project_clears_previous_state() {
         color: "#0000ff".to_string(),
         direction: None,
         shots: vec![test_shot_data(4.0)],
+        cave_section_id: None,
     });
     let path_b = temp_dir.path().join("b.stalx");
     state.save_project(Some(path_b.clone()));
@@ -17509,6 +17772,7 @@ fn test_close_project_clears_all_state() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     let result = state.close_project();
@@ -17532,6 +17796,7 @@ fn test_close_project_clears_adjusted_cache() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
 
     // Warm the memoized closure-adjusted coordinates cache. For a large project
@@ -17853,6 +18118,7 @@ fn test_execute_create_and_merge_success() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let existing_line_id = state.get_project_state().unwrap().lines[0].id;
 
@@ -17900,6 +18166,7 @@ fn test_execute_create_and_merge_rollback_on_merge_failure() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let lines_before = state.get_project_state().unwrap().lines.len();
 
@@ -18447,6 +18714,7 @@ fn test_execute_import_lines_from_existing_placement() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let existing_id = state.get_project_state().unwrap().lines[0].id;
 
@@ -18834,6 +19102,7 @@ fn test_execute_import_lines_manual_snap_placement() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let existing_id = state.get_project_state().unwrap().lines[0].id;
 
@@ -18931,6 +19200,7 @@ fn test_batch_partial_failure_rolls_back() {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![test_shot_data(5.0)],
+                cave_section_id: None,
             },
             Command::MergeStations {
                 station_a: StationRef::new(9999, 0),
@@ -18973,6 +19243,7 @@ fn batched_line_deletes_are_one_undo_entry() {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![test_shot_data(5.0)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap()
@@ -19040,6 +19311,7 @@ fn a_batch_may_reverse_a_line_and_then_delete_it() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19051,6 +19323,7 @@ fn a_batch_may_reverse_a_line_and_then_delete_it() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(9.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19117,6 +19390,7 @@ fn a_batch_that_reverses_a_line_after_deleting_it_rolls_back() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19186,6 +19460,7 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![north(10.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19197,6 +19472,7 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![north(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19285,6 +19561,7 @@ fn test_create_line_rejects_negative_length_shot() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("negative length"));
@@ -19305,6 +19582,7 @@ fn test_create_shot_rejects_zero_length() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         });
         result.line_id.unwrap()
     };
@@ -19341,6 +19619,7 @@ fn test_update_shot_rejects_zero_resulting_length() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         });
         result.line_id.unwrap()
     };
@@ -19383,6 +19662,7 @@ fn test_update_shot_rejects_an_explicitly_negative_length() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19424,6 +19704,7 @@ fn line_holding_a_zero_length_shot(state: &AppState) -> (LineId, [ShotId; 2]) {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19565,6 +19846,7 @@ fn test_move_station_rejects_zero_length_result() {
             depth_out: 0.0,
             ..Default::default()
         }],
+        cave_section_id: None,
     });
     let line_id = result.line_id.unwrap();
 
@@ -19598,6 +19880,7 @@ fn test_move_station_last_station() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        cave_section_id: None,
     });
     let line_id = result.line_id.unwrap();
 
@@ -19636,6 +19919,7 @@ fn test_move_station_invalid_index() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let line_id = result.line_id.unwrap();
 
@@ -19675,6 +19959,7 @@ fn test_delete_line_cascades_merges() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19687,6 +19972,7 @@ fn test_delete_line_cascades_merges() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19728,6 +20014,7 @@ fn test_delete_line_cascades_closures_and_offsets() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19740,6 +20027,7 @@ fn test_delete_line_cascades_closures_and_offsets() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19805,6 +20093,7 @@ fn test_delete_line_undo_restores_merges_and_datums() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19817,6 +20106,7 @@ fn test_delete_line_undo_restores_merges_and_datums() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19870,6 +20160,7 @@ fn test_unmerge_removes_only_specific_merge() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19882,6 +20173,7 @@ fn test_unmerge_removes_only_specific_merge() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19894,6 +20186,7 @@ fn test_unmerge_removes_only_specific_merge() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19942,6 +20235,7 @@ fn test_unmerge_undo_restores_merge() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -19954,6 +20248,7 @@ fn test_unmerge_undo_restores_merge() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20259,6 +20554,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 10.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20271,6 +20567,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![directional_shot_data(0.0, 5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20283,6 +20580,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20415,6 +20713,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 10.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20427,6 +20726,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![directional_shot_data(0.0, 5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20439,6 +20739,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20549,6 +20850,7 @@ fn test_delete_middle_line_removes_both_merge_edges() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20561,6 +20863,7 @@ fn test_delete_middle_line_removes_both_merge_edges() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20573,6 +20876,7 @@ fn test_delete_middle_line_removes_both_merge_edges() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20641,6 +20945,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 10.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20654,6 +20959,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![directional_shot_data(0.0, 5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20667,6 +20973,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20777,6 +21084,7 @@ fn test_merge_datum_line_does_not_move() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![directional_shot_data(90.0, 10.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20790,6 +21098,7 @@ fn test_merge_datum_line_does_not_move() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![directional_shot_data(0.0, 5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20913,6 +21222,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -20925,6 +21235,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21023,6 +21334,7 @@ fn test_set_station_comment_set_update_remove() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21104,6 +21416,7 @@ fn test_set_station_comment_invalid_refs_fail() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21143,6 +21456,7 @@ fn test_station_comment_survives_unrelated_undo_redo() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21159,6 +21473,7 @@ fn test_station_comment_survives_unrelated_undo_redo() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(2.0)],
+        cave_section_id: None,
     });
     assert!(state.undo().success);
     assert_eq!(
@@ -21199,6 +21514,7 @@ fn test_station_comment_persists_across_save_open() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21237,6 +21553,7 @@ fn test_move_comment_transfers_between_stations() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21280,6 +21597,7 @@ fn test_move_comment_swap_exchanges_comments() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21417,6 +21735,7 @@ fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21503,6 +21822,7 @@ fn test_undo_actually_works_after_project_reopen() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     assert!(create_result.success);
     let line_id = create_result.line_id.unwrap();
@@ -21567,6 +21887,7 @@ fn test_tml_roundtrip_preserves_shot_data() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![shot.clone(), shot2.clone()],
+        cave_section_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -21633,6 +21954,7 @@ fn test_tml_roundtrip_preserves_multiple_sections() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        cave_section_id: None,
     });
     state.execute(Command::CreateLine {
         name: Some("Gallery B".to_string()),
@@ -21641,6 +21963,7 @@ fn test_tml_roundtrip_preserves_multiple_sections() {
         color: "#00ff00".to_string(),
         direction: None,
         shots: vec![test_shot_data(7.0)],
+        cave_section_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -21679,6 +22002,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21691,6 +22015,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21804,6 +22129,7 @@ fn test_csv_export_preserves_azimuth_precision() {
         color: "#ff0000".to_string(),
         direction: None,
         shots: vec![shot],
+        cave_section_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -21859,6 +22185,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
                 test_shot_data(3.0),
                 test_shot_data(4.0),
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21872,6 +22199,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21963,6 +22291,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -21975,6 +22304,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22045,6 +22375,7 @@ fn test_delete_mid_shot_splits_line_with_merge_intact() {
                 test_shot_data(3.0),
                 test_shot_data(4.0),
             ],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22058,6 +22389,7 @@ fn test_delete_mid_shot_splits_line_with_merge_intact() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22129,6 +22461,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22141,6 +22474,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22234,6 +22568,7 @@ fn test_delete_last_shot_and_line_cleans_merges() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22246,6 +22581,7 @@ fn test_delete_last_shot_and_line_cleans_merges() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22310,6 +22646,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22377,6 +22714,7 @@ fn test_delete_middle_line_in_merge_chain() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22389,6 +22727,7 @@ fn test_delete_middle_line_in_merge_chain() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22401,6 +22740,7 @@ fn test_delete_middle_line_in_merge_chain() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22498,6 +22838,7 @@ fn test_zero_datum_in_chain_positions_all_lines() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22510,6 +22851,7 @@ fn test_zero_datum_in_chain_positions_all_lines() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22522,6 +22864,7 @@ fn test_zero_datum_in_chain_positions_all_lines() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22643,6 +22986,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22655,6 +22999,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22667,6 +23012,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22756,6 +23102,7 @@ fn test_merge_chain_survives_save_reopen() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22768,6 +23115,7 @@ fn test_merge_chain_survives_save_reopen() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22780,6 +23128,7 @@ fn test_merge_chain_survives_save_reopen() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22872,6 +23221,7 @@ fn test_triangle_topology_with_loop_closure() {
             color: "#ff0000".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22884,6 +23234,7 @@ fn test_triangle_topology_with_loop_closure() {
             color: "#00ff00".to_string(),
             direction: None,
             shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -22896,6 +23247,7 @@ fn test_triangle_topology_with_loop_closure() {
             color: "#0000ff".to_string(),
             direction: None,
             shots: vec![test_shot_data(7.0), test_shot_data(2.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -23235,6 +23587,7 @@ fn redo_create_shot_preserves_uuid_all_insert_modes() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -23319,6 +23672,7 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         })
         .line_id
         .unwrap();
@@ -23374,6 +23728,7 @@ fn repair_command_demotes_a_merge_between_two_datum_holding_groups() {
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots: vec![test_shot_data(10.0), test_shot_data(10.0)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap()
@@ -23574,6 +23929,7 @@ fn edit_enabled_defaults_true_and_local_project_passes() {
         color: "#abcdef".to_string(),
         direction: None,
         shots: vec![test_shot_data(1.0)],
+        cave_section_id: None,
     });
     assert!(result.success, "local project edits succeed");
 }
@@ -24416,6 +24772,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         });
         assert!(created.success);
     }
@@ -24491,6 +24848,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
         color: "#ff6b6b".to_string(),
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     });
     let waypoint_id = waypoint.line_id.unwrap();
 
@@ -24501,6 +24859,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     let real_id = real.line_id.unwrap();
 
@@ -24556,6 +24915,7 @@ fn a_no_undo_data_command_still_clears_the_redo_branch() {
             color: "#4ecdc4".to_string(),
             direction: None,
             shots: vec![test_shot_data(5.0)],
+            cave_section_id: None,
         });
         assert!(created.success);
         ids.push(created.line_id.unwrap());
@@ -24604,6 +24964,7 @@ fn a_shotless_reverse_leaves_the_redo_branch_intact() {
         color: "#ff6b6b".to_string(),
         direction: None,
         shots: Vec::new(),
+        cave_section_id: None,
     });
     let waypoint_id = waypoint.line_id.unwrap();
 
@@ -24614,6 +24975,7 @@ fn a_shotless_reverse_leaves_the_redo_branch_intact() {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![test_shot_data(5.0)],
+        cave_section_id: None,
     });
     assert!(real.success);
 
@@ -24844,6 +25206,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
                 shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap()
@@ -24992,6 +25355,7 @@ fn line_with_shots(state: &AppState, name: &str, shots: Vec<ShotData>) -> LineId
         color: "#3388FF".to_string(),
         direction: None,
         shots,
+        cave_section_id: None,
     });
     assert!(created.success, "CreateLine failed: {:?}", created.error);
     created.line_id.expect("CreateLine returned no id")

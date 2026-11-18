@@ -803,27 +803,19 @@ impl AppState {
                 color,
                 direction,
                 shots,
-            } => self.create_line(LineData {
-                name: name.clone(),
-                surveyor: surveyor.clone(),
-                date: *date,
-                color: color.clone(),
-                direction: *direction,
-                quality: 1.0,
-                // Identity is not the caller's to name (#423): this Command
-                // arrives verbatim off IPC (create_line, execute_batch), so
-                // strip uuids HERE, not in `AppState::create_line` - the
-                // importers funnel through that executor with identities our
-                // own parser legitimately adopted.
-                shots: shots
-                    .iter()
-                    .cloned()
-                    .map(|mut s| {
-                        s.uuid = None;
-                        s
-                    })
-                    .collect(),
-            }),
+                cave_section_id,
+            } => self.create_line_command(
+                LineData {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: *date,
+                    color: color.clone(),
+                    direction: *direction,
+                    quality: 1.0,
+                    shots: shots.clone(),
+                },
+                *cave_section_id,
+            ),
             Command::DeleteLine { line_id } => self.delete_line(*line_id),
             Command::UpdateLineMetadata { line_id, updates } => self
                 .refuse_line_rename(&cmd)
@@ -1589,6 +1581,7 @@ mod update_shot_clear_undo_tests {
                 color: "#ff0000".to_string(),
                 direction: None,
                 shots: vec![shot_data(left)],
+                cave_section_id: None,
             })
             .line_id
             .unwrap();
