@@ -71,8 +71,11 @@ pub(super) fn assert_snaps_held(project: &Project, what: &str) -> usize {
             continue;
         }
         let apart = dist(view[&a], view[&b]);
+        // The solve accepts each section's realignment within 1e-6 m per axis
+        // (`adjust_least_squares`), so two stations of a tie group can be
+        // shown up to that apart on the diagonal: 1e-6 * sqrt(2), rounded up.
         assert!(
-            apart < 1e-6,
+            apart < 1.5e-6,
             "{what}: the snapped pair {a:?} {b:?} (closure {}) is {apart:.6} m apart in the \
              Closures Computed View",
             closure.id
