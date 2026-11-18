@@ -302,6 +302,33 @@ test.describe('Sections (groups of lines)', () => {
     await expect.poll(() => drawnLineIds(page)).toEqual(Object.values(ids).sort((a, b) => a - b));
   });
 
+  test('H and the header menu hide / show a Section; a hidden one has nothing to zoom to', async ({ page }) => {
+    const ids = await setup(page);
+    const upper = await createSection(page, 'Upper level', [ids.Upper!, ids.Lower!]);
+    const header = page.getByTestId(`section-header-${upper}`);
+    await header.click();
+    await expect(header).toBeFocused();
+    await page.keyboard.press('h');
+    await expect(header).toHaveAttribute('data-hidden-on-map', 'true');
+    await expect.poll(() => drawnLineIds(page)).toEqual([ids.Main!, ids.Side!].sort((a, b) => a - b));
+    await expect(page.locator('#selection-announcer')).toHaveText('Upper level is hidden on the map');
+
+    // Hidden: the menu's Zoom to Section is off and says why; Show on Map
+    // brings the Section back.
+    await header.click({ button: 'right' });
+    await expect(page.getByRole('button', { name: 'Zoom to Section' })).toBeDisabled();
+    await expect(page.getByTestId('context-menu')).toContainText('Show the section on the map first');
+    await page.getByRole('button', { name: 'Show on Map' }).click();
+    await expect(header).not.toHaveAttribute('data-hidden-on-map', 'true');
+    await expect.poll(() => drawnLineIds(page)).toEqual(Object.values(ids).sort((a, b) => a - b));
+    await expect(page.locator('#selection-announcer')).toHaveText('Upper level is shown on the map');
+
+    // And the menu hides it again.
+    await header.click({ button: 'right' });
+    await page.getByRole('button', { name: 'Hide on Map' }).click();
+    await expect(header).toHaveAttribute('data-hidden-on-map', 'true');
+  });
+
   test('keyboard: arrows walk the tree, Left/Right collapse and expand, Space toggles', async ({ page }) => {
     const ids = await setup(page);
     const upper = await createSection(page, 'Upper level', [ids.Upper!]);
@@ -418,6 +445,8 @@ test.describe('Sections (groups of lines)', () => {
     await page.getByTestId(`section-header-${upper}`).click({ button: 'right' });
     await expect(page.getByRole('button', { name: 'Delete Section' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Zoom to Section' })).toBeEnabled();
+    // Hide / Show on Map is a view setting too.
+    await expect(page.getByRole('button', { name: 'Hide on Map' })).toBeEnabled();
     await page.keyboard.press('Escape');
     await page.getByTestId(`section-header-${upper}`).click();
     await page.keyboard.press('F2');
