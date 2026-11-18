@@ -169,6 +169,7 @@ pub fn create_line_and_merge(
     import_station_index: u32,
     target_station: StationRef,
     closure_strategy: ClosureStrategy,
+    cave_section_id: Option<SectionId>,
 ) -> CommandResult {
     create_line_and_merge_impl(
         state.inner(),
@@ -181,9 +182,12 @@ pub fn create_line_and_merge(
         import_station_index,
         target_station,
         closure_strategy,
+        cave_section_id,
     )
 }
 
+/// `cave_section_id` is the new line's Section (#327), the New Line dialog's
+/// target: the Section joins the same single undo step.
 pub(crate) fn create_line_and_merge_impl(
     state: &AppState,
     name: Option<String>,
@@ -195,6 +199,7 @@ pub(crate) fn create_line_and_merge_impl(
     import_station_index: u32,
     target_station: StationRef,
     closure_strategy: ClosureStrategy,
+    cave_section_id: Option<SectionId>,
 ) -> CommandResult {
     if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
         return refusal;
@@ -202,9 +207,9 @@ pub(crate) fn create_line_and_merge_impl(
     // Use a special internal execution that:
     // 1. Takes a project snapshot for undo
     // 2. Creates the line
-    // 3. Merges with the actual line ID
+    // 3. Merges with the actual line ID (and puts it in its Section)
     // 4. Returns as a single undo unit
-    state.execute_create_and_merge(
+    state.execute_create_and_merge_in_cave_section(
         name,
         surveyor,
         date,
@@ -214,6 +219,7 @@ pub(crate) fn create_line_and_merge_impl(
         import_station_index,
         target_station,
         closure_strategy,
+        cave_section_id,
     )
 }
 

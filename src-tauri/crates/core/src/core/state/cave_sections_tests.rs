@@ -488,6 +488,56 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
     assert_eq!(section_of(&state, plain), None);
 }
 
+/// A New Line placed by snapping onto a station goes in its Section inside
+/// the create-and-merge step: ONE undo removes the line, its merge and its
+/// membership; one redo brings all three back.
+#[test]
+fn a_snapped_new_line_joins_its_section_in_one_undo_step() {
+    let state = new_state();
+    let (a, _, _) = three_lines(&state);
+    let id = create_section(&state, "Upper level", &[]);
+    let merges_before = project(&state).station_merges.len();
+    let steps_before = state.get_undo_stack().len();
+    let create = |section| {
+        state.execute_create_and_merge_in_cave_section(
+            Some("Snapped".to_string()),
+            None,
+            None,
+            "#123456".to_string(),
+            None,
+            vec![shot(45.0, 6.0)],
+            0,
+            StationRef::new(a, 1),
+            crate::models::ClosureStrategy::Move,
+            section,
+        )
+    };
+    let refused = create(Some(99));
+    assert!(!refused.success, "a missing section is refused");
+    assert_eq!(
+        state.get_undo_stack().len(),
+        steps_before,
+        "and changes nothing"
+    );
+    assert_eq!(project(&state).lines.len(), 3);
+
+    let line = ok(create(Some(id))).line_id.unwrap();
+    assert_eq!(section_of(&state, line), Some(id));
+    assert_eq!(project(&state).station_merges.len(), merges_before + 1);
+    assert_eq!(state.get_undo_stack().len(), steps_before + 1, "one step");
+
+    undo(&state);
+    assert!(
+        project(&state).get_line(line).is_none(),
+        "one undo removes the line"
+    );
+    assert_eq!(project(&state).station_merges.len(), merges_before);
+    assert_eq!(project(&state).lines_in_section(id).count(), 0);
+    redo(&state);
+    assert_eq!(section_of(&state, line), Some(id));
+    assert_eq!(project(&state).station_merges.len(), merges_before + 1);
+}
+
 fn import_config(index: u32, name: &str, section: Option<&str>) -> ImportLineConfig {
     ImportLineConfig {
         cave_section: section.map(str::to_string),

@@ -2819,7 +2819,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { along_line: 12.34, path_shots, path_stations };
           }
 
-          case 'create_line': {
+          // create_line_and_merge (#327): create_line plus the merge of the new
+          // line's station onto an existing one, and the optional Section, as
+          // ONE undo step (the structural snapshot `undo` restores).
+          case 'create_line':
+          case 'create_line_and_merge': {
+            if (cmd === 'create_line_and_merge' && currentProject) {
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
+            }
             lineCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
@@ -2862,6 +2869,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               Object.assign(line, { cave_section_id: targetSection });
             }
             currentProject?.lines.push(line);
+            if (cmd === 'create_line_and_merge' && currentProject) {
+              const stationA = { line_id: lineCounter, station_index: (args?.importStationIndex as number) ?? 0 };
+              const stationB = args?.targetStation as { line_id: number; station_index: number } | undefined;
+              if (stationB) {
+                mergeStationCalls.push({ stationA, stationB });
+                (currentProject.station_merges as Array<{
+                  station_a: { line_id: number; station_index: number };
+                  station_b: { line_id: number; station_index: number };
+                }>).push({ station_a: stationA, station_b: stationB });
+              }
+            }
             return { success: true, line, line_id: lineCounter, line_ids: [], warnings: [], error: null };
           }
 

@@ -1,8 +1,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    AzimuthReference, ClosureStrategy, Coordinates, LineData, LineId, Project, ShotData, ShotKind,
-    StationRef, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
+    AzimuthReference, ClosureStrategy, Coordinates, LineData, LineId, Project, SectionId, ShotData,
+    ShotKind, StationRef, FEATURE_ID_STRIDE, MAX_LINES_IN_ID_SPACE, MAX_LINE_ID,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -172,7 +172,39 @@ impl AppState {
         shots: Vec<ShotData>,
         import_station_index: u32,
         target_station: StationRef,
+        closure_strategy: ClosureStrategy,
+    ) -> CommandResult {
+        self.execute_create_and_merge_in_cave_section(
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots,
+            import_station_index,
+            target_station,
+            closure_strategy,
+            None,
+        )
+    }
+
+    /// [`Self::execute_create_and_merge`] that also puts the new line in the
+    /// Section `cave_section_id` (#327), inside the same undo step: a New
+    /// Line placed by snapping onto a station is ONE undo, Section included.
+    /// A Section that no longer exists refuses the whole step before anything
+    /// changes, as `create_line_in_cave_section` does.
+    pub fn execute_create_and_merge_in_cave_section(
+        &self,
+        name: Option<String>,
+        surveyor: Option<String>,
+        date: Option<chrono::NaiveDate>,
+        color: String,
+        direction: Option<crate::models::SurveyDirection>,
+        shots: Vec<ShotData>,
+        import_station_index: u32,
+        target_station: StationRef,
         _closure_strategy: ClosureStrategy,
+        cave_section_id: Option<SectionId>,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
         let Ok(_cmd_guard) = self.command_lock.lock() else {
@@ -182,6 +214,23 @@ impl AppState {
         // project, so it is gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Import line and merge") {
             return f;
+        }
+        if let Some(section_id) = cave_section_id {
+            let exists = self
+                .project
+                .lock()
+                .ok()
+                .and_then(|guard| guard.as_ref().map(|p| p.section(section_id).is_some()));
+            match exists {
+                Some(true) => {}
+                Some(false) => {
+                    return CommandResult::failure(
+                        "The section for the new line no longer exists; it may have been deleted"
+                            .to_string(),
+                    )
+                }
+                None => return CommandResult::failure("No project open".to_string()),
+            }
         }
         tracing::info!(
             purpose = "keep undo atomic for import merge",
@@ -235,6 +284,16 @@ impl AppState {
             );
             self.rollback_project(&snapshot);
             return merge_result;
+        }
+
+        // The new line joins its Section before the after snapshot, so the
+        // one undo entry covers it too.
+        if let Some(section_id) = cave_section_id {
+            if let Ok(mut guard) = self.project.lock() {
+                if let Some(project) = guard.as_mut() {
+                    project.set_line_section(new_line_id, Some(section_id));
+                }
+            }
         }
 
         // Step 4: Capture the after snapshot and push undo entry with before+after.

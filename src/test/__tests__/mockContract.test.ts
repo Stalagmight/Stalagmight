@@ -288,7 +288,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
     'export-dialog.spec.ts drives the TML export flow, but only asserts the dialog closes afterward, which happens regardless of the (missing) mock response',
   get_line_relationships:
     'ConfirmDialog calls it when deleting a line, but no seeded e2e project has merges/closures/offsets on the deleted line, so a null fallback renders identically to a real empty response',
-  create_line_and_merge: 'no mocked spec drives the drag-to-merge-during-import flow',
   resolve_warning: 'no mocked spec drives the warning-resolution flow',
   unresolve_warning: 'no mocked spec drives the warning-resolution flow',
   get_recent_logs_since: 'no frontend caller (only get_recent_logs, the unbounded variant, is used)',

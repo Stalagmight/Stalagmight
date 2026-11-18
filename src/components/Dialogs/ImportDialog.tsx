@@ -87,7 +87,7 @@ export default function ImportDialog() {
   const { t } = useTranslation();
   const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast, lastUsedCredit, setLastUsedCredit } =
     useUIStore();
-  const { createLine, createLineAndMerge, moveLine, moveLinesToCaveSection, project } = useProjectStore();
+  const { createLine, createLineAndMerge, moveLine, project } = useProjectStore();
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
   const gridLabels = useGridLabels('dataTable.shotNoun');
@@ -464,8 +464,9 @@ export default function ImportDialog() {
       async (result: PlacementResult) => {
         // The Section as it stands now: it may have gone while placing.
         const section = liveSectionId(caveSectionId);
+        // One undo step either way, the Section included.
         const cmdResult = result.snappedToStation
-          ? await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move')
+          ? await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move', section)
           : await createLine(lineData, section);
         if (!cmdResult.success) {
           // Refused (the name was taken meanwhile): back to the form, with why.
@@ -475,12 +476,7 @@ export default function ImportDialog() {
           });
           return;
         }
-        if (result.snappedToStation) {
-          // create_line_and_merge takes no Section, so this one is its own step.
-          if (section !== null && cmdResult.line_id != null) {
-            await moveLinesToCaveSection([cmdResult.line_id], section);
-          }
-        } else if (cmdResult.line_id != null) {
+        if (!result.snappedToStation && cmdResult.line_id != null) {
           await moveLine(cmdResult.line_id, result.position);
         }
       },
