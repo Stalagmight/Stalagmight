@@ -116,6 +116,80 @@ fn renaming_a_station_to_its_own_name_leaves_no_history() {
     assert_eq!(project(&state).station_name_at(station), Some("1"));
 }
 
+/// The `command` field of every event `run` emits on this thread, as a
+/// formatter renders it (`%` values raw, `?` values escaped).
+fn commands_logged_during(run: impl FnOnce()) -> Vec<String> {
+    use std::sync::{Arc, Mutex};
+
+    struct Capture(Arc<Mutex<Vec<String>>>);
+    struct CommandField(Option<String>);
+    impl tracing::field::Visit for CommandField {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "command" {
+                self.0 = Some(format!("{value:?}"));
+            }
+        }
+    }
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut field = CommandField(None);
+            event.record(&mut field);
+            if let Some(command) = field.0 {
+                self.0.lock().unwrap().push(command);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let logged = Arc::new(Mutex::new(Vec::new()));
+    // With a single dispatcher registered, tracing works out a callsite's
+    // interest from whichever thread hits it first - another test's, with no
+    // subscriber - and caches "never". A second one, kept alive throughout,
+    // makes it ask every registered dispatcher, this one included.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::subscriber::with_default(Capture(Arc::clone(&logged)), run);
+    let logged = logged.lock().unwrap().clone();
+    logged
+}
+
+/// Command descriptions quote station and Section names, which a file can
+/// fill with anything: they are logged escaped, so a name holding a newline
+/// cannot forge a log line.
+#[test]
+fn a_name_with_a_newline_is_logged_escaped() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 2);
+    let station = StationRef::new(main, 1);
+    let forged = "1\nERROR forged line";
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let key = project.key_for_ref(station).unwrap();
+        project.station_names.insert(key, forged.to_string());
+    }
+    // The rename to the name the station has is the no-op path's log.
+    let logged = commands_logged_during(|| {
+        ok(state.execute(Command::SetStationName {
+            station_ref: station,
+            name: forged.to_string(),
+        }));
+    });
+    assert!(!logged.is_empty(), "the command is logged");
+    assert!(
+        logged.iter().all(|command| !command.contains('\n')),
+        "a raw newline reached the log: {logged:?}"
+    );
+}
+
 #[test]
 fn control_and_invisible_characters_are_refused_in_names() {
     let state = new_state();

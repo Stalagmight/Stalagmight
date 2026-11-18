@@ -645,7 +645,7 @@ pub fn parse_dmp_bytes(data: &[u8]) -> Result<(DmpFile, DmpReadLoss)> {
             Ok(line) => {
                 tracing::debug!(
                     line_index = i,
-                    line_name = %line.name,
+                    line_name = ?line.name,
                     shot_count = line.shots.len(),
                     purpose = "build import preview",
                     "Parsed line for import preview"

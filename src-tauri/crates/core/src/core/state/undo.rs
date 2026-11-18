@@ -607,7 +607,7 @@ impl AppState {
         } else {
             let reason = result.error.as_deref().unwrap_or("Unknown error");
             tracing::error!(
-                command = %entry.command.description(),
+                command = ?entry.command.description(),
                 undo_data_variant = entry.undo_data.variant_name(),
                 reason = reason,
                 "Undo operation failed after popping entry; pushing back to undo stack"
@@ -1066,7 +1066,7 @@ impl AppState {
             // beneath. Drop it here instead - the redo itself already succeeded.
             if matches!(entry.undo_data, UndoData::None) {
                 tracing::warn!(
-                    command = %entry.command.description(),
+                    command = ?entry.command.description(),
                     purpose = "keep the undo stack applicable",
                     "Redone entry carries no undo data; not pushing it onto the undo stack"
                 );
@@ -1077,7 +1077,7 @@ impl AppState {
         } else {
             let reason = result.error.as_deref().unwrap_or("Unknown error");
             tracing::error!(
-                command = %entry.command.description(),
+                command = ?entry.command.description(),
                 undo_data_variant = entry.undo_data.variant_name(),
                 reason = reason,
                 "Redo operation failed after popping entry; pushing back to redo stack"

@@ -744,7 +744,7 @@ impl AppState {
         // that filter, and shot-less lines are real (a GPX waypoint imports as one).
         if self.is_provable_reverse_noop(&cmd) {
             tracing::debug!(
-                command = %cmd.description(),
+                command = ?cmd.description(),
                 "Reverse of shot-less line(s) changes nothing; skipping undo, redo-clear and dirty flip"
             );
             return CommandResult::success();
@@ -755,7 +755,7 @@ impl AppState {
         // dialog's Save with the name untouched leaves no history behind.
         if self.is_unchanged_station_name(&cmd) {
             tracing::debug!(
-                command = %cmd.description(),
+                command = ?cmd.description(),
                 "Station already has that name; skipping undo, redo-clear and dirty flip"
             );
             return CommandResult::success();
@@ -1076,7 +1076,7 @@ impl AppState {
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 if matches!(final_undo_data, UndoData::None) {
                     tracing::debug!(
-                        command = %cmd.description(),
+                        command = ?cmd.description(),
                         "Command produced no undo data; not pushing an unundoable entry, clearing redo"
                     );
                     undo_stack.clear_redo();

@@ -224,7 +224,7 @@ pub(super) fn determine_placement(
         .iter()
         .any(|id| input.deselected_ids.contains(id));
     tracing::warn!(
-        line = %line.name,
+        line = ?line.name,
         lost_parent,
         "Line has no topology link or GPS data, placing at origin"
     );
@@ -265,7 +265,7 @@ fn gps_placement(line: &TmlSection) -> Option<ImportPlacement> {
             Ok(coordinates) => coordinates,
             Err(reason) => {
                 tracing::warn!(
-                    line = %line.name,
+                    line = ?line.name,
                     %reason,
                     purpose = "import Ariane TML/TMLU",
                     "Ignoring an unusable GPS anchor in the file"
