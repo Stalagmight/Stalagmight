@@ -29,7 +29,10 @@
 //! `next_cave_section_id`, so a Section id deleted (or undone) before a save
 //! is never handed out again after a reopen - a view setting such as
 //! `hiddenSections` names Sections by id. Read tolerantly: a missing or
-//! unreadable row, or one below the saved ids, is raised above them.
+//! unreadable row, or one past `MAX_SECTION_ID`, is derived from the ids, and
+//! one below the saved ids is raised above them. Each table's read is capped
+//! ([`MAX_CAVE_SECTION_ROWS`], [`MAX_CAVE_SECTION_LINE_ROWS`]): a crafted file
+//! cannot make the open unbounded.
 //!
 //! Plain DDL only: `schema_guard` refuses a file with CHECKs other than
 //! `id = 1`, partial or expression indexes, `DEFAULT (expr)`, views and
@@ -40,12 +43,23 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, Transaction};
 
-use crate::models::{LineId, Project, Section, SectionId};
+use crate::models::{LineId, Project, Section, SectionId, MAX_SECTION_ID};
 
 use super::shot_credits::{extended_code, is_schema_error};
 
 /// The `project_settings` key of `Project::next_section_id`.
 pub(super) const NEXT_CAVE_SECTION_ID_KEY: &str = "next_cave_section_id";
+
+/// The most `cave_sections` rows a read takes, in panel order; the rest are
+/// skipped with a warning. The tables are not bounded by anything the user did
+/// (a crafted file can hold millions of rows), and the open must stay bounded:
+/// the cap matches `stalx-reader`'s default `CountLimits::cave_sections`.
+pub(super) const MAX_CAVE_SECTION_ROWS: usize = 100_000;
+
+/// The most `cave_section_lines` rows a read takes beyond one per line (a
+/// line belongs to at most one Section, so a file the app wrote never holds
+/// more than the lines); as `stalx-reader`'s `CountLimits::cave_section_lines`.
+pub(super) const MAX_CAVE_SECTION_LINE_ROWS: usize = 100_000;
 
 /// Run by `save_project` inside its transaction, after the lines are written:
 /// both tables are rewritten whole, so they are recreated rather than emptied
@@ -102,8 +116,9 @@ pub(super) fn write_cave_sections(tx: &Transaction<'_>, project: &Project) -> Re
     Ok(())
 }
 
-/// The stored `next_cave_section_id`, or `None` when the row is missing or
-/// does not read as an id (`normalize_sections` then derives it).
+/// The stored `next_cave_section_id`, or `None` when the row is missing,
+/// does not read as an id, or is past [`MAX_SECTION_ID`] - no counter this
+/// build keeps (`normalize_sections` then derives it).
 fn load_next_cave_section_id(conn: &Connection) -> Option<SectionId> {
     conn.query_row(
         "SELECT value FROM project_settings WHERE key = ?1",
@@ -112,6 +127,7 @@ fn load_next_cave_section_id(conn: &Connection) -> Option<SectionId> {
     )
     .ok()
     .and_then(|value| value.trim().parse::<SectionId>().ok())
+    .filter(|next| *next <= MAX_SECTION_ID)
 }
 
 /// Whether `table` exists as a table.
@@ -155,22 +171,47 @@ type SectionRow = (
 
 type MemberRow = (rusqlite::Result<LineId>, rusqlite::Result<SectionId>);
 
-fn read_section_rows(conn: &Connection) -> rusqlite::Result<Vec<SectionRow>> {
-    let mut stmt = conn.prepare("SELECT id, name, color, position FROM cave_sections")?;
+/// At most `cap` rows, in panel order (the cap keeps the first Sections of
+/// the panel), plus one more so the caller can tell the table was cut.
+fn read_section_rows(conn: &Connection, cap: usize) -> rusqlite::Result<Vec<SectionRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, color, position FROM cave_sections ORDER BY position, id LIMIT ?1",
+    )?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([row_limit(cap)], |row| {
             Ok((row.get(0), row.get(1), row.get(2), row.get(3)))
         })?
         .collect::<rusqlite::Result<Vec<SectionRow>>>()?;
     Ok(rows)
 }
 
-fn read_member_rows(conn: &Connection) -> rusqlite::Result<Vec<MemberRow>> {
-    let mut stmt = conn.prepare("SELECT line_id, cave_section_id FROM cave_section_lines")?;
+/// At most `cap` rows, plus one more so the caller can tell the table was cut.
+fn read_member_rows(conn: &Connection, cap: usize) -> rusqlite::Result<Vec<MemberRow>> {
+    let mut stmt =
+        conn.prepare("SELECT line_id, cave_section_id FROM cave_section_lines LIMIT ?1")?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get(0), row.get(1))))?
+        .query_map([row_limit(cap)], |row| Ok((row.get(0), row.get(1))))?
         .collect::<rusqlite::Result<Vec<MemberRow>>>()?;
     Ok(rows)
+}
+
+/// `cap + 1` as SQLite's `LIMIT`: one row past the cap tells it was reached.
+fn row_limit(cap: usize) -> i64 {
+    i64::try_from(cap.saturating_add(1)).unwrap_or(i64::MAX)
+}
+
+/// Cut `rows` to `cap`, warning when that dropped any.
+fn capped<T>(mut rows: Vec<T>, cap: usize, table: &'static str) -> Vec<T> {
+    if rows.len() > cap {
+        rows.truncate(cap);
+        tracing::warn!(
+            table,
+            cap,
+            purpose = "read sections",
+            "A section table holds more rows than any project; reading only the first"
+        );
+    }
+    rows
 }
 
 /// Read the Sections and memberships into `project` (whose lines are
@@ -186,7 +227,11 @@ pub(super) fn load_cave_sections(conn: &Connection, project: &mut Project) -> Re
     }
     let mut skipped = 0usize;
     let mut sections: Vec<(i64, Section)> = Vec::new();
-    for (id, name, color, position) in shape_or_fail("cave_sections", read_section_rows(conn))? {
+    let rows = shape_or_fail(
+        "cave_sections",
+        read_section_rows(conn, MAX_CAVE_SECTION_ROWS),
+    )?;
+    for (id, name, color, position) in capped(rows, MAX_CAVE_SECTION_ROWS, "cave_sections") {
         let (Ok(id), Ok(name), Ok(color), Ok(position)) = (id, name, color, position) else {
             skipped += 1;
             continue;
@@ -201,12 +246,20 @@ pub(super) fn load_cave_sections(conn: &Connection, project: &mut Project) -> Re
     project.sections.retain(|s| held.insert(s.id));
 
     if has_table(conn, "cave_section_lines")? {
-        for (line_id, section) in shape_or_fail("cave_section_lines", read_member_rows(conn))? {
+        let cap = MAX_CAVE_SECTION_LINE_ROWS.max(project.lines.len());
+        let rows = shape_or_fail("cave_section_lines", read_member_rows(conn, cap))?;
+        // Looked up here, not through `set_line_section`: a row naming no line
+        // misses the line index and would scan every line.
+        let lines: HashSet<LineId> = project.lines.iter().map(|line| line.id).collect();
+        for (line_id, section) in capped(rows, cap, "cave_section_lines") {
             let (Ok(line_id), Ok(section)) = (line_id, section) else {
                 skipped += 1;
                 continue;
             };
-            if !held.contains(&section) || !project.set_line_section(line_id, Some(section)) {
+            if !held.contains(&section)
+                || !lines.contains(&line_id)
+                || !project.set_line_section(line_id, Some(section))
+            {
                 skipped += 1;
             }
         }
