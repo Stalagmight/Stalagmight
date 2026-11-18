@@ -8,8 +8,8 @@
 //!   rename name, see `disk_names`).
 //!
 //! Like `station_names`, the tables arrived WITHOUT a schema bump: SpeleoDB's
-//! Python reader accepts exactly v18 and reads only its seven tables, by
-//! explicit column lists, so new tables are invisible to it (see
+//! Python reader pins the schema version (exactly 18 before its 0.0.2) and
+//! reads only the tables it knows, by explicit column lists, so new tables are invisible to it (see
 //! `station_texts` for the version of it this was verified against). Every
 //! save drops and recreates both, inside its transaction, so a v18 file opened
 //! through the fast path (no migration) gets them on its first save. The price:

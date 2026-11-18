@@ -1355,10 +1355,10 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// The SpeleoDB contract (see `station_texts` and `shot_credits`): its Python
-/// reader accepts exactly v18 and reads these seven tables by explicit column
-/// lists. The same project saved with and without per-shot credit must give
-/// identical rows in every one of them, except `sections.surveyor` and
-/// `lines.date` - which hold the aggregate, as one plain TEXT value and one
+/// reader pins the schema version (exactly 18 before its 0.0.2) and reads
+/// these seven tables by explicit column lists. The same project saved with
+/// and without per-shot credit must give identical rows in every one of them,
+/// except `sections.surveyor` and `sections.date` - which hold the aggregate, as one plain TEXT value and one
 /// ISO date. The surveyor text is pinned: the surveyors, or the Ariane
 /// `"explorers / surveyors"` form when the line has explorers (#718).
 #[test]
@@ -1374,7 +1374,7 @@ fn credit_leaves_every_table_an_outside_reader_reads_unchanged_but_the_legacy_pa
     ];
     assert_eq!(
         SCHEMA_VERSION, 18,
-        "SpeleoDB's Python stalagmight_lib accepts exactly v18"
+        "SpeleoDB's Python stalagmight_lib before 0.0.2 accepts exactly v18"
     );
     let dir = TempDir::new().unwrap();
     let (credited, ids) = rich_project();

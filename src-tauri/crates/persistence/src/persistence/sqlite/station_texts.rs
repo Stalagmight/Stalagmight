@@ -14,10 +14,15 @@
 //! of the same name). Verified at pytool_stalagmight_lib @ 23049eabca21
 //! (2026-11-09), `stalagmight_lib/parser.py`: `_read` refuses any
 //! `PRAGMA user_version != 18` and `_read_project` any `project.schema_version`
-//! other than 18, and it reads only `project`, `lines`, `shots`,
+//! other than 18, and it reads only `project`, `sections`, `shots`,
 //! `station_comments`, `project_settings`, `zero_datums` and `station_merges`,
 //! each by an explicit column list. A new table is invisible to it; a bump would
-//! lock it out. (The in-repo `stalx-reader` is not the constraint: its supported
+//! lock it out. Since its 0.0.2 (c4bf036, 2026-11-13; the version SpeleoDB's
+//! lockfile pins at 792be226d) `_read` accepts `user_version` 18 or 19, with a
+//! `project.schema_version` that matches, and it also reads `loop_closures`,
+//! `section_offsets` and `station_offsets`, still by column lists. A server
+//! still on 0.0.1 refuses anything but 18, so the rule stands until every
+//! deployment has moved. (The in-repo `stalx-reader` is not the constraint: its supported
 //! version is this crate's `SCHEMA_VERSION`, so it moves with any bump - though an
 //! older build of it refuses a newer file too.) The price is that a build
 //! without this table drops the names on its next save - every save rebuilds the

@@ -118,8 +118,8 @@ serialize back to the same JSON.
 Every station has a name (unique within its line) and a project-unique
 Station ID ([SPEC 4.2](SPEC.md#42-station-identification)). Both are stored
 positionally, keyed `(section_id, station_index)` like `station_comments`, in
-side tables that carry no schema bump (SpeleoDB's reader accepts exactly v18
-and ignores tables it does not know):
+side tables that carry no schema bump (SpeleoDB's reader pins the schema
+version, exactly 18 before its 0.0.2, and ignores tables it does not know):
 
 - `station_names (section_id, station_index, name)` - written for every
   station (`persistence/sqlite/station_texts.rs`);
@@ -149,8 +149,8 @@ existed adopts the live project's ids for the stations it shares
 ## Per-shot survey credit
 
 Surveyors, explorers and the survey date are stored per shot, in two side
-tables that carry no schema bump (SpeleoDB's reader accepts exactly v18 and
-ignores tables it does not know): `credit_people (id, name, email)` and
+tables that carry no schema bump (SpeleoDB's reader pins the schema version,
+exactly 18 before its 0.0.2, and ignores tables it does not know): `credit_people (id, name, email)` and
 `shot_credits (section_id, shot_uuid, date, surveyors, explorers)`, keyed by
 `(section_id, shot_uuid)`, the people columns
 comma-joined `credit_people` ids (`section_id` is the SQL name of the line
@@ -196,8 +196,9 @@ tables are project data and ride in SpeleoDB pushes. See
 ## Sections (groupings of lines)
 
 Sections - named, coloured groupings of lines (#327) - live in two side tables
-with no schema bump, like `station_names` (SpeleoDB's Python reader accepts
-exactly v18 and reads only its seven tables, by explicit column lists):
+with no schema bump, like `station_names` (SpeleoDB's Python reader pins the
+schema version, exactly 18 before its 0.0.2, and reads only the tables it
+knows, by explicit column lists):
 
 - `cave_sections (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT
   NULL, position INTEGER NOT NULL)`: one row per Section, `position` its place
@@ -230,7 +231,7 @@ A merge-connected survey can hold several zero datums (#741). Their roles are
 derived from list order, never stored: the first datum of a component places
 it, every later one is a GPS fix. `zero_datums` keeps exactly what an older
 build expects, the placement datums (at most one per merge component) in list
-order, so SpeleoDB's reader (exactly v18, explicit column lists) and older
+order, so SpeleoDB's reader (a pinned schema version, explicit column lists) and older
 builds see nothing new. GPS fixes and accuracies live in a side table with no
 schema bump, `zero_datum_extras (position, section_id, station_index,
 shot_uuid, in_zero_datums, latitude, longitude, depth_reference, accuracy_m,

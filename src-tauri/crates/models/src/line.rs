@@ -914,7 +914,7 @@ impl Line {
         });
     }
 
-    /// The earliest shot date; what the legacy `lines.date` column carries.
+    /// The earliest shot date; what the legacy `sections.date` column carries.
     pub fn first_survey_date(&self) -> Option<NaiveDate> {
         self.shots.iter().filter_map(|s| s.credit().date).min()
     }
