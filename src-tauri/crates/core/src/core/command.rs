@@ -816,6 +816,64 @@ impl Command {
         }
     }
 
+    /// Whether this command can leave a station or a line without its
+    /// identity: create, delete, renumber or re-key stations, or store a line
+    /// name the station-identity epilogue would have to seed or de-duplicate.
+    ///
+    /// `false` is the fast path of that epilogue
+    /// (`AppState::settle_station_identities` in `execute()` and a batch's
+    /// after-snapshot): every command here leaves the stations, their keys and
+    /// the line list as they were, and the two that store a name validate it
+    /// first (`SetStationName`, a rename through `UpdateLineMetadata`), so a
+    /// settled project stays settled and the whole-project pass is skipped.
+    /// Exhaustive on purpose, like [`Self::affects_geometry`]: a new command
+    /// must be classified, and `true` is the safe answer.
+    #[must_use]
+    pub fn can_change_station_identity(&self) -> bool {
+        match self {
+            Command::UpdateLineMetadata { .. }
+            | Command::UpdateShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::EditShotCredit { .. }
+            | Command::SetStationComment { .. }
+            | Command::SetStationName { .. }
+            | Command::MoveComment { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::CreateLoopClosure { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::RemoveZeroDatum { .. }
+            | Command::MoveLine { .. }
+            | Command::MoveSegment { .. }
+            | Command::MoveStation { .. }
+            | Command::UntrackImport { .. }
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation
+            | Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. } => false,
+            Command::Batch { commands } => {
+                commands.iter().any(Command::can_change_station_identity)
+            }
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::CreateLine { .. }
+            | Command::DeleteLine { .. }
+            | Command::ReverseLine { .. }
+            | Command::CreateShot { .. }
+            | Command::DeleteShot { .. }
+            | Command::MergeProjects { .. }
+            | Command::AddProjectFile { .. }
+            | Command::RepairIntegrity => true,
+        }
+    }
+
     /// The `AddProjectFile` command for `path`, its label taken from the file
     /// name alone (sanitized and clamped like a receipt's `file_name`).
     pub fn add_project_file(path: PathBuf) -> Self {

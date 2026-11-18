@@ -1026,8 +1026,6 @@ mod tests {
         assert_eq!(
             forward_calls,
             [
-                // Create a line straight into a Section (#327): a forward edit.
-                "command_cave_section.rs",
                 "command_combine_lines.rs",
                 "command_comment.rs",
                 "command_delete_split.rs",

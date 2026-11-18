@@ -549,3 +549,68 @@ fn ids_and_names_survive_a_save_and_a_file_without_them_re_mints_the_same_ids() 
         [Some("0".into()), Some("sump".into()), Some("3".into())]
     );
 }
+
+/// The epilogue's fast path: a command that cannot change station identity
+/// (`Command::can_change_station_identity`) skips the whole-project pass, a
+/// structural one runs it. Observed through a station whose name was taken
+/// away behind the command path's back: only the structural command seeds
+/// it again.
+#[test]
+fn metadata_commands_skip_the_identity_pass_and_structural_ones_run_it() {
+    let state = new_state();
+    let main = create_line(&state, "Main", 2);
+    let unname = |state: &AppState| {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let key = project.key_for_ref(StationRef::new(main, 1)).unwrap();
+        project.station_names.remove(&key);
+    };
+    let name_of_1 = |state: &AppState| {
+        project(state)
+            .station_name_at(StationRef::new(main, 1))
+            .map(str::to_string)
+    };
+    unname(&state);
+    let metadata = [
+        Command::UpdateLineMetadata {
+            line_id: main,
+            updates: LineUpdates {
+                color: Some("#123456".to_string()),
+                ..Default::default()
+            },
+        },
+        Command::CreateCaveSection {
+            name: "Upper".to_string(),
+            color: "#abcdef".to_string(),
+            line_ids: vec![main],
+        },
+        Command::SetStationName {
+            station_ref: StationRef::new(main, 2),
+            name: "end".to_string(),
+        },
+        Command::Batch {
+            commands: vec![Command::UpdateLineMetadata {
+                line_id: main,
+                updates: LineUpdates {
+                    color: Some("#654321".to_string()),
+                    ..Default::default()
+                },
+            }],
+        },
+    ];
+    for cmd in metadata {
+        assert!(!cmd.can_change_station_identity(), "{}", cmd.description());
+        let result = state.execute(cmd);
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(name_of_1(&state), None, "the pass was skipped");
+    }
+    let append = Command::CreateShot {
+        line_id: main,
+        shot: shot(0.0, 5.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    };
+    assert!(append.can_change_station_identity());
+    assert!(state.execute(append).success);
+    assert!(name_of_1(&state).is_some(), "the pass ran");
+}

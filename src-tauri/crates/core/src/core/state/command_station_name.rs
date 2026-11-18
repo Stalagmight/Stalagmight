@@ -80,8 +80,10 @@ impl AppState {
     /// mutating command, before its undo entry is finalized, after every
     /// undo/redo step, and on the after-snapshot of every command that records
     /// a snapshot pair, so the id an edit allocates is part of the state its
-    /// undo entry recorded. Leaves a valid id or name untouched, and is a cheap
-    /// scan when nothing is missing.
+    /// undo entry recorded. Leaves a valid id or name untouched. Costs
+    /// O(stations) even when nothing is missing, so a forward command that
+    /// cannot change station identity skips it
+    /// (`Command::can_change_station_identity`).
     pub(super) fn settle_station_identities(&self) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,

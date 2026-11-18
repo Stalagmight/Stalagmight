@@ -992,9 +992,15 @@ impl AppState {
         // command did not name it, its name) here, BEFORE the undo entry below
         // is finalized, so the entry records the state with the ids in it.
         // Lifecycle commands load or create a project that the load path has
-        // already settled; a Batch settles inside `execute_batch`, before its
-        // after-snapshot.
-        if result.success && !Self::is_lifecycle_passthrough(&cmd) {
+        // already settled; a Batch settles once, inside `execute_batch`, before
+        // its after-snapshot; a command that cannot change station identity
+        // (`Command::can_change_station_identity`) leaves a settled project
+        // settled, so it skips the whole-project pass.
+        if result.success
+            && !Self::is_lifecycle_passthrough(&cmd)
+            && !matches!(cmd, Command::Batch { .. })
+            && cmd.can_change_station_identity()
+        {
             self.settle_station_identities();
         }
 
@@ -1322,8 +1328,13 @@ impl AppState {
         }
 
         if push_undo {
-            // Capture after-snapshot for redo support; failure means rollback
-            let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            // Capture after-snapshot for redo support; failure means rollback.
+            // The batch's one station-identity settle runs inside it, skipped
+            // when no member can change station identity (a paste of comments
+            // or LRUD).
+            let settle = commands.iter().any(Command::can_change_station_identity);
+            let after_snapshot = match self.capture_after_snapshot_settled(&before_snapshot, settle)
+            {
                 Ok(s) => s,
                 Err(result) => return result,
             };

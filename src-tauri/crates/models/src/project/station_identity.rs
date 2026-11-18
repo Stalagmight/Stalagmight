@@ -206,7 +206,13 @@ impl Project {
     /// A station that already has a valid id and name keeps both. Ids whose
     /// station is gone are dropped (an id is identity, not data); a name whose
     /// station is gone is left for the integrity check, like a comment.
-    /// Cheap when nothing is missing: one allocation-free pass over the keys.
+    ///
+    /// Cost when nothing is missing: one pass over the shots to build the
+    /// `(line, uuid)` index the keys resolve against (a few allocations sized
+    /// to the project, none per station), then one pass over each map. That
+    /// is O(stations) per call, so `execute()` skips the call entirely for a
+    /// command that cannot change station identity
+    /// (`Command::can_change_station_identity` in the core crate).
     pub fn ensure_station_identities(&mut self) -> IdentityHeal {
         let mut heal = IdentityHeal {
             line_names: self.ensure_line_names(),

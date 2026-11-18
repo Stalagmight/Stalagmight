@@ -1010,6 +1010,17 @@ impl AppState {
         &self,
         before_snapshot: &str,
     ) -> Result<String, CommandResult> {
+        self.capture_after_snapshot_settled(before_snapshot, true)
+    }
+
+    /// [`Self::capture_after_snapshot_or_rollback`], with the station-identity
+    /// settle only when `settle`: a batch whose members cannot change station
+    /// identity (`Command::can_change_station_identity`) skips it.
+    pub(super) fn capture_after_snapshot_settled(
+        &self,
+        before_snapshot: &str,
+        settle: bool,
+    ) -> Result<String, CommandResult> {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -1034,7 +1045,9 @@ impl AppState {
         // every command that records a snapshot pair: the after side has to
         // hold the ids its new stations were given, or the redo would put
         // back stations without them.
-        super::command_station_name::settle(p);
+        if settle {
+            super::command_station_name::settle(p);
+        }
         match Self::serialize_project_snapshot(p) {
             Ok(json) => Ok(json),
             Err(e) => {

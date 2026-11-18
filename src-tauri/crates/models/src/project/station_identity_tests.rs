@@ -406,8 +406,9 @@ fn snapshots_carry_ids_and_the_counter() {
     assert_eq!(old.next_station_id, 0);
 }
 
-/// The epilogue runs after every command, so its no-change pass must stay
-/// cheap on the largest surveys (~89k stations): a scan, no allocation per
+/// The epilogue runs after every structural command (metadata-only commands
+/// skip it), so its no-change pass must stay cheap on the largest surveys
+/// (~89k stations): one shot-uuid index and a scan, no allocation per
 /// station. Prints the timing; asserts only a generous bound.
 #[test]
 #[ignore = "timing probe; run with --ignored --nocapture"]
