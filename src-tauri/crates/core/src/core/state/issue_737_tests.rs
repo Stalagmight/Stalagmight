@@ -758,10 +758,20 @@ fn no_delete_leaves_a_new_closure_across_one_shot_with_snaps() {
         .unwrap_or(120);
     let run = delete_fuzz(0x736_05a1, cases, true);
     eprintln!(
-        "{cases} cases: {} snaps planted, {} deletes beside a snap, {} closures removed, {} predicted",
-        run.snaps, run.deletes_with_snaps, run.removals, run.agreed
+        "{cases} cases: {} snaps and {} torn snaps planted, {} deletes beside a snap, \
+         {} closures removed ({} checked as needed), {} predicted",
+        run.snaps,
+        run.torn_snaps,
+        run.deletes_with_snaps,
+        run.removals,
+        run.removals_checked,
+        run.agreed
     );
     assert!(run.snaps > 0, "no snap was planted; widen the generator");
+    assert!(
+        run.torn_snaps > 0,
+        "no torn snap was planted; widen the generator"
+    );
     assert!(
         run.deletes_with_snaps > 0,
         "no delete ran beside a snap; widen the generator"
@@ -773,7 +783,9 @@ struct DeleteFuzz {
     removals: usize,
     agreed: usize,
     snaps: usize,
+    torn_snaps: usize,
     deletes_with_snaps: usize,
+    removals_checked: usize,
 }
 
 /// Random merged networks with random `Batch` closures (and, with `snaps`,
@@ -821,7 +833,17 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
                 ) else {
                     continue;
                 };
-                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                // One in three is a torn snap: the section ends 1.5 to 5.5 cm
+                // off y, so the `Move` closure is measured apart (not
+                // aligned) - the shape a delete's shift can close again.
+                let torn = next(3) == 0;
+                let (mut dx, mut dy) = (b.x - a.x, b.y - a.y);
+                if torn {
+                    let off = 0.015 + next(5) as f64 * 0.01;
+                    let bearing = (next(360) as f64).to_radians();
+                    dx += off * bearing.sin();
+                    dy += off * bearing.cos();
+                }
                 let length = dx.hypot(dy);
                 if length < 0.5 {
                     continue;
@@ -831,10 +853,10 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
                 if p.merge_stations(st(s, 0), x).is_err() {
                     continue;
                 }
-                if p.create_loop_closure(st(s, 1), y, ClosureStrategy::Move)
-                    .is_ok_and(|c| c.is_aligned)
-                {
-                    planted += 1;
+                match p.create_loop_closure(st(s, 1), y, ClosureStrategy::Move) {
+                    Ok(c) if c.is_aligned => planted += 1,
+                    Ok(_) if torn => run.torn_snaps += 1,
+                    _ => {}
                 }
             }
         }
@@ -906,6 +928,37 @@ fn delete_fuzz(seed0: u64, cases: usize, snaps: bool) -> DeleteFuzz {
             .filter(|w| w.code == CLOSURE_REMOVED_ACROSS_ONE_SHOT)
             .count();
         run.removals += reported;
+        // Every closure the delete removed as across one shot is across one
+        // shot in the project the command left (alignment re-measured by its
+        // epilogue, #736): put it back where it was in the list, re-measure,
+        // and ask. Only when every closure that went is one it reported, so
+        // a closure the orphan sweep took (#738) is not mistaken for one.
+        let gone: Vec<u64> = before
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| !after.loop_closures.iter().any(|c| c.id == *id))
+            .collect();
+        if reported > 0 && gone.len() == reported {
+            let order = |id: u64| before.loop_closures.iter().position(|c| c.id == id);
+            for &id in &gone {
+                let mut probe = after.clone();
+                let back = before.loop_closures.iter().find(|c| c.id == id).unwrap();
+                probe.loop_closures.push(back.clone());
+                probe.loop_closures.sort_by_key(|c| order(c.id));
+                probe.remeasure_closure_alignment();
+                assert!(
+                    probe
+                        .closures_across_one_shot()
+                        .iter()
+                        .any(|c| c.closure_id == id),
+                    "closure {id} was removed as across one shot, but it is not once the \
+                     command has run: {:?}",
+                    result.warnings
+                );
+                run.removals_checked += 1;
+            }
+        }
         assert!(state.undo().success);
         assert_eq!(
             serde_json::to_value(&project(&state).loop_closures).unwrap(),
