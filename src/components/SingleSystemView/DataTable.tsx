@@ -1230,8 +1230,9 @@ export default function DataTable({ lines }: DataTableProps) {
     return `${header} ${gridSel.activeRow + 1}`;
   }, [gridSel, tableView, selectedLine, shotColumns]);
 
-  // Gutter shows the shot's ID pill (replaces the old ID column); double-click
-  // pans the map to the shot, as it did on the column's pill.
+  // Gutter shows the shot's name pill (`4 → 5`, never an id); double-click
+  // pans the map to the shot, as it did on the old id column's pill. A long
+  // name is cut with an ellipsis; the tooltip has it whole.
   const shotRowLabel = useCallback(
     (shot: Shot, rowIndex: number) => {
       // Draft rows earn their pill only once they become real shots.
@@ -1239,10 +1240,14 @@ export default function DataTable({ lines }: DataTableProps) {
       const shotIndex = shotIndexAt(rowIndex);
       return selectedLineId !== null && shotIndex !== null ? (
         <span
+          className="flex min-w-0 max-w-full"
           onDoubleClick={() => handlePanToShot(shot)}
+          title={labels.shotAt(selectedLineId, shotIndex, true)}
           data-testid={`data-table-shot-row-label-${selectedLineId}-${shot.id}`}
         >
-          <EntityBlob entity="shot">{labels.shotAt(selectedLineId, shotIndex)}</EntityBlob>
+          <EntityBlob entity="shot" className="min-w-0 max-w-full">
+            <span className="truncate">{labels.shotAt(selectedLineId, shotIndex)}</span>
+          </EntityBlob>
         </span>
       ) : (
         rowIndex + 1
@@ -1423,18 +1428,22 @@ export default function DataTable({ lines }: DataTableProps) {
     [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick, labels, lineStationNames]
   );
 
-  // Gutter shows the station's ID pill (the old index column); double-click
+  // Gutter shows the station's name pill (never its position); double-click
   // centers the map on the station, as the row double-click used to.
   const stationRowLabel = useCallback(
     (station: Station) => (
       <span
+        className="flex min-w-0 max-w-full"
         onDoubleClick={() => {
           setSource('data-table');
           triggerCenterOnStation(station.station_ref);
         }}
+        title={labels.station(station.station_ref, true)}
         data-testid={`data-table-station-row-label-${station.station_ref.line_id}-${station.station_ref.station_index}`}
       >
-        <EntityBlob entity="station">{labels.station(station.station_ref)}</EntityBlob>
+        <EntityBlob entity="station" className="min-w-0 max-w-full">
+          <span className="truncate">{labels.station(station.station_ref)}</span>
+        </EntityBlob>
       </span>
     ),
     [triggerCenterOnStation, labels]
@@ -1809,7 +1818,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 cellClassName={shotCellClassName}
                 rowLabel={shotRowLabel}
                 labels={gridLabels}
-                gutterWidth={72}
+                gutterWidth={96}
                 onSelectionChange={setGridSel}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 {...(editingBlocked ? {} : { onInsertRows: onShotInsertRows })}
@@ -1844,7 +1853,7 @@ export default function DataTable({ lines }: DataTableProps) {
                 hoveredRow={stationHoveredRow}
                 rowLabel={stationRowLabel}
                 labels={stationGridLabels}
-                gutterWidth={72}
+                gutterWidth={96}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 hiddenColumns={stationHiddenColumns}
                 columnOrder={stationColumnOrder}
