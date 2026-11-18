@@ -84,9 +84,14 @@ export function createProjectHistoryBannerActions(
         const discarded = await invokeIpc<boolean>('history_discarded', undefined, {
           purpose: 'report a history load that was discarded',
         });
+        // Only the banner's wording rides on this second read, so a failure of
+        // it must not cost the banner itself: it falls back to the generic text.
         const earlierVersion = discarded
           ? await invokeIpc<boolean>('history_discarded_from_earlier_version', undefined, {
               purpose: 'say whether a discarded history was an earlier version',
+            }).catch((e: unknown) => {
+              console.error('Failed to read why the history was discarded:', e);
+              return false;
             })
           : false;
         const cur = get();

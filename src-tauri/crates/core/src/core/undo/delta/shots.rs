@@ -2,7 +2,7 @@
 //! copying by uuid from any section, in either direction, turned around when
 //! the section was reversed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Map, Number, Value};
 
@@ -140,9 +140,17 @@ pub(super) fn flip_shot(shot: &Value, swap_lr: bool) -> Value {
 
 /// The source's shots, indexed by uuid, built on first use: only an edited or
 /// new section needs it.
+///
+/// Each source shot is copied at most once, and never out of a section the
+/// target keeps in place ([`Self::reserve`]): a shot matched a second time (two
+/// shots sharing a uuid) is written literally instead. That is what lets an
+/// apply refuse any delta that copies a source shot twice
+/// ([`super::ProjectDelta::check_shape`]), so an applied delta is never larger
+/// than its source plus the literals it carries.
 pub(super) struct ShotPool<'a> {
     sections: &'a BTreeMap<usize, Value>,
     by_uuid: Option<HashMap<&'a str, Vec<(usize, usize)>>>,
+    used: HashSet<(usize, usize)>,
 }
 
 impl<'a> ShotPool<'a> {
@@ -150,7 +158,15 @@ impl<'a> ShotPool<'a> {
         Self {
             sections,
             by_uuid: None,
+            used: HashSet::new(),
         }
+    }
+
+    /// Take every shot of the source section at `section` out of the pool: the
+    /// target keeps them where they are.
+    pub(super) fn reserve(&mut self, section: usize) {
+        let count = self.shots(section).len();
+        self.used.extend((0..count).map(|i| (section, i)));
     }
 
     fn shots(&self, section: usize) -> &'a [Value] {
@@ -187,12 +203,13 @@ impl<'a> ShotPool<'a> {
         let mut out = Vec::new();
         let mut open: Option<OpenCopy> = None;
         for (t, shot) in target.iter().enumerate() {
-            let candidates: Vec<(usize, usize)> = shot
+            let mut candidates: Vec<(usize, usize)> = shot
                 .get(UUID)
                 .and_then(Value::as_str)
                 .and_then(|uuid| self.index().get(uuid))
                 .cloned()
                 .unwrap_or_default();
+            candidates.retain(|position| !self.used.contains(position));
             let extended = open.as_ref().and_then(|run| run.continuation(&candidates));
             let chosen = if extended.is_some() {
                 extended
@@ -215,6 +232,9 @@ impl<'a> ShotPool<'a> {
                 continue;
             };
             let edit = self.shots(p).get(i).and_then(|source| diff(source, shot));
+            if !matches!(edit, Some(Edit::Set(_))) {
+                self.used.insert((p, i));
+            }
             if matches!(edit, Some(Edit::Set(_))) {
                 // Not an object any more: nothing to share with the source.
                 if let Some(run) = open.take() {

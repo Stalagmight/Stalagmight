@@ -10,10 +10,21 @@ type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 /// Why a loaded history was dropped whole (see `drop_history_with_a_hole`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDropped {
-    /// Rows written by a build before compact entries: no `{"v2": ...}` envelope.
+    /// Rows written by a build before compact entries: no versioned envelope.
     EarlierVersion,
-    /// A row in this format that could not be read.
+    /// A row in this format that could not be read, or one in a versioned
+    /// envelope this build does not know (a later build's).
     Unreadable,
+}
+
+/// Whether a row is wrapped in a versioned envelope, `{"v<digits>": ...}`:
+/// this build's (`v2`), or any later one.
+fn versioned(undo_data_json: &str) -> bool {
+    let Some(rest) = undo_data_json.trim_start().strip_prefix("{\"v") else {
+        return false;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0 && rest[digits..].starts_with('"')
 }
 
 /// Tally of the rows a load could not read, by why.
@@ -24,8 +35,11 @@ struct Unread {
 }
 
 impl Unread {
+    /// Count a row this build could not read: an EARLIER version's when it
+    /// carries no versioned envelope (`{"v<digits>": ...}`) at all; damaged, or
+    /// a later version's, when it does.
     fn note(&mut self, undo_data_json: &str) {
-        if undo_data_json.trim_start().starts_with("{\"v2\":") {
+        if versioned(undo_data_json) {
             self.damaged += 1;
         } else {
             self.earlier += 1;
@@ -70,12 +84,25 @@ struct PersistedIn {
     data: UndoData,
 }
 
-/// A persisted payload, or `None` when it is not one this format wrote: a
-/// row from an older build, or a corrupt one.
+/// A row's payload, or `None` when it is not one this build wrote: not the
+/// envelope, not an `UndoData`, or a compact entry that breaks the rules every
+/// delta obeys ([`check_shape`](super::ProjectDelta::check_shape): the file is untrusted input, and
+/// a delta that breaks them could build without bound).
 fn parse_undo_data(undo_data_json: &str) -> Option<UndoData> {
-    serde_json::from_str::<PersistedIn>(undo_data_json)
-        .ok()
-        .map(|row| row.data)
+    let data = serde_json::from_str::<PersistedIn>(undo_data_json)
+        .ok()?
+        .data;
+    if let UndoData::Delta(delta) = &data {
+        if let Err(reason) = delta.delta.check_shape() {
+            tracing::warn!(
+                purpose = "load persisted undo history",
+                reason = %reason,
+                "A compact undo entry in the file breaks the delta rules; it is unreadable"
+            );
+            return None;
+        }
+    }
+    Some(data)
 }
 
 fn write_undo_data(undo_data: &UndoData) -> Option<String> {
@@ -171,7 +198,7 @@ impl UndoStack {
                 tracing::warn!(
                     error = %e,
                     purpose = "load persisted undo history",
-                    "Skipping an undo entry whose command could not be deserialized; its undo step is dropped"
+                    "An undo entry's command could not be deserialized; the entry is unreadable, so the history is dropped"
                 );
                 None
             }
@@ -289,8 +316,11 @@ impl UndoStack {
     /// a target that does not resolve against the project as loaded may resolve
     /// perfectly once the walk gets there. Above the wall the question is
     /// answerable, because every live path that REMOVES a shot records a
-    /// `ProjectSnapshotPair` - itself a wall - so no entry above one can be
-    /// addressing a shot that something above it deleted.
+    /// compact delta (captured as a `ProjectSnapshotPair`) - itself a wall - so
+    /// no entry above one can be addressing a shot that something above it
+    /// deleted. Dropping an entry here leaves no hole a delta below could fall
+    /// into: its shot is gone from the live project, so nothing it changed is
+    /// left there for the delta to be relative to.
     fn drop_unresolvable_undo_entries(&mut self, project: &Project) -> usize {
         let mut doomed: Vec<usize> = Vec::new();
         let mut dropped: Vec<String> = Vec::new();

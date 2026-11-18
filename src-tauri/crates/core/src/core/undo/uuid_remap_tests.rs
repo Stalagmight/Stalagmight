@@ -417,8 +417,11 @@ fn a_copy_only_the_history_still_holds_is_renamed_so_undo_cannot_repeat_an_id() 
 }
 
 /// The compact form of the test above: the delete's entry is a delta whose
-/// re-created section COPIES its shots from section 0 (the same ids, so the
-/// encoder shares them), and the remap pins the renamed ids onto the copies.
+/// re-created section carries its shots LITERALLY - section 0 keeps the same
+/// ids in place, and a delta never copies a shot out of a section that stays
+/// where it is (`ProjectDelta::check_shape`) - and the remap renames the ids
+/// in those literals. (A rename landing on a COPY is pinned onto it instead:
+/// `a_renamed_id_is_pinned_onto_the_shot_a_delta_copies` in `delta_tests.rs`.)
 #[test]
 fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
     let mut project = two_copies();
@@ -437,8 +440,8 @@ fn a_compact_entry_copying_an_id_only_the_history_holds_twice_is_renamed() {
         panic!("premise: the pair compacts");
     };
     assert!(
-        delta.delta.shot_uuid_mentions().is_empty(),
-        "premise: the re-created shots are copies, carrying no uuid of their own"
+        !delta.delta.shot_uuid_mentions().is_empty(),
+        "premise: the re-created shots are literals, carrying their uuids"
     );
     let mut stack = stack_of(vec![compact]);
     assert_eq!(stack.translate_shot_uuids(&project, &renamed), 1);

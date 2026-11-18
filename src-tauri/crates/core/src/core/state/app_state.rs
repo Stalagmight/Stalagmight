@@ -758,7 +758,8 @@ impl AppState {
     ///
     /// Snapshot entries stopped being local-only when Full mode started shipping undo
     /// history: `sanitize_push_snapshot` deliberately keeps `undo_stack` in the upload, and
-    /// every `ProjectSnapshotPair` half is a whole serialized `Project`.
+    /// every `ProjectSnapshotPair` half is a whole serialized `Project` - which the compact
+    /// delta made from it carries in part.
     /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
     /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
     /// layout into the project's git history, permanently, readable by every collaborator
@@ -779,9 +780,9 @@ impl AppState {
     /// are `#[serde(skip)]`, and `imported_file_hashes` is content hashes that are meant to
     /// proliferate. A new field of that kind must be added here too.
     ///
-    /// [#741] GPS fixes leave `zero_datums` here too, for an older build that reads the
-    /// persisted history: see [`snapshot_fixes`]. `restore_snapshot_into_with` merges them
-    /// back.
+    /// [#741] GPS fixes leave `zero_datums` here too (made for an older build reading the
+    /// persisted history, which none does any more): see [`snapshot_fixes`].
+    /// `restore_snapshot_into_with` merges them back.
     pub(super) fn serialize_project_snapshot(project: &Project) -> serde_json::Result<String> {
         let holds_fix = snapshot_fixes::holds_fix(project);
         if project.file_path.is_none() && !holds_fix {

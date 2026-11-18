@@ -468,3 +468,173 @@ fn a_section_counter_rewound_by_a_reload_is_raised_past_a_restored_section() {
         .unwrap();
     assert!(rebuilt["next_section_id"].as_u64().unwrap() > restored_max);
 }
+
+// === Hostile deltas: a delta is read back from the file ===
+
+fn hostile(text: &str) -> ProjectDelta {
+    serde_json::from_str(text).unwrap()
+}
+
+fn section_count(p: &Value) -> usize {
+    p["sections"].as_array().unwrap().len()
+}
+
+/// A delta must not build more than its source holds plus what it carries,
+/// or a small row grows the project it is applied to without bound.
+#[test]
+fn a_delta_that_keeps_a_section_twice_is_refused() {
+    let mut world = World::new(23);
+    let p = world.project(2);
+    let n = section_count(&p);
+    let delta = hostile(&format!(
+        r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"k":[0,{n}]}}]]}}"#
+    ));
+    assert!(delta.check_shape().is_err());
+    assert!(delta.apply(&p).is_err(), "applied: the sections doubled");
+}
+
+#[test]
+fn a_delta_that_copies_a_shot_twice_is_refused() {
+    let mut world = World::new(29);
+    let p = world.project(2);
+    let n = section_count(&p);
+    let id = p["sections"][0]["id"].as_u64().unwrap();
+    let copy = r#"{"c":{"sec":0,"at":0,"n":1}}"#;
+    let delta = hostile(&format!(
+        r#"{{"s":[{n},[{{"e":{{"at":0,"id":{id},"s":[{copy},{copy}]}}}},{{"k":[1,{}]}}]]}}"#,
+        n - 1
+    ));
+    assert!(delta.check_shape().is_err());
+    assert!(delta.apply(&p).is_err());
+}
+
+#[test]
+fn a_delta_that_copies_out_of_a_kept_section_is_refused() {
+    let mut world = World::new(31);
+    let p = world.project(2);
+    let n = section_count(&p);
+    let delta = hostile(&format!(
+        r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":900}},"s":[{{"c":{{"sec":0,"at":0,"n":1}}}}]}}}}]]}}"#
+    ));
+    assert!(delta.check_shape().is_err());
+    assert!(delta.apply(&p).is_err());
+}
+
+#[test]
+fn a_delta_that_keeps_an_array_element_twice_is_refused() {
+    let mut world = World::new(37);
+    let p = world.project(1);
+    let len = p["station_merges"].as_array().unwrap().len();
+    let delta = hostile(&format!(
+        r#"{{"f":{{"station_merges":{{"a":[{len},[{{"k":[0,{len}]}},{{"k":[0,{len}]}}]]}}}}}}"#
+    ));
+    assert!(delta.check_shape().is_err());
+    assert!(delta.apply(&p).is_err());
+}
+
+#[test]
+fn a_new_section_with_an_id_past_the_bound_is_refused_not_overflowed() {
+    let mut world = World::new(41);
+    let p = world.project(1);
+    let n = section_count(&p);
+    let delta = hostile(&format!(
+        r#"{{"s":[{n},[{{"k":[0,{n}]}},{{"n":{{"f":{{"id":18446744073709551615,"next_shot_id":0}},"s":[]}}}}]]}}"#
+    ));
+    assert!(delta.check_shape().is_err());
+    assert!(delta.apply(&p).is_err());
+}
+
+#[test]
+fn the_holder_walk_refuses_a_delta_that_breaks_the_rules() {
+    use std::rc::Rc;
+    let view: Vec<super::history::HolderSection> = vec![(1, Rc::new(vec![Some(Rc::from("u-1"))]))];
+    let doubled = hostile(r#"{"s":[1,[{"k":[0,1]},{"k":[0,1]}]]}"#);
+    assert!(doubled.step_holders(&view).is_none());
+    let kept = hostile(r#"{"s":[1,[{"k":[0,1]}]]}"#);
+    assert_eq!(kept.step_holders(&view).map(|v| v.len()), Some(1));
+}
+
+/// Two shots that share a uuid (a legacy file can hold such a pair): a split
+/// that sends one to each side copies each source shot once and writes the
+/// second match literally, so the delta keeps the rules and rebuilds exactly.
+#[test]
+fn a_repeated_uuid_is_copied_once_and_written_literally_after() {
+    let mut world = World::new(43);
+    let mut before = world.project(0);
+    let mut section = world.section(4);
+    let twin = section["shots"][0]["uuid"].clone();
+    section["shots"][2]["uuid"] = twin;
+    World::sections(&mut before).push(section);
+    before["next_section_id"] = json!(world.next_section);
+    let mut after = before.clone();
+    let mut tail = World::sections(&mut after)[0].clone();
+    let shots = World::sections(&mut after)[0]["shots"]
+        .as_array_mut()
+        .unwrap();
+    let moved: Vec<Value> = shots.drain(2..).collect();
+    tail["id"] = json!(world.next_section);
+    tail["shots"] = json!(moved);
+    World::sections(&mut after).push(tail);
+    after["next_section_id"] = json!(world.next_section + 1);
+    for (source, target) in [(&before, &after), (&after, &before)] {
+        let delta = round_trip(source, target);
+        delta.check_shape().unwrap();
+    }
+}
+
+/// A copy carries no uuid of its own, so a rename the load's heal makes in
+/// the section a shot is copied into is pinned onto the copy as an edit.
+#[test]
+fn a_renamed_id_is_pinned_onto_the_shot_a_delta_copies() {
+    use std::rc::Rc;
+    let mut world = World::new(47);
+    let mut source = world.project(0);
+    let first = world.section(3);
+    let second = world.section(1);
+    World::sections(&mut source).push(first);
+    World::sections(&mut source).push(second);
+    source["next_section_id"] = json!(world.next_section + 1);
+    // Move the first section's last shot into a new section.
+    let mut target = source.clone();
+    let moved = World::sections(&mut target)[0]["shots"]
+        .as_array_mut()
+        .unwrap()
+        .pop()
+        .unwrap();
+    let uuid = moved["uuid"].as_str().unwrap().to_string();
+    let new_section = world.next_section;
+    let mut fresh = World::sections(&mut target)[1].clone();
+    fresh["id"] = json!(new_section);
+    fresh["shots"] = json!([moved]);
+    World::sections(&mut target).push(fresh);
+    let mut delta = ProjectDelta::between(&source, &target).unwrap();
+
+    let renamed = format!("{uuid}-renamed");
+    let view: Vec<super::history::HolderSection> = source["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let id = u32::try_from(s["id"].as_u64().unwrap()).unwrap();
+            let shots = s["shots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|shot| shot["uuid"].as_str().map(Rc::from))
+                .collect();
+            (id, Rc::new(shots))
+        })
+        .collect();
+    let target_section = u32::try_from(new_section).unwrap();
+    let rename = |section: u32, old: &str| {
+        (section == target_section && old == uuid).then(|| renamed.clone())
+    };
+    assert!(
+        delta.rename_copies(&view, &rename),
+        "the moved shot is a copy, so the rename has to be pinned onto it"
+    );
+    let rebuilt = delta.apply(&source).unwrap();
+    let mut expected = target.clone();
+    World::sections(&mut expected)[2]["shots"][0]["uuid"] = json!(renamed);
+    assert!(same(&rebuilt, &expected), "rebuilt: {rebuilt}");
+}

@@ -486,12 +486,24 @@ fn actions() -> Vec<(&'static str, Action)> {
     ]
 }
 
-/// Every action's row, and every action that could not be measured.
-fn measure(gate: &Gate) -> (Vec<Row>, Vec<String>) {
+/// The project as the undo fuzzer compares it (`canonical_snapshot`): what no
+/// history move restores - `modified_at`, the monotonic id allocators - left out.
+fn state_text(state: &AppState) -> String {
+    super::fuzz_undo_tests::canonical_snapshot(state, false)
+}
+
+/// Every action's row, and every action that could not be measured - or, when
+/// `exact`, whose undo or redo did not land exactly on the state it records,
+/// since a small entry that restores the wrong project is no saving at all.
+/// (The fuzzer's comparison costs most of the run on the larger survey, whose
+/// entries take the same paths, so only the smaller one asks for it.)
+fn measure(gate: &Gate, exact: bool) -> (Vec<Row>, Vec<String>) {
     let mut rows = Vec::new();
     let mut failed = Vec::new();
     for (action, run) in actions() {
         let depth = gate.state.undo_stack.lock().unwrap().len();
+        let state = |gate: &Gate| exact.then(|| state_text(&gate.state));
+        let before = state(gate);
         let started = std::time::Instant::now();
         let result = run(gate);
         let forward_ms = started.elapsed().as_millis();
@@ -503,6 +515,7 @@ fn measure(gate: &Gate) -> (Vec<Row>, Vec<String>) {
             failed.push(format!("{action}: pushed no entry"));
             continue;
         }
+        let after = state(gate);
         let (variant, undo_bytes) = newest(&gate.state, false);
         let started = std::time::Instant::now();
         let undone = gate.state.undo();
@@ -511,14 +524,32 @@ fn measure(gate: &Gate) -> (Vec<Row>, Vec<String>) {
             failed.push(format!("{action}: undo: {:?}", undone.error));
             continue;
         }
+        if state(gate) != before {
+            failed.push(format!(
+                "{action}: the undo did not restore the state before it"
+            ));
+            continue;
+        }
         let (_, redo_bytes) = newest(&gate.state, true);
         // Redo and undo again, so the next action starts from the same state
         // and the redo is timed too.
         let started = std::time::Instant::now();
         let redone = gate.state.redo();
         let redo_ms = started.elapsed().as_millis();
-        if !redone.success || !gate.state.undo().success {
-            failed.push(format!("{action}: redo or the undo after it failed"));
+        if !redone.success {
+            failed.push(format!("{action}: redo: {:?}", redone.error));
+            continue;
+        }
+        if state(gate) != after {
+            failed.push(format!(
+                "{action}: the redo did not restore the state after it"
+            ));
+            continue;
+        }
+        if !gate.state.undo().success || state(gate) != before {
+            failed.push(format!(
+                "{action}: the second undo did not restore the state before it"
+            ));
             continue;
         }
         rows.push(Row {
@@ -567,9 +598,9 @@ fn report(text: &str) {
     }
 }
 
-fn gate(sections: usize, label: &str) {
+fn gate(sections: usize, label: &str, exact: bool) {
     let gate = open(sections);
-    let (rows, failed) = measure(&gate);
+    let (rows, failed) = measure(&gate, exact);
     let mut text = table(label, &gate, &rows);
     for failure in &failed {
         let _ = writeln!(text, "  NOT MEASURED {failure}");
@@ -590,10 +621,10 @@ fn gate(sections: usize, label: &str) {
 
 #[test]
 fn every_undo_entry_is_a_small_fraction_of_a_5k_shot_file() {
-    gate(100, "5k shots");
+    gate(100, "5k shots", true);
 }
 
 #[test]
 fn every_undo_entry_is_a_small_fraction_of_a_20k_shot_file() {
-    gate(400, "20k shots");
+    gate(400, "20k shots", false);
 }

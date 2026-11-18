@@ -156,6 +156,7 @@ impl ProjectDelta {
     /// and a delta carries no state whole. A section the delta does not touch
     /// is shared with `view`, so a step costs the sections it touches.
     pub fn step_holders(&self, view: &[HolderSection]) -> Option<Vec<HolderSection>> {
+        self.check_shape().ok()?;
         let Some((count, runs)) = &self.sections else {
             return Some(view.to_vec());
         };

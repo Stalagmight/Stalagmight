@@ -1,12 +1,18 @@
 //! GPS fixes in a whole-project undo snapshot (#741).
 //!
-//! A `ProjectSnapshotPair` half is a serialized [`Project`], and
-//! it is persisted in the `.stalx` undo history, where an older build reads it
-//! back with `serde_json::from_str::<Project>`. That build assumes at most one
-//! zero datum per merge component, so a GPS fix in the plain `zero_datums`
-//! list would reach it as a second placement: an Undo there could restore two
-//! datums in one merged group, and its next save would write both to the v18
-//! `zero_datums` table an outside reader reads.
+//! A `ProjectSnapshotPair` half is a serialized [`Project`]. It was persisted
+//! in the `.stalx` undo history, where an older build read it back with
+//! `serde_json::from_str::<Project>`; that build assumes at most one zero datum
+//! per merge component, so a GPS fix in the plain `zero_datums` list would have
+//! reached it as a second placement. The split below was made for that reader.
+//!
+//! It no longer protects one: the history is now stored as compact deltas in a
+//! versioned envelope no older build parses (`undo/persistence.rs`), and the
+//! undo history keeps no compatibility with older builds. What remains is that
+//! the snapshot text a delta is encoded from and the restore that reads it
+//! back agree on the split, so it is consistent, not load-bearing. Removing it
+//! means dropping both sides (`serialize_project_snapshot` and the restore's
+//! merge) in one change.
 //!
 //! So a snapshot mirrors the file's table split (`zero_datum_extras`):
 //!

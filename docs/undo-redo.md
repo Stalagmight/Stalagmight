@@ -89,9 +89,10 @@ An entry holds the delta from the LIVE project to the state on its other side - 
 step (`AppState::step_through_delta`, `core/state/undo_delta.rs`) serializes the live
 project, applies the delta to that text, installs the result through the same
 `restore_snapshot_into_with` every snapshot restore takes, and re-encodes the entry as
-the delta back to the state it just left. This is the delta form of the
-self-refreshing wall below: the next step starts from exactly the state the last one
-installed, so undo and redo stay exact inverses whatever undo-less change (a save's
+the delta from the project that restore INSTALLED (serialized again, not the text it
+was handed: the restore heals) back to the state it just left. This is the delta form
+of the self-refreshing wall below: the next step starts from exactly the state the last
+one installed, so undo and redo stay exact inverses whatever undo-less change (a save's
 heals) happened in between.
 
 The engine works on the serialized TEXT (`Doc`): an untouched section stays a borrowed
@@ -126,6 +127,27 @@ reinstall is judged against the state it replays into (#732), each state a delta
 records is folded in like a snapshot half (its ids, its repeats), and a COPIED shot
 whose id the remap renames gets the new id pinned as an edit on the copy
 (`ProjectDelta::rename_copies`), since a copy carries no uuid of its own.
+
+### The rules every delta keeps
+
+A persisted delta is read back from the `.stalx`, so it is untrusted input.
+`ProjectDelta::check_shape` (`core/undo/delta/shape.rs`) refuses one that breaks a rule
+the encoder keeps by construction:
+
+- the section runs read each source section at most once, within the source count the
+  delta records;
+- the shot copies take each source shot at most once, and never out of a section whose
+  shots stay where they are (kept, or edited without its shots rebuilt) - the encoder's
+  `ShotPool` writes a second match of a shared uuid literally instead;
+- every positional array edit walks its source forwards, each element at most once;
+- a new section's id fits the section-id bound.
+
+Together they bound an apply: it never builds more than its source holds plus the
+literals the delta carries. Without them a row of a few kilobytes that keeps the same
+sections over and over grows the project on every step - and the load's holder walk
+steps through every entry at open, before any click. The check runs when a row is read
+(a row that fails is unreadable, so the history is dropped), before every apply, before
+every walk step, and after every encode.
 
 ### Persisted rows, and older histories
 
@@ -1115,7 +1137,7 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`) |
+| `src-tauri/crates/core/src/core/undo/delta.rs`, `delta/*.rs` | The compact-entry engine: `ProjectDelta`, `SnapshotDelta`, text-level encode/apply (`doc.rs`), the JSON diff (`json.rs`), shot runs (`shots.rs`), what the history reads in a delta (`history.rs`), the rules every delta keeps (`shape.rs`) |
 | `src-tauri/crates/core/src/core/state/undo_delta.rs` | `step_through_delta`: one step through a compact entry |
 | `src-tauri/crates/core/src/core/undo/history_walk.rs` | `HolderWalk`: shot ownership in every recorded state, for the load's uuid remap |
 | `src-tauri/crates/core/src/core/state/undo_size_gate_tests.rs` | The 1% size gate on 5k- and 20k-shot surveys |

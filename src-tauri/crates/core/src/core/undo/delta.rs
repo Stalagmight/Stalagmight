@@ -40,6 +40,7 @@ use crate::models::SectionId;
 mod doc;
 mod history;
 mod json;
+mod shape;
 mod shots;
 
 pub use doc::{Applied, Doc, SectionIds, SectionOut};

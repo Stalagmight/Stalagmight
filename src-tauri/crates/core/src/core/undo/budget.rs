@@ -7,10 +7,12 @@ impl UndoStack {
     ///
     /// An ESTIMATE by design: it exists to bound growth, and measuring exactly would
     /// mean serializing the whole stack on every push - the cost the byte budget is
-    /// there to avoid. The dominant terms are exact (the snapshot variants hold their
-    /// JSON as `String` already, so their length is the real payload); the structured
-    /// variants are approximated from their element counts, and everything else is
-    /// small enough that the flat overhead covers it.
+    /// there to avoid. The dominant terms are exact: a snapshot pair holds its JSON as
+    /// `String` already, and a compact delta is serialized to measure it (one entry,
+    /// kept to a small fraction of the file by the size gate, so a few kilobytes -
+    /// not the whole stack). The structured variants are approximated from their
+    /// element counts, and everything else is small enough that the flat overhead
+    /// covers it.
     ///
     /// EVERY variant that owns a `previous_offsets` map charges `BYTES_PER_OFFSET`
     /// per entry on top of whatever else its arm counts. The map is the one field

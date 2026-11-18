@@ -1648,6 +1648,38 @@ mod tests {
             stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0.clone(), legacy)]);
         assert_eq!(stack.len(), 0);
         assert_eq!(earlier, Some(HistoryDropped::EarlierVersion));
+
+        // A later build's envelope is not "an earlier version".
+        let later = stack.load_from_persisted(vec![
+            valid_entry.clone(),
+            (
+                valid_entry.0.clone(),
+                "{\"v3\":{\"None\":null}}".to_string(),
+            ),
+        ]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(later, Some(HistoryDropped::Unreadable));
+
+        // A compact entry that breaks the delta rules is untrusted input, not a
+        // history: one that keeps its single section twice would double the
+        // project on every step. It is unreadable, and the history goes.
+        let hostile = r#"{"v2":{"Delta":{"d":{"s":[1,[{"k":[0,1]},{"k":[0,1]}]]}}}}"#;
+        let refused = stack.load_from_persisted(vec![
+            valid_entry.clone(),
+            (valid_entry.0.clone(), hostile.to_string()),
+        ]);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(refused, Some(HistoryDropped::Unreadable));
+        // The same entry without the repeat is read.
+        let fine = r#"{"v2":{"Delta":{"d":{"s":[1,[{"k":[0,1]}]]}}}}"#;
+        assert_eq!(
+            stack.load_from_persisted(vec![
+                valid_entry.clone(),
+                (valid_entry.0.clone(), fine.to_string())
+            ]),
+            None
+        );
+        assert_eq!(stack.len(), 2);
     }
 
     /// A stack persisted before the forward guard existed can carry an entry with

@@ -1328,9 +1328,9 @@ impl Database {
             // v11->v12 and v12->v13 drop theirs. `Command` is an internally
             // tagged enum with no catch-all, so a stored
             // `{"type":"apply_collab_changes"}` entry no longer deserializes -
-            // and `load_from_persisted_with_timestamps` skips a bad entry
-            // WITHOUT truncating, keeping the entries on both sides. That
-            // leaves a HOLE: the surviving older entries (position-keyed
+            // and the loader of that time skipped a bad entry WITHOUT
+            // truncating, keeping the entries on both sides (today's drops the
+            // whole history instead). That left a HOLE: the surviving older entries (position-keyed
             // shot snapshots, and the `ProjectSnapshotPair` the apply itself
             // wrote) would replay against a tree that still carries the applied
             // changes, silently reverting them or shifting every station past

@@ -195,7 +195,11 @@ pub(super) fn encode(source: &Doc<'_>, target: &Doc<'_>) -> Result<ProjectDelta,
     }
     let sections = encode_sections(&source.sections, &target.sections)?
         .map(|runs| (source.sections.len(), runs));
-    Ok(ProjectDelta { fields, sections })
+    let delta = ProjectDelta { fields, sections };
+    // The encoder keeps every rule an apply checks; one it broke would only
+    // be refused later, at an undo, so refuse it here instead.
+    delta.check_shape()?;
+    Ok(delta)
 }
 
 /// For every target section, the source section whose TEXT it repeats, when
@@ -260,22 +264,73 @@ fn encode_sections(
             by_id.entry(id).or_insert(*p);
         }
     }
-    let mut pool = ShotPool::new(&parsed);
-    let mut runs: Vec<SectionRun> = Vec::new();
+    // Every target section's plan first, so the pool knows which source
+    // sections keep their shots in place before any shot is copied out of one.
+    let mut plans: Vec<Plan> = Vec::with_capacity(target.len());
     for (j, raw) in target.iter().enumerate() {
         if let Some(at) = matched[j] {
-            push_keep(&mut runs, at);
+            plans.push(Plan::Keep(at));
             continue;
         }
         let section = parse_value(raw)?;
         let at = section_id_of(&section).and_then(|id| by_id.get(&id).copied());
-        match at.and_then(|at| Some((at, parsed.get(&at)?))) {
-            Some((at, from)) if same(from, &section) => push_keep(&mut runs, at),
-            Some((at, from)) => runs.push(edit_section(from, &section, at, &mut pool)),
-            None => runs.push(new_section(&section, &mut pool)),
+        plans.push(match at.and_then(|at| Some((at, parsed.get(&at)?))) {
+            Some((at, from)) if same(from, &section) => Plan::Keep(at),
+            Some((at, _)) => Plan::Edit(at, section),
+            None => Plan::New(section),
+        });
+    }
+    let mut pool = ShotPool::new(&parsed);
+    for plan in &plans {
+        match plan {
+            Plan::Keep(at) => pool.reserve(*at),
+            Plan::Edit(at, section) => {
+                if parsed
+                    .get(at)
+                    .is_some_and(|from| !rebuilds_shots(from, section))
+                {
+                    pool.reserve(*at);
+                }
+            }
+            Plan::New(_) => {}
+        }
+    }
+    let mut runs: Vec<SectionRun> = Vec::new();
+    for plan in plans {
+        match plan {
+            Plan::Keep(at) => push_keep(&mut runs, at),
+            Plan::Edit(at, section) => {
+                let Some(from) = parsed.get(&at) else {
+                    return Err(format!(
+                        "section {at} was planned as an edit but not parsed"
+                    ));
+                };
+                runs.push(edit_section(from, &section, at, &mut pool));
+            }
+            Plan::New(section) => runs.push(new_section(&section, &mut pool)),
         }
     }
     Ok(Some(runs))
+}
+
+/// What a target section is, over the source.
+enum Plan {
+    /// The source section at this position, unchanged.
+    Keep(usize),
+    /// The source section at this position, edited into this value.
+    Edit(usize, Value),
+    /// A section the source does not hold.
+    New(Value),
+}
+
+/// Whether [`edit_section`] rebuilds the shots of `from` to make `to`: when
+/// both hold a shots array and the arrays differ. Otherwise the section keeps
+/// its shots where they are, and no other section may copy one.
+fn rebuilds_shots(from: &Value, to: &Value) -> bool {
+    match (shots_array(from), shots_array(to)) {
+        (Some(a), Some(b)) => a.len() != b.len() || a.iter().zip(b).any(|(x, y)| !same(x, y)),
+        _ => false,
+    }
 }
 
 fn gauge_of(section: &Value) -> (Option<&str>, Option<&str>) {
@@ -296,7 +351,7 @@ fn edit_section(from: &Value, to: &Value, at: usize, pool: &mut ShotPool<'_>) ->
             shots: None,
         };
     };
-    let (Some(from_shots), Some(to_shots)) = (shots_array(from), shots_array(to)) else {
+    let (Some(_), Some(to_shots)) = (shots_array(from), shots_array(to)) else {
         return SectionRun::Edit {
             at,
             id,
@@ -307,9 +362,7 @@ fn edit_section(from: &Value, to: &Value, at: usize, pool: &mut ShotPool<'_>) ->
     };
     let mut fields = diff_members(a, b);
     fields.remove(SHOTS);
-    let same_shots = from_shots.len() == to_shots.len()
-        && from_shots.iter().zip(to_shots).all(|(x, y)| same(x, y));
-    let shots = (!same_shots).then(|| pool.rebuild(to_shots, Some(at)));
+    let shots = rebuilds_shots(from, to).then(|| pool.rebuild(to_shots, Some(at)));
     let gauge_untouched = !fields.contains_key(GAUGE_SHOT) && !fields.contains_key(GAUGE_NEIGHBOUR);
     let ungauged = shots.is_some() && gauge_untouched && gauge_of(from).0.is_none();
     SectionRun::Edit {
@@ -387,6 +440,7 @@ pub(super) fn apply<'a>(
     source: &Doc<'a>,
     ids: &[SectionIds],
 ) -> Result<Applied<'a>, DeltaError> {
+    delta.check_shape()?;
     if ids.len() != source.sections.len() {
         return Err(format!(
             "the id table lists {} sections, the source holds {}",
@@ -645,7 +699,7 @@ fn settle_ids(
             *section = SectionOut::Built(parse_value(raw)?);
         }
         if let SectionOut::Built(Value::Object(members)) = section {
-            members.insert(NEXT_SHOT_ID.to_string(), Value::from(max + 1));
+            members.insert(NEXT_SHOT_ID.to_string(), Value::from(max.saturating_add(1)));
         }
     }
     for (s, i) in clash {
@@ -655,12 +709,21 @@ fn settle_ids(
         let Some(section_id) = section.get(ID).and_then(Value::as_u64) else {
             return Err("a section without an id holds a shot whose id is taken".to_string());
         };
-        let end = (section_id + 1) * stride;
+        // The ids come from the file: checked, so a hostile one is refused
+        // rather than overflowing.
+        let Some(end) = section_id
+            .checked_add(1)
+            .and_then(|s| s.checked_mul(stride))
+        else {
+            return Err(format!(
+                "section {section_id} is past the shot-id encode bound"
+            ));
+        };
         let mut next = section
             .get(NEXT_SHOT_ID)
             .and_then(Value::as_u64)
-            .unwrap_or(section_id * stride);
-        while taken.contains(&next) {
+            .unwrap_or(end - stride);
+        while next < end && taken.contains(&next) {
             next += 1;
         }
         if next >= end {
@@ -709,7 +772,7 @@ fn settle_section_counter(
     if next <= max {
         members.insert(
             NEXT_SECTION_ID.to_string(),
-            Cow::Owned((max + 1).to_string()),
+            Cow::Owned(max.saturating_add(1).to_string()),
         );
     }
 }

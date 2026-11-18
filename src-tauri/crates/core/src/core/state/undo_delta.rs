@@ -6,10 +6,10 @@
 //! the result through the same restore every snapshot takes
 //! (`restore_snapshot_into_with`: caches, the refusal bounds, the GPS-fix
 //! merge, the heal carry-forward, the dust-offset invariant), and re-encodes
-//! the entry as the delta back to the state it just left. So the entry always
-//! holds one direction, and the next step is exact by construction - the
-//! delta form of the self-refreshing wall a snapshot pair was
-//! (`refresh_snapshot_pair_counterpart`).
+//! the entry as the delta from the project that restore installed back to the
+//! state it just left. So the entry always holds one direction, and the next
+//! step is exact by construction - the delta form of the self-refreshing wall
+//! a snapshot pair was (`refresh_snapshot_pair_counterpart`).
 //!
 //! The delta works on the text ([`Doc`]): a section it does not touch is
 //! never parsed, so a step costs about what a snapshot restore costs.
@@ -69,28 +69,45 @@ impl AppState {
         if !Self::restore_snapshot_into_with(&mut guard, &other_doc.text(), Some(&edited)) {
             return CommandResult::failure("Failed to restore the undo state".to_string());
         }
-        // The way back, from the state just written to the one just left. The
-        // restore's own heals (the uuid mint, the gauge carry-forward the
-        // `edited` set blocks, the dust-offset drop) cannot change what this
-        // delta installed, so the two documents in hand are the two states.
-        match ProjectDelta::between_docs(&other_doc, &live_doc) {
+        // The way back, from the state just installed to the one just left -
+        // read off the project the restore installed, not the text it was
+        // given: the restore heals (a save's gauge carried forward, a dust
+        // offset dropped, ...), and the next step applies this delta to
+        // whatever is live then. Re-serializing it also gives the rebuilt
+        // sections the live serializer's text, so the encode matches them by
+        // text rather than by parsing them.
+        let installed_text = match guard.as_ref().map(Self::serialize_project_snapshot) {
+            Some(Ok(text)) => text,
+            Some(Err(e)) => {
+                return Self::roll_back_step(&mut guard, &live_text, &format!("serialize: {e}"));
+            }
+            None => return Self::roll_back_step(&mut guard, &live_text, "no project installed"),
+        };
+        let installed_doc = match Doc::parse(&installed_text) {
+            Ok(doc) => doc,
+            Err(e) => return Self::roll_back_step(&mut guard, &live_text, &format!("read: {e}")),
+        };
+        match ProjectDelta::between_docs(&installed_doc, &live_doc) {
             Ok(delta) => {
                 entry.delta = delta;
                 CommandResult::success()
             }
-            Err(e) => {
-                // Put the live project back: the entry can only describe the
-                // state it was recorded against.
-                let restored_back = Self::restore_snapshot_into(&mut guard, &live_text);
-                tracing::error!(
-                    purpose = "step through a compact undo entry",
-                    reason = %e,
-                    restored_back,
-                    "Could not re-encode the undo entry after the step; rolled the step back"
-                );
-                CommandResult::failure(format!("Failed to record the way back: {e}"))
-            }
+            Err(e) => Self::roll_back_step(&mut guard, &live_text, &e),
         }
+    }
+
+    /// Put the live project back after a step that installed the other side
+    /// but could not record the way back: the entry can only describe the
+    /// state it was recorded against.
+    fn roll_back_step(guard: &mut Option<Project>, live_text: &str, reason: &str) -> CommandResult {
+        let restored_back = Self::restore_snapshot_into(guard, live_text);
+        tracing::error!(
+            purpose = "step through a compact undo entry",
+            reason = %reason,
+            restored_back,
+            "Could not re-encode the undo entry after the step; rolled the step back"
+        );
+        CommandResult::failure(format!("Failed to record the way back: {reason}"))
     }
 }
 
