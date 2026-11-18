@@ -836,6 +836,8 @@ impl Database {
             default_azimuth_reference,
             counter_parity_shots,
             held_gauges: self.load_project_held_gauges(&shot_uuid_index, line_count),
+            sections: Vec::new(),
+            next_section_id: 0,
             cascade_deferred: false,
             line_index_cache,
             shot_uuid_index,
@@ -846,6 +848,8 @@ impl Database {
         // Only entries that still name a station: a dangling one (a file
         // edited by hand) anchors nothing.
         project.prune_held_gauges();
+        // Sections (#327) and the lines' memberships, normalized.
+        super::cave_sections::load_cave_sections(&self.conn, &mut project)?;
         Ok(project)
     }
 

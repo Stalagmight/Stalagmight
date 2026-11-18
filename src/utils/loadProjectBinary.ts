@@ -20,6 +20,7 @@ import type { Project } from '../types/ipc/Project';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Line } from '../types/ipc/Line';
+import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
 import type { Person } from '../types/ipc/Person';
 import type { SurveyCredit } from '../types/ipc/SurveyCredit';
@@ -159,6 +160,10 @@ interface ProjectHeaderBinary {
   /** Every distinct person any shot credits, once (v7); `CreditBinary` lists
    *  index into it. */
   credit_people: Person[];
+  /** Sections, named groupings of lines (#327), in panel order. Absent on an
+   *  envelope from a backend that predates them: read as none. */
+  cave_sections?: Section[];
+  next_cave_section_id?: number;
 }
 
 /** One distinct survey credit of a line, people as `credit_people` indices. */
@@ -181,6 +186,8 @@ interface LineHeaderBinary {
   azimuth_reference?: AzimuthReference | null;
   /** The line's distinct shot credits, indexed by `shots_credit` (v7). */
   credits: CreditBinary[];
+  /** The line's Section (#327); absent/null is ungrouped. */
+  cave_section_id?: number | null;
 }
 
 const NO_CREDIT = 0xFFFFFFFF;
@@ -355,6 +362,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       quality: sh.quality,
       next_shot_id: sh.next_shot_id,
       azimuth_reference: sh.azimuth_reference ?? null,
+      // Optional on `Line`: present only for a grouped line, as on the JSON path.
+      ...(sh.cave_section_id !== null && sh.cave_section_id !== undefined
+        ? { cave_section_id: sh.cave_section_id }
+        : {}),
     } as Line;
     // Define-once lazy getter: on first read it materializes the Shot[] and
     // *replaces itself* with a plain data property holding that array. This
@@ -420,6 +431,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     ...(env.project_header.default_azimuth_reference
       ? { default_azimuth_reference: env.project_header.default_azimuth_reference }
       : {}),
+    cave_sections: env.project_header.cave_sections ?? [],
+    next_cave_section_id: env.project_header.next_cave_section_id ?? 0,
   };
 
   // Stations: typed-array views over the binary buffers.

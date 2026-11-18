@@ -134,6 +134,8 @@ impl AppState {
             // (#438) - `LineData` cannot carry it, so it is copied explicitly
             // below, exactly like the metadata above.
             let azimuth_reference = line.azimuth_reference;
+            // And it stays in the line's Section (#327).
+            let section = line.section_id;
             // Line B must also keep the reverse parity and the gauge's
             // physical station (`settle_cut_halves` below), or a reversed
             // line's single-neighbour plan pins and gauge fallback land one
@@ -212,6 +214,7 @@ impl AppState {
             let new_id = line_b.id;
             if let Some(line_b) = project.get_line_mut(new_id) {
                 line_b.azimuth_reference = azimuth_reference;
+                line_b.section_id = section;
             }
             // A keeps the original stations 0..=pos, B starts at pos + 1.
             if let Some(orientation) = &orientation {
@@ -428,8 +431,10 @@ impl AppState {
             let color = line.color.clone();
             let direction = line.direction;
             let quality = line.quality;
-            // Same survey, same north reference (#438); see the single-shot path.
+            // Same survey, same north reference (#438) and Section (#327); see
+            // the single-shot path.
             let azimuth_reference = line.azimuth_reference;
+            let section = line.section_id;
             // And the same reverse parity and gauge station; see the single-shot path.
             let orientation = project.cut_orientation(line_id);
             // The component's least-squares anchor, kept on its station below.
@@ -515,6 +520,7 @@ impl AppState {
             let new_id = line_b.id;
             if let Some(line_b) = project.get_line_mut(new_id) {
                 line_b.azimuth_reference = azimuth_reference;
+                line_b.section_id = section;
             }
             // A keeps the original stations 0..=start_pos, B starts after
             // the deleted range, at end_pos + 1.

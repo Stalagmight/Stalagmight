@@ -423,6 +423,8 @@ fn visit_entry(
         | UndoData::SegmentMoveInfo { .. }
         | UndoData::ProjectSnapshot(_)
         | UndoData::ProjectSnapshotPair { .. }
+        // Section memberships and colours, keyed by line: no shot id.
+        | UndoData::CaveSections(_)
         | UndoData::None => {}
         UndoData::PreviousValues {
             line_id, shot_uuid, ..

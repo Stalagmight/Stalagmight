@@ -590,6 +590,10 @@ impl AppState {
                 }
             }
 
+            // A Section command (#327): put the recorded Sections and
+            // memberships back, guard-free.
+            UndoData::CaveSections(change) => self.restore_cave_sections(&change.before),
+
             UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
         };
 
@@ -696,6 +700,9 @@ impl AppState {
                     None => CommandResult::failure("No project open".to_string()),
                 }
             }
+            // A Section command (#327): the recorded after-state, never a
+            // re-execution (a re-run create would take a fresh id).
+            UndoData::CaveSections(change) => self.restore_cave_sections(&change.after),
             UndoData::CreatedLineSnapshot {
                 line_id,
                 line_data,
@@ -1107,6 +1114,26 @@ impl AppState {
     /// A no-op for every other variant, and for an entry whose line is
     /// already gone (the undo is about to fail anyway), which keeps the recorded
     /// payload rather than degrading it.
+    /// Put one side of a Section command's record into the open project.
+    fn restore_cave_sections(&self, side: &crate::core::CaveSectionsState) -> CommandResult {
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(project) = guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+        let missing = side.restore_into(project);
+        if missing > 0 {
+            tracing::warn!(
+                missing,
+                purpose = "restore section memberships",
+                "Section history names lines the project no longer holds; skipped them"
+            );
+        }
+        CommandResult::success()
+    }
+
     fn refresh_created_line_identity(&self, entry: &mut UndoEntry) {
         let UndoData::CreatedLineSnapshot {
             line_id,

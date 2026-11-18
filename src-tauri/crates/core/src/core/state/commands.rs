@@ -77,6 +77,11 @@ impl AppState {
             | MoveComment { .. }
             | Batch { .. }
             | UntrackImport { .. }
+            | CreateCaveSection { .. }
+            | UpdateCaveSection { .. }
+            | DeleteCaveSection { .. }
+            | MoveLinesToCaveSection { .. }
+            | ApplyCaveSectionColor { .. }
             // Adding a file INTO the open project is an edit of it (#674),
             // unlike MergeProjects, which writes a new file.
             | AddProjectFile { .. }
@@ -191,6 +196,13 @@ impl AppState {
             | UpdateProjectSettings
             // Import-dedup bookkeeping: a set of hashes, referenced by nothing.
             | UntrackImport { .. }
+            // Sections (#327) group lines by id: no station reference, no
+            // geometry, nothing a closure hangs on.
+            | CreateCaveSection { .. }
+            | UpdateCaveSection { .. }
+            | DeleteCaveSection { .. }
+            | MoveLinesToCaveSection { .. }
+            | ApplyCaveSectionColor { .. }
             | SetSurfaceElevation => SAFE_REFS,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
@@ -897,6 +909,24 @@ impl AppState {
                 file_hashes,
                 line_hashes,
             } => self.untrack_import(file_hashes, line_hashes),
+            Command::CreateCaveSection {
+                name,
+                color,
+                line_ids,
+            } => self.create_cave_section(name, color, line_ids),
+            Command::UpdateCaveSection {
+                section_id,
+                name,
+                color,
+            } => self.update_cave_section(*section_id, name.as_deref(), color.as_deref()),
+            Command::DeleteCaveSection { section_id } => self.delete_cave_section(*section_id),
+            Command::MoveLinesToCaveSection {
+                line_ids,
+                section_id,
+            } => self.move_lines_to_cave_section(line_ids, *section_id),
+            Command::ApplyCaveSectionColor { section_id } => {
+                self.apply_cave_section_color(*section_id)
+            }
             Command::AddProjectFile { path, .. } => {
                 self.add_project_file(path, Self::add_slot_generation(&undo_data))
             }
@@ -1166,6 +1196,13 @@ impl AppState {
                 // shots' credit in one user action, so both go in one batch and
                 // come back with one undo.
                 | Command::UpdateLineMetadata { .. }
+                // Sections (#327) are metadata like the line edits above, so
+                // an action that also moves a line into one stays one step.
+                | Command::CreateCaveSection { .. }
+                | Command::UpdateCaveSection { .. }
+                | Command::DeleteCaveSection { .. }
+                | Command::MoveLinesToCaveSection { .. }
+                | Command::ApplyCaveSectionColor { .. }
         )
     }
 

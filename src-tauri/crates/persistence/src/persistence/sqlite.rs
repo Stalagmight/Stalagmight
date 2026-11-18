@@ -548,6 +548,7 @@ pub struct Database {
     conn: Connection,
 }
 
+mod cave_sections;
 mod datum_extras;
 mod integrity;
 // The #706 fuzzer's live-connection probe; see the module doc.
@@ -682,6 +683,13 @@ mod station_names_tests;
 )]
 mod station_ids_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod cave_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

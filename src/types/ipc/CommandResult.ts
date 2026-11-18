@@ -4,4 +4,4 @@ import type { LockReleaseOutcome } from "./LockReleaseOutcome";
 import type { ReversedLine } from "./ReversedLine";
 import type { ValidationWarning } from "./ValidationWarning";
 
-export interface CommandResult { success: boolean, warnings: Array<ValidationWarning>, error: string | null, line_id?: number, line_ids: Array<number>, shot_id?: number, saved_path?: string, session_closed?: boolean, unlinked_copy_path?: string, reversed_lines?: Array<ReversedLine>, import_receipt?: ImportReceipt, lock_release?: LockReleaseOutcome, }
+export interface CommandResult { success: boolean, warnings: Array<ValidationWarning>, error: string | null, line_id?: number, line_ids: Array<number>, shot_id?: number, saved_path?: string, session_closed?: boolean, unlinked_copy_path?: string, reversed_lines?: Array<ReversedLine>, import_receipt?: ImportReceipt, lock_release?: LockReleaseOutcome, cave_section_id?: number, }

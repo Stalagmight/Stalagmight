@@ -104,7 +104,11 @@ reads the same in an older build and in SpeleoDB's reader:
 A new persisted field or enum tag whose name contains `line`/`Line` needs its
 disk name added to `disk_names`, and a new concept must not reuse a disk name
 (`sections`, `section_id`, ...) as its own key; `debug_assert!`s in the
-translation check both. `core/state/pre_line_rename_disk_tests.rs` replays undo
+translation check both. The Section concept (a grouping of lines, #327, see
+[Sections](#sections-groupings-of-lines)) was born after the rename, so it is
+`cave_sections`, `next_cave_section_id` and `cave_section_id` in every JSON
+shape, its commands are tagged `*_cave_section`, and its two names that
+contain `line` (`line_ids`, `move_lines_to_cave_section`) map to themselves. `core/state/pre_line_rename_disk_tests.rs` replays undo
 rows, `held_gauges` and a dive-plan snapshot captured on the commit before the
 rename (`core/undo/testdata/pre_line_rename_rows.json`): each must parse and
 serialize back to the same JSON.
@@ -188,6 +192,37 @@ failing for a reason of its own (busy, I/O, corrupt) still fails the open, so a
 save cannot then drop the rows for good (#717). All three
 tables are project data and ride in SpeleoDB pushes. See
 `persistence/sqlite/shot_credits.rs`.
+
+## Sections (groupings of lines)
+
+Sections - named, coloured groupings of lines (#327) - live in two side tables
+with no schema bump, like `station_names` (SpeleoDB's Python reader accepts
+exactly v18 and reads only its seven tables, by explicit column lists):
+
+- `cave_sections (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT
+  NULL, position INTEGER NOT NULL)`: one row per Section, `position` its place
+  in the Sections panel;
+- `cave_section_lines (line_id INTEGER PRIMARY KEY REFERENCES sections(id) ON
+  DELETE CASCADE, cave_section_id INTEGER NOT NULL REFERENCES cave_sections(id)
+  ON DELETE CASCADE)`: one row per grouped line (`sections` is the lines table).
+
+Plain DDL only (`schema_guard` refuses CHECKs other than `id = 1`, partial or
+expression indexes, `DEFAULT (expr)`, views and triggers). Every save drops and
+recreates both inside its transaction, after the lines, so a v18 file opened
+through the fast path gets them on its first save. The id counter is not
+stored: a load derives it from the highest id, like `next_line_id`. Reading
+tolerates the tables missing (a file older than them, a read-only open) and
+being of another shape (no Sections, with a warning, never a failed open);
+SQLite failing for a reason of its own still fails the open. A row that cannot
+be read, or names a line or Section the file does not hold, is skipped (the
+open's foreign-key check already refuses such a file); repeated names are made
+unique on read. See `persistence/sqlite/cave_sections.rs`.
+
+An older build drops both tables on its next save (it writes a fresh file), so
+the lines come back ungrouped. Both tables are project data and ride in
+SpeleoDB pushes. Which Sections are hidden on the map is a view setting, the
+`hiddenSections` row of `display_settings` (a JSON array of Section ids), which
+is machine-local and stripped from pushes like every display setting.
 
 ## Zero datum fixes
 

@@ -584,6 +584,7 @@ fn import_overrides_replace_every_shots_credit() {
     let mut file_shot = shot(1.0);
     file_shot.credit = Some(credit(&["From File"], &["Ex"], day(1)).into());
     let config = ImportLineConfig {
+        cave_section: None,
         line_index: 0,
         name: Some("Imported".to_string()),
         surveyor: None,
@@ -825,6 +826,7 @@ fn an_imported_team_credit_stays_one_shared_allocation() {
             })
             .collect();
         let config = ImportLineConfig {
+            cave_section: None,
             line_index: 0,
             name: Some("Team".to_string()),
             surveyor: None,

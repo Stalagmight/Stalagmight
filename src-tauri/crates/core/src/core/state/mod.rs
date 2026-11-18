@@ -1,4 +1,5 @@
 mod app_state;
+mod command_cave_section;
 mod command_combine_lines;
 mod command_comment;
 mod command_credit;
@@ -65,6 +66,13 @@ mod adversarial_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod azimuth_reference_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::unwrap_in_result,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod cave_sections_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

@@ -4,6 +4,7 @@ use rusqlite::params;
 
 use crate::models::Project;
 
+use super::cave_sections::write_cave_sections;
 use super::datum_extras::{write_zero_datums, CREATE_DATUM_EXTRAS, RECREATE_DATUM_EXTRAS};
 use super::shot_credits::{
     write_credit_rows, write_recorded_legacy, CREATE_CREDIT_TABLES, RECREATE_CREDIT_TABLES,
@@ -470,6 +471,10 @@ impl Database {
                 params![crate::models::disk_names::to_disk_string(&held_gauges)?],
             )?;
         }
+
+        // Sections (#327): side tables, no bump either, see `cave_sections`.
+        // After the lines, which their memberships reference.
+        write_cave_sections(&tx, project)?;
 
         tx.commit()?;
         tracing::debug!("Transaction committed");

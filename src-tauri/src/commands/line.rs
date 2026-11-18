@@ -4,12 +4,13 @@ use tauri::State;
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     ClosureStrategy, CombineCandidate, CombineLinesOptions, Coordinates, LineId, LineRelationships,
-    LineUpdates, ShotData, StationRef, SurveyDirection,
+    LineUpdates, SectionId, ShotData, StationRef, SurveyDirection,
 };
 
 pub use crate::models::{SegmentGeometry, SegmentLineGeometry};
 
-/// Create a new line
+/// Create a new line. `cave_section_id` (optional, `caveSectionId` from the
+/// frontend) puts it straight into that Section (#327), in the same undo step.
 #[tauri::command]
 pub fn create_line(
     state: State<AppState>,
@@ -19,8 +20,18 @@ pub fn create_line(
     color: String,
     direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
+    cave_section_id: Option<SectionId>,
 ) -> CommandResult {
-    create_line_impl(state.inner(), name, surveyor, date, color, direction, shots)
+    create_line_impl(
+        state.inner(),
+        name,
+        surveyor,
+        date,
+        color,
+        direction,
+        shots,
+        cave_section_id,
+    )
 }
 
 pub(crate) fn create_line_impl(
@@ -31,19 +42,23 @@ pub(crate) fn create_line_impl(
     color: String,
     direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
+    cave_section_id: Option<SectionId>,
 ) -> CommandResult {
     // Line names are required and unique: refused here, on the UI path.
     if let Some(refusal) = state.refuse_new_line_name(name.as_deref()) {
         return refusal;
     }
-    state.execute(Command::CreateLine {
-        name,
-        surveyor,
-        date,
-        color,
-        direction,
-        shots,
-    })
+    state.create_line_in_cave_section(
+        Command::CreateLine {
+            name,
+            surveyor,
+            date,
+            color,
+            direction,
+            shots,
+        },
+        cave_section_id,
+    )
 }
 
 /// Update line metadata

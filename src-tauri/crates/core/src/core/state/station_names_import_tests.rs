@@ -26,6 +26,7 @@ fn config(reverse: bool, names: &[(u32, &str)], comments: &[(u32, &str)]) -> Imp
             .collect()
     };
     ImportLineConfig {
+        cave_section: None,
         line_index: 0,
         name: Some("A01".to_string()),
         surveyor: None,

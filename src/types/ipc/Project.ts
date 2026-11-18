@@ -2,8 +2,9 @@
 import type { AzimuthReference } from "./AzimuthReference";
 import type { Line } from "./Line";
 import type { LoopClosure } from "./LoopClosure";
+import type { Section } from "./Section";
 import type { StationMerge } from "./StationMerge";
 import type { ValidationConfig } from "./ValidationConfig";
 import type { ZeroDatum } from "./ZeroDatum";
 
-export interface Project { name: string, location: string | null, created_at: string, modified_at: string, lines: Array<Line>, station_merges: Array<StationMerge>, zero_datums: Array<ZeroDatum>, loop_closures: Array<LoopClosure>, file_path: string | null, next_line_id: number, line_offsets: Record<number, [number, number]>, imported_file_hashes: Array<string>, imported_line_hashes: Array<string>, next_closure_id: bigint, validation: ValidationConfig, surface_elevation: number | null, default_azimuth_reference?: AzimuthReference, }
+export interface Project { name: string, location: string | null, created_at: string, modified_at: string, lines: Array<Line>, station_merges: Array<StationMerge>, zero_datums: Array<ZeroDatum>, loop_closures: Array<LoopClosure>, file_path: string | null, next_line_id: number, line_offsets: Record<number, [number, number]>, imported_file_hashes: Array<string>, imported_line_hashes: Array<string>, next_closure_id: bigint, validation: ValidationConfig, surface_elevation: number | null, default_azimuth_reference?: AzimuthReference, cave_sections: Array<Section>, next_cave_section_id: number, }

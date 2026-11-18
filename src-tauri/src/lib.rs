@@ -1888,6 +1888,11 @@ pub fn run() {
             commands::speleodb::speleodb_project_access_at,
             // Line commands
             commands::line::create_line,
+            commands::cave_section::create_cave_section,
+            commands::cave_section::update_cave_section,
+            commands::cave_section::delete_cave_section,
+            commands::cave_section::move_lines_to_cave_section,
+            commands::cave_section::apply_cave_section_color,
             commands::line::update_line,
             commands::line::delete_line,
             commands::line::reverse_line,

@@ -40,6 +40,9 @@ const KEYS: &[(&str, &str)] = &[
     ("prev_line_offset", "prev_section_offset"),
     ("CreatedLineSnapshot", "CreatedSectionSnapshot"),
     ("LineSnapshot", "SectionSnapshot"),
+    // Born after the rename (the Section commands, #327), so no older build
+    // wrote another name: they persist as they are.
+    ("line_ids", "line_ids"),
 ];
 
 /// Enum tags written as string values: (key that holds the tag, name in code,
@@ -54,6 +57,12 @@ const TAGS: &[(&str, &str, &str)] = &[
     ("type", "move_line", "move_section"),
     ("type", "line", "section"),
     ("anchor", "LineStart", "SectionStart"),
+    // Born after the rename (#327): persists as it is.
+    (
+        "type",
+        "move_lines_to_cave_section",
+        "move_lines_to_cave_section",
+    ),
 ];
 
 /// Keys whose string value is itself a persisted JSON document (a project

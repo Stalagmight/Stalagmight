@@ -6,8 +6,9 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, LineCreditSummary, Person, Shot,
-    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit, FEATURE_ID_STRIDE,
+    legacy_people, AzimuthReference, Coordinates, GpsCoordinates, LineCreditSummary, Person,
+    SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyCredit,
+    FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a line
@@ -134,6 +135,17 @@ pub struct Line {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The [`crate::Section`] (named grouping of lines) this line belongs
+    /// to; `None` is ungrouped. Serialized as `cave_section_id`, never as the
+    /// disk name `section_id` (a LINE id, see `disk_names`), and absent when
+    /// `None` so a project without Sections serializes as before.
+    #[serde(
+        default,
+        rename = "cave_section_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub section_id: Option<SectionId>,
     /// The legacy `sections.surveyor` text this line was READ with, when it
     /// differs from what this build would write for the same people
     /// ([`Self::legacy_surveyor_text`]): a list longer than a role keeps, a
@@ -205,6 +217,15 @@ pub struct LineIdentity {
     /// Each station's name, by station index; empty in a legacy entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub station_names: Vec<Option<String>>,
+    /// The Section the line belonged to (#327). [`LineData`] cannot carry
+    /// it, so a redo that re-creates a line puts its membership back from
+    /// here. Absent (`None`, ungrouped) on a legacy entry.
+    #[serde(
+        default,
+        rename = "cave_section_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub section_id: Option<SectionId>,
 }
 
 impl LineIdentity {
@@ -218,6 +239,7 @@ impl LineIdentity {
             azimuth_reference: line.azimuth_reference,
             station_ids: Vec::new(),
             station_names: Vec::new(),
+            section_id: line.section_id,
         }
     }
 }
@@ -417,6 +439,14 @@ pub struct ImportLineConfig {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The Section (#327) to group this line into, by name - the importers'
+    /// auto-grouping (an Ariane section name that fanned out into several
+    /// lines, a Compass survey, a Walls book). The import reuses the
+    /// project's Section of that name, or creates one. `None` (what the
+    /// wizards send) leaves the line ungrouped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cave_section: Option<String>,
 }
 
 /// Update to apply to an existing line's shot during batch import.
@@ -531,6 +561,7 @@ impl Line {
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
             azimuth_reference: None,
+            section_id: None,
             loaded_legacy_surveyor: None,
         };
 
@@ -627,6 +658,7 @@ impl Line {
         line.gauge_neighbour_uuid
             .clone_from(&identity.gauge_neighbour_uuid);
         line.azimuth_reference = identity.azimuth_reference;
+        line.section_id = identity.section_id;
         line
     }
 

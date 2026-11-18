@@ -48,6 +48,7 @@ Commands go through a two-phase capture during execution:
 | `ProjectSnapshotPair` | Batch, DeleteLine, DeleteShot, ReverseLine, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), the delete/split entry points, Split Line Here and Combine Lines (label-only `Batch`es, see below), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `ShotCredits` | EditShotCredit, and an UpdateLineMetadata that sets the legacy surveyor/date | Write each recorded shot's `before` credit back, by uuid (a shot that is gone is skipped with a warning, never a wedge); for a line edit, then put its other previous values back | EditShotCredit: write each `after` credit, by uuid. UpdateLineMetadata: execute the original command |
 | `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same line, shot and closure ids |
+| `CaveSections` | the Section commands (#327): Create/Update/Delete CaveSection, MoveLinesToCaveSection, ApplyCaveSectionColor | Restore the recorded `before`: the whole Section list and id counter, and the membership and colour of each line the command changed (a line no longer present is skipped) | Restore the recorded `after` the same way - never a re-execution, so a re-created Section keeps its id |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -528,6 +529,7 @@ history, and that step records only what the add brought - never a
   added `Line`s whole (ids, shot uuids, parity, gauge pair), every merge,
   closure, datum, comment, station name and line/station offset that names
   them, the
+  Sections it appended (#327; the added lines name them), the
   dedup hashes the add put in (not ones the project already held), the ignored
   warnings it carried, `(before, after)` of `surface_elevation` and `location`
   (the two project fields the shared append can set), and `(before, after)` of

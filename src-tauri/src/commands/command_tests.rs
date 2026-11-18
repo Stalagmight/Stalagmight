@@ -163,6 +163,7 @@ fn create_line_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -
         "#4ecdc4".to_string(),
         Some(SurveyDirection::In),
         shots,
+        None,
     );
     assert_success(&result);
     result.line_id.expect("line id")
@@ -1865,6 +1866,7 @@ fn test_import_lines_persists_deferred_new_project() {
 
         // Import one origin-placed line through the command.
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2024,6 +2026,7 @@ fn test_import_lines_provenance_params_decorate_receipt() {
         });
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2084,6 +2087,7 @@ fn test_import_lines_sanitizes_hostile_zero_datum_line_name() {
 
         let hostile_name = format!("A\u{202e}B{}", "x".repeat(10_000));
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some(hostile_name),
@@ -2148,6 +2152,7 @@ fn test_import_lines_without_provenance_params_leaves_receipt_defaults() {
         });
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2307,6 +2312,7 @@ fn test_import_lines_deferred_save_failure_warns_no_phantom() {
         // Import one origin-placed line through the command - same shape as the
         // success test, only the save target differs.
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2428,6 +2434,7 @@ fn test_import_lines_deferred_save_permission_denied_humanizes_no_marker_leak() 
         );
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -2496,6 +2503,7 @@ fn test_import_lines_deferred_save_generic_open_failure_is_not_a_denial() {
             .set_initial_save_deferred_for_tests(true);
 
         let lines = vec![crate::models::ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: 0,
             name: Some("Imported".to_string()),
@@ -3590,6 +3598,7 @@ fn test_create_line_fails_without_project() {
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
+        None,
     );
     assert_failure_contains(&result, "No project open");
 }
@@ -3614,6 +3623,7 @@ fn test_create_line_defaults_direction() {
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(1.0)],
+        None,
     );
     assert_success(&result);
     let line = get_line(state(&app), result.line_id.unwrap()).unwrap();
@@ -3771,6 +3781,7 @@ fn test_create_line_with_validation_warnings() {
         "#4ecdc4".to_string(),
         None,
         vec![shot_data(0.05)],
+        None,
     );
     assert!(result.success);
     assert!(!result.warnings.is_empty());
@@ -5920,6 +5931,7 @@ fn test_create_line_with_date_roundtrip() {
         "#4ecdc4".to_string(),
         Some(SurveyDirection::Out),
         vec![shot_data(1.0)],
+        None,
     );
     assert_success(&result);
     let line = get_line(state(&app), result.line_id.unwrap()).unwrap();

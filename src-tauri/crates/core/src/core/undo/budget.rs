@@ -88,6 +88,12 @@ impl UndoStack {
                 changes,
                 line_values,
             } => changes.len() * 256 + line_values.as_ref().map_or(0, |(_, json)| json.len()),
+            // The Section list on both sides, and two rows per touched line.
+            UndoData::CaveSections(change) => {
+                let sections = change.before.cave_sections.len() + change.after.cave_sections.len();
+                let members = change.before.members.len() + change.after.members.len();
+                sections * 256 + members * 64
+            }
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
         // Restored rows deliberately do not reserialize their command just to rebuild

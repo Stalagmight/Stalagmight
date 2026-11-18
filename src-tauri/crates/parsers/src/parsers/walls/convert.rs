@@ -220,6 +220,8 @@ pub fn convert_walls_to_import_configs(
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         vectors: Vec<KeptVector>,
+        /// The survey's segment path, for the auto-grouping (#327).
+        segment: String,
     }
     struct KeptVector {
         from: String,
@@ -414,6 +416,7 @@ pub fn convert_walls_to_import_configs(
             surveyor: survey.surveyor.clone(),
             date: survey.date,
             vectors: kept_vectors,
+            segment: survey.segment.trim().to_string(),
         });
     }
 
@@ -436,6 +439,8 @@ pub fn convert_walls_to_import_configs(
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         azimuth_reference: AzimuthReference,
+        /// The survey's segment path (#327 auto-grouping); empty for none.
+        segment: String,
     }
     // The model has no zero-length shot (it can't place two stations at one
     // point as a leg), so a Walls zero-length coincident-station tie is nudged to
@@ -625,6 +630,7 @@ pub fn convert_walls_to_import_configs(
                 surveyor: survey.surveyor.clone(),
                 date: survey.date,
                 azimuth_reference,
+                segment: survey.segment.clone(),
             });
         }
     }
@@ -656,6 +662,10 @@ pub fn convert_walls_to_import_configs(
         &placements,
     );
 
+    // Auto-grouping (#327): every line of a survey in a segment joins a
+    // Section named after the segment.
+    let segment_sections = segment_section_names(chains.iter().map(|c| c.segment.as_str()));
+
     // Emit configs in BFS creation order.
     let mut configs: Vec<ImportLineConfig> = Vec::with_capacity(chains.len());
     for &ci in &placements.creation_order {
@@ -677,6 +687,7 @@ pub fn convert_walls_to_import_configs(
             })
             .collect();
         configs.push(ImportLineConfig {
+            cave_section: segment_sections.get(chain.segment.as_str()).cloned(),
             reverse: false,
             line_index: chain.line_index,
             name: Some(chain.label.clone()),
@@ -707,6 +718,39 @@ pub fn convert_walls_to_import_configs(
     }
 
     Ok((configs, closures, warnings))
+}
+
+/// The Section name for each non-empty segment path (#327): its last
+/// component (`Cave/North branch` -> `North branch`), or the whole path when
+/// another path in the same import ends in the same component, so two
+/// different segments never fall into one Section.
+pub(crate) fn segment_section_names<'a>(
+    segments: impl Iterator<Item = &'a str>,
+) -> HashMap<&'a str, String> {
+    let paths: std::collections::BTreeSet<&str> = segments.filter(|s| !s.is_empty()).collect();
+    let last = |path: &str| -> String {
+        path.rsplit('/')
+            .map(str::trim)
+            .find(|part| !part.is_empty())
+            .unwrap_or(path)
+            .to_string()
+    };
+    let mut by_last: HashMap<String, usize> = HashMap::new();
+    for path in &paths {
+        *by_last.entry(last(path)).or_insert(0) += 1;
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            let short = last(path);
+            let name = if by_last.get(&short).copied().unwrap_or(0) > 1 {
+                path.to_string()
+            } else {
+                short
+            };
+            (path, name)
+        })
+        .collect()
 }
 
 /// The declination for one vector, and where the number came from (#438 - the

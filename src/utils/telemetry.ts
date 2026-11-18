@@ -145,6 +145,8 @@ const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'delete_shot_range_split', 'delete_shot_range_shift',
   'import_lines', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
   'execute_gpx_import', 'add_project_file', 'execute_batch',
+  'create_cave_section', 'update_cave_section', 'delete_cave_section', 'move_lines_to_cave_section',
+  'apply_cave_section_color',
 ]);
 
 /**

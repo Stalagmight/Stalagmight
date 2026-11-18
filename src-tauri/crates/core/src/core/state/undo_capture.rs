@@ -1,4 +1,4 @@
-use crate::core::{AddedContent, Command, UndoData};
+use crate::core::{AddedContent, CaveSectionChange, Command, UndoData};
 use crate::models::{ClosureStrategy, LineId, LineUpdates, Project, ShotId, ShotUpdates};
 
 use super::AppState;
@@ -543,6 +543,16 @@ impl AppState {
                 AddedContent::stub(project, Some(self.speleodb_session_generation())),
             )),
 
+            // A STUB holding the whole Section state before the command
+            // (#327); `finalize_undo_data` keeps only what changed.
+            Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. } => {
+                UndoData::CaveSections(Box::new(CaveSectionChange::stub(project)))
+            }
+
             // Non-undoable commands
             _ => UndoData::None,
         }
@@ -744,6 +754,21 @@ impl AppState {
             // in the record too. Ignores come from the pending set the forward
             // step filled (`project_add.rs`).
             Command::AddProjectFile { .. } => self.finalize_add_undo(project, undo_data),
+
+            // The Section state after, and only the lines that changed. A
+            // command that changed nothing records nothing.
+            Command::CreateCaveSection { .. }
+            | Command::UpdateCaveSection { .. }
+            | Command::DeleteCaveSection { .. }
+            | Command::MoveLinesToCaveSection { .. }
+            | Command::ApplyCaveSectionColor { .. } => match undo_data {
+                UndoData::CaveSections(stub) => {
+                    stub.finalize(project).map_or(UndoData::None, |change| {
+                        UndoData::CaveSections(Box::new(change))
+                    })
+                }
+                other => other,
+            },
 
             _ => undo_data,
         }

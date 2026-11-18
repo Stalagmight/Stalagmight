@@ -822,6 +822,7 @@ pub fn waypoints_to_import_configs(
         }
 
         configs.push(ImportLineConfig {
+            cave_section: None,
             reverse: false,
             line_index: idx,
             name: wpt.name.clone(),
@@ -863,6 +864,7 @@ fn track_segment_to_config(
         .collect();
 
     ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index,
         name,
@@ -897,6 +899,7 @@ fn route_to_config(
         .collect();
 
     ImportLineConfig {
+        cave_section: None,
         reverse: false,
         line_index,
         name: rte.name.clone(),

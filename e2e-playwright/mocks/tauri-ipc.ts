@@ -203,6 +203,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         zero_datums: unknown[];
         loop_closures: unknown[];
         line_offsets: Record<string, unknown>;
+        // Sections (#327): named groupings of lines.
+        cave_sections?: Array<{ id: number; name: string; color: string }>;
+        next_cave_section_id?: number;
       } | null = null;
       let projectPath: string | null = null;
       // `BinaryEnvelope::is_remote` (#270): whether the loaded `.stalx` lives in
@@ -1636,6 +1639,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   // The line's north reference (#438); undefined until an
                   // importer declares one.
                   azimuth_reference?: unknown | null;
+                  // The line's Section (#327); undefined while ungrouped.
+                  cave_section_id?: number | null;
                   shots?: Array<{
                     id: number; azimuth_in?: number; azimuth_out?: number;
                     length?: number; depth_in?: number; depth_out?: number;
@@ -1659,6 +1664,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // The project-level north reference (#438); undefined until one
                 // is declared.
                 default_azimuth_reference?: unknown | null;
+                // Sections, named groupings of lines (#327).
+                cave_sections?: Array<{ id: number; name: string; color: string }>;
+                next_cave_section_id?: number;
               };
               stations: Array<{
                 station_ref: { line_id: number; station_index: number };
@@ -1776,6 +1784,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // nothing carries on disk.
                 azimuth_reference: line.azimuth_reference ?? null,
                 credits: lineCredits,
+                // The line's Section (#327); `null` is ungrouped.
+                cave_section_id: line.cave_section_id ?? null,
               });
             }
             const shotsCredit = anyCredit
@@ -1885,6 +1895,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   jsonResult.project.default_azimuth_reference ?? null,
                 // Every distinct person any shot credits, once (v7).
                 credit_people: creditPeople,
+                // Sections, named groupings of lines (#327), in panel order.
+                cave_sections: jsonResult.project.cave_sections ?? [],
+                next_cave_section_id: jsonResult.project.next_cave_section_id ?? 0,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
@@ -2822,8 +2835,72 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               color: '#3b82f6',
               shots,
             };
+            // #327: an optional target Section, as the backend's create_line takes it.
+            const targetSection = args?.caveSectionId as number | null | undefined;
+            if (targetSection !== null && targetSection !== undefined) {
+              Object.assign(line, { cave_section_id: targetSection });
+            }
             currentProject?.lines.push(line);
             return { success: true, line, line_id: lineCounter, line_ids: [], warnings: [], error: null };
+          }
+
+          // Sections (#327): named groupings of lines, kept on the mock project
+          // the way the backend keeps them (`cave_sections`, `cave_section_id`).
+          case 'create_cave_section': {
+            if (!currentProject) return { success: false, warnings: [], error: 'No project open', line_ids: [] };
+            const sections = (currentProject.cave_sections ??= []);
+            const name = String(args?.name ?? '').trim();
+            if (!name) return { success: false, warnings: [], error: 'A section needs a name', line_ids: [] };
+            if (sections.some((s) => s.name === name)) {
+              return { success: false, warnings: [], error: `There is already a section named "${name}"`, line_ids: [] };
+            }
+            const id = currentProject.next_cave_section_id ?? 0;
+            currentProject.next_cave_section_id = id + 1;
+            sections.push({ id, name, color: String(args?.color ?? '#4ecdc4') });
+            const members = (args?.lineIds as number[] | undefined) ?? [];
+            for (const line of currentProject.lines as Array<{ id: number; cave_section_id?: number }>) {
+              if (members.includes(line.id)) line.cave_section_id = id;
+            }
+            return { success: true, warnings: [], error: null, line_ids: [], cave_section_id: id };
+          }
+
+          case 'update_cave_section': {
+            const section = currentProject?.cave_sections?.find((s) => s.id === args?.caveSectionId);
+            if (!section) return { success: false, warnings: [], error: 'Section not found', line_ids: [] };
+            if (typeof args?.name === 'string') section.name = args.name.trim();
+            if (typeof args?.color === 'string') section.color = args.color;
+            return { success: true, warnings: [], error: null, line_ids: [] };
+          }
+
+          case 'delete_cave_section': {
+            if (currentProject?.cave_sections) {
+              currentProject.cave_sections = currentProject.cave_sections.filter((s) => s.id !== args?.caveSectionId);
+              for (const line of currentProject.lines as Array<{ cave_section_id?: number }>) {
+                if (line.cave_section_id === args?.caveSectionId) delete line.cave_section_id;
+              }
+            }
+            return { success: true, warnings: [], error: null, line_ids: [] };
+          }
+
+          case 'move_lines_to_cave_section': {
+            const target = args?.caveSectionId as number | null | undefined;
+            const ids = (args?.lineIds as number[] | undefined) ?? [];
+            for (const line of (currentProject?.lines ?? []) as Array<{ id: number; cave_section_id?: number }>) {
+              if (!ids.includes(line.id)) continue;
+              if (target === null || target === undefined) delete line.cave_section_id;
+              else line.cave_section_id = target;
+            }
+            return { success: true, warnings: [], error: null, line_ids: [] };
+          }
+
+          case 'apply_cave_section_color': {
+            const section = currentProject?.cave_sections?.find((s) => s.id === args?.caveSectionId);
+            if (section) {
+              for (const line of (currentProject?.lines ?? []) as Array<{ cave_section_id?: number; color?: string }>) {
+                if (line.cave_section_id === section.id) line.color = section.color;
+              }
+            }
+            return { success: true, warnings: [], error: null, line_ids: [] };
           }
 
           case 'import_lines': {

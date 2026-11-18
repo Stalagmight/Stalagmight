@@ -1,5 +1,6 @@
 pub mod app_update;
 pub mod cache;
+pub mod cave_section;
 pub mod config;
 pub mod debug;
 pub mod dive_plan;

@@ -77,6 +77,11 @@ fn get_command_type(command: &Command) -> String {
         Command::MoveComment { .. } => "move_comment".to_string(),
         Command::Batch { .. } => "batch".to_string(),
         Command::UntrackImport { .. } => "untrack_import".to_string(),
+        Command::CreateCaveSection { .. } => "create_cave_section".to_string(),
+        Command::UpdateCaveSection { .. } => "update_cave_section".to_string(),
+        Command::DeleteCaveSection { .. } => "delete_cave_section".to_string(),
+        Command::MoveLinesToCaveSection { .. } => "move_lines_to_cave_section".to_string(),
+        Command::ApplyCaveSectionColor { .. } => "apply_cave_section_color".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
         Command::AddProjectFile { .. } => "add_project_file".to_string(),
         Command::RepairIntegrity => "repair_integrity".to_string(),
@@ -954,11 +959,13 @@ fn derive_preview_data(entry: &UndoEntry, line_names: &NameBook) -> Option<Previ
         }
 
         // Default catch-all: show command description so hover is never empty
+        // (a Section command's names its Section, as its label does).
         _ => Some(PreviewData {
             changes: vec![FieldChange {
                 field: "Action".to_string(),
                 old_value: String::new(),
-                new_value: describe_entry(entry, line_names),
+                new_value: super::history_cave_section::description(entry)
+                    .unwrap_or_else(|| describe_entry(entry, line_names)),
             }],
             additional_changes: 0,
         }),
@@ -974,6 +981,7 @@ pub fn entry_to_history_item(
     UndoHistoryItem {
         index,
         description: super::history_credit::description(entry)
+            .or_else(|| super::history_cave_section::description(entry))
             .unwrap_or_else(|| describe_entry(entry, line_names)),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),

@@ -1335,3 +1335,52 @@ fn a_huge_legacy_surveyor_is_read_bounded_and_shared() {
         .iter()
         .all(|s| std::sync::Arc::ptr_eq(&s.surveyors, &main.shots[0].surveyors)));
 }
+
+/// The Section tables (#327) are counted against their own caps before the
+/// load builds them, like every other side table.
+#[test]
+fn section_rows_are_counted_against_their_own_caps() {
+    let dir = TempDir::new().unwrap();
+    let mut project = full_project();
+    let (main, side) = (project.lines[0].id, project.lines[1].id);
+    let upper = project.add_section("Upper".to_string(), "#123456".to_string());
+    project.add_section("Lower".to_string(), "#654321".to_string());
+    project.set_line_section(main, Some(upper));
+    project.set_line_section(side, Some(upper));
+    let path = save(&dir, &project);
+
+    let refused = |limits: CountLimits| {
+        read_file_with(&path, &ReadOptions::default().count_limits(limits)).unwrap_err()
+    };
+    assert!(
+        matches!(
+            refused(CountLimits::default().cave_sections(1)),
+            ReadError::TooComplex {
+                what: Limit::CaveSections,
+                count: 2,
+                max: 1
+            }
+        ),
+        "the section list"
+    );
+    assert!(
+        matches!(
+            refused(CountLimits::default().cave_section_lines(1)),
+            ReadError::TooComplex {
+                what: Limit::CaveSectionLines,
+                count: 2,
+                max: 1
+            }
+        ),
+        "the memberships"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(
+            CountLimits::default()
+                .cave_sections(2)
+                .cave_section_lines(2)
+        )
+    )
+    .is_ok());
+}

@@ -43,6 +43,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.arm_forced_exit",
     "command.attempt_repair",
     "command.calculate_file_hash",
+    // Sections, named groupings of lines (#327).
+    "command.create_cave_section",
+    "command.update_cave_section",
+    "command.delete_cave_section",
+    "command.move_lines_to_cave_section",
+    "command.apply_cave_section_color",
     "command.can_redo",
     "command.can_undo",
     "command.cancel_loading",
@@ -425,6 +431,11 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.unmerge_stations",
     "undo-after.update_line",
     "undo-after.update_shot",
+    "undo-after.create_cave_section",
+    "undo-after.update_cave_section",
+    "undo-after.delete_cave_section",
+    "undo-after.move_lines_to_cave_section",
+    "undo-after.apply_cave_section_color",
     // ── Dwell: tools (241-252) ──
     "dwell.tool.comment",
     "dwell.tool.delete",
@@ -1191,7 +1202,10 @@ mod tests {
         //       datum would do (#741): command.preview_zero_datum = 731.
         //   + 2 renaming a station (line identity): command.set_station_name,
         //       undo-after.set_station_name = 733.
-        assert_eq!(EVENT_NAMES.len(), 733);
+        //   + 10 Sections, named groupings of lines (#327): command.* and
+        //       undo-after.* of {create,update,delete}_cave_section,
+        //       move_lines_to_cave_section, apply_cave_section_color = 743.
+        assert_eq!(EVENT_NAMES.len(), 743);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -218,7 +218,7 @@ describe('the Warnings-tab visit', () => {
   it('loading a project drops the visit changes', () => {
     openWarnings();
     useUIStore.getState().setColorMode('depth');
-    const settings: DisplaySettings = { ...DISPLAY_DEFAULTS, geometryMode: 'measured' };
+    const settings: DisplaySettings = { ...DISPLAY_DEFAULTS, geometryMode: 'measured', hiddenSections: [] };
     useUIStore.getState().applyDisplaySettings(settings);
     expect(useUIStore.getState().warningsVisitOverride).toBeNull();
   });

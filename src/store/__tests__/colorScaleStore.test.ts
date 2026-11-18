@@ -143,7 +143,7 @@ describe('colour scale session state', () => {
     s.setIssueLevels('azimuth', { min: 1, warn: 4, max: 9 }, false);
     s.setIssueLevels('closure', { min: 0, warn: 2, max: 6 }, true);
 
-    useUIStore.getState().applyDisplaySettings({ ...DISPLAY_DEFAULTS, geometryMode: 'measured' });
+    useUIStore.getState().applyDisplaySettings({ ...DISPLAY_DEFAULTS, geometryMode: 'measured', hiddenSections: [] });
 
     const after = useColorScaleStore.getState();
     expect(after.mapScale).toEqual({ depth: null, distance: null });

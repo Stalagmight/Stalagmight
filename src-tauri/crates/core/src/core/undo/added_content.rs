@@ -12,7 +12,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    Line, LineId, LoopClosure, Project, StationId, StationKey, StationMerge, ZeroDatum, MAX_LINE_ID,
+    Line, LineId, LoopClosure, Project, Section, SectionId, StationId, StationKey, StationMerge,
+    ZeroDatum, MAX_LINE_ID,
 };
 
 /// One ignored warning the add carried over from the source file, remapped onto
@@ -45,6 +46,9 @@ pub struct AddBaseline {
     pub line_hashes: HashSet<String>,
     pub surface_elevation: Option<f64>,
     pub location: Option<String>,
+    /// The Sections the project held, so the ones the add appended can be
+    /// told apart (#327).
+    pub section_ids: HashSet<SectionId>,
 }
 
 /// Everything one add put into the open project, and nothing else.
@@ -103,6 +107,11 @@ pub struct AddedContent {
     /// only thing that can do that. Normally empty.
     #[serde(default)]
     pub moved_offsets: Vec<(LineId, Option<(f64, f64)>, Option<(f64, f64)>)>,
+    /// The Sections the add appended (#327), in panel order. The added lines
+    /// name them (`Line::section_id`), so undo removes them with the lines
+    /// and redo puts them back with the same ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cave_sections: Vec<Section>,
     /// The stub's baseline; `None` on every finalized entry.
     #[serde(skip)]
     pub baseline: Option<AddBaseline>,
@@ -121,6 +130,7 @@ impl AddedContent {
                 line_hashes: project.imported_line_hashes.iter().cloned().collect(),
                 surface_elevation: project.surface_elevation,
                 location: project.location.clone(),
+                section_ids: project.sections.iter().map(|s| s.id).collect(),
             }),
             ..Self::default()
         }
@@ -165,6 +175,12 @@ impl AddedContent {
             .collect();
         moved.sort_by_key(|(id, _, _)| *id);
         content.moved_offsets = moved;
+        content.cave_sections = project
+            .sections
+            .iter()
+            .filter(|s| !baseline.section_ids.contains(&s.id))
+            .cloned()
+            .collect();
         Some(content)
     }
 
@@ -264,6 +280,13 @@ impl AddedContent {
         for (id, _, after) in &mut self.moved_offsets {
             *after = project.line_offsets.get(id).copied();
         }
+        let added: HashSet<SectionId> = self.cave_sections.iter().map(|s| s.id).collect();
+        self.cave_sections = project
+            .sections
+            .iter()
+            .filter(|s| added.contains(&s.id))
+            .cloned()
+            .collect();
     }
 
     /// Undo: take out exactly what the add put in and put back the
@@ -315,6 +338,9 @@ impl AddedContent {
         for (id, before, _) in &self.moved_offsets {
             write_offset(project, *id, *before);
         }
+        for section in &self.cave_sections {
+            project.remove_section(section.id);
+        }
         project.rebuild_line_index();
         project.rebuild_shot_uuid_index();
         project.touch();
@@ -340,6 +366,16 @@ impl AddedContent {
         if let Some(taken) = project.lines.iter().find(|s| ids.contains(&s.id)) {
             return Err(format!(
                 "Cannot redo the add: line {} already exists",
+                taken.id
+            ));
+        }
+        if let Some(taken) = self
+            .cave_sections
+            .iter()
+            .find(|s| project.section(s.id).is_some())
+        {
+            return Err(format!(
+                "Cannot redo the add: section {} already exists",
                 taken.id
             ));
         }
@@ -394,6 +430,12 @@ impl AddedContent {
         for (id, _, after) in &self.moved_offsets {
             write_offset(project, *id, *after);
         }
+        project.sections.extend(self.cave_sections.iter().cloned());
+        if let Some(max) = self.cave_sections.iter().map(|s| s.id).max() {
+            project.next_section_id = project.next_section_id.max(max.saturating_add(1));
+        }
+        // A line naming a Section the project does not hold is ungrouped.
+        project.normalize_sections();
         project.rebuild_line_index();
         project.rebuild_shot_uuid_index();
         project.touch();

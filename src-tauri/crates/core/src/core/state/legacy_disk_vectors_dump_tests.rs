@@ -1023,6 +1023,7 @@ fn legacy_disk_vectors_dump() {
     // --- Import, withdraw, create-and-merge ---------------------------------
     let before_import = line_ids(&state);
     let import_line = |index: u32, name: &str, placement: ImportPlacement| ImportLineConfig {
+        cave_section: None,
         line_index: index,
         name: Some(name.to_string()),
         surveyor: Some("Importer".to_string()),
