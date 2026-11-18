@@ -181,7 +181,26 @@ impl AddedContent {
             .filter(|s| !baseline.section_ids.contains(&s.id))
             .cloned()
             .collect();
+        content.shrink_to_fit();
         Some(content)
+    }
+
+    /// Give back the room the filtered collections grew past their length:
+    /// the record lives as long as its entry.
+    fn shrink_to_fit(&mut self) {
+        self.lines.shrink_to_fit();
+        self.line_offsets.shrink_to_fit();
+        self.station_offsets.shrink_to_fit();
+        self.station_comments.shrink_to_fit();
+        self.station_names.shrink_to_fit();
+        self.station_ids.shrink_to_fit();
+        self.zero_datums.shrink_to_fit();
+        self.station_merges.shrink_to_fit();
+        self.loop_closures.shrink_to_fit();
+        self.file_hashes.shrink_to_fit();
+        self.line_hashes.shrink_to_fit();
+        self.moved_offsets.shrink_to_fit();
+        self.cave_sections.shrink_to_fit();
     }
 
     /// The slot generation a stub was captured against; `None` on a finalized
@@ -287,6 +306,7 @@ impl AddedContent {
             .filter(|s| added.contains(&s.id))
             .cloned()
             .collect();
+        self.shrink_to_fit();
     }
 
     /// Undo: take out exactly what the add put in and put back the

@@ -807,7 +807,13 @@ impl UndoData {
             }
             | UndoData::SegmentMoveInfo {
                 previous_offsets, ..
-            } => previous_offsets.retain(|id, before| !unchanged(id, before)),
+            } => {
+                previous_offsets.retain(|id, before| !unchanged(id, before));
+                // The map was captured whole and is kept for the entry's
+                // life: without this it keeps the whole map's table (17 KB
+                // for an insert's two keys on a 20,000-shot survey).
+                previous_offsets.shrink_to_fit();
+            }
             _ => {}
         }
     }
