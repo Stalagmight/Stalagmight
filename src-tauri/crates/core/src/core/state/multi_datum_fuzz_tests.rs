@@ -1367,6 +1367,13 @@ const PINNED_CHAINS: &[&str] = &[
     // frame-gps-edit: the setup gives the frame datum a new GPS while another
     // datum places a piece of its own (#769).
     "11",
+    // frame-gps-edit (#778): the frame takes the GPS and accuracy of a fix on
+    // its spot, on a piece the frame correction moves: the frame datum looks
+    // like that fix re-keyed where it stands, and pairing them dropped every
+    // datum in between, so the frame was placed again and every piece moved
+    // twice.
+    "1436150;twin(3:0,0,-);datum(2:1,-28.76717640316142,44.73562740619891,5.0);acc(0,0.5);acc(0,5.0);datum(2:0,73.16789539354458,-38.58700483932714,-);twin(4:3,1,-);merge(3:0,2:0);datum(4:4,25.196609454458898,59.09807127063376,5.0);delshot(1,0);unmerge(0:1,4:2);acc(5,0.5);twin(0:1,3,-)",
+    "50124619;delsec(4);acc(0,50.0);delshot(3,1);reopen;undo;reopen;datum(1:0,-21.964371565441986,48.867914065325635,0.5);datum(2:3,-19.025474508692568,96.3596903811504,-);delshot(2,1);rm(1);split(1,1,b);datum(3:0,37.86557792113264,57.57345304260396,1000.0);merge(3:2,2:2);combine(4:start,1:end);unmerge(4:0,3:2);rm(0);rm(0);merge(3:0,2:1);combine(3:end,2:end);twin(3:3,0,0.5);acc(0,50.0);merge(3:2,4:2);split(4,1,b);datum(0:1,-0.10493873460938649,-0.2260835289914435,0.0);merge(0:0,3:2);unmerge(3:2,5:1);delshot(0,0);merge(3:1,0:0);closure(3:2,5:0);unmerge(3:1,0:0);combine(5:start,4:end);delsec(5);reopen;merge(0:0,3:3);split(3,2,b);acc(0,1000.0);closure(0:0,4:2);datum(4:0,-79.63158641198679,38.92858175150428,1000.0);merge(3:1,3:2);twin(3:0,2,0.0)",
 ];
 
 #[test]
