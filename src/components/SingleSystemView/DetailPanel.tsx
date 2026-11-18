@@ -839,6 +839,7 @@ function StationDetail({ station }: { station: Station }) {
                     type="shot"
                     target={{ lineId, position: prevShotPosition }}
                     displayText={labels.shotAt(lineId, prevShotIndex)}
+                    fullText={labels.shotAt(lineId, prevShotIndex, true)}
                     onSelect={handleSelectPrevShot}
                     isMissing={!prevShotExists}
                     onAnnounce={announceSelection}
@@ -857,6 +858,7 @@ function StationDetail({ station }: { station: Station }) {
                     type="shot"
                     target={{ lineId, position: nextShotPosition }}
                     displayText={labels.shotAt(lineId, nextShotIndex)}
+                    fullText={labels.shotAt(lineId, nextShotIndex, true)}
                     onSelect={handleSelectNextShot}
                     isMissing={!nextShotExists}
                     onAnnounce={announceSelection}
@@ -1054,6 +1056,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   type="station"
                   target={{ lineId: line.id, position: startStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: startStationIndex })}
+                  fullText={labels.station({ line_id: line.id, station_index: startStationIndex }, true)}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
@@ -1067,6 +1070,7 @@ function ShotDetail({ line, shot, stations }: { line: Line; shot: Shot; stations
                   type="station"
                   target={{ lineId: line.id, position: endStationPosition }}
                   displayText={labels.station({ line_id: line.id, station_index: endStationIndex })}
+                  fullText={labels.station({ line_id: line.id, station_index: endStationIndex }, true)}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
@@ -1290,6 +1294,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                       type="station"
                       target={{ lineId: line.id, position: firstStationPosition }}
                       displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
+                      fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
@@ -1306,6 +1311,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         type="station"
                         target={{ lineId: line.id, position: firstStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: firstStationIndex })}
+                      fullText={labels.station({ line_id: line.id, station_index: firstStationIndex }, true)}
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
@@ -1319,6 +1325,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                         type="station"
                         target={{ lineId: line.id, position: lastStationPosition }}
                         displayText={labels.station({ line_id: line.id, station_index: lastStationIndex })}
+                        fullText={labels.station({ line_id: line.id, station_index: lastStationIndex }, true)}
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}

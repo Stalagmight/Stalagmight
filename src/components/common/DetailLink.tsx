@@ -59,6 +59,12 @@ export interface DetailLinkProps {
   target: DetailLinkTarget;
   /** Text to display in the link */
   displayText: string;
+  /**
+   * The target named with its line context, for the aria-label and the
+   * selection announcement (`Main Line / 17`, `Main Line: 4 → 5`) when the
+   * visible text omits the line. Defaults to `displayText`.
+   */
+  fullText?: string;
   /** Callback when link is clicked */
   onSelect: () => void;
   /** Whether the target element is missing/invalid */
@@ -128,6 +134,7 @@ export function DetailLink({
   type,
   target,
   displayText,
+  fullText,
   onSelect,
   isMissing = false,
   onAnnounce,
@@ -141,7 +148,8 @@ export function DetailLink({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
-  const ariaLabel = generateAriaLabel(type, displayText);
+  const spokenText = fullText ?? displayText;
+  const ariaLabel = generateAriaLabel(type, spokenText);
 
   // Full highlighting: a leading entity symbol signals what the link points to
   // (station ring, shot line, line zigzag), colored by entity. Hidden for
@@ -161,9 +169,9 @@ export function DetailLink({
     }
     onSelect();
     if (onAnnounce) {
-      onAnnounce(`Selected ${type} ${displayText}`);
+      onAnnounce(`Selected ${type} ${spokenText}`);
     }
-  }, [type, displayText, onSelect, onAnnounce, isMissing, onHoverEnd]);
+  }, [type, spokenText, onSelect, onAnnounce, isMissing, onHoverEnd]);
 
   const handleMouseEnter = useCallback(() => {
     if (isMissing || !onHoverStart) return;

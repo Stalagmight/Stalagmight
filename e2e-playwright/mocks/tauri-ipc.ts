@@ -745,6 +745,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       type MockCreditStep = Array<{ shot: Record<string, unknown>; before: unknown; after: unknown }>;
       const mockCreditUndo: MockCreditStep[] = [];
       const mockCreditRedo: MockCreditStep[] = [];
+      // set_station_name steps (`line:index` key, the name before and after), so
+      // a rename undoes and redoes like the backend's SetStationName. Kept apart
+      // from the credit steps; the specs never interleave the two.
+      type MockNameStep = { key: string; before: string | undefined; after: string };
+      const mockNameUndo: MockNameStep[] = [];
+      const mockNameRedo: MockNameStep[] = [];
       // Set while execute_batch runs, so its credit sub-commands share one step.
       let mockCreditBatchStep: MockCreditStep | null = null;
       const mockRestoreCredit = (shot: Record<string, unknown>, credit: unknown): void => {
@@ -4390,12 +4396,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (i !== stationRef.station_index && mockStationName(line.id, i) === name) {
                 return {
                   success: false,
-                  error: `Line "${line.name ?? `Line ${line.id}`}" already has a station named "${name}"`,
+                  error: `Line "${line.name ?? ''}" already has a station named "${name}"`,
                   line_ids: [],
                 };
               }
             }
-            mockStationNames[`${stationRef.line_id}:${stationRef.station_index}`] = name;
+            const nameKey = `${stationRef.line_id}:${stationRef.station_index}`;
+            mockNameUndo.push({ key: nameKey, before: mockStationNames[nameKey], after: name });
+            mockNameRedo.length = 0;
+            mockStationNames[nameKey] = name;
             return { success: true, line_ids: [] };
           }
 
@@ -4441,6 +4450,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               colocatedJoins = restored.joins;
               return { success: true, line_ids: [] };
             }
+            const nameStep = (cmd === 'undo' ? mockNameUndo : mockNameRedo).pop();
+            if (nameStep) {
+              const value = cmd === 'undo' ? nameStep.before : nameStep.after;
+              if (value === undefined) delete mockStationNames[nameStep.key];
+              else mockStationNames[nameStep.key] = value;
+              (cmd === 'undo' ? mockNameRedo : mockNameUndo).push(nameStep);
+              return { success: true, line_ids: [] };
+            }
             const from = cmd === 'undo' ? mockCreditUndo : mockCreditRedo;
             const to = cmd === 'undo' ? mockCreditRedo : mockCreditUndo;
             const step = from.pop();
@@ -4452,10 +4469,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'can_undo':
-            return mockCreditUndo.length > 0 || structuralUndo.length > 0;
+            return mockCreditUndo.length > 0 || structuralUndo.length > 0 || mockNameUndo.length > 0;
 
           case 'can_redo':
-            return mockCreditRedo.length > 0;
+            return mockCreditRedo.length > 0 || mockNameRedo.length > 0;
 
           case 'get_undo_state':
             return { can_undo: false, can_redo: false };
