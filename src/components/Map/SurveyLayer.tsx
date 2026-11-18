@@ -8,7 +8,7 @@ import type { ToolType } from '../../store/uiStore';
 import type { StationLabelMode } from '../../store/displaySelectors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { selectActiveSurveyData } from '../../store/geometrySelectors';
+import { selectMapSurveyData } from '../../store/sectionVisibility';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
@@ -3453,7 +3453,7 @@ export default class SurveyLayer {
   private resyncCustomRenderFromStore(): void {
     if (!this.customRender || !hasLiveStyle(this.map)) return;
     const surveyData =
-      selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode) ??
+      selectMapSurveyData(useProjectStore.getState(), useUIStore.getState()) ??
       this.cachedSurveyData;
     if (surveyData) this.syncCustomRender(surveyData);
   }
@@ -3531,10 +3531,9 @@ export default class SurveyLayer {
 
     // Prefer the live store geometry (never a stale project's) over the legacy
     // cached args; fall back to the args only when the store has no active geometry.
-    const surveyData = selectActiveSurveyData(
-      useProjectStore.getState(),
-      useUIStore.getState().geometryMode
-    ) ?? surveyDataFromLegacy(lines, stations);
+    // Hidden Sections' lines (#327) are left out of everything below at once.
+    const surveyData = selectMapSurveyData(useProjectStore.getState(), useUIStore.getState()) ??
+      surveyDataFromLegacy(lines, stations);
 
     this.cachedSurveyData = surveyData;
     this.cachedIssueRender = resolveIssueRender(surveyData, this.issueInput, loopClosures);

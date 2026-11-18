@@ -29,6 +29,7 @@ import { useGasPlanStore } from './gasPlanStore';
 import { useExportStore } from './exportStore';
 import { useColorScaleStore } from './colorScaleStore';
 import { displaySettingStorageKey } from './displaySettingKeys';
+import { createSectionsViewSlice, type SectionsViewSlice } from './sectionsViewSlice';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -350,7 +351,7 @@ export interface LastUsedCredit {
   explorers: Person[];
 }
 
-export interface UIStore {
+export interface UIStore extends SectionsViewSlice {
   // View state
   view: ViewType;
   setView: (view: ViewType) => void;
@@ -488,7 +489,8 @@ export interface UIStore {
   requestFitToBounds: false | 'animate' | 'snap';
   triggerFitToBounds: (options?: { snap?: boolean }) => void;
   clearFitToBoundsRequest: () => void;
-  requestZoomToLine: LineId | null;
+  /** One line, or several framed together (a Section's extent, #327). */
+  requestZoomToLine: LineId | readonly LineId[] | null;
   triggerZoomToLine: (lineId: LineId) => void;
   clearZoomToLineRequest: () => void;
   requestPanToShot: { lineId: LineId; shotId: ShotId } | null;
@@ -1005,6 +1007,8 @@ export function isScreenBusy(
 }
 
 export const useUIStore = create<UIStore>((set) => ({
+  // Sections panel view state (#327): hidden / collapsed Sections
+  ...createSectionsViewSlice(set),
   // View state
   view: 'global',
   setView: (view) => {
@@ -1979,6 +1983,8 @@ export const useUIStore = create<UIStore>((set) => ({
       // preference, so a load is authoritative and never inherits the previous
       // project's mode.
       geometryMode: settings.geometryMode === 'closureAdjusted' ? 'closureAdjusted' : GEOMETRY_MODE_DEFAULT,
+      // The Sections hidden on the map (#327): a load is authoritative.
+      hiddenSections: settings.hiddenSections ?? [],
     }));
     trackDisplayState(useUIStore.getState());
   },
