@@ -293,6 +293,34 @@ describe('generate-replay.mjs', () => {
   });
 });
 
+describe('generate-replay.mjs, traces recorded before the Section -> Line rename', () => {
+  it('replays a map_feature_click that names its line sectionId', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-legacy-'));
+    try {
+      const ts = new Date(1751970000000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'legacy', startedAt: ts }),
+        record({
+          type: 'action', v: 1, seq: 1, ts, tool: 'map_feature_click',
+          params: { featureType: 'station', sectionId: 3, stationIndex: 8 },
+          outcome: { ok: true, durationMs: 5 },
+        }),
+      ];
+      fs.writeFileSync(path.join(dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      const out = path.join(dir, 'replay.spec.ts');
+      execFileSync(process.execPath, [replayGen, dir, '--out', out], { encoding: 'utf8' });
+      const spec = fs.readFileSync(out, 'utf8');
+      expect(spec).toContain(
+        `await mapFeatureClick(browser, {"featureType":"station","stationIndex":8,"lineId":3});`,
+      );
+      expect(spec).not.toContain('sectionId');
+      expect(spec).not.toContain('had no recorded feature identity');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('testIdSelector', () => {
   it('targets exact IDs containing Windows separators, quotes, and control characters', () => {
     expect(testIdSelector('C:\\Caves\\survey.stalx')).toBe(
