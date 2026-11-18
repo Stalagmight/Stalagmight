@@ -383,12 +383,8 @@ fn the_combine_candidate_names_the_renames_and_the_joined_station() {
     let candidate = state
         .combine_candidate_for_lines(main, side)
         .unwrap()
-        .expect("the lines touch");
-    let renames = candidate
-        .plan_keeping_a
-        .station_renames
-        .clone()
-        .expect("the names collide");
+        .unwrap();
+    let renames = candidate.plan_keeping_a.station_renames.unwrap();
     assert_eq!(renames.reason, CombineRenameReason::Collision);
     let kept = renames.kept.unwrap();
     assert_eq!(
@@ -431,7 +427,7 @@ fn a_combine_that_renames_nothing_says_nothing() {
     let candidate = state
         .combine_candidate_for_lines(main, second)
         .unwrap()
-        .expect("the halves touch");
+        .unwrap();
     assert_eq!(candidate.plan_keeping_a.station_renames, None);
     assert_eq!(candidate.plan_keeping_b.station_renames, None);
     ok(state.execute_combine_lines(main, second, combine_options("Main")));

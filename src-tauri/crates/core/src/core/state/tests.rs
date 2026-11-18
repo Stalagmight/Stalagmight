@@ -17937,10 +17937,7 @@ fn test_merge_projects_source_missing() {
         false,
     );
     assert!(!result.success);
-    assert!(result
-        .error
-        .unwrap_or_default()
-        .contains("no longer exists"));
+    assert!(result.error.unwrap_or_default().contains("not found"));
 }
 
 #[test]

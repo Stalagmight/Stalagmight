@@ -624,9 +624,11 @@ fn make_snapshot_pair_legacy(state: &AppState, redo: bool) {
     } else {
         stack.pop_undo().unwrap()
     };
-    let crate::core::UndoData::ProjectSnapshotPair { before, after } = &mut entry.undo_data else {
-        panic!("expected a snapshot pair, got {:?}", entry.undo_data);
+    let pair = match &mut entry.undo_data {
+        crate::core::UndoData::ProjectSnapshotPair { before, after } => Some((before, after)),
+        _ => None,
     };
+    let (before, after) = pair.unwrap();
     for snapshot in [before, after] {
         let mut json: serde_json::Value = serde_json::from_str(snapshot).unwrap();
         let object = json.as_object_mut().unwrap();
