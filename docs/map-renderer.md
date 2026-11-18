@@ -62,7 +62,10 @@ state, no errors, blank layer. That failure has already been paid for once.
 ## From store state to GPU
 
 `SurveyLayer.flushUpdate` picks the active geometry (measured or
-closure-adjusted, via `store/geometrySelectors.selectActiveSurveyData`), rebuilds
+closure-adjusted, via `store/geometrySelectors.selectActiveSurveyData`) without
+the lines of hidden Sections (`store/sectionVisibility.selectMapSurveyData`: a
+compacted copy, cached per source, the source itself when nothing is hidden, so
+geometry, labels, picking and closures all leave those lines out), rebuilds
 the hit index, and calls `syncCustomRender`, which assembles a
 `DisplayColorContext` and syncs the geometry and label controllers. All of it is
 synchronous - no worker, no tile cut - which is why an edit repaints in the same
@@ -467,6 +470,7 @@ the Zustand write.
 | Wrong color in one mode only | `colorResolvers.ts` precedence, then `displayColor.ts`; for a one-byte overlay drift, `overlayColor.ts` (floor vs round) |
 | Hover / selection emphasis stuck or missing | `controller.refreshHighlight` and the highlight flag in `tessellate.ts` |
 | Originals still visible under a drag preview | `controller.setDragHide` and `CustomRenderExclusion` |
+| A line missing from the map, or a hidden Section still drawn | `store/sectionVisibility.ts` (hidden Sections minus the selected lines) and `utils/surveyDataLineFilter.ts` |
 | Click or hover misses a feature | `hitProbe.ts` padding, then `geometryIndex.linesIntersectingBox`, then the camera snapshot key |
 | Labels missing entirely | font readiness in `labelController` (the `label-font-unavailable` path) |
 | Labels vanish or flash while zooming | `labelReveal.ts` / `labelDecimation.ts` |
