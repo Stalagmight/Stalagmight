@@ -9034,7 +9034,16 @@ fn held_gauges_round_trip_and_a_stale_or_malformed_setting_reads_as_none() {
 fn a_line_keeps_the_created_at_it_was_read_with() {
     let dir = TempDir::new().unwrap();
     let mut project = Project::new("Times".to_string(), None);
-    for name in ["Kept", "Garbled", "Offset"] {
+    for name in [
+        "Kept",
+        "Garbled",
+        "Offset",
+        "Before year 0",
+        "After year 9999",
+        "Leap second",
+        "Integer",
+        "Blob",
+    ] {
         project.add_line(LineData {
             name: Some(name.to_string()),
             shots: vec![ShotData {
@@ -9057,6 +9066,11 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
             "2024-03-05T10:20:30.123456789+00:00",
             "not a time",
             "2024-03-05T12:20:30+02:00",
+            // RFC 3339, but out of years 0000-9999 once in UTC, where
+            // `to_rfc3339` writes `-0001-...` and `+10000-...`.
+            "0000-01-01T00:00:00+23:59",
+            "9999-12-31T23:59:59-23:59",
+            "2016-12-31T23:59:60Z",
         ]) {
             db.conn
                 .execute(
@@ -9065,6 +9079,19 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
                 )
                 .unwrap();
         }
+        // Not text at all: another tool's file, or a hostile one.
+        db.conn
+            .execute(
+                "UPDATE sections SET created_at = 42 WHERE id = ?1",
+                [ids[6]],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE sections SET created_at = x'0102' WHERE id = ?1",
+                [ids[7]],
+            )
+            .unwrap();
     }
 
     let mut reopened = Database::open_existing(&first)
@@ -9102,5 +9129,14 @@ fn a_line_keeps_the_created_at_it_was_read_with() {
         "2024-03-05T10:20:30+00:00",
         "an offset is kept as the same instant in UTC"
     );
+    for (id, why) in ids[3..].iter().zip([
+        "before year 0",
+        "after year 9999",
+        "a leap second",
+        "an integer",
+        "a blob",
+    ]) {
+        assert_eq!(stored(*id), fallback, "{why} is replaced");
+    }
     assert_eq!(stored(new_line), fallback, "a new line has no stored time");
 }

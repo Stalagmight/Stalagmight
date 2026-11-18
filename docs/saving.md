@@ -297,24 +297,28 @@ Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo sta
 
 Saving, opening and saving again with no edit writes the survey data byte for
 byte the same. SpeleoDB keeps every push in git, so a page that changes for no
-reason is a page every push uploads and stores. Two rules keep it:
+reason is a page every push uploads and stores. What keeps it:
 
 - The station side tables (`station_ids`, `station_names`, `station_comments`,
   `station_offsets`) and `section_offsets` are written in station order (line
   id, then station index), not in the order of the in-memory `HashMap`s, which
   changes on every open. The insert order decides a table's rowids and how its
   pages and its key index split, so map order rewrote most of those pages on
-  every save.
+  every save. The app's save writes `display_settings` in key order for the
+  same reason.
 - `sections.created_at` is written back as the file held it
   (`Line::loaded_created_at`); builds before this one stamped it with the time
-  of each save. A line the file holds no readable time for (new this session,
-  restored from an undo snapshot, or not RFC 3339 text) gets the project's
-  `created_at`.
+  of each save. A line with no usable stored time gets the project's
+  `created_at`: a line new this session, a line an undo re-creates after a
+  delete, or a stored value that is not RFC 3339 text, is a leap second, or
+  falls outside years 0000-9999 in UTC. Restoring a whole-project snapshot
+  (undo or redo) carries each live line's time across by line id.
 
 `a_resave_with_no_edit_writes_the_same_bytes` (`station_ids_tests.rs`) pins
-this for a project without undo history; the undo rows are written by their own
-path and are not covered. An edit still rewrites what it moves: inserting or
-deleting a shot mid-line shifts every later row of the `shots` table.
+this for `Database::save_project` on a project without undo history. The undo
+rows are written by their own path and are not covered. An edit still rewrites
+what it moves: inserting or deleting a shot mid-line shifts every later row of
+the `shots` table.
 
 ### `section_offsets` rows are never all-zero
 

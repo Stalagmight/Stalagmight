@@ -170,11 +170,12 @@ pub struct Line {
     /// tracks or shows: builds before this one stamped every line with the
     /// time of each save, so it only ever held when the file was last saved.
     /// A save writes it back unchanged, so an unchanged project saves to the
-    /// same bytes; a line the file did not hold (new this session, or
-    /// restored from an undo snapshot) is written with the project's
-    /// `created_at` instead (`Database::save_project`). Session-only, like
-    /// [`Self::loaded_legacy_surveyor`]: set by the file reader, never
-    /// serialized.
+    /// same bytes; a line with none (new this session, re-created by an undo
+    /// after a delete, or read with a value the reader refused) is written
+    /// with the project's `created_at` instead (`Database::save_project`).
+    /// Session-only, like [`Self::loaded_legacy_surveyor`]: set by the file
+    /// reader, never serialized, and carried across a whole-project undo or
+    /// redo by line id (`reapply_heals_after_restore`).
     #[serde(skip)]
     #[ts(skip)]
     pub loaded_created_at: Option<DateTime<Utc>>,

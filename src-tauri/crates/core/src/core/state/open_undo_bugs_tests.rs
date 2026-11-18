@@ -4500,3 +4500,55 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
     );
     assert_eq!(slot.unwrap().lines.len(), 1);
 }
+
+/// `Line::loaded_created_at` is session-only (serde-skipped), so restoring a
+/// whole-project snapshot (the undo or redo of a `ProjectSnapshotPair`) brings
+/// every line back without the time its file held. The restore carries the
+/// live line's, so the next save writes that time back rather than the
+/// project's `created_at` (`docs/saving.md`).
+#[test]
+fn undo_of_a_snapshot_entry_keeps_each_lines_stored_created_at() {
+    const STORED: &str = "2024-03-05T10:20:30.123456789+00:00";
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let written = temp.path().join("written.stalx");
+    let line_id = {
+        let state = state_with_project();
+        let line_id = create_line(&state, "Timed", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+        let saved = state.save_project(Some(written.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        line_id
+    };
+    // As an older build leaves it: the line's own time, not the project's.
+    rusqlite::Connection::open(&written)
+        .unwrap()
+        .execute("UPDATE sections SET created_at = ?1", [STORED])
+        .unwrap();
+
+    let state = AppState::new().unwrap();
+    let opened = state.open_project(written);
+    assert!(opened.success, "open failed: {:?}", opened.error);
+    let moved = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(line_id, 1),
+        offset: Coordinates {
+            x: 1.0,
+            y: 2.0,
+            z: 0.0,
+        },
+    });
+    assert!(moved.success, "MoveStation failed: {:?}", moved.error);
+    assert!(state.undo().success, "undo of MoveStation failed");
+
+    let resaved = temp.path().join("resaved.stalx");
+    let saved = state.save_project(Some(resaved.clone()));
+    assert!(saved.success, "save failed: {:?}", saved.error);
+    let stored: String = rusqlite::Connection::open(&resaved)
+        .unwrap()
+        .query_row(
+            "SELECT created_at FROM sections WHERE id = ?1",
+            [line_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, STORED, "the undo dropped the line's stored time");
+}

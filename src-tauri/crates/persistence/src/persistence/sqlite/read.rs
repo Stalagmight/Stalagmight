@@ -382,13 +382,9 @@ impl Database {
                     row.get::<_, Option<f64>>(11)?,
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<i32>>(13)?,
-                    // Tolerant: a value that is not RFC 3339 text (another
-                    // tool's, or NULL) is no stored time, not a failed open.
-                    row.get_ref(14)?
-                        .as_str()
-                        .ok()
-                        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                        .map(|at| at.with_timezone(&Utc)),
+                    // Tolerant: an unusable value is no stored time, not a
+                    // failed open (`stored_line_time`).
+                    stored_line_time(row.get_ref(14)?),
                 ))
             })?;
             for row in rows {
@@ -1558,4 +1554,18 @@ impl Database {
             parsed
         }))
     }
+}
+
+/// A line's stored `sections.created_at`, or `None` when it is not a time the
+/// save can write back as RFC 3339 text that readers parse: not text, not
+/// RFC 3339, a leap second (Python's `datetime`, which SpeleoDB's reader uses,
+/// has no second 60), or an offset that moves the instant out of years
+/// 0000-9999 once in UTC (`to_rfc3339` would then write `-0001-...` or
+/// `+10000-...`). The save then writes the fallback (`Line::loaded_created_at`).
+fn stored_line_time(value: rusqlite::types::ValueRef<'_>) -> Option<chrono::DateTime<Utc>> {
+    use chrono::{Datelike as _, Timelike as _};
+    let at = chrono::DateTime::parse_from_rfc3339(value.as_str().ok()?)
+        .ok()?
+        .with_timezone(&Utc);
+    ((0..=9999).contains(&at.year()) && at.nanosecond() < 1_000_000_000).then_some(at)
 }

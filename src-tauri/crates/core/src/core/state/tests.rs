@@ -2489,6 +2489,45 @@ fn test_save_project_persists_display_settings_cache() {
     assert!(cache.is_empty());
 }
 
+/// The save copies the display settings out of a `HashMap`, whose order
+/// changes on every open. They are written in key order, so the
+/// `display_settings` rows (a rowid table) land the same way on every save
+/// (`docs/saving.md`).
+#[test]
+fn test_save_project_writes_display_settings_in_key_order() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Settings Order".to_string(),
+        location: None,
+    });
+    let written = [
+        "zeta", "alpha", "mu", "beta", "omega", "delta", "kappa", "gamma",
+    ];
+    for key in written {
+        state.save_display_setting(key, "1").unwrap();
+    }
+
+    let save_path = temp_dir.path().join("settings-order.stalx");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success, "save failed: {:?}", result.error);
+
+    let conn = rusqlite::Connection::open(&save_path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT key FROM display_settings ORDER BY rowid")
+        .unwrap();
+    let keys: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(written.iter().all(|key| keys.iter().any(|k| k == key)));
+    assert!(
+        keys.is_sorted(),
+        "display settings out of key order: {keys:?}"
+    );
+}
+
 #[test]
 fn test_undo_fails_with_invalid_previous_values_shot() {
     let state = AppState::new().unwrap();
