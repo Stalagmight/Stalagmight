@@ -477,7 +477,7 @@ fn a_line_created_into_a_section_undoes_and_redoes_with_its_membership() {
     let line = ok(create(Some(id))).line_id.unwrap();
     assert_eq!(section_of(&state, line), Some(id));
     assert_eq!(state.get_undo_stack().len(), 2, "one step");
-    assert_eq!(last_label(&state), "Create line 'New'");
+    assert_eq!(last_label(&state), "Create line \"New\"");
     // Every new station has its Station ID and its name straight away: the
     // create runs `execute()`'s identity epilogue like any other command.
     let identity = |state: &AppState| -> Vec<(Option<u32>, Option<String>)> {

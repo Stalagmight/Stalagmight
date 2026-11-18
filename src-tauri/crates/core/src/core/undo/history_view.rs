@@ -1135,7 +1135,7 @@ mod tests {
 
         let item = entry_to_history_item(&entry, 0, &empty_names());
         assert_eq!(item.index, 0);
-        assert_eq!(item.description, "Create line 'Test Line'");
+        assert_eq!(item.description, "Create line \"Test Line\"");
         assert!(item.timestamp.is_some());
         assert_eq!(item.command_type, "create_line");
         assert!(item.preview_data.is_some());

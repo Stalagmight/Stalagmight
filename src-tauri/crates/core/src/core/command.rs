@@ -977,7 +977,7 @@ impl Command {
             },
             Command::CloseProject => "Close project".to_string(),
             Command::CreateLine { name, .. } => {
-                format!("Create line '{}'", name.as_deref().unwrap_or("unnamed"))
+                format!("Create line \"{}\"", name.as_deref().unwrap_or("unnamed"))
             }
             Command::DeleteLine { line_id } => {
                 format!("Delete line {line_id}")
@@ -1735,7 +1735,7 @@ mod tests {
                     shots: vec![shot_data.clone()],
                     cave_section_id: None,
                 },
-                "Create line 'Main'",
+                "Create line \"Main\"",
             ),
             (Command::DeleteLine { line_id: 3 }, "Delete line 3"),
             (
