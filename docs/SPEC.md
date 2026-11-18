@@ -3051,6 +3051,7 @@ and quoted (`export/csv.rs` `escape_csv`).
       "name": "Main Line",
       "surveyor": "J. Smith",
       "date": "2024-01-10",
+      "section": "Upstream",
       "shots": [
         {
           "from": "0",

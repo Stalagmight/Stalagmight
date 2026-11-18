@@ -55,7 +55,7 @@ replacing stays as it was.
   `to_id`), then length, bearings in and out, depths in and out, left, right,
   up, down, kind and comment.
 - **JSON**: the project name and location, then every line with its name,
-  people, dates, color and shots. Each shot has the same `from`, `to`,
+  people, dates, color, its section (when it is in one) and shots. Each shot has the same `from`, `to`,
   `from_id` and `to_id` as the CSV.
 - CSV and JSON hold the shot readings only: no zero datums, merges or loop
   closures.

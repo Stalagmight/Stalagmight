@@ -53,6 +53,10 @@ pub struct JsonLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date_last: Option<String>,
     pub color: String,
+    /// The name of the Section (named group of lines) the line belongs to;
+    /// absent for a line in no section.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub shots: Vec<JsonShot>,
 }
 
@@ -115,6 +119,10 @@ impl JsonExport {
                         .filter(|last| Some(*last) != s.first_survey_date())
                         .map(|d| d.to_string()),
                     color: s.color.clone(),
+                    section: s
+                        .section_id
+                        .and_then(|id| project.section(id))
+                        .map(|section| section.name.clone()),
                     shots: {
                         let stations = super::csv::station_columns(project, s.id);
                         let name =
@@ -203,6 +211,34 @@ mod tests {
         assert_eq!(parsed["lines"][0]["surveyor"], "Tester");
         assert_eq!(parsed["lines"][0]["surveyors"][0], "Tester");
         assert_eq!(parsed["lines"][0]["shots"][0]["surveyors"][0], "Tester");
+    }
+
+    #[test]
+    fn a_line_in_a_section_carries_the_section_name() {
+        let mut project = Project::new("Test".to_string(), None);
+        let data = |name: &str| LineData {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                length: 10.0,
+                ..Default::default()
+            }],
+        };
+        let grouped = project.add_line(data("Main")).id;
+        project.add_line(data("Side"));
+        let upper = project.add_section("Upper series".to_string(), "#ff6b6b".to_string());
+        project.get_line_mut(grouped).unwrap().section_id = Some(upper);
+
+        let file = NamedTempFile::new().unwrap();
+        export_json(&project, file.path()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(parsed["lines"][0]["section"], "Upper series");
+        assert!(parsed["lines"][1].get("section").is_none());
     }
 
     #[test]
