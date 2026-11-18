@@ -453,3 +453,55 @@ fn a_label_survives_a_save_and_a_reopen() {
     save_close_reopen(&state, &path);
     assert_eq!(top(&state).description, label);
 }
+
+/// A Remove Loop Closure entry names its two stations from its own record,
+/// whatever else is on the stack. The names used to be read only for the
+/// lines some COMMAND on the stack addressed, and `RemoveLoopClosure` names
+/// a closure id: alone on a stack (a save that kept a short persisted window,
+/// then a reopen) its preview fell back to `-`.
+#[test]
+fn a_removed_closure_names_its_stations_alone_on_the_stack() {
+    let state = new_state();
+    let up = create(&state, "Upstream", shots(3));
+    let down = create(&state, "Downstream", shots(2));
+    let project = state.get_project_state().unwrap();
+    let closure = crate::models::LoopClosure {
+        id: 7,
+        station_a: project.key_for_ref(StationRef::new(up, 3)).unwrap(),
+        station_b: project.key_for_ref(StationRef::new(down, 0)).unwrap(),
+        path_length: 12.0,
+        misclosure_distance: 0.5,
+        error_percentage: 4.0,
+        horizontal_misclosure: 0.3,
+        vertical_misclosure: 0.4,
+        strategy: ClosureStrategy::Move,
+        is_aligned: false,
+    };
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.clear();
+        stack.push_with_data(
+            Command::RemoveLoopClosure { closure_id: 7 },
+            UndoData::ClosureInfo {
+                closure,
+                position: Some(0),
+            },
+        );
+    }
+    let stations = top(&state)
+        .preview_data
+        .unwrap()
+        .changes
+        .into_iter()
+        .find(|change| change.field == "Stations")
+        .unwrap()
+        .new_value;
+    assert_eq!(
+        stations,
+        format!(
+            "Upstream / {} \u{2194} Downstream / {}",
+            station_name(&state, up, 3),
+            station_name(&state, down, 0)
+        )
+    );
+}

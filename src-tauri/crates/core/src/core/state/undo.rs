@@ -1,4 +1,4 @@
-use crate::core::undo::history_names::{referenced_lines, NameBook};
+use crate::core::undo::history_names::{referenced_entry_lines, NameBook};
 use crate::core::{Command, CommandResult, ReversedLine, UndoData, UndoEntry};
 use crate::models::{LineId, LineUpdates, Shot, ShotId, ShotUpdates};
 
@@ -1282,7 +1282,7 @@ impl AppState {
                     Box::new(stack.undo_entries())
                 };
                 for entry in entries {
-                    referenced_lines(&entry.command, &mut lines);
+                    referenced_entry_lines(entry, &mut lines);
                 }
                 lines
             })

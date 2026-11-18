@@ -103,6 +103,19 @@ impl NameBook {
     }
 }
 
+/// [`referenced_lines`] for a history entry: its command's lines, and the
+/// lines its undo data names a station of that its preview names (a removed
+/// loop closure's two ends). Without them a Remove Loop Closure preview named
+/// its stations only while another entry on the same stack named their lines,
+/// so it changed when a save trimmed the persisted window.
+pub fn referenced_entry_lines(entry: &UndoEntry, out: &mut HashSet<LineId>) {
+    referenced_lines(&entry.command, out);
+    if let UndoData::ClosureInfo { closure, .. } = &entry.undo_data {
+        out.insert(closure.station_a.line_id);
+        out.insert(closure.station_b.line_id);
+    }
+}
+
 /// Every line `cmd` addresses (batch sub-commands included), so the history
 /// can read just those lines' names.
 pub fn referenced_lines(cmd: &Command, out: &mut HashSet<LineId>) {
