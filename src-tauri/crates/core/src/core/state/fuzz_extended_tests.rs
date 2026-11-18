@@ -969,3 +969,71 @@ fn a_merge_of_two_held_components_survives_a_reopen() {
         "the reopen changed held_gauges the session had left as they were"
     );
 }
+
+/// OPEN FINDING (LARGE + EXTENDED + SAVES, seed 6 x80, both halves; found on
+/// the merge of release/0.6.0): the in-session twin of the finding above.
+/// After a merge joins two components that each hold a gauge, an Add .stalx
+/// runs `normalize_held_gauges` over the WHOLE project (`project_append.rs`),
+/// which keeps one entry per component and so drops one of the target's own.
+/// `AddedProjectContent` records nothing of `held_gauges`, so the undo of the
+/// add removes what the add brought and leaves the dropped entry dropped: the
+/// state before the add does not come back. Present on both sides of the
+/// merge (the normalize and the record both predate it).
+#[test]
+#[ignore = "open finding: an add after an in-session merge of two held components drops a held gauge its undo does not restore - see the doc comment"]
+fn an_add_after_a_merge_of_two_held_components_undoes_exactly() {
+    let _config = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("held.stalx");
+    let mut project = Project::new("Held".to_string(), None);
+    let mut rng = Rng::new(3);
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let data = LineData {
+            name: Some(format!("island-{index}")),
+            color: "#123456".to_string(),
+            shots: vec![random_shot(&mut rng), random_shot(&mut rng)],
+            ..LineData::default()
+        };
+        let id = project.add_line(data).id;
+        let line = project.get_line(id).unwrap();
+        let shot = line.shots[1].uuid.clone().unwrap();
+        let parity = project.shot_record_parity(line, Some(&shot));
+        project.held_gauges.push(HeldGauge {
+            line_id: id,
+            shot,
+            neighbour: None,
+            end: false,
+            parity,
+        });
+        ids.push(id);
+    }
+    Database::open(&path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+    let state = super::AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+    assert!(
+        state
+            .execute(Command::MergeStations {
+                station_a: StationRef::new(ids[0], 2),
+                station_b: StationRef::new(ids[1], 0),
+            })
+            .success
+    );
+    let before_add = state.get_project_state().unwrap().held_gauges;
+    assert_eq!(before_add.len(), 2, "the merge keeps both entries");
+    let added = dir.path().join("added.stalx");
+    Database::open(&added)
+        .unwrap()
+        .save_project(&added_project(11, 1, &[]))
+        .unwrap();
+    assert!(state.execute(Command::add_project_file(added)).success);
+    assert!(state.undo().success);
+    assert_eq!(
+        state.get_project_state().unwrap().held_gauges,
+        before_add,
+        "the undo of the add did not put back the held gauges it found"
+    );
+}
