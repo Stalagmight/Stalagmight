@@ -67,6 +67,7 @@ import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations, 
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectShotActions, type ProjectShotActions } from './projectShotActions';
 import { createLineStructureActions, type LineStructureActions } from './lineStructureActions';
+import { createCaveSectionActions, type CaveSectionActions } from './caveSectionActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
@@ -221,7 +222,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, LineStructureActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectShotActions, LineStructureActions, CaveSectionActions {
   // State
   project: Project | null;
   /**
@@ -407,7 +408,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   deleteProject: (path: string) => Promise<CommandResult>;
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
-  createLine: (data: LineData) => Promise<CommandResult>;
+  createLine: (data: LineData, caveSectionId?: number | null) => Promise<CommandResult>;
   createLineAndMerge: (
     data: LineData,
     importStationIndex: number,
@@ -919,6 +920,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   ...createProjectShotActions(executeCommand),
   // splitLine / combineLines live in lineStructureActions.ts
   ...createLineStructureActions(executeCommand),
+  ...createCaveSectionActions(executeCommand), // Sections (#327), caveSectionActions.ts
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
@@ -1799,7 +1801,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   }),
 
   // Line operations
-  createLine: async (data: LineData) => {
+  createLine: async (data: LineData, caveSectionId?: number | null) => {
     return executeCommand(
       'create_line',
       {
@@ -1810,6 +1812,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         direction: data.direction,
         quality: data.quality,
         shots: data.shots,
+        caveSectionId: caveSectionId ?? null, // the New Line dialog's target Section (#327)
       },
       {
         purpose: 'add line to project',

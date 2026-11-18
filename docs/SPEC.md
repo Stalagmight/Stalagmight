@@ -984,6 +984,54 @@ Data Table shot selection:
 ```
 Example: "Selected shot 2:3."
 
+#### 6.3.4 Sections Panel Tree (#327)
+
+A project without Sections lists its lines flat, as it always did. Once it has
+one, the panel is a tree: each Section is a header row (colour dot, name, "N
+lines · L m", eye toggle, collapse chevron) with its lines beneath, in project
+order, then an **Ungrouped** header for the lines in no Section (shown even when
+empty: it is where a line is dragged to leave its Section).
+
+- **One virtualized list.** The tree is flattened into one list of rows
+  (`sectionsTree.ts`), virtualized like the flat list; line rows keep their test
+  ids (`line-row-{id}`), headers are `section-header-{id}` /
+  `sections-ungrouped-header`.
+- **ARIA tree.** `role="tree"` (`aria-multiselectable`), rows are `treeitem`s
+  with `aria-level` (1 for headers and flat lines, 2 under a header),
+  `aria-posinset` / `aria-setsize`, `aria-expanded` on headers and
+  `aria-selected` on lines. Up / Down / Home / End walk the rows; Right expands
+  a header, then steps into it; Left collapses it, or steps from a line to its
+  header; Enter selects and zooms to a line, or frames a header's lines; Space
+  selects a line, or opens / closes a header; F2 renames a Section;
+  Shift+F10 / the Menu key opens the row's context menu; Escape clears the
+  selection.
+- **Headers are not selected.** A click on a header only focuses it: a Section
+  is not a map item, so the map, Details and the data table would have nothing
+  to show, and selecting its lines would replace the user's selection and draw
+  a hidden Section. Shift- or Ctrl-click adds all its lines to the selection;
+  double-click frames them on the map.
+- **Collapse** is per project, for the session. Selecting a line of a collapsed
+  group elsewhere (map, data table, Details) opens the group, so a selection is
+  always visible in the panel.
+- **Editing** - New Section (header button; `Section N` in the next free palette
+  colour, then an inline rename), the header menu (Rename, Color..., Apply Color
+  to Lines, Zoom to Section, Delete Section), the line menu's **Move to
+  Section** flyout (each Section, No Section, New Section...; the right-clicked
+  line, or the whole line selection it is part of), dragging a line row (or the
+  line selection it is part of) onto a group, and the New Line dialog's Section.
+  Every one is gated on `useEditingBlocked()` and re-checked at commit time; the
+  drag uses pointer events (not HTML5 drag-and-drop, which WebKitGTK runs
+  unreliably), mouse and pen only, so a touch long-press keeps opening the menu.
+- **Show / hide** is allowed in the read-only views too (it is a view setting).
+  A hidden Section's lines are left out of the map's survey data
+  (`store/sectionVisibility.ts`), so their geometry, stations, labels, comments,
+  closures, hover and picking go at once; the panel shows them dimmed. A line
+  the user selects is drawn while it is selected (so a selection is never
+  invisible and Zoom to Line frames something); the Section stays hidden. A
+  station or shot drag still moves stations of hidden lines merged with (or
+  tied by an aligned closure to) the dragged one. The image export does not
+  read the setting: it draws every line.
+
 ### 6.4 Undo/Redo History Dropdown
 
 The Undo and Redo toolbar buttons feature dropdown menus showing recent actions with timestamps and diff previews.

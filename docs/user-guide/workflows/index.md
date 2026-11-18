@@ -17,5 +17,6 @@ Step-by-step guides that take one task from start to finish.
 - [Closing a loop](closing-a-loop.md)
 - [Adding comments](adding-comments.md)
 - [Combining and splitting lines](combining-and-splitting-sections.md)
+- [Grouping lines into sections](grouping-lines-into-sections.md)
 - [Exporting](exporting.md)
 - [Planning a dive](planning-a-dive.md)

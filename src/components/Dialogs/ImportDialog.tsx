@@ -59,6 +59,7 @@ import {
   lineNameProblemMessage,
   nextFreeLineName,
 } from '../../utils/nameValidation';
+import { liveSectionId, NewLineSectionSelect } from './NewLineSectionSelect';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -78,13 +79,15 @@ interface SavedFormState {
   /** Continues the monotonic key counter, so restored rows can never collide
    *  with rows added afterwards. */
   nextKey: number;
+  /** The Section (#327) the line goes into; null for none. */
+  caveSectionId?: number | null;
 }
 
 export default function ImportDialog() {
   const { t } = useTranslation();
   const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast, lastUsedCredit, setLastUsedCredit } =
     useUIStore();
-  const { createLine, createLineAndMerge, moveLine, project } = useProjectStore();
+  const { createLine, createLineAndMerge, moveLine, moveLinesToCaveSection, project } = useProjectStore();
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
   const gridLabels = useGridLabels('dataTable.shotNoun');
@@ -114,6 +117,8 @@ export default function ImportDialog() {
   const [people, setPeople] = useState<CreditLists>(initialPeople);
   const [peopleTyping, setPeopleTyping] = useState(false);
   const [date, setDate] = useState<string>(restored?.date ?? '');
+  // The Section the new line goes into (#327), none by default.
+  const [caveSectionId, setCaveSectionId] = useState<number | null>(restored?.caveSectionId ?? null);
 
   // Row keys are handed out from a monotonic counter and NEVER reused: the grid
   // keys per-cell state (missing-cell marks) by row identity, so a recycled key
@@ -446,6 +451,7 @@ export default function ImportDialog() {
       color,
       drafts,
       nextKey: keyCounterRef.current,
+      caveSectionId,
     };
 
     // Close dialog and enter placement mode
@@ -456,9 +462,11 @@ export default function ImportDialog() {
       0, // align station 0 to cursor
       // onComplete: create line, merge if snapped or move to position
       async (result: PlacementResult) => {
+        // The Section as it stands now: it may have gone while placing.
+        const section = liveSectionId(caveSectionId);
         const cmdResult = result.snappedToStation
           ? await createLineAndMerge(lineData, 0, result.snappedToStation, 'Move')
-          : await createLine(lineData);
+          : await createLine(lineData, section);
         if (!cmdResult.success) {
           // Refused (the name was taken meanwhile): back to the form, with why.
           openDialog('import', {
@@ -467,7 +475,12 @@ export default function ImportDialog() {
           });
           return;
         }
-        if (!result.snappedToStation && cmdResult.line_id != null) {
+        if (result.snappedToStation) {
+          // create_line_and_merge takes no Section, so this one is its own step.
+          if (section !== null && cmdResult.line_id != null) {
+            await moveLinesToCaveSection([cmdResult.line_id], section);
+          }
+        } else if (cmdResult.line_id != null) {
           await moveLine(cmdResult.line_id, result.position);
         }
       },
@@ -558,6 +571,9 @@ export default function ImportDialog() {
                 />
               </div>
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 empty:hidden">
+            <NewLineSectionSelect value={caveSectionId} onChange={setCaveSectionId} disabled={editingBlocked} />
           </div>
           <CreditPeopleFields
             {...peopleProps}

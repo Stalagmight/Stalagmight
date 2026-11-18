@@ -2879,6 +2879,64 @@
     "stats": "Shots: {{shots}} | {{length}}",
     "title": "Sections"
   },
+  "caveSections": {
+    "actions": {
+      "collapse": "Collapse {{name}}",
+      "color": "Change section color",
+      "expand": "Expand {{name}}",
+      "hide": "Hide this section on the map",
+      "hideToggle": "Hide {{name}} on the map",
+      "new": "New Section",
+      "renameLabel": "Section name",
+      "show": "Show this section on the map"
+    },
+    "ariaTree": "Lines, grouped by section",
+    "defaultNameBase": "Section",
+    "detailLabel": "Section",
+    "drag": {
+      "moveTo_one": "Move to {{name}}",
+      "moveTo_other": "Move {{count}} lines to {{name}}",
+      "noTarget_one": "Drop on a section to move this line",
+      "noTarget_other": "Drop on a section to move {{count}} lines"
+    },
+    "headerHint": "Double-click to zoom to this section · Shift+click to select its lines",
+    "hiddenLineHint": "Its section is hidden on the map. Selecting the line shows it until you select something else.",
+    "hiddenState": "hidden on the map",
+    "menu": {
+      "alreadyThere_one": "The line is already in this section",
+      "alreadyThere_other": "The lines are already in this section",
+      "alreadyUngrouped_one": "The line is in no section",
+      "alreadyUngrouped_other": "The lines are in no section",
+      "applyColor": "Apply Color to Lines",
+      "applyColorHint_one": "Give its line the section color",
+      "applyColorHint_other": "Give its {{count}} lines the section color",
+      "color": "Color...",
+      "delete": "Delete Section",
+      "deleteHint": "Its lines stay, ungrouped",
+      "moveLinesTo": "Move {{count}} Lines to Section",
+      "moveTo": "Move to Section",
+      "newSectionWithLines": "New Section...",
+      "noLines": "This section has no lines",
+      "noSection": "No Section",
+      "rename": "Rename",
+      "zoom": "Zoom to Section"
+    },
+    "newLine": {
+      "label": "Section",
+      "none": "No section"
+    },
+    "readOnly": "This view is read-only, so sections cannot be changed.",
+    "readOnlyProject": "This project is open read-only, so sections cannot be changed.",
+    "rename": {
+      "empty": "A section needs a name.",
+      "taken": "There is already a section named \"{{name}}\".",
+      "tooLong": "A section name can be at most 200 characters."
+    },
+    "stats_one": "{{lines}} line · {{length}}",
+    "stats_other": "{{lines}} lines · {{length}}",
+    "ungrouped": "Ungrouped",
+    "ungroupedHint": "The lines in no section. Drag a line here to take it out of its section."
+  },
   "shotTable": {
     "actions": {
       "delete": "Delete shot"

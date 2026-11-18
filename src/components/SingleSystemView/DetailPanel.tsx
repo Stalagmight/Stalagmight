@@ -31,6 +31,7 @@ import { countUnresolvedErrors } from '../../utils/validation';
 import { shotCredit } from '../../utils/lineCredit';
 import { CreditDetail, MultiShotDetail, lineCredits, useSelectedShots } from './CreditDetail';
 import { CenterLocateIcon, DetailRow, StatCard } from './DetailPanelParts';
+import { LineSectionDetailRow } from './LineSectionDetailRow';
 import { StationDatumDetail } from './StationDatumDetail';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
@@ -1237,6 +1238,7 @@ function LineDetail({ line, stations, totalProjectLength }: LineDetailProps) {
                 <span>{line.color}</span>
               </div>
             } />
+            <LineSectionDetailRow line={line} />
           </div>
 
           {/* Survey credit of every shot of the line */}

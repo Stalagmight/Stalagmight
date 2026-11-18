@@ -701,8 +701,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let undoRedoCalls: string[] = [];
       // Split Line Here and Combine Lines each push a whole-project
       // snapshot here, and `undo` restores the newest one, so a spec can prove
-      // one Undo puts the lines back. Only these two commands record one:
-      // every other mocked mutation stays a no-op under undo, as before.
+      // one Undo puts the lines back. Only these two commands and the five
+      // Section commands (#327) record one: every other mocked mutation stays
+      // a no-op under undo, as before.
       const structuralUndo: Array<Record<string, unknown>> = [];
       // Joins a split left co-located but unmerged, `[first half end, second
       // half start]`: what the real backend finds by position.
@@ -975,6 +976,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         showShots: 'true',
         showLineNames: 'true',
         showDepthGradient: 'false',
+      };
+      // The hidden Sections (#327) as the backend reads them back on load: the
+      // stored JSON array, anything unreadable as none.
+      const mockHiddenSections = (): number[] => {
+        try {
+          const parsed: unknown = JSON.parse(mockDisplaySettings.hiddenSections ?? '[]');
+          return Array.isArray(parsed) ? parsed.filter((v): v is number => typeof v === 'number') : [];
+        } catch {
+          return [];
+        }
       };
 
       interface MockGpxPoint {
@@ -1354,6 +1365,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
+                // A new project hides no Section (#327).
+                hiddenSections: [],
               },
             };
           }
@@ -1618,6 +1631,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
+                // The Sections hidden on the map (#327), as save_display_setting stored them.
+                hiddenSections: mockHiddenSections(),
               },
             };
           }
@@ -2860,6 +2875,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (sections.some((s) => s.name === name)) {
               return { success: false, warnings: [], error: `There is already a section named "${name}"`, line_ids: [] };
             }
+            // One undo step, like the backend's (the structural snapshot `undo` restores).
+            structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             const id = currentProject.next_cave_section_id ?? 0;
             currentProject.next_cave_section_id = id + 1;
             sections.push({ id, name, color: String(args?.color ?? '#4ecdc4') });
@@ -2873,6 +2890,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'update_cave_section': {
             const section = currentProject?.cave_sections?.find((s) => s.id === args?.caveSectionId);
             if (!section) return { success: false, warnings: [], error: 'Section not found', line_ids: [] };
+            if (typeof args?.name === 'string') {
+              const name = args.name.trim();
+              if (!name) return { success: false, warnings: [], error: 'A section needs a name', line_ids: [] };
+              if (currentProject?.cave_sections?.some((s) => s.id !== section.id && s.name === name)) {
+                return { success: false, warnings: [], error: `There is already a section named "${name}"`, line_ids: [] };
+              }
+            }
+            structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             if (typeof args?.name === 'string') section.name = args.name.trim();
             if (typeof args?.color === 'string') section.color = args.color;
             return { success: true, warnings: [], error: null, line_ids: [] };
@@ -2880,6 +2905,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_cave_section': {
             if (currentProject?.cave_sections) {
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
               currentProject.cave_sections = currentProject.cave_sections.filter((s) => s.id !== args?.caveSectionId);
               for (const line of currentProject.lines as Array<{ cave_section_id?: number }>) {
                 if (line.cave_section_id === args?.caveSectionId) delete line.cave_section_id;
@@ -2891,6 +2917,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'move_lines_to_cave_section': {
             const target = args?.caveSectionId as number | null | undefined;
             const ids = (args?.lineIds as number[] | undefined) ?? [];
+            if (currentProject) structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
             for (const line of (currentProject?.lines ?? []) as Array<{ id: number; cave_section_id?: number }>) {
               if (!ids.includes(line.id)) continue;
               if (target === null || target === undefined) delete line.cave_section_id;
@@ -2902,6 +2929,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'apply_cave_section_color': {
             const section = currentProject?.cave_sections?.find((s) => s.id === args?.caveSectionId);
             if (section) {
+              structuralUndo.push(structuredClone({ project: currentProject, joins: colocatedJoins }));
               for (const line of (currentProject?.lines ?? []) as Array<{ cave_section_id?: number; color?: string }>) {
                 if (line.cave_section_id === section.id) line.color = section.color;
               }

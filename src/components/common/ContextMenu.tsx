@@ -22,6 +22,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ROW_HEIGHT_PX, MENU_ROW_HINT_HEIGHT_PX, MenuRow, MenuSeparator } from './MenuRow';
 import { ChevronRightIcon } from './icons';
 import { anchorOf, SubmenuFlyout, type SubmenuAnchor } from './ContextSubmenu';
+import { caveSectionHeaderMenuItems, caveSectionLineMenuItems } from './caveSectionMenuItems';
 
 /** The widest the menu grows; a hint line wraps within it. */
 const MENU_MAX_WIDTH_PX = 288;
@@ -356,6 +357,8 @@ export default function ContextMenu() {
     // menu, which has no click position on the line.
     | { type: 'shot'; lineId: LineId; shotId: ShotId; alongT?: number }
     | { type: 'line'; lineId: LineId }
+    // A Section header in the Sections panel (#327).
+    | { type: 'cave-section'; sectionId: number }
     | { type: 'datatable-shot'; lineId: LineId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; lineName: string }
     | null;
   const position = dialogData.position as { x: number; y: number } | undefined;
@@ -825,6 +828,8 @@ export default function ContextMenu() {
             closeDialog();
           },
         },
+        // "Move to Section" (#327): the line, or the line selection it is in.
+        ...caveSectionLineMenuItems(target.lineId, selectedLineIds, project, t, closeDialog),
         { label: '', action: () => {}, separator: true },
         {
           label: 'Delete Line',
@@ -834,6 +839,10 @@ export default function ContextMenu() {
           danger: true,
         },
       ];
+    }
+
+    if (target.type === 'cave-section') {
+      return caveSectionHeaderMenuItems(target.sectionId, project, t, closeDialog);
     }
 
     if (target.type === 'datatable-shot') {
@@ -1000,7 +1009,7 @@ export default function ContextMenu() {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Line"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
-    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line']);
+    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Line', t('caveSections.menu.zoom')]);
     const gate = (item: ContextMenuItem): ContextMenuItem => {
       const nested = item.submenu ? { ...item, submenu: item.submenu.map(gate) } : item;
       return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
@@ -1008,7 +1017,7 @@ export default function ContextMenu() {
         : nested;
     };
     items = buildMenuItems().map((item) => {
-      const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
+      const withIcon = item.separator ? item : { ...item, icon: item.icon ?? iconForLabel(item.label) };
       return gate(withIcon);
     });
   }

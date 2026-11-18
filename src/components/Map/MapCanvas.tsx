@@ -13,6 +13,8 @@ import {
 import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
+import { mapHiddenLines } from '../../store/sectionVisibility';
+import { withHiddenColocated } from './hiddenColocated';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
@@ -336,7 +338,7 @@ function MapCanvas() {
   const measureSnapShotRef = useRef<{ line_id: number; shot_id: number; t: number; lng: number; lat: number } | null>(null);
   const shotSnapMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Pending line zoom request (stored when map not loaded, processed when it loads)
-  const pendingZoomToLineRef = useRef<number | null>(null);
+  const pendingZoomToLineRef = useRef<number | readonly number[] | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
   const pendingPanToShotRef = useRef<{ lineId: number; shotId: number } | null>(null);
   // Pending center-on-station request (stored when map not loaded, processed when it loads)
@@ -983,7 +985,7 @@ function MapCanvas() {
           data.stationRef.line_id,
           data.stationRef.station_index
         ) ?? [];
-        stationDragColocatedRefsRef.current = colocated;
+        stationDragColocatedRefsRef.current = withHiddenColocated(colocated);
       } else if (data.type === 'segment' && data.lineId !== undefined) {
         const segmentLineId = data.lineId;
         // Always clear selection on any segment click, even if drag is blocked
@@ -1052,7 +1054,7 @@ function MapCanvas() {
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
           data.lineId, data.shotIndex, [otherEndpoint]
         ) ?? [];
-        stationDragColocatedRefsRef.current = colocated;
+        stationDragColocatedRefsRef.current = withHiddenColocated(colocated);
       }
     },
     [anchoredLineIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedLineIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
@@ -1961,6 +1963,10 @@ function MapCanvas() {
     [surveyLayerRef, mapLoaded, gpsOrigin],
   );
 
+  // Lines of hidden Sections (#327) the map leaves out; SurveyLayer reads the
+  // set itself, this key only re-runs the update below when it changes.
+  const mapHiddenKey = useUIStore((s) => mapHiddenLines(project?.lines, s).key);
+
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints - critical
   // for drag commit where endDragPreview() must fire in the same frame as setData().
@@ -1983,7 +1989,7 @@ function MapCanvas() {
         issueInput
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, issueInput, mapHiddenKey]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
   // above - no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
@@ -3336,13 +3342,14 @@ function MapCanvas() {
     });
   }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config]);
 
-  // Fit to a specific line's bounds
+  // Fit to a specific line's bounds, or several lines' together (a Section, #327)
   const fitToLine = useCallback(
-    (lineId: number) => {
+    (lineIds: number | readonly number[]) => {
       if (!map.current || !config) return;
+      const ids = new Set(typeof lineIds === 'number' ? [lineIds] : lineIds);
 
-      // Filter stations belonging to this line
-      const lineStations = activeStations.filter((s) => s.station_ref.line_id === lineId);
+      // Filter stations belonging to these lines
+      const lineStations = activeStations.filter((s) => ids.has(s.station_ref.line_id));
 
       // Empty line: nothing to zoom to
       if (lineStations.length === 0) {
@@ -3356,26 +3363,29 @@ function MapCanvas() {
       // could be left off-screen. Jumps and References are independent toggles
       // (#27), so this is per-kind - judging both by the reference toggle alone
       // got it backwards in each direction.
-      const byIndex = new Map<number, (typeof lineStations)[number]>();
-      for (const s of lineStations) byIndex.set(s.station_ref.station_index, s);
-      const line = project?.lines.find((s) => s.id === lineId);
+      const byIndex = new Map<string, (typeof lineStations)[number]>();
+      for (const s of lineStations) byIndex.set(`${s.station_ref.line_id}:${s.station_ref.station_index}`, s);
       const rendered: typeof lineStations = [];
-      const seenIdx = new Set<number>();
-      const includeIdx = (idx: number) => {
-        if (seenIdx.has(idx)) return;
-        const st = byIndex.get(idx);
+      const seenIdx = new Set<string>();
+      const includeIdx = (lineId: number, idx: number) => {
+        const key = `${lineId}:${idx}`;
+        if (seenIdx.has(key)) return;
+        const st = byIndex.get(key);
         if (st) {
           rendered.push(st);
-          seenIdx.add(idx);
+          seenIdx.add(key);
         }
       };
-      line?.shots.forEach((shot, i) => {
-        if (!isShotKindVisible(shot.kind, showShots, showJumps, showReferenceShots)) return;
-        includeIdx(i);
-        includeIdx(i + 1);
-      });
+      for (const line of project?.lines ?? []) {
+        if (!ids.has(line.id)) continue;
+        line.shots.forEach((shot, i) => {
+          if (!isShotKindVisible(shot.kind, showShots, showJumps, showReferenceShots)) return;
+          includeIdx(line.id, i);
+          includeIdx(line.id, i + 1);
+        });
+      }
       for (const s of lineStations) {
-        if (s.is_zero_datum) includeIdx(s.station_ref.station_index);
+        if (s.is_zero_datum) includeIdx(s.station_ref.line_id, s.station_ref.station_index);
       }
       const fitStations = rendered.length > 0 ? rendered : lineStations;
 
