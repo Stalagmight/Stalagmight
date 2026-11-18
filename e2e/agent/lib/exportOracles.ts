@@ -361,11 +361,13 @@ export function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
-/** The header `export/csv.rs:12-16` writes, in order. */
+/** The header `export/csv.rs` (`CSV_HEADER`) writes, in order. */
 export const CSV_HEADER: readonly string[] = [
-  'line_id',
-  'line_name',
-  'shot_id',
+  'line',
+  'from',
+  'to',
+  'from_id',
+  'to_id',
   'length',
   'azimuth_in',
   'azimuth_out',
@@ -379,10 +381,13 @@ export const CSV_HEADER: readonly string[] = [
   'comment',
 ];
 
-/** Index of the `comment` column, which is the only hostile-text column. */
+/** Index of the `comment` column, a hostile-text column. */
 export const CSV_COMMENT_INDEX = CSV_HEADER.length - 1;
-/** Index of the `line_name` column, the other `escape_csv`-processed field. */
-export const CSV_LINE_NAME_INDEX = 1;
+/** Index of the `line` (line name) column, an `escape_csv`-processed field. */
+export const CSV_LINE_NAME_INDEX = 0;
+/** Indexes of the `from` / `to` station-name columns, `escape_csv`-processed too. */
+export const CSV_FROM_INDEX = 1;
+export const CSV_TO_INDEX = 2;
 
 export interface CsvViolation {
   row: number;
@@ -436,7 +441,9 @@ export function csvTextViolations(
       });
     }
     for (const [column, index] of [
-      ['line_name', CSV_LINE_NAME_INDEX],
+      ['line', CSV_LINE_NAME_INDEX],
+      ['from', CSV_FROM_INDEX],
+      ['to', CSV_TO_INDEX],
       ['comment', CSV_COMMENT_INDEX],
     ] as const) {
       const cell = row[index];

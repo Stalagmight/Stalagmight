@@ -270,11 +270,13 @@ describe('parseCsvRows', () => {
 
 describe('csvTextViolations', () => {
   const header =
-    'line_id,line_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment';
+    'line,from,to,from_id,to_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment';
   const row = (name: string, comment: string): string =>
     [
-      '1',
       escapeCsvMirror(name),
+      '0',
+      '1',
+      '0',
       '1',
       '1.00',
       '0.0',
@@ -301,7 +303,7 @@ describe('csvTextViolations', () => {
   it('reports an UN-NEUTRALISED formula cell', () => {
     // What a regression in escape_csv would produce: the raw `=` reaches the
     // file, and the next spreadsheet to open it evaluates the cell.
-    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,=cmd\n`;
+    const text = `${header}\nSec,0,1,0,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,=cmd\n`;
     const result = csvTextViolations(text, ['=cmd']);
     // The cell parses as `=cmd`, which escape_csv would have written as `'=cmd`.
     expect(result.violations.map((v) => v.column)).toContain('comment');
@@ -311,18 +313,18 @@ describe('csvTextViolations', () => {
   });
 
   it('reports a row torn by an unquoted separator', () => {
-    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,a,b\n`;
+    const text = `${header}\nSec,0,1,0,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,a,b\n`;
     const result = csvTextViolations(text, []);
-    // 15 fields against a 14-column header. Note every surviving cell here is
+    // 17 fields against a 16-column header. Note every surviving cell here is
     // individually well-formed (`a` needs no escaping), which is why the field
     // COUNT has to be its own check rather than a consequence of the per-cell
     // shape check.
-    expect(parseCsvRows(text)[1]).toHaveLength(15);
+    expect(parseCsvRows(text)[1]).toHaveLength(17);
     expect(result.violations.map((v) => v.column)).toContain('(record)');
   });
 
   it('reports a comment that did not survive at all', () => {
-    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,\n`;
+    const text = `${header}\nSec,0,1,0,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,\n`;
     expect(csvTextViolations(text, ['important note']).missing).toEqual(['important note']);
   });
 });

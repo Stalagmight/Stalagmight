@@ -4606,7 +4606,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
     export::export_json(state(&app), json_path.clone()).unwrap();
 
     let csv_contents = fs::read_to_string(&csv_path).unwrap();
-    assert!(csv_contents.contains("line_id,line_name"));
+    assert!(csv_contents.starts_with("line,from,to,from_id,to_id,"));
     assert!(csv_contents.contains("\"note,with comma\""));
     // #27 replaced the boolean `is_reference` column with the 3-way `kind`,
     // so the export now names the kind instead of emitting "true".
