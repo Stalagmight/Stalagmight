@@ -1626,6 +1626,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   // The line's north reference (#438); undefined until an
                   // importer declares one.
                   azimuth_reference?: unknown | null;
+                  // The line's Section (#327); undefined while ungrouped.
+                  cave_section_id?: number | null;
                   shots?: Array<{
                     id: number; azimuth_in?: number; azimuth_out?: number;
                     length?: number; depth_in?: number; depth_out?: number;
@@ -1649,6 +1651,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // The project-level north reference (#438); undefined until one
                 // is declared.
                 default_azimuth_reference?: unknown | null;
+                // Sections, named groupings of lines (#327).
+                cave_sections?: Array<{ id: number; name: string; color: string }>;
+                next_cave_section_id?: number;
               };
               stations: Array<{
                 station_ref: { line_id: number; station_index: number };
@@ -1765,6 +1770,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // nothing carries on disk.
                 azimuth_reference: line.azimuth_reference ?? null,
                 credits: lineCredits,
+                // The line's Section (#327); `null` is ungrouped.
+                cave_section_id: line.cave_section_id ?? null,
               });
             }
             const shotsCredit = anyCredit
@@ -1870,6 +1877,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   jsonResult.project.default_azimuth_reference ?? null,
                 // Every distinct person any shot credits, once (v7).
                 credit_people: creditPeople,
+                // Sections, named groupings of lines (#327), in panel order.
+                cave_sections: jsonResult.project.cave_sections ?? [],
+                next_cave_section_id: jsonResult.project.next_cave_section_id ?? 0,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,

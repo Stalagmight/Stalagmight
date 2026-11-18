@@ -700,3 +700,30 @@ fn every_section_command_round_trips_through_the_disk_vocabulary() {
     assert_eq!(back.sections, project.sections);
     assert_eq!(back.next_section_id, 1);
 }
+
+/// Hiding a Section is a view setting: saved through `save_display_setting`,
+/// read back into `DisplaySettings::hidden_sections` on the next open, and no
+/// undo step.
+#[test]
+fn hidden_sections_are_a_saved_view_setting_not_an_edit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("hidden.stalx");
+    let state = saved_state(&path);
+    let upper = create_section(&state, "Upper level", &[]);
+    let depth = state.get_undo_stack().len();
+    state
+        .save_display_setting(
+            crate::core::loading::HIDDEN_SECTIONS_KEY,
+            &format!("[{upper}]"),
+        )
+        .unwrap();
+    assert_eq!(state.get_undo_stack().len(), depth, "no undo step");
+    ok(state.execute(Command::SaveProject { path: None }));
+    ok(state.execute(Command::CloseProject));
+    ok(state.open_project(path));
+    let stored = state.load_display_settings().unwrap();
+    assert_eq!(
+        crate::core::loading::DisplaySettings::from_stored(&stored).hidden_sections,
+        [upper]
+    );
+}
