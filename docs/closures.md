@@ -465,10 +465,11 @@ id) does not hold it (`Project::held_gauges`; plans/2026-11-12_merge-split-secti
     re-closed elsewhere (beside a merged join, where the sections merged at
     the join point move with neither side) is a snap again, and a snap left
     between two placed groups would be torn again. No combine reaches the
-    last: a closure the app keeps has both ends in one merge component, and
-    the only merges a combine tears that leave one split apart (the moving
-    section's merges to its datum sides) take every snap between the parts
-    with them.
+    last: a snap has both ends in one merge component (a closure between two
+    components is made a merge on the next sweep unless both are placed, and
+    then it is never aligned), and the only merges a combine tears that leave
+    one split apart (the moving section's merges to its datum sides) take
+    every snap between the parts with them.
 
   The model of the joined survey (`joined_sweep`) sweeps the snaps of the
   combined project, so the anchor rule and the across-one-shot removal read

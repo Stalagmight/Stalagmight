@@ -25,8 +25,13 @@
 //! - **A snap the combine leaves between two placed groups** (still within
 //!   1 cm, but a torn merge or the join puts a zero datum on each side) is a
 //!   torn snap from then on, as the stamp would make it after any edit; the
-//!   model no longer ties it. Nothing moves for it, and a split that left it
-//!   snapped is undone by the combine that rejoins the halves.
+//!   model no longer ties it. Nothing moves for it. No combine reaches this
+//!   one: a snap has both ends in one merge component (a closure between two
+//!   is made a merge unless both are placed, and then it is never aligned),
+//!   and the only merges a combine tears that leave a component split (the
+//!   moving section's merges to its datum sides) take every snap between the
+//!   parts with them. It is kept so the plan asks exactly what the stamp
+//!   asks.
 //!
 //! The combine then re-measures every flag itself, before its across-one-shot
 //! backstop, and checks the flags it changed are the ones the plan predicted
