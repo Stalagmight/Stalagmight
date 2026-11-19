@@ -875,15 +875,17 @@ impl AppState {
             let mut shots = config.shots.clone();
             // A shot with no length (zero, or negative after a correction)
             // would make `create_section` refuse the whole section, and the
-            // project model has no zero-length shot. Every importer funnels
+            // project model has no zero-length shot. Every batch import goes
             // through here, so it gets the negligible length the Ariane and
             // Walls parsers give such a leg (#818): its stations share a map
-            // position, and the depth each end records is kept. A non-finite
-            // length is left alone, for `create_section` to refuse.
+            // position, and any depth reading at its two ends is kept. A
+            // non-finite length is left alone, for `create_section` to refuse.
+            // Counted into the receipt only once the section lands.
+            let mut section_ties: u32 = 0;
             for shot in &mut shots {
                 if shot.length.is_finite() && shot.length <= 0.0 {
                     shot.length = crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
-                    coincident_ties += 1;
+                    section_ties += 1;
                 }
             }
             // A reverse makes station 0 the far end, so the section's anchor has
@@ -1019,6 +1021,7 @@ impl AppState {
             created_ids.insert(config.section_index, section_id);
             all_section_ids.push(section_id);
             imported_shot_count += config.shots.len() as u32;
+            coincident_ties += section_ties;
             all_warnings.extend(create_result.warnings);
 
             // Keep a reversed section where the un-reversed import would have put
@@ -1562,7 +1565,7 @@ impl AppState {
             receipt_warnings.push(format!(
                 "{coincident_ties} shot{} with no length {} given a negligible {} m length, so \
                  the stations on either end share one position on the map; any depth \
-                 difference recorded between them is kept",
+                 reading recorded at its two ends is kept",
                 if coincident_ties == 1 { "" } else { "s" },
                 if coincident_ties == 1 { "was" } else { "were" },
                 crate::parsers::geo::COINCIDENT_TIE_EPSILON_M,

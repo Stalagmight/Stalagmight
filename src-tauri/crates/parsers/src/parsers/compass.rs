@@ -501,10 +501,11 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
 ///   one fixed corrections setting, went stale the moment the user flipped
 ///   that checkbox.
 ///
-/// `shot_count - (include_excluded ? 0 : excluded_shot_count) -
-/// non_excluded_{corrected,uncorrected} - (include_excluded ?
-/// excluded_{corrected,uncorrected} : 0)`, picking the pair matching the
-/// live `apply_corrections` toggle, is exact in all four toggle states.
+/// Since #818 these shots land, so the landed count is
+/// `shot_count - (include_excluded ? 0 : excluded_shot_count)`; the four
+/// counters, picking the pair matching the live `apply_corrections` toggle,
+/// are how many of those landed shots are ties, exact in all four toggle
+/// states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct InvalidShotCounts {
@@ -513,11 +514,11 @@ pub struct InvalidShotCounts {
     /// Non-`X`-flagged shots with non-positive length, corrections NOT
     /// applied.
     pub non_excluded_uncorrected: u32,
-    /// `X`-flagged shots that would ALSO be dropped by the length check if
-    /// `include_excluded` let them reach it, corrections applied.
+    /// `X`-flagged shots that would ALSO import as ties if
+    /// `include_excluded` imported them, corrections applied.
     pub excluded_corrected: u32,
-    /// `X`-flagged shots that would ALSO be dropped by the length check if
-    /// `include_excluded` let them reach it, corrections NOT applied.
+    /// `X`-flagged shots that would ALSO import as ties if
+    /// `include_excluded` imported them, corrections NOT applied.
     pub excluded_uncorrected: u32,
 }
 
@@ -1450,10 +1451,33 @@ pub fn convert_compass_to_import_configs(
             // (#818; `execute_import_sections`). `shot_geometry` has already
             // turned a non-finite length into 0, with the warning above.
             let (_, length_m, inclination) = shot_geometry(shot, &ctx);
+            // A station tied to itself carries no connection and would put a
+            // station twice into one chain. It used to be dropped with the
+            // other zero-length shots; it still is, and says so (#275).
+            if shot.from == shot.to && !(length_m > 0.0) {
+                warnings.push(format!(
+                    "Shot {} -> {}: skipped (a station tied to itself).",
+                    shot.from, shot.to
+                ));
+                continue;
+            }
+            // An explicit 0 is an equate and is meant; anything else with no
+            // usable length (a missing-tape sentinel, a negative reading, or a
+            // correction that takes it to zero or below) was a real leg, so
+            // name it: the import ties it to 1 mm and moves what follows (#275).
+            // A non-finite length already has its own warning above.
+            if !(length_m > 0.0) && shot.length.is_finite() && shot.length != 0.0 {
+                warnings.push(format!(
+                    "Shot {} -> {}: no usable length, imported as a 1 mm tie.",
+                    shot.from, shot.to
+                ));
+            }
             edges.push((
                 shot.from.clone(),
                 shot.to.clone(),
-                elevation_gain(length_m, inclination),
+                // No length, no vertical step: a correction that takes a
+                // length below zero must not turn the shot upside down.
+                elevation_gain(length_m.max(0.0), inclination),
             ));
             shots.push(shot);
         }
@@ -2043,7 +2067,8 @@ mod tests {
     ///
     /// - exclusion drops `X`-flagged shots when `!include_excluded`;
     /// - the length check (pass 1, unconditional on whichever shots reach
-    ///   it) drops any shot whose resolved length is non-positive, and that
+    ///   it) dropped any shot whose resolved length is non-positive (since
+    ///   #818 it imports as a 1 mm tie instead, and is only counted), and that
     ///   resolution itself depends on `apply_corrections` (`CORRECTIONS`'s
     ///   length term can push a length across zero either direction) - so a
     ///   shot can be BOTH excluded AND length-invalid, or invalid under one
@@ -2683,6 +2708,121 @@ mod tests {
              \r\n\
              {survey_name}1 {survey_name}2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
         )
+    }
+
+    /// One survey record with the given shot rows and length correction.
+    fn survey_with_rows(rows: &str, length_correction: &str) -> String {
+        format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 {length_correction}\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             {rows}"
+        )
+    }
+
+    fn convert_rows(
+        rows: &str,
+        length_correction: &str,
+    ) -> (Vec<ImportSectionConfig>, Vec<String>) {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("rows.dat");
+        std::fs::write(&dat, survey_with_rows(rows, length_correction)).unwrap();
+        let parsed = parse_compass(&dat).unwrap();
+        let options = CompassImportOptions {
+            apply_corrections: true,
+            ..CompassImportOptions::default()
+        };
+        let (configs, _closures, warnings) =
+            convert_compass_to_import_configs(&parsed, &options).unwrap();
+        (configs, warnings)
+    }
+
+    /// #818: an equate (`A3 B1 0 0 0`) is kept, so the chain it joins stays one
+    /// chain. It used to be dropped, which cut the survey in two there.
+    #[test]
+    fn a_zero_length_equate_keeps_the_survey_connected() {
+        let (configs, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A3 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A3 B1 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             B1 B2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("dropped")),
+            "{warnings:?}"
+        );
+        assert_eq!(total_shots(&configs), 4, "the equate must be kept");
+        assert_eq!(configs.len(), 1, "one chain, not two: {configs:?}");
+    }
+
+    /// #818: a length correction that takes an inclined shot below zero is a
+    /// tie, so it carries no vertical step either. Before the fix the negative
+    /// length went into the elevation graph and flipped the shot's depth.
+    #[test]
+    fn a_negative_corrected_length_moves_neither_end_vertically() {
+        // 10 ft at -45 degrees, with a -15 ft length correction: -5 ft.
+        let (configs, _) =
+            convert_rows("A1 A2 10.00 90.00 -45.00 1.00 1.00 1.00 1.00\r\n", "-15.00");
+        let shot = &configs[0].shots[0];
+        assert!(
+            shot.length <= 0.0,
+            "premise: the corrected length is negative, got {}",
+            shot.length
+        );
+        assert!(
+            (shot.depth_out - shot.depth_in).abs() < 1e-9,
+            "a tie must not move its far end vertically: {} -> {}",
+            shot.depth_in,
+            shot.depth_out
+        );
+    }
+
+    /// A real leg with no usable length (here a negative reading) is named,
+    /// since tying it moves everything after it; a deliberate equate (an
+    /// explicit 0) is not.
+    #[test]
+    fn only_a_leg_with_no_usable_length_is_named() {
+        let (_, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A3 -4.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A3 A4 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "Shot A2 -> A3: no usable length, imported as a 1 mm tie."),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("Shot A3 -> A4")),
+            "{warnings:?}"
+        );
+    }
+
+    /// A shot from a station to itself connects nothing: still skipped, and
+    /// the import says so.
+    #[test]
+    fn a_station_tied_to_itself_is_skipped_with_a_warning() {
+        let (configs, warnings) = convert_rows(
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00\r\n\
+             A2 A2 0.00 0.00 0.00 1.00 1.00 1.00 1.00\r\n",
+            "0.00",
+        );
+        assert_eq!(total_shots(&configs), 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "Shot A2 -> A2: skipped (a station tied to itself)."),
+            "{warnings:?}"
+        );
     }
 
     /// A one-survey `.DAT`, in the smallest shape the vendored parser accepts.

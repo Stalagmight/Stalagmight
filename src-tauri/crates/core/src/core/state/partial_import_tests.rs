@@ -19,8 +19,9 @@ fn shot(length: f64) -> ShotData {
     }
 }
 
-/// A one-section config. `length` 0.0 makes a section `create_section` refuses
-/// ("has zero length"), the shape a bad row in any importer produces.
+/// A one-section config whose second shot has `length`. A NaN makes a section
+/// `create_section` refuses; a zero or negative one imports as a 1 mm tie
+/// (#818).
 fn section(index: u32, name: &str, length: f64, placement: ImportPlacement) -> ImportSectionConfig {
     ImportSectionConfig {
         reverse: false,
@@ -577,5 +578,25 @@ fn the_unconnected_warning_sanitises_the_section_name() {
         message.chars().count() < 1_000,
         "{} chars",
         message.chars().count()
+    );
+}
+
+/// A tie in a section that is then refused for another reason (here a NaN)
+/// never landed, so the receipt does not count it.
+#[test]
+fn a_refused_sections_ties_are_not_counted() {
+    let state = new_state();
+    let mut bad = section(0, "Bad", 0.0, ImportPlacement::Origin);
+    bad.shots.push(shot(f64::NAN));
+    let result = import(
+        &state,
+        vec![bad, section(1, "Good", 5.0, ImportPlacement::Origin)],
+        Vec::new(),
+    );
+    assert!(result.success, "{:?}", result.error);
+    let warnings = &receipt(&result).warnings;
+    assert!(
+        !warnings.iter().any(|w| w.contains("with no length")),
+        "{warnings:?}"
     );
 }

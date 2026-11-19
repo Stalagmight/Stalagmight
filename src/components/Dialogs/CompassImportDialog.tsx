@@ -106,8 +106,9 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     includeExcluded
   );
 
-  // "(N excluded, M invalid)" - only the parts that are non-zero and, for
-  // excluded, only while the toggle would actually drop them.
+  // "(N excluded, M shots with no length, imported as 1 mm ties)" - only the
+  // parts that are non-zero and, for excluded, only while the toggle would
+  // actually drop them.
   const shotCountFootnote = useMemo(() => {
     const parts: string[] = [];
     if (!includeExcluded && compassFile.excluded_shot_count > 0) {
