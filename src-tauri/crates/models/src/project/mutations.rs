@@ -1307,12 +1307,14 @@ impl Project {
                 };
 
                 let datum_line_id = datum.station_ref.line_id;
-                if let Some(current) = self
+                // X/Y only: the depth a full raw coordinate also works out (a
+                // whole merge-group walk per call) is not read here.
+                if let Some((current_x, current_y)) = self
                     .resolve_key(&datum.station_ref)
-                    .and_then(|sr| self.compute_station_raw_coords(sr))
+                    .and_then(|sr| self.compute_station_raw_xy(sr))
                 {
-                    let delta_x = target_x - current.x;
-                    let delta_y = target_y - current.y;
+                    let delta_x = target_x - current_x;
+                    let delta_y = target_y - current_y;
                     // Dust is not a displacement - the shared bound, see
                     // `Project::OFFSET_DUST_M` and its twin in `cascade_bfs`.
                     if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
@@ -1351,14 +1353,15 @@ impl Project {
                 visited.insert(partner_line);
 
                 // this_station's line is already aligned; partner needs adjustment
+                // X/Y only, as for the datum above.
                 if let (Some(this_pos), Some(partner_pos)) = (
                     self.resolve_key(this_station)
-                        .and_then(|sr| self.compute_station_raw_coords(sr)),
+                        .and_then(|sr| self.compute_station_raw_xy(sr)),
                     self.resolve_key(partner_station)
-                        .and_then(|sr| self.compute_station_raw_coords(sr)),
+                        .and_then(|sr| self.compute_station_raw_xy(sr)),
                 ) {
-                    let delta_x = this_pos.x - partner_pos.x;
-                    let delta_y = this_pos.y - partner_pos.y;
+                    let delta_x = this_pos.0 - partner_pos.0;
+                    let delta_y = this_pos.1 - partner_pos.1;
                     // Same shared bound as the gate above and `cascade_bfs`.
                     if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
                         self.adjust_line_offset(partner_line, delta_x, delta_y);
