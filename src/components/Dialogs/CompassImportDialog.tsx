@@ -25,7 +25,8 @@ interface CompassImportDialogProps {
  * How many of `invalid_shot_counts`'s four counters apply under the given
  * LIVE toggles - the ONE counter matching both `includeExcluded` (which set
  * of shots reaches the length check) and `applyCorrections` (how each
- * shot's length resolves before that check).
+ * shot's length resolves before that check). These shots are not dropped:
+ * they import as 1 mm coincident ties (#818).
  */
 function invalidShotCountFor(
   counts: InvalidShotCounts,
@@ -39,38 +40,25 @@ function invalidShotCountFor(
 
 /**
  * What the backend's converter actually lands for a shot_count/
- * excluded_shot_count/invalid_shot_counts triple, under the live toggles -
- * exact in all four `(includeExcluded, applyCorrections)` combinations,
- * mirroring pass 1 of `convert_compass_to_import_configs` (#437 follow-up,
- * review of #550). Shared by the header total and each per-survey row so
- * the rows always sum to the header.
+ * excluded_shot_count pair, under the live toggles, mirroring pass 1 of
+ * `convert_compass_to_import_configs` (#437 follow-up, review of #550).
+ * Zero-length shots now land as 1 mm ties, so nothing is subtracted for
+ * them (#818). Shared by the header total and each per-survey row so the
+ * rows always sum to the header.
  */
 function landingShotCountFor(
   shotCount: number,
   excludedShotCount: number,
-  invalidCounts: InvalidShotCounts,
-  includeExcluded: boolean,
-  applyCorrections: boolean
+  includeExcluded: boolean
 ): number {
-  return (
-    shotCount -
-    (includeExcluded ? 0 : excludedShotCount) -
-    invalidShotCountFor(invalidCounts, includeExcluded, applyCorrections)
-  );
+  return shotCount - (includeExcluded ? 0 : excludedShotCount);
 }
 
 function surveyLandingShotCount(
   survey: CompassSurveySummary,
-  includeExcluded: boolean,
-  applyCorrections: boolean
+  includeExcluded: boolean
 ): number {
-  return landingShotCountFor(
-    survey.shot_count,
-    survey.excluded_shot_count,
-    survey.invalid_shot_counts,
-    includeExcluded,
-    applyCorrections
-  );
+  return landingShotCountFor(survey.shot_count, survey.excluded_shot_count, includeExcluded);
 }
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
@@ -115,9 +103,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   const landingShotCount = landingShotCountFor(
     compassFile.shot_count,
     compassFile.excluded_shot_count,
-    compassFile.invalid_shot_counts,
-    includeExcluded,
-    applyCorrections
+    includeExcluded
   );
 
   // "(N excluded, M invalid)" - only the parts that are non-zero and, for
@@ -273,7 +259,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{survey.name}</td>
                   <td className="px-3 py-1.5" data-testid={`compass-survey-shots-${i}`}>
-                    {surveyLandingShotCount(survey, includeExcluded, applyCorrections)}
+                    {surveyLandingShotCount(survey, includeExcluded)}
                   </td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.team ?? '-'}</td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.date}</td>

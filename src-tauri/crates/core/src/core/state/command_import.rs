@@ -821,6 +821,8 @@ impl AppState {
         // section's shots were never imported, so summing the configs would
         // overstate a partial import.
         let mut imported_shot_count: u32 = 0;
+        // Shots given the coincident-tie length below (#818), for one receipt line.
+        let mut coincident_ties: u32 = 0;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -871,6 +873,19 @@ impl AppState {
             // final order - the contract every importer wizard builds against.
             // Left/right is never swapped on this path (no dialog to ask).
             let mut shots = config.shots.clone();
+            // A shot with no length (zero, or negative after a correction)
+            // would make `create_section` refuse the whole section, and the
+            // project model has no zero-length shot. Every importer funnels
+            // through here, so it gets the negligible length the Ariane and
+            // Walls parsers give such a leg (#818): its stations share a map
+            // position, and the depth each end records is kept. A non-finite
+            // length is left alone, for `create_section` to refuse.
+            for shot in &mut shots {
+                if shot.length.is_finite() && shot.length <= 0.0 {
+                    shot.length = crate::parsers::geo::COINCIDENT_TIE_EPSILON_M;
+                    coincident_ties += 1;
+                }
+            }
             // A reverse makes station 0 the far end, so the section's anchor has
             // to gain the span it used to cover or the passage lands a full
             // end-to-end displacement away from where the wizard put it.  The
@@ -1543,6 +1558,16 @@ impl AppState {
         let mut section_problems = skipped_sections;
         section_problems.extend(unconnected_sections);
         let mut receipt_warnings = Vec::new();
+        if coincident_ties > 0 {
+            receipt_warnings.push(format!(
+                "{coincident_ties} shot{} with no length {} given a negligible {} m length, so \
+                 the stations on either end share one position on the map; any depth \
+                 difference recorded between them is kept",
+                if coincident_ties == 1 { "" } else { "s" },
+                if coincident_ties == 1 { "was" } else { "were" },
+                crate::parsers::geo::COINCIDENT_TIE_EPSILON_M,
+            ));
+        }
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
         }

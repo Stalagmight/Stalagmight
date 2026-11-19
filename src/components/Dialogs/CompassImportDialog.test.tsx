@@ -170,11 +170,12 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
 });
 
 /**
- * #437 (+ review of #550): the header "Shots" stat must show what the
- * backend will actually land under BOTH live toggles - include-excluded AND
- * apply-corrections - with a footnote naming what was dropped and why. The
- * per-survey rows use the same arithmetic and must sum to the header, in
- * all four toggle combinations.
+ * #437 (+ review of #550, #818): the header "Shots" stat must show what the
+ * backend will actually land under the include-excluded toggle (zero-length
+ * shots are no longer dropped, they land as 1 mm ties), with a footnote
+ * naming the excluded shots and the tie count, which still follows BOTH live
+ * toggles. The per-survey rows use the same arithmetic and must sum to the
+ * header, in all four toggle combinations.
  *
  * Fixture: survey A has a shot that is invalid only WITHOUT corrections and
  * a `#|X#`-flagged shot invalid either way; survey B has a shot invalid
@@ -184,9 +185,10 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
  *
  * Injection: flip `landingShotCountFor`'s
  * `includeExcluded ? 0 : excludedShotCount` term at CompassImportDialog.tsx
- * and the default-toggle assertion goes red; flip `invalidShotCountFor`'s
- * `applyCorrections ? ... : ...` selection and the corrections-toggle
- * assertion goes red.
+ * and the default-toggle assertion goes red; re-add a
+ * `- invalidShotCountFor(...)` subtraction and the count assertions go red;
+ * flip `invalidShotCountFor`'s `applyCorrections ? ... : ...` selection and
+ * the corrections-toggle footnote assertion goes red.
  */
 describe('CompassImportDialog honest shot count (#437, #550)', () => {
   const twoSurveyFile: CompassFile = {
@@ -231,34 +233,36 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
     ],
   };
 
-  it('shows the landing count with an excluded+invalid footnote by default (corrections on)', async () => {
+  it('shows the landing count with an excluded+tie footnote by default (corrections on)', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
-    // 6 raw - 2 excluded - 1 invalid(non_excluded_corrected) = 3 landing.
-    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
-    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 1 invalid');
+    // 6 raw - 2 excluded = 4 landing; the 1 non_excluded_corrected tie lands.
+    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('4');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '2 excluded, 1 shot with no length, imported as a 1 mm tie'
+    );
 
-    // A: 3 - 1 excluded - 0 invalid = 2; B: 3 - 1 excluded - 1 invalid = 1.
+    // A: 3 - 1 excluded = 2; B: 3 - 1 excluded = 2.
     expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('1');
-    expect(2 + 1).toBe(3);
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('2');
+    expect(2 + 2).toBe(4);
   });
 
-  it('shows the invalid-only footnote (no excluded part) once include-excluded is checked', async () => {
+  it('shows the tie-only footnote (no excluded part) once include-excluded is checked', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
     await userEvent.click(screen.getByTestId('compass-include-excluded'));
 
-    // 6 raw - 0 excluded (included) - (1 non_excluded_corrected + 1 excluded_corrected) = 4.
-    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
+    // 6 raw - 0 excluded (included) = 6; ties (1 + 1 corrected) all land.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('6');
     const footnote = screen.getByTestId('compass-shot-count-footnote');
-    expect(footnote).toHaveTextContent('2 invalid');
+    expect(footnote).toHaveTextContent('2 shots with no length, imported as 1 mm ties');
     expect(footnote).not.toHaveTextContent('excluded');
 
-    // A: 3 - 0 - (0 + 1) = 2; B: 3 - 0 - (1 + 0) = 2.
-    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('2');
-    expect(2 + 2).toBe(4);
+    // A: 3 - 0 = 3; B: 3 - 0 = 3.
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('3');
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('3');
+    expect(3 + 3).toBe(6);
   });
 
   it('switches to the uncorrected invalid counter once apply-corrections is unchecked', async () => {
@@ -266,9 +270,11 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
 
     await userEvent.click(screen.getByTestId('compass-apply-corrections'));
 
-    // 6 raw - 2 excluded - 2 invalid(non_excluded_uncorrected) = 2 landing.
-    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('2');
-    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 2 invalid');
+    // 6 raw - 2 excluded = 4 landing; 2 non_excluded_uncorrected ties.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent(
+      '2 excluded, 2 shots with no length, imported as 1 mm ties'
+    );
   });
 
   it('combines include-excluded and apply-corrections off correctly', async () => {
@@ -277,10 +283,10 @@ describe('CompassImportDialog honest shot count (#437, #550)', () => {
     await userEvent.click(screen.getByTestId('compass-include-excluded'));
     await userEvent.click(screen.getByTestId('compass-apply-corrections'));
 
-    // 6 raw - 0 excluded (included) - (2 non_excluded_uncorrected + 1 excluded_uncorrected) = 3.
-    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('3');
+    // 6 raw - 0 excluded (included) = 6; 2 + 1 uncorrected ties land.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('6');
     const footnote = screen.getByTestId('compass-shot-count-footnote');
-    expect(footnote).toHaveTextContent('3 invalid');
+    expect(footnote).toHaveTextContent('3 shots with no length, imported as 1 mm ties');
     expect(footnote).not.toHaveTextContent('excluded');
   });
 });

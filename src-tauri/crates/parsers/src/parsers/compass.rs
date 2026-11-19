@@ -62,10 +62,10 @@ pub struct CompassFile {
     /// toggle (#437). `shot_count - excluded_shot_count` is what a default
     /// import actually lands.
     pub excluded_shot_count: u32,
-    /// How many shots the converter drops because their resolved length is
-    /// non-positive - a missing-length sentinel, an explicit zero, or a
-    /// non-finite reading (`convert_compass_to_import_configs`'s
-    /// `length_m <= 0.0` check) - broken out by exclusion status and by the
+    /// How many shots have a non-positive resolved length - a missing-length
+    /// sentinel, an explicit zero (an equate), or a non-finite reading. Since
+    /// #818 they import as 1 mm coincident ties rather than being dropped; the
+    /// preview names how many - broken out by exclusion status and by the
     /// `apply_corrections` toggle. See `InvalidShotCounts` for the exact
     /// arithmetic; it is exact in all four `(include_excluded,
     /// apply_corrections)` toggle states, unlike a single count computed
@@ -481,10 +481,10 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
         .count() as u32
 }
 
-/// Shots the converter drops because their resolved length is non-positive
-/// (`convert_compass_to_import_configs`'s `length_m <= 0.0` check, pass 1),
-/// broken out by the two live dialog toggles that change which shots reach
-/// that check and how their length resolves:
+/// Shots whose resolved length is non-positive, which import as 1 mm
+/// coincident ties (#818; they used to be dropped), broken out by the two
+/// live dialog toggles that change which shots are imported and how their
+/// length resolves:
 ///
 /// - `include_excluded` decides whether `X`-flagged shots even reach the
 ///   length check at all (excluded-and-dropped-by-exclusion never does, under
@@ -1443,23 +1443,13 @@ pub fn convert_compass_to_import_configs(
                     corrupt.join(", ")
                 ));
             }
+            // A shot with no length (an equate such as `A B 0 0 0`, a missing
+            // tape, or a correction that takes it to zero or below) is KEPT:
+            // dropping it cut the survey in two at that point. The import
+            // gives it a negligible length and counts it in the receipt
+            // (#818; `execute_import_sections`). `shot_geometry` has already
+            // turned a non-finite length into 0, with the warning above.
             let (_, length_m, inclination) = shot_geometry(shot, &ctx);
-            if length_m <= 0.0 {
-                // Zero-length connectors can't be stored as section shots.
-                // Dropping a shot removes its connectivity, so never do it
-                // silently (#275).
-                warnings.push(format!(
-                    "Shot {} -> {}: dropped ({} length).",
-                    shot.from,
-                    shot.to,
-                    if shot.length.is_finite() {
-                        "missing or zero"
-                    } else {
-                        "non-finite"
-                    }
-                ));
-                continue;
-            }
             edges.push((
                 shot.from.clone(),
                 shot.to.clone(),
@@ -2077,9 +2067,10 @@ mod tests {
     /// The landed count is asserted against the preview in all four toggle
     /// combinations.
     ///
-    /// Injection: zero any ONE of the four `InvalidShotCounts` fields (or
-    /// `excluded_shot_count`) and the toggle combination(s) that field feeds
-    /// go red - each state's assertion isolates its own counter.
+    /// Injection: zero any ONE of the four `InvalidShotCounts` fields and its
+    /// pinned value above goes red; drop `excluded_shot_count` and the
+    /// default-toggle landed count goes red. Re-dropping zero-length shots in
+    /// the converter reds every toggle state's landed count (#818).
     #[test]
     fn preview_shot_counts_match_the_landed_count_in_all_four_toggle_states() {
         let dir = tempfile::tempdir().unwrap();
@@ -2160,29 +2151,15 @@ mod tests {
         );
 
         // Exact landing arithmetic for the given toggles, mirroring what the
-        // dialog computes from these same fields.
-        let landing = |include_excluded: bool, apply_corrections: bool| -> u32 {
-            let non_excluded_invalid = if apply_corrections {
-                counts.non_excluded_corrected
-            } else {
-                counts.non_excluded_uncorrected
-            };
-            let excluded_invalid = if apply_corrections {
-                counts.excluded_corrected
-            } else {
-                counts.excluded_uncorrected
-            };
+        // dialog computes from these same fields. Since #818 a shot with no
+        // length lands (as a 1 mm tie), so only the exclusion toggle removes
+        // shots; `invalid_shot_counts` names the ties, pinned above.
+        let landing = |include_excluded: bool, _apply_corrections: bool| -> u32 {
             preview.shot_count
                 - if include_excluded {
                     0
                 } else {
                     preview.excluded_shot_count
-                }
-                - non_excluded_invalid
-                - if include_excluded {
-                    excluded_invalid
-                } else {
-                    0
                 }
         };
 
@@ -2257,14 +2234,8 @@ mod tests {
             has("Shot N6 -> N7: non-finite left, up, down, right"),
             "{warnings:?}"
         );
-        assert!(
-            has("Shot N2 -> N3: dropped (non-finite length)"),
-            "{warnings:?}"
-        );
-        assert!(
-            has("Shot N5 -> N6: dropped (non-finite length)"),
-            "{warnings:?}"
-        );
+        // #818: the rows are kept, not dropped - dropping cut the survey.
+        assert!(!has("dropped"), "{warnings:?}");
 
         let shots: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
         assert!(!shots.is_empty(), "fixture should keep at least one shot");
@@ -2315,11 +2286,13 @@ mod tests {
             (n6.left, n6.up, n6.down, n6.right)
         );
 
-        // nan/inf LENGTH rows collapse to 0 length and are dropped as
-        // zero-length connectors, not stored.
-        assert!(
-            shots.iter().all(|s| s.length > 0.0),
-            "no zero/negative-length shot may be stored"
+        // nan/inf LENGTH rows collapse to a finite 0 and are KEPT (#818): the
+        // import turns each into a 1 mm coincident tie, so the survey stays
+        // connected through them.
+        assert_eq!(
+            shots.iter().filter(|s| s.length == 0.0).count(),
+            2,
+            "the two non-finite-length rows (N2 -> N3, N5 -> N6) must be kept"
         );
     }
 
