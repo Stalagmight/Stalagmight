@@ -201,13 +201,14 @@ impl Gate {
     }
 }
 
-/// Persisted size of the newest entry of one stack.
+/// Persisted size of the newest entry of one stack (the one the next undo or
+/// redo takes: `undo_entries` lists the most recent first).
 fn newest(state: &AppState, redo: bool) -> (String, usize) {
     let stack = state.undo_stack.lock().unwrap();
     let entry = if redo {
-        stack.redo_entries().last()
+        stack.redo_entries().next()
     } else {
-        stack.undo_entries().last()
+        stack.undo_entries().next()
     }
     .expect("an entry");
     let (command, payload) = UndoStack::serialize_entry(entry).unwrap();
@@ -657,11 +658,81 @@ fn state_text(state: &AppState) -> String {
     super::fuzz_undo_tests::canonical_snapshot(state, false)
 }
 
+/// The id allocators: each only grows (an id once handed out is not handed
+/// out again, so an undo of what took one leaves it standing), so a history
+/// move may leave one higher than it recorded, never lower.
+const ALLOCATORS: [&str; 4] = [
+    "next_line_id",
+    "next_closure_id",
+    "next_station_id",
+    "next_cave_section_id",
+];
+
+/// The live project member by member, every number to the bit: the
+/// snapshot's top-level members as written, each line on its own with its
+/// shot-id allocator apart. Left out is the edit time, which every step
+/// stamps afresh.
+fn bitwise_state(state: &AppState) -> std::collections::BTreeMap<String, String> {
+    let project = state.get_project_state().unwrap();
+    let text = AppState::serialize_project_snapshot(&project).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut out = std::collections::BTreeMap::new();
+    for (key, member) in value.as_object().unwrap() {
+        match key.as_str() {
+            "modified_at" => {}
+            "lines" => {
+                for line in member.as_array().unwrap() {
+                    let mut line = line.clone();
+                    let id = line["id"].to_string();
+                    let next = line.as_object_mut().unwrap().remove("next_shot_id");
+                    out.insert(format!("line {id}"), line.to_string());
+                    out.insert(
+                        format!("line {id} next_shot_id"),
+                        next.map(|n| n.to_string()).unwrap_or_default(),
+                    );
+                }
+            }
+            _ => {
+                out.insert(key.clone(), member.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Where `now` is not `recorded` to the bit. The one difference allowed is an
+/// id allocator standing higher than recorded ([`ALLOCATORS`], and a line's
+/// shot-id allocator): an undo of an insert leaves the line's raised past the
+/// shot it removed, an undo of a new line or Section the project's, so a redo
+/// cannot hand an id out twice.
+fn bitwise_differences(
+    recorded: &std::collections::BTreeMap<String, String>,
+    now: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let raised = |key: &str, was: &str, is: &str| {
+        (key.ends_with(" next_shot_id") || ALLOCATORS.contains(&key))
+            && matches!((was.parse::<u64>(), is.parse::<u64>()), (Ok(was), Ok(is)) if is > was)
+    };
+    recorded
+        .keys()
+        .chain(now.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|key| {
+            let (was, is) = (recorded.get(*key), now.get(*key));
+            was != is && !matches!((was, is), (Some(was), Some(is)) if raised(key, was, is))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Every action's row, and every action that could not be measured - or, when
 /// `exact`, whose undo or redo did not land exactly on the state it records,
 /// since a small entry that restores the wrong project is no saving at all.
-/// (The fuzzer's comparison costs most of the run on the larger survey, whose
-/// entries take the same paths, so only the smaller one asks for it.)
+/// Exact twice over: as the fuzzer compares (`canonical_snapshot`, numbers to
+/// 12 significant digits), and to the bit ([`bitwise_state`]). (The
+/// comparisons cost most of the run on the larger survey, whose entries take
+/// the same paths, so only the smaller one asks for them.)
 fn measure(
     gate: &Gate,
     exact: bool,
@@ -672,7 +743,16 @@ fn measure(
     for (action, run) in actions {
         let depth = gate.state.undo_stack.lock().unwrap().len();
         let state = |gate: &Gate| exact.then(|| state_text(&gate.state));
+        let bits = |gate: &Gate| exact.then(|| bitwise_state(&gate.state));
+        let off_by_bits = |recorded: &Option<std::collections::BTreeMap<String, String>>,
+                           gate: &Gate| {
+            recorded
+                .as_ref()
+                .map(|recorded| bitwise_differences(recorded, &bitwise_state(&gate.state)))
+                .filter(|differences| !differences.is_empty())
+        };
         let before = state(gate);
+        let before_bits = bits(gate);
         let started = std::time::Instant::now();
         let result = run(gate);
         let forward_ms = started.elapsed().as_millis();
@@ -685,6 +765,7 @@ fn measure(
             continue;
         }
         let after = state(gate);
+        let after_bits = bits(gate);
         let (variant, undo_bytes) = newest(&gate.state, false);
         let started = std::time::Instant::now();
         let undone = gate.state.undo();
@@ -696,6 +777,12 @@ fn measure(
         if state(gate) != before {
             failed.push(format!(
                 "{action}: the undo did not restore the state before it"
+            ));
+            continue;
+        }
+        if let Some(differences) = off_by_bits(&before_bits, gate) {
+            failed.push(format!(
+                "{action}: the undo did not restore the state before it to the bit: {differences:?}"
             ));
             continue;
         }
@@ -715,9 +802,22 @@ fn measure(
             ));
             continue;
         }
+        if let Some(differences) = off_by_bits(&after_bits, gate) {
+            failed.push(format!(
+                "{action}: the redo did not restore the state after it to the bit: {differences:?}"
+            ));
+            continue;
+        }
         if !gate.state.undo().success || state(gate) != before {
             failed.push(format!(
                 "{action}: the second undo did not restore the state before it"
+            ));
+            continue;
+        }
+        if let Some(differences) = off_by_bits(&before_bits, gate) {
+            failed.push(format!(
+                "{action}: the second undo did not restore the state before it to the bit: \
+                 {differences:?}"
             ));
             continue;
         }

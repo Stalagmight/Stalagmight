@@ -264,12 +264,21 @@ stack once undone - is more than 1% of the saved `.stalx`. Actions that bring wh
 data in (Add `.stalx`, an import, Merge Projects) are exempt; the station-name,
 Station ID and Section commands are measured with the rest. The 20,000-shot survey
 also runs edits of a thousand shots or stations at once (a 1,000-cell paste, 1,000
-station names pasted), and `a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell`
-holds a paste to a fixed part plus at most 40 bytes per changed cell. Run it with
-`STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the table; on the 5,000-shot survey the
-largest entries are a New Line snapped onto a station and into a Section (0.76%, the
-new line itself) and a line delete (0.73%, the deleted line with its stations' names
-and Station IDs).
+station names pasted), a credit edit over a 2,000-shot line and over 1,000 shots in
+40 lines (on that survey with the long line added), and
+`a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell` holds a paste to a
+fixed part plus at most 40 bytes per changed cell.
+
+On the 5,000-shot survey every undo and redo is also checked to land exactly on the
+state it records, twice: as the fuzzer compares (`canonical_snapshot`, numbers to 12
+significant digits) and to the bit (`bitwise_state`: every member as written, every
+float by its bits), where the one difference allowed is an id allocator standing
+higher than recorded (a line's shot ids after an insert is undone, the project's
+station or Section ids after a new line or Section is), since an id handed out is
+never handed out again. Run it with `STALAGMIGHT_UNDO_SIZE_REPORT=<path>` for the
+table; the largest entries are a line delete on the 5,000-shot survey (0.73%, the
+deleted line with its stations' names and Station IDs) and, on the 20,000-shot one,
+the 1,000 station names (0.86%) and the 1,000-cell paste (0.77%).
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
 
