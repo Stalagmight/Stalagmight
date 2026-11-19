@@ -1093,8 +1093,9 @@ fn diff_values(
     actual: &serde_json::Value,
     path: &str,
     out: &mut Vec<Diff>,
+    limit: usize,
 ) {
-    if out.len() >= WALK_DIFFS {
+    if out.len() >= limit {
         return;
     }
     let label = if path.is_empty() { "<root>" } else { path };
@@ -1110,14 +1111,14 @@ fn diff_values(
                     format!("{path}.{key}")
                 };
                 match (a.get(key), b.get(key)) {
-                    (Some(left), Some(right)) => diff_values(left, right, &child, out),
+                    (Some(left), Some(right)) => diff_values(left, right, &child, out, limit),
                     (left, right) => out.push(Diff {
                         path: child,
                         expected: left.map_or_else(|| ABSENT.to_string(), show),
                         actual: right.map_or_else(|| ABSENT.to_string(), show),
                     }),
                 }
-                if out.len() >= WALK_DIFFS {
+                if out.len() >= limit {
                     return;
                 }
             }
@@ -1131,8 +1132,14 @@ fn diff_values(
                 });
             }
             for index in 0..a.len().min(b.len()) {
-                diff_values(&a[index], &b[index], &format!("{path}[{index}]"), out);
-                if out.len() >= WALK_DIFFS {
+                diff_values(
+                    &a[index],
+                    &b[index],
+                    &format!("{path}[{index}]"),
+                    out,
+                    limit,
+                );
+                if out.len() >= limit {
                     return;
                 }
             }
@@ -1252,10 +1259,26 @@ pub(super) fn diff_snapshots_capped(expected: &str, actual: &str) -> (Vec<Diff>,
         );
     };
     let mut out = Vec::new();
-    diff_values(&left, &right, "", &mut out);
+    diff_values(&left, &right, "", &mut out, WALK_DIFFS);
     let truncated = out.len() > MAX_DIFFS;
     out.truncate(MAX_DIFFS);
     (out, truncated)
+}
+
+/// The same walk without the cap: every differing path. Only for taking the
+/// documented undo-less changes of a save or a reload out of a difference
+/// wider than the cap before the cap applies (`expect_state`), so the rules
+/// that speak for a path have seen every path.
+pub(super) fn diff_snapshots_all(expected: &str, actual: &str) -> Vec<Diff> {
+    let (Ok(left), Ok(right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return diff_snapshots_capped(expected, actual).0;
+    };
+    let mut out = Vec::new();
+    diff_values(&left, &right, "", &mut out, usize::MAX);
+    out
 }
 
 pub(super) fn describe_diffs(diffs: &[Diff]) -> String {
@@ -3698,7 +3721,32 @@ impl Fuzzer {
             self.expect_derived(depth, &format!("{what} (stored state EXACT)"), false);
             return;
         }
-        let (diffs, truncated) = diff_snapshots_capped(&expected, &actual);
+        let (mut diffs, mut truncated) = diff_snapshots_capped(&expected, &actual);
+        // Across an epoch boundary a save or a reload may have made a WIDE
+        // documented change - the first save of a long session captures a
+        // gauge pair on every line that has none. Those changes are taken out
+        // of the WHOLE difference, every path walked, before the cap below
+        // applies; what is left is judged exactly as a narrow difference is.
+        if truncated && self.epochs[depth] < self.epoch {
+            let all = diff_snapshots_all(&expected, &actual);
+            let walked = all.len();
+            let mut rest: Vec<Diff> = all
+                .into_iter()
+                .filter(|diff| {
+                    !(self.outcome.saves > 0 && attributable_to_save(diff))
+                        && !(self.outcome.reloads > 0 && attributable_to_reload(diff))
+                })
+                .collect();
+            self.outcome.attributed += walked - rest.len();
+            if rest.is_empty() {
+                self.resync(depth, actual);
+                self.expect_derived(depth, what, true);
+                return;
+            }
+            truncated = rest.len() > MAX_DIFFS;
+            rest.truncate(MAX_DIFFS);
+            diffs = rest;
+        }
         // A mismatch wider than the cap is NEVER read as explained. Every
         // tolerate path below - attributable, accumulated - reads "nothing
         // unexplained is left" off a list that stops at MAX_DIFFS, and the walk
