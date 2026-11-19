@@ -77,10 +77,8 @@ fn nothing_imported_message(skipped: &[String]) -> String {
         message.push('.');
     }
     if skipped.len() > SHOWN {
-        message.push_str(&format!(
-            " ({} more sections were not imported.)",
-            skipped.len() - SHOWN
-        ));
+        let more = skipped.len() - SHOWN;
+        message = format!("{message} ({more} more sections were not imported.)");
     }
     message
 }
