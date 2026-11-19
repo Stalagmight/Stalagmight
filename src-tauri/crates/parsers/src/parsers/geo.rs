@@ -13,6 +13,17 @@ use chrono::{Datelike, NaiveDate};
 /// conversion has a single source of truth.
 pub const FEET_TO_METERS: f64 = 0.3048;
 
+/// The length (meters) a leg with no usable tape length imports as.
+///
+/// The project model has no zero-length shot (`create_section` rejects one,
+/// which fails the whole import), so a coincident-station tie - two names for
+/// one point, or a tape reading of 0 - gets this negligible length instead: the
+/// stations stay connected and effectively coincident. Shared so the Walls and
+/// Ariane importers nudge by the same amount (#812). Only the horizontal offset
+/// collapses: the depth each end records is kept, so a tie with a depth step
+/// is a vertical shot of one depth difference.
+pub const COINCIDENT_TIE_EPSILON_M: f64 = 0.001;
+
 /// Trim `s` and return the owned result only when it is non-empty - the survey
 /// parsers' shared "skip blank fields" helper.
 pub fn non_empty(s: &str) -> Option<String> {
