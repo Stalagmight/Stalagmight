@@ -25,6 +25,10 @@ pub struct Field {
     pub zdot: f64,
 }
 
+// Stalagmight fork: every column of the model table is generated, but `name`,
+// `altmin`, `altmax` and `max3` are never read. Registry builds hid the
+// warning (cargo caps lints for crates.io dependencies); a path dependency shows it.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct FieldModel {
     name: &'static str,
@@ -509,7 +513,7 @@ fn dihf(x: f64, y: f64, z: f64) -> (f64, f64, f64, f64) {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum Error {
-    #[error("Date must be between 1900-01-01 and 2025-12-31")]
+    #[error("Date must be between 1900-01-01 and 2029-12-31")]
     DateOutOfRange(Field),
     #[error("Latitude is out of bounds")]
     LatitudeOutOfBounds,
@@ -546,14 +550,16 @@ mod tests {
         let model = &MODELS[MODELS.len() - 1];
         assert_eq!(model.max2, 8);
 
+        // IGRF-14's 2025-30 secular variation (degrees 1-8), as published in
+        // data/igrf14coeffs.txt.
         let expected = &vec![
-            0.00, 5.70, 7.40, -25.90, -11.00, -7.00, -30.20, -2.10, -22.40, 2.20, -5.90, 6.00,
-            3.10, -1.10, -12.00, 0.50, -1.20, -1.60, -0.10, -5.90, 6.50, 5.20, 3.60, -5.10, -5.00,
-            -0.30, 0.50, 0.00, -0.60, 2.50, 0.20, -0.60, 1.30, 3.00, 0.90, 0.30, -0.50, -0.30,
-            0.00, 0.40, -1.60, 1.30, -1.30, -1.40, 0.80, 0.00, 0.00, 0.90, 1.00, -0.10, -0.20,
-            0.60, 0.00, 0.60, 0.70, -0.80, 0.10, -0.20, -0.50, -1.10, -0.80, 0.10, 0.80, 0.30,
-            0.00, 0.10, -0.20, -0.10, 0.60, 0.40, -0.20, -0.10, 0.50, 0.40, -0.30, 0.30, -0.40,
-            -0.10, 0.50, 0.40,
+            0.00, 12.60, 10.00, -21.50, -11.20, -5.30, -27.30, -8.30, -11.10, -1.50, -4.40, 3.80,
+            0.40, -0.20, -15.60, -3.90, -1.70, -2.30, -1.30, -5.80, 4.10, 5.40, 1.60, -6.80, -4.10,
+            0.60, 1.30, -0.50, 0.00, 2.10, 0.70, 0.50, 2.30, 1.70, 1.00, 1.90, -0.20, -0.30, 0.30,
+            0.80, -1.60, 1.20, -0.40, -0.80, 0.80, 0.40, 0.70, 0.90, 0.90, -0.10, -0.10, 0.60,
+            -0.10, 0.50, 0.50, -0.70, -0.10, 0.00, -0.80, -0.90, -0.80, 0.50, 0.90, -0.30, -0.10,
+            0.20, -0.30, 0.00, 0.40, 0.40, -0.30, -0.10, 0.40, 0.30, -0.50, 0.10, -0.60, 0.00,
+            0.30, 0.30, 0.20
         ];
         for (i, e) in expected.iter().enumerate() {
             assert!(
@@ -645,34 +651,22 @@ mod tests {
 
     #[test]
     fn test_declination_year_out_of_range() {
-        let field = declination(
+        // IGRF-14 spans 1900.0 to 2030.0: a 2026 date is inside it (it was not
+        // under IGRF-13), and 2030-01-01 is the first date past its end.
+        let inside = declination(
             41.60911536877931,
             41.6009718546448,
             100,
             time::Date::from_ordinal_date(2026, 1).unwrap(),
         );
-        let field = match field {
-            Err(Error::DateOutOfRange(field)) => field,
-            _ => unreachable!(),
-        };
-        assert_eq!(
-            field.rounded(),
-            Field {
-                d: 7.16,
-                i: 60.77,
-                h: 24339.67,
-                f: 49843.94,
-                x: 24149.84,
-                y: 3033.95,
-                z: 43497.12,
-                ddot: 4.51,
-                fdot: 74.67,
-                hdot: 3.16,
-                idot: 2.63,
-                xdot: -0.87,
-                ydot: 32.04,
-                zdot: 83.78,
-            }
+        assert!(inside.is_ok(), "{:?}", inside);
+
+        let past = declination(
+            41.60911536877931,
+            41.6009718546448,
+            100,
+            time::Date::from_ordinal_date(2030, 1).unwrap(),
         );
+        assert!(matches!(past, Err(Error::DateOutOfRange(_))), "{:?}", past);
     }
 }

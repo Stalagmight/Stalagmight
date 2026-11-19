@@ -1,12 +1,15 @@
+# Vendored fork of igrf v0.2.0 (https://github.com/rkusa/igrf), MIT. Upstream is
+# unmaintained since 2021 and bundles IGRF-13, which ends 2025-12-31; this fork
+# carries IGRF-14 (valid to 2030). See MODIFICATIONS.md for local changes.
 [package]
 name = "igrf"
 version = "0.2.0"
 authors = ["Markus Ast <m@rkusa.st>"]
 edition = "2018"
-description = "International Geomagnetic Reference Field (IGRF) implementation in pure Rust."
+description = "International Geomagnetic Reference Field (IGRF) implementation in pure Rust (Stalagmight fork, IGRF-14)"
 license = "MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/rkusa/igrf"
+readme = "README.md"
 
 [dependencies]
 thiserror = "1.0"
