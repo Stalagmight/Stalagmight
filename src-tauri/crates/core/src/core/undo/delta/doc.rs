@@ -17,17 +17,67 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::Value;
 
+use super::bags;
 use super::json::{apply_edit, apply_members, diff_member, diff_members, myers, same};
 use super::shots::{build_shots, ShotPool};
 use super::stations::{self, built_line_id, raw_line_id, LineText, Stations, STATION_KEYED};
 use super::{
     line_id_of, line_id_of_map, shots_array, DeltaError, Edit, LineRun, LiteralShot, ProjectDelta,
-    GAUGE_NEIGHBOUR, GAUGE_SHOT, ID, LINES, NEXT_LINE_ID, NEXT_SHOT_ID, SHOTS,
+    GAUGE_NEIGHBOUR, GAUGE_SHOT, ID, LINES, NEXT_LINE_ID, NEXT_SHOT_ID, SHOTS, UNORDERED_MEMBERS,
 };
 use crate::models::{LineId, FEATURE_ID_STRIDE};
 
+/// A serialized project held in its parts: the top-level members other than
+/// `lines` as one JSON object, and each line's JSON on its own - what
+/// [`Doc::parse`] would split the whole text into, made without the whole
+/// text (`AppState::serialize_project_parts`). A [`Doc`] of it parses only the
+/// members' object; the lines are borrowed as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectText {
+    members: String,
+    lines: Vec<String>,
+}
+
+impl ProjectText {
+    /// The parts of a serialized project: `members`, a JSON object of its
+    /// top-level members (`lines` absent, or an empty array), and `lines`, each
+    /// line serialized alone.
+    pub fn new(members: String, lines: Vec<String>) -> Self {
+        Self { members, lines }
+    }
+
+    /// The project split as a [`Doc`], borrowing these parts.
+    pub fn doc(&self) -> Result<Doc<'_>, DeltaError> {
+        let mut doc = Doc::parse(&self.members)?;
+        if !doc.lines.is_empty() {
+            return Err("a project's members hold lines of their own".to_string());
+        }
+        doc.lines = self
+            .lines
+            .iter()
+            .map(|line| Cow::Borrowed(line.as_str()))
+            .collect();
+        Ok(doc)
+    }
+
+    /// The project as one JSON text ([`Doc::text`] of its parts).
+    pub fn text(&self) -> Result<String, DeltaError> {
+        Ok(self.doc()?.text())
+    }
+
+    /// How many bytes the parts hold.
+    pub fn len(&self) -> usize {
+        self.members.len() + self.lines.iter().map(String::len).sum::<usize>()
+    }
+
+    /// Whether the parts hold nothing (a default, never a serialized project).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// A serialized project split at its top level, each part still raw JSON.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Doc<'a> {
     /// The top-level members other than `lines`.
     members: BTreeMap<String, Cow<'a, str>>,
@@ -97,6 +147,22 @@ impl<'a> Doc<'a> {
     /// How many lines the project holds.
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// The raw text of the top-level member `key`, when the project has one.
+    pub fn member(&self, key: &str) -> Option<&str> {
+        self.members.get(key).map(AsRef::as_ref)
+    }
+
+    /// The lines' raw texts, in order.
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.lines.iter().map(AsRef::as_ref)
+    }
+
+    /// The raw text of the first line whose id is `id`, read without parsing
+    /// the others.
+    pub fn line_text(&self, id: LineId) -> Option<&str> {
+        self.lines().find(|raw| raw_line_id(raw) == Some(id))
     }
 }
 
@@ -179,7 +245,17 @@ pub(super) fn encode(source: &Doc<'_>, target: &Doc<'_>) -> Result<ProjectDelta,
             }
             Some(other) if other == raw => {}
             Some(other) => {
-                if let Some(edit) = diff_member(key, &parse_value(raw)?, &parse_value(other)?) {
+                // The unordered members are matched element by element as
+                // text (`delta/bags.rs`); one that is not an array is diffed
+                // as any other value is.
+                let edit = match UNORDERED_MEMBERS
+                    .contains(&key.as_str())
+                    .then(|| bags::diff_bag_text(raw, other, STATION_KEYED.contains(&key.as_str())))
+                {
+                    Some(Ok(edit)) => edit,
+                    _ => diff_member(key, &parse_value(raw)?, &parse_value(other)?),
+                };
+                if let Some(edit) = edit {
                     fields.insert(key.clone(), edit);
                 }
             }
@@ -560,6 +636,23 @@ fn apply_fields<'a>(
         match (members.get(key), edit) {
             (Some(_), Edit::Del) => {
                 members.remove(key);
+            }
+            // An unordered member is edited as text, element by element
+            // (`delta/bags.rs`); one that is not an array as any other value.
+            (
+                Some(raw),
+                Edit::Bag {
+                    del,
+                    add,
+                    station_del,
+                    station_add,
+                },
+            ) if station_del.is_empty() && station_add.is_empty() => {
+                let text = match bags::apply_bag_text(raw, del, add) {
+                    Ok(text) => text,
+                    Err(_) => to_text(&apply_edit(&parse_value(raw)?, edit)?)?,
+                };
+                members.insert(key.clone(), Cow::Owned(text));
             }
             (Some(raw), edit) => {
                 let value = apply_edit(&parse_value(raw)?, edit)?;

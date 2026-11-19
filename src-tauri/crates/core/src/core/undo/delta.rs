@@ -38,6 +38,7 @@ use serde_json::{Map, Value};
 
 use crate::models::LineId;
 
+mod bags;
 mod doc;
 mod history;
 mod json;
@@ -45,7 +46,7 @@ mod shape;
 mod shots;
 mod stations;
 
-pub use doc::{Applied, Doc, LineIds, LineOut};
+pub use doc::{Applied, Doc, LineIds, LineOut, ProjectText};
 pub use history::HolderLine;
 #[cfg(test)]
 use json::same;

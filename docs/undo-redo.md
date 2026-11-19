@@ -94,7 +94,7 @@ Equality is bitwise on floats: `-0.0` is not `0.0`, and a restore puts back the 
 An entry holds the delta from the LIVE project to the state on its other side - its
 `before` while it is on the undo stack, its `after` while it is on the redo stack. A
 step (`AppState::step_through_delta`, `core/state/undo_delta.rs`) serializes the live
-project, applies the delta to that text, installs the result through the same
+project (in its parts, see below), applies the delta to that text, installs the result through the same
 `restore_snapshot_into_with` every snapshot restore takes, and re-encodes the entry as
 the delta from the project that restore INSTALLED (serialized again, not the text it
 was handed: the restore heals) back to the state it just left. This is the delta form
@@ -104,8 +104,37 @@ heals) happened in between.
 
 The engine works on the serialized TEXT (`Doc`): an untouched line stays a borrowed
 slice of the live project's JSON, matched by `memcmp`, and only the lines a delta
-touches are parsed. On a 20,000-shot survey a step through a compact entry takes about
-what the snapshot restore took (32-39 ms against 29-30 ms in release).
+touches are parsed. Three things keep a step at what a snapshot restore cost:
+
+- **The live project is serialized in its parts** (`serialize_project_parts`,
+  `ProjectText`): the members as one object and each line on its own - the split
+  `Doc::parse` makes of the whole text, made without it: no whole-project clone to
+  clear `file_path`, no whole text to scan and split again. It needs the project
+  mutably for the moment it takes the lines and the path out, and gives them back on
+  every path. A test holds it to the whole-text path part for part and byte for byte,
+  on both gate surveys and with a GPS fix
+  (`a_project_serialized_in_parts_is_its_whole_snapshot_split`). The restore reads
+  the facts it checks (`validation`, `surface_elevation`, the GPS fixes) off the
+  split, not by searching the whole text (`restore_doc_reporting`).
+- **The unordered members are diffed and edited as text** (`delta/bags.rs`). Every
+  station has a name and a Station ID, so `station_names` and `station_ids` are about
+  20,000 pairs each on the 20,000-shot gate; parsing each into a `Value` tree on every
+  encode and apply was most of a delete's or a reverse's step (190 ms). A member is
+  split into its elements' raw text and matched by text - for a station-keyed member
+  only the stretch where the two texts differ is split at all, since every pair this
+  build writes starts `[{"line_id":` - and only what the text cannot match is parsed
+  and matched by value, so the result never depends on how a text was written.
+- **A capture is made the same way** (`UndoData::CapturedPair`): its two states in
+  parts, encoded without either whole text, its preview facts read off the split
+  `before` (`history_view::before_preview` parses only the deleted line, or the datums
+  and the lines they stand on). A command whose undo captures a pair uses its `before`
+  as the integrity guard's rollback point instead of serializing the project again.
+
+On the 20,000-shot gate (release, a loaded 16-core host), a step through Delete Line,
+Reverse Line or Delete Shot takes 46-52 ms and a Merge Stations step 45 ms, where the
+snapshot-pair step it replaced (serialize the live side, restore the other) takes
+46-51 ms; encoding a capture takes 3-8 ms (18-24 ms from whole texts, 93-107 ms before
+the text bags).
 
 ### What a step settles
 

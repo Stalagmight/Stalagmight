@@ -161,7 +161,7 @@ impl Fuzzer {
     /// A miss is "loads, then a step refuses": the history came back, and the
     /// walk will be refused at that entry, for good, with every entry beyond it.
     fn expect_entries_fit(&mut self, what: &str) {
-        let Ok(live) = self.state.capture_project_snapshot() else {
+        let Ok(live) = self.state.capture_project_snapshot_text() else {
             return;
         };
         let live: Value = serde_json::from_str(&live).expect("the live snapshot is JSON");

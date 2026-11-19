@@ -410,12 +410,12 @@ fn a_pinned_compact_row_reads_and_writes_back_unchanged() {
         r##""shots":[]}}}]]},"n":7,"p":{"Section":{"name":"Gone","shots":0}}}}}"##
     );
     let command = r#"{"type":"batch","commands":[],"label":"Pinned"}"#;
-    let entry = UndoStack::deserialize_entry(command, row).expect("the pinned row reads");
+    let entry = UndoStack::deserialize_entry(command, row).unwrap();
     let held = match &entry.undo_data {
         UndoData::Delta(held) => Some(held),
         _ => None,
     }
-    .expect("a compact entry");
+    .unwrap();
     assert_eq!(held.omitted_commands, 7);
     assert!(matches!(
         &held.preview,

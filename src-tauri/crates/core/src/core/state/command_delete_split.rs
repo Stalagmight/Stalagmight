@@ -553,7 +553,7 @@ impl AppState {
                 // preserve/cleanup above already mutated the project; roll back
                 // to the before-snapshot so a failure here leaves no half-applied
                 // state (mirrors the shift path's rollback on remove failure).
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(crate::models::LINE_GONE.to_string());
             };
             line_mut.name = Some(name_a);
@@ -823,7 +823,7 @@ impl AppState {
             // keeps the doomed-anchor rule this path used to spell out here).
             if let Err(e) = project.gap_close_shot_range(line_id, start_pos, end_pos) {
                 // Already mutated - roll back to the before snapshot.
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(e);
             }
             // An interior gap-close brings the head boundary one shot from the
@@ -1032,7 +1032,7 @@ impl AppState {
                     purpose = "remove single-shot line",
                     "remove_line returned None after validation; rolling back"
                 );
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(crate::models::LINE_GONE.to_string());
             }
 
@@ -1057,7 +1057,7 @@ impl AppState {
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
-                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure("No project after mutation".to_string());
             };
             let sweep = project.sweep_orphan_closures();

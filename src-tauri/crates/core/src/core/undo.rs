@@ -27,7 +27,7 @@ mod uuid_remap;
 pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 pub use cave_sections::{CaveSectionChange, CaveSectionMember, CaveSectionsState};
 pub use created_station::CreatedStation;
-pub use delta::{BeforePreview, Doc, LineIds, ProjectDelta, SnapshotDelta};
+pub use delta::{BeforePreview, Doc, LineIds, ProjectDelta, ProjectText, SnapshotDelta};
 pub use persistence::HistoryDropped;
 
 /// Serialize a line-offset map in KEY order rather than in `HashMap`
@@ -373,12 +373,11 @@ mod credit_runs {
         let mut rows = Vec::with_capacity(runs.len());
         for run in runs {
             let pair = (&run.before, &run.after);
-            let index = match pairs.iter().position(|p| *p == pair) {
-                Some(index) => index,
-                None => {
-                    pairs.push(pair);
-                    pairs.len() - 1
-                }
+            let index = if let Some(index) = pairs.iter().position(|p| *p == pair) {
+                index
+            } else {
+                pairs.push(pair);
+                pairs.len() - 1
             };
             // A run without a position (an older row's) is written as one at
             // the position no line reaches, which reads back as one found by
@@ -425,6 +424,26 @@ mod credit_runs {
                 .collect()),
         }
     }
+}
+
+/// The two states of a snapshot capture in their parts
+/// ([`UndoData::CapturedPair`]).
+#[derive(Debug, Clone)]
+pub struct CapturedPair {
+    pub before: ProjectText,
+    pub after: Option<ProjectText>,
+}
+
+/// The compact entry for a capture's two states: the delta from `after` (the
+/// live project when the entry is pushed) to `before`, with the facts the
+/// preview reads off `before` while it is still at hand.
+fn encode_pair(
+    command: &Command,
+    before: &Doc<'_>,
+    after: &Doc<'_>,
+) -> Result<SnapshotDelta, delta::DeltaError> {
+    let preview = history_view::before_preview(command, before);
+    SnapshotDelta::new(&ProjectDelta::between_docs(after, before)?, preview)
 }
 
 /// Data needed to undo a command
@@ -674,6 +693,15 @@ pub enum UndoData {
     /// if the conversion failed (it never has).
     ProjectSnapshotPair { before: String, after: String },
 
+    /// A snapshot pair as a capture takes it, before it is pushed: the two
+    /// states in their parts ([`ProjectText`]: the members, each line on its
+    /// own), which [`UndoData::compact`] encodes as a [`UndoData::Delta`]
+    /// without writing or splitting either whole text. `after` is filled once
+    /// the command has run. Never on a stack and never persisted:
+    /// `push_with_data` compacts before it pushes.
+    #[serde(skip)]
+    CapturedPair(Box<CapturedPair>),
+
     /// A snapshot pair as an entry holds it: only what differs between the
     /// two states, as the edit that turns the LIVE project into the state on
     /// the other side of this entry - the `before` while the entry is on the
@@ -828,11 +856,20 @@ impl UndoData {
     /// produces) is kept as a pair, which still steps correctly.
     #[must_use]
     pub fn compact(self, command: &Command) -> Self {
-        let UndoData::ProjectSnapshotPair { before, after } = self else {
-            return self;
+        let encoded = match &self {
+            UndoData::ProjectSnapshotPair { before, after } => {
+                Doc::parse(before).and_then(|b| encode_pair(command, &b, &Doc::parse(after)?))
+            }
+            UndoData::CapturedPair(pair) => match &pair.after {
+                Some(after) => pair
+                    .before
+                    .doc()
+                    .and_then(|b| encode_pair(command, &b, &after.doc()?)),
+                None => Err("the capture has no after state".to_string()),
+            },
+            _ => return self,
         };
-        let preview = history_view::before_preview(command, &before);
-        match SnapshotDelta::from_pair(&before, &after, preview) {
+        match encoded {
             Ok(delta) => UndoData::Delta(Box::new(delta)),
             Err(e) => {
                 tracing::error!(
@@ -841,8 +878,29 @@ impl UndoData {
                     purpose = "store an undo entry compactly",
                     "Could not encode a snapshot pair as a delta; keeping the pair"
                 );
-                UndoData::ProjectSnapshotPair { before, after }
+                self.into_snapshot_pair()
             }
+        }
+    }
+
+    /// The `before` state a snapshot capture holds, when this is one.
+    pub fn captured_before(&self) -> Option<&ProjectText> {
+        match self {
+            UndoData::CapturedPair(pair) => Some(&pair.before),
+            _ => None,
+        }
+    }
+
+    /// A captured pair as the whole-text pair it stands for; every other
+    /// payload as it is.
+    fn into_snapshot_pair(self) -> Self {
+        let UndoData::CapturedPair(pair) = self else {
+            return self;
+        };
+        let text = |part: &ProjectText| part.text().unwrap_or_default();
+        UndoData::ProjectSnapshotPair {
+            before: text(&pair.before),
+            after: pair.after.as_ref().map(text).unwrap_or_default(),
         }
     }
 
@@ -857,6 +915,7 @@ impl UndoData {
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
+            UndoData::CapturedPair(_) => "CapturedPair",
             UndoData::Delta(_) => "Delta",
             UndoData::AddedProjectContent(_) => "AddedProjectContent",
             UndoData::ShotCredits { .. } => "ShotCredits",

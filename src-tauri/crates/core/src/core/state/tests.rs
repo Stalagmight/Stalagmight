@@ -3100,7 +3100,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             .success
     );
 
-    let snapshot = match state.capture_project_snapshot() {
+    let snapshot = match state.capture_project_snapshot_text() {
         Ok(s) => s,
         Err(e) => panic!("snapshot failed: {e:?}"),
     };
@@ -25526,7 +25526,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
     let (_anchored, partner) = two_merged_lines(&state);
     inject_drift(&state, partner);
     let drifted = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capturing the drifted project");
     state.reconcile_geometry();
     assert_eq!(
@@ -25535,7 +25535,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
         "setup: the reconcile should have healed the live drift"
     );
     let healed = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capturing the healed project");
 
     {

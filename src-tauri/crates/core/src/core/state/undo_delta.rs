@@ -1,15 +1,17 @@
 //! One step through a compact undo entry ([`UndoData::Delta`]).
 //!
 //! The entry holds the delta that turns the live project into the state on
-//! its other side. A step serializes the live project (once - the cost every
-//! snapshot restore has always paid), applies the delta to that text, installs
+//! its other side. A step serializes the live project once, in its parts
+//! (`serialize_project_parts`: no clone, no whole text to split), applies the
+//! delta to that text, installs
 //! the result through the same restore every snapshot takes
 //! (`restore_snapshot_into_with`: caches, the refusal bounds, the GPS-fix
 //! merge, the heal carry-forward, the dust-offset invariant), and re-encodes
 //! the entry as the delta from the project that restore installed (read again
-//! when the restore healed it) back to the state it just left. So the entry always holds one direction, and the next
-//! step is exact by construction - the delta form of the self-refreshing wall
-//! a snapshot pair was (`refresh_snapshot_pair_counterpart`).
+//! when the restore healed it) back to the state it just left. So the entry
+//! always holds one direction, and the next step is exact by construction -
+//! the delta form of the self-refreshing wall a snapshot pair was
+//! (`refresh_snapshot_pair_counterpart`).
 //!
 //! The delta works on the text ([`Doc`]): a line it does not touch is
 //! never parsed, so a step costs about what a snapshot restore costs.
@@ -20,7 +22,7 @@ use serde_json::Value;
 
 use super::project_io::RecordedGauges;
 use super::AppState;
-use crate::core::{CommandResult, Doc, LineIds, ProjectDelta, SnapshotDelta};
+use crate::core::{CommandResult, LineIds, ProjectDelta, ProjectText, SnapshotDelta};
 use crate::models::{LineId, Project};
 
 impl AppState {
@@ -31,16 +33,19 @@ impl AppState {
         let Ok(mut guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
+        // The live project in its parts (`serialize_project_parts`): no
+        // whole-project clone to clear its path, no whole text to split.
+        let live_text = match guard.as_mut().map(Self::serialize_project_parts) {
+            Some(Ok(text)) => text,
+            Some(Err(e)) => {
+                return CommandResult::failure(format!("Failed to serialize project: {e}"));
+            }
+            None => return CommandResult::failure("No project open".to_string()),
+        };
         let Some(live) = guard.as_ref() else {
             return CommandResult::failure("No project open".to_string());
         };
-        let live_text = match Self::serialize_project_snapshot(live) {
-            Ok(text) => text,
-            Err(e) => {
-                return CommandResult::failure(format!("Failed to serialize project: {e}"));
-            }
-        };
-        let live_doc = match Doc::parse(&live_text) {
+        let live_doc = match live_text.doc() {
             Ok(doc) => doc,
             Err(e) => return CommandResult::failure(format!("Failed to read project: {e}")),
         };
@@ -70,8 +75,7 @@ impl AppState {
             Ok(doc) => doc,
             Err(e) => return CommandResult::failure(format!("Failed to write undo state: {e}")),
         };
-        let Some(healed) =
-            Self::restore_snapshot_reporting(&mut guard, &other_doc.text(), Some(&edited))
+        let Some(healed) = Self::restore_doc_reporting(&mut guard, &other_doc, Some(&edited))
         else {
             return CommandResult::failure("Failed to restore the undo state".to_string());
         };
@@ -85,7 +89,7 @@ impl AppState {
         let installed_text;
         let installed_doc;
         let from = if healed {
-            installed_text = match guard.as_ref().map(Self::serialize_project_snapshot) {
+            installed_text = match guard.as_mut().map(Self::serialize_project_parts) {
                 Some(Ok(text)) => text,
                 Some(Err(e)) => {
                     return Self::roll_back_step(
@@ -98,7 +102,7 @@ impl AppState {
                     return Self::roll_back_step(&mut guard, &live_text, "no project installed");
                 }
             };
-            installed_doc = match Doc::parse(&installed_text) {
+            installed_doc = match installed_text.doc() {
                 Ok(doc) => doc,
                 Err(e) => {
                     return Self::roll_back_step(&mut guard, &live_text, &format!("read: {e}"));
@@ -117,8 +121,14 @@ impl AppState {
     /// Put the live project back after a step that installed the other side
     /// but could not record the way back: the entry can only describe the
     /// state it was recorded against.
-    fn roll_back_step(guard: &mut Option<Project>, live_text: &str, reason: &str) -> CommandResult {
-        let restored_back = Self::restore_snapshot_into(guard, live_text);
+    fn roll_back_step(
+        guard: &mut Option<Project>,
+        live_text: &ProjectText,
+        reason: &str,
+    ) -> CommandResult {
+        let restored_back = live_text
+            .text()
+            .is_ok_and(|text| Self::restore_snapshot_into(guard, &text));
         tracing::error!(
             purpose = "step through a compact undo entry",
             reason = %reason,

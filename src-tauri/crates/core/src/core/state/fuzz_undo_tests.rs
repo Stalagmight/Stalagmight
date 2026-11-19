@@ -3137,7 +3137,7 @@ pub(super) fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
 /// Canonical, comparison-ready snapshot of the live project.
 pub(super) fn canonical_snapshot(state: &AppState, id_agnostic: bool) -> String {
     let raw = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     let parsed: serde_json::Value = serde_json::from_str(&raw).expect("snapshot is not JSON");
     canonicalize(&parsed, "", id_agnostic).to_string()

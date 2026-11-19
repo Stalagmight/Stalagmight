@@ -853,3 +853,72 @@ fn a_paste_entry_costs_a_bounded_number_of_bytes_per_changed_cell() {
     }
     report(&report_text);
 }
+
+/// The live project serialized in its parts (`serialize_project_parts`, what a
+/// compact step and a capture use) is the whole-text snapshot split
+/// (`serialize_project_snapshot` then `Doc::parse`), part for part and byte
+/// for byte, and the project is left exactly as it was: on both gate surveys
+/// (opened from a file, so `file_path` is set) and with a GPS fix, which the
+/// snapshot keeps beside `zero_datums`.
+#[test]
+fn a_project_serialized_in_parts_is_its_whole_snapshot_split() {
+    fn check(state: &AppState, what: &str) {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        assert!(
+            project.file_path.is_some(),
+            "{what}: premise, the path is set"
+        );
+        let whole = AppState::serialize_project_snapshot(project).unwrap();
+        let parts = AppState::serialize_project_parts(project).unwrap();
+        assert_eq!(
+            parts.doc().unwrap(),
+            crate::core::Doc::parse(&whole).unwrap(),
+            "{what}: the parts are the whole text's"
+        );
+        assert_eq!(
+            AppState::serialize_project_snapshot(project).unwrap(),
+            whole,
+            "{what}: serializing in parts gave everything back"
+        );
+        assert!(project.file_path.is_some(), "{what}: the path is back");
+        let mut from_whole = None;
+        let mut from_parts = None;
+        assert!(AppState::restore_snapshot_into(&mut from_whole, &whole));
+        assert!(AppState::restore_parts_into(&mut from_parts, &parts));
+        assert_eq!(
+            AppState::serialize_project_snapshot(from_parts.as_ref().unwrap()).unwrap(),
+            AppState::serialize_project_snapshot(from_whole.as_ref().unwrap()).unwrap(),
+            "{what}: the parts restore the project the whole text restores"
+        );
+    }
+    for lines in [100, 400] {
+        let gate = open(lines);
+        check(&gate.state, &format!("{lines} lines"));
+        if lines == 100 {
+            // A second datum in the tree's component is a GPS fix there.
+            assert!(
+                gate.state
+                    .execute(Command::SetZeroDatum {
+                        station_ref: StationRef::new(gate.mid(), 20),
+                        coordinates: GpsCoordinates {
+                            latitude: 20.501,
+                            longitude: -87.249,
+                            depth_reference: 0.0,
+                        },
+                        accuracy_m: Some(5.0),
+                        entrance: None,
+                    })
+                    .success
+            );
+            {
+                let guard = gate.state.project.lock().unwrap();
+                assert!(
+                    crate::core::undo::snapshot_fixes::holds_fix(guard.as_ref().unwrap()),
+                    "premise: the project holds a GPS fix"
+                );
+            }
+            check(&gate.state, "100 lines and a GPS fix");
+        }
+    }
+}

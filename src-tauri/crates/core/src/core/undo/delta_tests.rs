@@ -834,3 +834,110 @@ fn a_positional_pair_past_its_line_refuses_the_step() {
     let rebuilt = delta.apply(&source).unwrap();
     assert!(same(&rebuilt["station_names"], &source["station_names"]));
 }
+
+/// A station-keyed member as this build writes it: `[station key, value]`
+/// pairs, the key through `StationKey`'s own serialization, sorted by line.
+fn station_member(pairs: &[(u64, Option<String>, String)]) -> String {
+    use crate::models::{StationAnchor, StationKey};
+    let mut typed: Vec<(StationKey, &str)> = pairs
+        .iter()
+        .map(|(line, after, value)| {
+            let anchor = match after {
+                Some(uuid) => StationAnchor::AfterShot(uuid.clone()),
+                None => StationAnchor::LineStart,
+            };
+            let line_id = crate::models::LineId::try_from(*line).unwrap();
+            (StationKey { line_id, anchor }, value.as_str())
+        })
+        .collect();
+    typed.sort_by_key(|(key, _)| (key.line_id, format!("{:?}", key.anchor)));
+    serde_json::to_string(&typed).unwrap()
+}
+
+/// The text bag diff and apply (`delta/bags.rs`) agree with the value-level
+/// ones on random edits of station-keyed members written as this build writes
+/// them, on members written another way (a `Value`'s key order), and on a
+/// removal of an element a load pruned.
+#[test]
+fn the_text_bag_engine_agrees_with_the_value_engine() {
+    use super::bags::{apply_bag_text, diff_bag_text};
+    use super::json::{apply_bag, diff_member};
+    let mut rng = Rng(0x5eed_ba95);
+    for round in 0..200 {
+        let lines = 1 + rng.below(6) as u64;
+        let mut pairs: Vec<(u64, Option<String>, String)> = Vec::new();
+        for line in 0..lines {
+            for k in 0..rng.below(12) {
+                let after = (k > 0).then(|| format!("u{line}-{k}"));
+                pairs.push((line, after, format!("name {line}.{k}")));
+            }
+        }
+        let mut edited = pairs.clone();
+        for _ in 0..rng.below(5) {
+            match rng.below(3) {
+                0 if !edited.is_empty() => {
+                    let at = rng.below(edited.len());
+                    edited.remove(at);
+                }
+                1 if !edited.is_empty() => {
+                    let at = rng.below(edited.len());
+                    edited[at].2 = format!("renamed {round}");
+                }
+                _ => {
+                    let line = rng.below(lines as usize + 1) as u64;
+                    edited.push((
+                        line,
+                        Some(format!("new{round}-{}", rng.next())),
+                        "added".into(),
+                    ));
+                }
+            }
+        }
+        let from = station_member(&pairs);
+        let to = station_member(&edited);
+        let parsed = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+        let by_value = diff_member("station_names", &parsed(&from), &parsed(&to));
+        let by_text = diff_bag_text(&from, &to, true).unwrap();
+        assert_eq!(by_text.is_none(), by_value.is_none(), "round {round}");
+        let Some(super::Edit::Bag { del, add, .. }) = by_text else {
+            continue;
+        };
+        let expected = apply_bag(parsed(&from).as_array().unwrap(), &del, &add);
+        let applied = apply_bag_text(&from, &del, &add).unwrap();
+        assert!(
+            same(&parsed(&applied), &Value::Array(expected.clone())),
+            "round {round}"
+        );
+        assert!(
+            same(&parsed(&applied), &parsed(&to)),
+            "round {round}: the edit rebuilds the target"
+        );
+        // The same edit over the member written in a `Value`'s key order,
+        // which no text of this build matches, still lands exactly.
+        let reordered = serde_json::to_string(&parsed(&from)).unwrap();
+        let applied = apply_bag_text(&reordered, &del, &add).unwrap();
+        assert!(
+            same(&parsed(&applied), &Value::Array(expected)),
+            "round {round}"
+        );
+        // An element to remove that is gone is skipped, as the value apply does.
+        if let Some(gone) = del.first() {
+            let pruned: Vec<Value> = parsed(&from)
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| !same(v, gone))
+                .cloned()
+                .collect();
+            let pruned_text = serde_json::to_string(&pruned).unwrap();
+            let applied = apply_bag_text(&pruned_text, &del, &add).unwrap();
+            assert!(
+                same(
+                    &parsed(&applied),
+                    &Value::Array(apply_bag(&pruned, &del, &add))
+                ),
+                "round {round}: a pruned element"
+            );
+        }
+    }
+}

@@ -55,21 +55,37 @@ struct SnapshotOut<'a> {
 /// `zero_datums` (see the module doc). `project` is the copy the caller is
 /// about to serialize, so its fixes are taken out of it in place.
 pub(crate) fn serialize_split(project: &mut Project) -> serde_json::Result<String> {
+    let (kept, fixes) = split(project);
+    project.zero_datums = kept;
+    serialize_with(project, fixes)
+}
+
+/// `project`'s datums as a snapshot writes them: the placement and dangling
+/// ones, in list order, and the GPS fixes with their places in the whole list.
+/// Read with the lines in place: a datum's role depends on the survey.
+pub(crate) fn split(project: &Project) -> (Vec<ZeroDatum>, Vec<SnapshotFix>) {
     let roles = project.datum_roles();
     let mut fixes = Vec::new();
     let mut kept = Vec::with_capacity(project.zero_datums.len());
-    for (position, (datum, role)) in std::mem::take(&mut project.zero_datums)
-        .into_iter()
-        .zip(roles)
-        .enumerate()
-    {
+    for (position, (datum, role)) in project.zero_datums.iter().zip(roles).enumerate() {
         if role == Some(DatumRole::GpsFix) {
-            fixes.push(SnapshotFix { position, datum });
+            fixes.push(SnapshotFix {
+                position,
+                datum: datum.clone(),
+            });
         } else {
-            kept.push(datum);
+            kept.push(datum.clone());
         }
     }
-    project.zero_datums = kept;
+    (kept, fixes)
+}
+
+/// `project` (its `zero_datums` already the split's kept list) serialized
+/// with `fixes` beside them.
+pub(crate) fn serialize_with(
+    project: &Project,
+    fixes: Vec<SnapshotFix>,
+) -> serde_json::Result<String> {
     serde_json::to_string(&SnapshotOut {
         project,
         zero_datum_fixes: fixes,

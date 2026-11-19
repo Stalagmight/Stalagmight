@@ -639,7 +639,7 @@ fn push_legacy_snapshot_pair(state: &AppState, before: String, after: String) {
 
 /// The live project as a snapshot pair half.
 fn snapshot(state: &AppState) -> String {
-    state.capture_project_snapshot().unwrap()
+    state.capture_project_snapshot_text().unwrap()
 }
 
 /// Turn the snapshot pair on top of the undo (or redo) stack into what a

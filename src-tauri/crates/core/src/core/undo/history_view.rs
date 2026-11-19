@@ -2,7 +2,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use super::history_names::{describe, describe_entry, NameBook};
-use super::BeforePreview;
+use super::{BeforePreview, Doc};
 use crate::core::{Command, UndoData, UndoEntry};
 use crate::models::{LineId, ShotKind, ShotUpdates};
 
@@ -143,39 +143,36 @@ fn deleted_line_preview(name: Option<&str>, shots: usize) -> PreviewData {
     }
 }
 
-/// What the preview of `command` will need from its `before` snapshot, read
-/// while the snapshot still exists: [`UndoData::compact`] then drops it.
+/// What the preview of `command` will need from its `before` state, read
+/// while the capture still has it: [`UndoData::compact`] then drops it.
 /// `None` for every command whose preview reads nothing from it.
-pub(crate) fn before_preview(command: &Command, before: &str) -> Option<BeforePreview> {
+///
+/// Read off the split state (`Doc`), so only what the preview names is
+/// parsed - the deleted line, the datums and the lines they stand on - not
+/// the whole project.
+pub(crate) fn before_preview(command: &Command, before: &Doc<'_>) -> Option<BeforePreview> {
+    let line = |id: LineId| SnapshotLine::parse(before.line_text(id)?);
     match command {
         Command::DeleteLine { line_id } => {
-            let snapshot = SnapshotPreview::parse(before)?;
-            let line = snapshot.line(*line_id)?;
+            let line = line(*line_id)?;
             Some(BeforePreview::Line {
-                name: line.name.clone(),
+                name: line.name,
                 shots: line.shots.len(),
             })
         }
         Command::RemoveZeroDatum { station_ref } => Some(BeforePreview::Datum(
-            SnapshotPreview::parse(before).and_then(|snapshot| snapshot.datum_gps(*station_ref)),
+            SnapshotPreview::of_doc(before).and_then(|snapshot| snapshot.datum_gps(*station_ref)),
         )),
         Command::Batch { commands, .. } => {
-            let deleted: Vec<LineId> = commands
+            let names: Vec<(LineId, String)> = commands
                 .iter()
                 .take(BATCH_PREVIEW_ROWS)
                 .filter_map(|cmd| match cmd {
                     Command::DeleteLine { line_id } => Some(*line_id),
                     _ => None,
                 })
-                .collect();
-            if deleted.is_empty() {
-                return None;
-            }
-            let snapshot = SnapshotPreview::parse(before)?;
-            let names: Vec<(LineId, String)> = deleted
-                .into_iter()
                 .filter_map(|line_id| {
-                    let name = snapshot.line(line_id)?.name.clone()?;
+                    let name = line(line_id)?.name?;
                     (!name.trim().is_empty()).then_some((line_id, name))
                 })
                 .collect();
@@ -255,12 +252,46 @@ struct SnapshotShot {
     uuid: Option<String>,
 }
 
+impl SnapshotLine {
+    /// One line of a split state, or `None` if it is not one this build can
+    /// read.
+    fn parse(raw: &str) -> Option<Self> {
+        serde_json::from_str(raw).ok()
+    }
+}
+
 impl SnapshotPreview {
     /// Parse a snapshot half, or `None` if it is not one this build can read.
     /// A preview is decoration: an unreadable snapshot loses the extra rows,
     /// never the entry.
     fn parse(snapshot_json: &str) -> Option<Self> {
         serde_json::from_str(snapshot_json).ok()
+    }
+
+    /// What [`Self::parse`] reads, off a split state: its datums and GPS
+    /// fixes, and only the lines they stand on.
+    fn of_doc(doc: &Doc<'_>) -> Option<Self> {
+        let member = |key: &str| doc.member(key).unwrap_or("[]");
+        let zero_datums: Vec<crate::models::ZeroDatum> =
+            serde_json::from_str(member("zero_datums")).ok()?;
+        let zero_datum_fixes: Vec<super::snapshot_fixes::SnapshotFix> =
+            serde_json::from_str(member(super::snapshot_fixes::FIXES_KEY)).ok()?;
+        let mut ids: Vec<LineId> = zero_datums
+            .iter()
+            .chain(zero_datum_fixes.iter().map(|fix| &fix.datum))
+            .map(|zd| zd.station_ref.line_id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let lines = ids
+            .into_iter()
+            .filter_map(|id| SnapshotLine::parse(doc.line_text(id)?))
+            .collect();
+        Some(Self {
+            lines,
+            zero_datums,
+            zero_datum_fixes,
+        })
     }
 
     fn line(&self, id: LineId) -> Option<&SnapshotLine> {

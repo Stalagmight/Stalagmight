@@ -465,6 +465,8 @@ fn visit_entry(
         | UndoData::ZeroDatumInfo { .. }
         | UndoData::SegmentMoveInfo { .. }
         | UndoData::ProjectSnapshotPair { .. }
+        // Compacted before it is pushed, so never in a loaded history.
+        | UndoData::CapturedPair(_)
         // Section memberships and colours, keyed by line: no shot id.
         | UndoData::CaveSections(_)
         // Rewritten as a whole by `remap_entry`, like a snapshot.

@@ -420,6 +420,10 @@ impl AppState {
                 UndoData::Delta(_) => {
                     CommandResult::failure("A compact entry steps above".to_string())
                 }
+                // A capture is compacted before it is pushed; it never reaches here.
+                UndoData::CapturedPair(_) => {
+                    CommandResult::failure("An uncompacted capture cannot be undone".to_string())
+                }
             }
         };
 

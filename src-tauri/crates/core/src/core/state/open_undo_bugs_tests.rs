@@ -1884,7 +1884,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
     );
 
     let project_before = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     let base = adjusted_bits(&state);
     let mut differing = 0;
@@ -1903,7 +1903,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
         }
     }
     let project_after = state
-        .capture_project_snapshot()
+        .capture_project_snapshot_text()
         .expect("capture_project_snapshot failed");
     assert_eq!(
         project_before, project_after,

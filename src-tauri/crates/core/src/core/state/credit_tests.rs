@@ -535,7 +535,7 @@ fn a_split_gives_both_pieces_the_shots_credit() {
 fn an_old_snapshot_with_a_line_surveyor_restores_people_onto_shots() {
     let state = state_with_project();
     let sid = create_line(&state, None, vec![shot(1.0), shot(2.0)]);
-    let snapshot = state.capture_project_snapshot().unwrap();
+    let snapshot = state.capture_project_snapshot_text().unwrap();
     let mut json: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
     // What a build before per-shot credit wrote: line-level text, shots bare.
     let line = json["lines"]

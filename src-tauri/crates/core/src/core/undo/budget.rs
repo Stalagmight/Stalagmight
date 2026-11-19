@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::{DepthLimit, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
+use super::{DepthLimit, ProjectText, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
 
 impl UndoStack {
     /// [#303] Estimated serialized size of one entry, in bytes.
@@ -33,6 +33,10 @@ impl UndoStack {
         let payload = match &entry.undo_data {
             // Exact: this holds the serialized project already.
             UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
+            // Never pushed (compacted first); counted as the pair it stands for.
+            UndoData::CapturedPair(pair) => {
+                pair.before.len() + pair.after.as_ref().map_or(0, ProjectText::len)
+            }
             // Exact too: measured by serializing, which is cheap because the
             // payload is only what the entry changed.
             UndoData::Delta(delta) => delta.encoded_len(),

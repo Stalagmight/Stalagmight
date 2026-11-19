@@ -109,13 +109,13 @@ fn workspace_reload_failed_download_preserves_pending_work_and_mode_without_acqu
     let (base, _listener, seen) = recording_stub(WORKSPACE_NEWER_BODY);
     let (_temp, state) = editing_fixture(&base);
     state.mark_remote_dirty();
-    let before = state.capture_project_snapshot().expect("before");
+    let before = state.capture_project_snapshot_text().expect("before");
     let expected = workspace_context(&state);
     assert!(
         state.speleodb_reload(true, Some(expected)).is_err(),
         "JSON is not a native project"
     );
-    assert_eq!(state.capture_project_snapshot().expect("after"), before);
+    assert_eq!(state.capture_project_snapshot_text().expect("after"), before);
     assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
     assert!(state.edit_enabled());
     let requests = seen.lock().expect("requests");
@@ -292,10 +292,10 @@ fn workspace_prepared_reload_rejects_newer_edits_and_invalid_files_without_repla
                 .expect("open")
                 .name = "Newer edit".into();
         }
-        let before = state.capture_project_snapshot().expect("before");
+        let before = state.capture_project_snapshot_text().expect("before");
         let result = state.open_project_download(source, dest.clone(), expected, true);
         assert!(result.is_err() || result.is_ok_and(|result| !result.success));
-        assert_eq!(state.capture_project_snapshot().expect("after"), before);
+        assert_eq!(state.capture_project_snapshot_text().expect("after"), before);
         assert_eq!(std::fs::read(&dest).expect("unchanged bytes"), bytes);
         assert!(state.edit_enabled());
     }

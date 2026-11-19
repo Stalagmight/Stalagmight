@@ -474,7 +474,7 @@ impl AppState {
     fn guard_introduced_corruption(
         &self,
         pre_had_critical: bool,
-        snapshot: &str,
+        snapshot: &crate::core::ProjectText,
         cmd_desc: &str,
     ) -> Option<CommandResult> {
         if pre_had_critical || !self.project_has_critical() {
@@ -800,16 +800,22 @@ impl AppState {
         // (which must reject corruption BEFORE pushing its undo entry, #1), so it
         // is excluded here to avoid a redundant whole-project serialize and a
         // double rollback.
-        let integrity_snapshot =
-            if integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. }) {
-                self.capture_project_snapshot().ok()
-            } else {
-                None
-            };
+        //
+        // A command whose undo captures a snapshot pair holds that snapshot
+        // already: the project as it is now, which is the rollback point too,
+        // so it is not serialized a second time.
+        let guards_integrity = integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. });
+        let integrity_snapshot = if guards_integrity && undo_data.captured_before().is_none() {
+            self.capture_project_snapshot().ok()
+        } else {
+            None
+        };
+        let has_rollback_point = integrity_snapshot.is_some()
+            || (guards_integrity && undo_data.captured_before().is_some());
         // If the project is ALREADY corrupt (loaded that way), don't block - the
         // user repairs via the banner. We only reject commands that newly
         // introduce corruption into a clean project.
-        let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
+        let pre_had_critical = has_rollback_point && self.project_has_critical();
         // What the epilogue's orphan sweep needs to name the closures it removes
         // by the stations they had before this command (#738).
         // A Batch takes its own inside `execute_batch`, where its sweep runs.
@@ -973,8 +979,11 @@ impl AppState {
         // project with dangling references, roll back to the pre-command
         // snapshot and reject it rather than committing (and later persisting)
         // a corrupt state (#17).
-        if result.success && !pre_had_critical {
-            if let Some(snapshot) = &integrity_snapshot {
+        if result.success && !pre_had_critical && has_rollback_point {
+            let snapshot = integrity_snapshot
+                .as_ref()
+                .or_else(|| undo_data.captured_before());
+            if let Some(snapshot) = snapshot {
                 if let Some(failure) =
                     self.guard_introduced_corruption(pre_had_critical, snapshot, &cmd.description())
                 {

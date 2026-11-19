@@ -170,7 +170,7 @@ impl AppState {
                     // The model re-checks before it mutates, so this is
                     // reachable only if the project changed under the check
                     // above; put it back regardless.
-                    let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                    let _ = Self::restore_parts_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
             };

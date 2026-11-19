@@ -1,16 +1,45 @@
-use crate::core::{AddedContent, CaveSectionChange, Command, UndoData};
+use crate::core::{AddedContent, CapturedPair, CaveSectionChange, Command, UndoData};
 use crate::models::{ClosureStrategy, LineId, LineUpdates, Project, ShotId, ShotUpdates};
 
 use super::AppState;
 
 impl AppState {
+    /// The `before` of a snapshot capture (`UndoData::CapturedPair`), the
+    /// project in its parts; `None` when it cannot be serialized.
+    fn capture_before(project: &mut Project) -> UndoData {
+        match Self::serialize_project_parts(project) {
+            Ok(before) => UndoData::CapturedPair(Box::new(CapturedPair {
+                before,
+                after: None,
+            })),
+            Err(_) => UndoData::None,
+        }
+    }
+
+    /// A snapshot capture completed with its `after`, once the command and its
+    /// epilogue have run; any other payload as it is.
+    fn capture_after(project: &mut Project, undo_data: UndoData) -> UndoData {
+        match undo_data {
+            UndoData::CapturedPair(mut pair) => match Self::serialize_project_parts(project) {
+                Ok(after) => {
+                    pair.after = Some(after);
+                    UndoData::CapturedPair(pair)
+                }
+                Err(_) => UndoData::None,
+            },
+            other => other,
+        }
+    }
+
     /// Generate undo data before executing a command
     pub(super) fn generate_undo_data(&self, cmd: &Command) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
+        let Ok(mut proj_guard) = self.project.lock() else {
             return UndoData::None;
         };
 
-        let Some(project) = proj_guard.as_ref() else {
+        // Mutable only so a snapshot capture can serialize it in its parts
+        // (`serialize_project_parts`), which hands everything back.
+        let Some(project) = proj_guard.as_mut() else {
             return UndoData::None;
         };
 
@@ -18,7 +47,8 @@ impl AppState {
             // For create commands, we'll fill in the ID after execution
             Command::CreateLine { .. } => UndoData::None, // Will be finalized after execution
             // A STUB, filled in by `finalize_undo_data` once the shot exists -
-            // the same shape `ProjectSnapshotPair { after: String::new() }` uses
+            // the same shape a snapshot capture (`UndoData::CapturedPair`, its
+            // `after` filled by `finalize_undo_data`) uses
             // below. It is a stub rather than `UndoData::None` because ONE of its
             // fields can only be read BEFORE the insert: the `line_offsets` the
             // insert's cascade can reach, as they stood, which the undo has to
@@ -57,13 +87,7 @@ impl AppState {
             // Guard: only serialize if line exists (avoids overhead for doomed commands).
             Command::DeleteLine { line_id } => {
                 if project.get_line(*line_id).is_some() {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -86,13 +110,7 @@ impl AppState {
                     .get_line(*line_id)
                     .is_some_and(|s| !s.shots.is_empty())
                 {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -104,13 +122,7 @@ impl AppState {
             Command::DeleteShot { line_id, shot_id } => {
                 if let Some(line) = project.get_line(*line_id) {
                     if line.shots.iter().any(|s| s.id == *shot_id) {
-                        match AppState::serialize_project_snapshot(project) {
-                            Ok(before) => UndoData::ProjectSnapshotPair {
-                                before,
-                                after: String::new(), // Filled by finalize_undo_data
-                            },
-                            Err(_) => UndoData::None,
-                        }
+                        AppState::capture_before(project)
                     } else {
                         UndoData::None
                     }
@@ -277,13 +289,7 @@ impl AppState {
                 if project.get_line(station_a.line_id).is_some()
                     && project.get_line(station_b.line_id).is_some()
                 {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -306,13 +312,7 @@ impl AppState {
                         || project.key_is_ref(&m.station_b, *station_ref)
                 });
                 if involved {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -329,13 +329,7 @@ impl AppState {
                             && project.key_is_ref(&m.station_b, *station_a))
                 });
                 if merged {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -349,13 +343,7 @@ impl AppState {
                     closure_strategy,
                     ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
                 ) {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -441,13 +429,7 @@ impl AppState {
                     .iter()
                     .any(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
                 {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -517,13 +499,7 @@ impl AppState {
                 offset: _,
             } => {
                 if project.get_line(station_ref.line_id).is_some() {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(before) => UndoData::ProjectSnapshotPair {
-                            before,
-                            after: String::new(), // Filled by finalize_undo_data
-                        },
-                        Err(_) => UndoData::None,
-                    }
+                    AppState::capture_before(project)
                 } else {
                     UndoData::None
                 }
@@ -563,11 +539,13 @@ impl AppState {
 
     /// Finalize undo data after command execution (for commands that create new entities)
     pub(super) fn finalize_undo_data(&self, cmd: &Command, undo_data: UndoData) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
+        let Ok(mut proj_guard) = self.project.lock() else {
             return undo_data;
         };
 
-        let Some(project) = proj_guard.as_ref() else {
+        // Mutable only for a snapshot capture's `after` (see
+        // `generate_undo_data`).
+        let Some(project) = proj_guard.as_mut() else {
             return undo_data;
         };
 
@@ -688,14 +666,7 @@ impl AppState {
                     closure_strategy,
                     ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
                 ) {
-                    if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
-                        match AppState::serialize_project_snapshot(project) {
-                            Ok(after) => UndoData::ProjectSnapshotPair { before, after },
-                            Err(_) => UndoData::None,
-                        }
-                    } else {
-                        undo_data
-                    }
+                    AppState::capture_after(project, undo_data)
                 } else {
                     // Capture the newly created closure from the project's loop_closures
                     if let Some(closure) = project.loop_closures.iter().find(|lc| {
@@ -728,16 +699,7 @@ impl AppState {
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
             | Command::RemoveZeroDatum { .. }
-            | Command::MoveStation { .. } => {
-                if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
-                    match AppState::serialize_project_snapshot(project) {
-                        Ok(after) => UndoData::ProjectSnapshotPair { before, after },
-                        Err(_) => UndoData::None,
-                    }
-                } else {
-                    undo_data
-                }
-            }
+            | Command::MoveStation { .. } => AppState::capture_after(project, undo_data),
 
             // Read each shot's credit back after the edit, keep what changed.
             Command::EditShotCredit { .. } | Command::UpdateLineMetadata { .. } => {
