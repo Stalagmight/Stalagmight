@@ -46,6 +46,13 @@ const KEYS: &[(&str, &str)] = &[
     ("LineSnapshot", "SectionSnapshot"),
     // A compact undo entry's `BeforePreview::Line` (the facts a Delete Line
     // preview reads), written in the old vocabulary like the rest of the row.
+    // Like every pair here it renames the KEY wherever it occurs in a
+    // translated document, not only in the preview. Safe as long as no other
+    // persisted shape uses `Line` or `Section` as an object key: no project
+    // map is keyed by a user string, and the other `Line`/`Section` enums are
+    // internally tagged (a `type` value, handled by TAGS) or never persisted
+    // through here. A new externally tagged `Line` or `Section` variant, or a
+    // map keyed by user text, must not go through this translation.
     ("Line", "Section"),
     // Born after the rename (the Section commands, #327; the compact entry's
     // `BeforePreview::DeletedLines`), so no older build wrote another name:

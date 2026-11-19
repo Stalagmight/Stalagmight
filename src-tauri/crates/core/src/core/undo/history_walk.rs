@@ -90,11 +90,17 @@ impl HolderWalk {
         }
         match &entry.undo_data {
             UndoData::Delta(delta) => {
-                if let Some(next) = delta
-                    .delta()
-                    .ok()
-                    .and_then(|delta| delta.step_holders(&self.view))
+                let delta = delta.delta().ok();
+                // A delta that leaves every line as it is (a settings edit, a
+                // merge or a move of offsets) leaves the view as it is: no
+                // pass over every line for an entry that touches none.
+                if delta
+                    .as_ref()
+                    .is_some_and(|delta| delta.check_shape().is_ok() && !delta.touches_lines())
                 {
+                    return Some(Vec::new());
+                }
+                if let Some(next) = delta.and_then(|delta| delta.step_holders(&self.view)) {
                     Some(self.replace(next))
                 } else {
                     self.known = false;

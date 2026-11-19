@@ -158,9 +158,42 @@ fn collect_copies(
     Ok(())
 }
 
+/// Whether every index is past the one before it.
+fn strictly_ascending(indices: impl IntoIterator<Item = usize>) -> bool {
+    let mut last: Option<usize> = None;
+    indices.into_iter().all(|at| {
+        let ok = last.is_none_or(|before| before < at);
+        last = Some(at);
+        ok
+    })
+}
+
 fn check_edit(edit: &Edit) -> Result<(), DeltaError> {
     match edit {
-        Edit::Set(_) | Edit::Del | Edit::Bag { .. } => Ok(()),
+        Edit::Set(_) | Edit::Del => Ok(()),
+        Edit::Bag {
+            add, station_add, ..
+        } => {
+            // Each addition lands at its own index in the result, and the
+            // encoder records them in ascending order: an apply then places
+            // them in one pass. Out of order or repeated, a stored edit could
+            // make every addition shift the whole list.
+            let mut all: Vec<usize> = add
+                .iter()
+                .map(|(at, _)| *at)
+                .chain(station_add.iter().map(|(at, ..)| *at))
+                .collect();
+            if !strictly_ascending(add.iter().map(|(at, _)| *at))
+                || !strictly_ascending(station_add.iter().map(|(at, ..)| *at))
+            {
+                return Err("a bag adds elements out of order".to_string());
+            }
+            all.sort_unstable();
+            if !strictly_ascending(all) {
+                return Err("a bag adds two elements at one place".to_string());
+            }
+            Ok(())
+        }
         Edit::Obj(members) => members.values().try_for_each(check_edit),
         Edit::Arr(len, runs) => {
             let mut next = 0;

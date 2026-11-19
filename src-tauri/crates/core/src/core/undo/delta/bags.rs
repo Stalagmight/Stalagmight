@@ -103,15 +103,25 @@ fn differing_pairs(from: &str, to: &str) -> Option<(usize, usize, usize, usize)>
     let (a, b) = (from.as_bytes(), to.as_bytes());
     let prefix = common_prefix(a, b);
     // The pair the first difference falls in starts at the last pair start
-    // at or before it (or the array does).
-    let start = from[..(prefix + PAIR_START.len()).min(from.len())]
-        .rfind(PAIR_START)
-        .unwrap_or(1)
-        .max(1);
+    // at or before it (or the array does). The shared prefix is counted in
+    // bytes, so it can end inside a character the two texts start alike (an
+    // accented letter in a station name): the cut is taken back to the
+    // character it is in. A pair start is ASCII, so wherever one is found,
+    // both texts have a character boundary there.
+    let mut cut = (prefix + PAIR_START.len()).min(from.len());
+    while !from.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let start = from[..cut].rfind(PAIR_START).unwrap_or(1).max(1);
     let room = from.len().min(to.len()) - start;
     let suffix = common_suffix(a, b, room);
     // The pairs the shared tail holds whole start at its first pair start.
-    let tail = from.len() - suffix;
+    // Counted in bytes like the prefix, so moved up to the character
+    // boundary it may fall short of: the tail only gets shorter.
+    let mut tail = from.len() - suffix;
+    while !from.is_char_boundary(tail) {
+        tail += 1;
+    }
     let (from_end, to_end) = match from[tail..].find(PAIR_START) {
         Some(at) => {
             let end = tail + at - 1;
@@ -300,19 +310,21 @@ pub(super) fn apply_bag_text(
         let out = apply_bag(&values, del, add);
         return serde_json::to_string(&out).map_err(|e| e.to_string());
     }
-    let mut out: Vec<Cow<'_, str>> = items
+    let out: Vec<Cow<'_, str>> = items
         .iter()
         .zip(&removed)
         .filter(|(_, gone)| !**gone)
         .map(|(raw, _)| Cow::Borrowed(*raw))
         .collect();
+    let mut added = Vec::with_capacity(add.len());
     for (index, value) in add {
         let text = match element_text(value) {
             Some(text) => text,
             None => serde_json::to_string(value).map_err(|e| e.to_string())?,
         };
-        out.insert((*index).min(out.len()), Cow::Owned(text));
+        added.push((*index, Cow::Owned(text)));
     }
+    let out = super::json::merge_additions(out, added);
     let mut text = String::with_capacity(out.iter().map(|e| e.len() + 1).sum::<usize>() + 2);
     text.push('[');
     for (k, element) in out.iter().enumerate() {

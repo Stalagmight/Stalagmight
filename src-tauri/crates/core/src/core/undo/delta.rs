@@ -379,6 +379,12 @@ impl ProjectDelta {
         doc::encode(source, target)
     }
 
+    /// Whether the delta rebuilds any line (its line runs are set); one that
+    /// does not keeps every line of its source as it is.
+    pub fn touches_lines(&self) -> bool {
+        self.lines.is_some()
+    }
+
     /// True when the two states were identical.
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty() && self.lines.is_none()

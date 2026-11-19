@@ -56,6 +56,11 @@ pub(super) mod shot_rows {
         chunks.serialize(serializer)
     }
 
+    /// The longest key a stored shot table may name: past every member name
+    /// a shot has, and short enough that copying the keys into each row costs
+    /// no more than parsing the same bytes as plain JSON would.
+    const MAX_KEY_BYTES: usize = 64;
+
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<Value>, D::Error> {
@@ -65,6 +70,14 @@ pub(super) mod shot_rows {
             match chunk {
                 Chunk::One(value) => out.push(value),
                 Chunk::Table { k, r } => {
+                    // Every row copies the keys, so a long key would let a
+                    // few bytes per row expand without bound. Shot members
+                    // are short names; rows already match their key count.
+                    if k.iter().any(|key| key.len() > MAX_KEY_BYTES) {
+                        return Err(serde::de::Error::custom(
+                            "a shot table names a key longer than any shot member",
+                        ));
+                    }
                     for row in r {
                         if row.len() != k.len() {
                             return Err(serde::de::Error::custom(

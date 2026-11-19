@@ -1071,3 +1071,93 @@ fn a_copy_run_numbered_past_the_id_range_is_refused() {
         "past any id",
     );
 }
+
+/// Station names and comments are stored as typed, so two texts can share
+/// the first bytes of a character and differ in the rest (or the reverse):
+/// the text diff's cut points stay on character boundaries.
+#[test]
+fn a_station_text_differing_inside_a_character_diffs_and_applies() {
+    let pair =
+        |line: u32, text: &str| format!(r#"[{{"line_id":{line},"anchor":"LineStart"}},"{text}"]"#);
+    let cases = [
+        ("ééééééé", "èéééééé"),
+        ("aé", "aũ"),
+        ("名前", "名刺"),
+        ("x", "xé"),
+        ("éa", "a"),
+    ];
+    for (from, to) in cases {
+        let a = format!("[{},{}]", pair(1, "keep"), pair(2, from));
+        let b = format!("[{},{}]", pair(1, "keep"), pair(2, to));
+        let edit = super::bags::diff_bag_text(&a, &b, true).unwrap().unwrap();
+        assert!(
+            matches!(edit, super::Edit::Bag { .. }),
+            "a station-keyed member diffs as a bag: {edit:?}"
+        );
+        let (del, add) = match &edit {
+            super::Edit::Bag { del, add, .. } => (del.as_slice(), add.as_slice()),
+            _ => (&[][..], &[][..]),
+        };
+        let rebuilt = super::bags::apply_bag_text(&a, del, add).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&rebuilt).unwrap(),
+            serde_json::from_str::<Value>(&b).unwrap(),
+            "{from} -> {to}"
+        );
+    }
+}
+
+/// The encoder records a bag's additions at ascending, distinct indices, so
+/// an apply places them in one pass; a stored edit that does not is refused.
+#[test]
+fn a_bag_whose_additions_are_out_of_order_is_refused() {
+    refused_for(
+        &hostile(r#"{"f":{"station_offsets":{"b":{"a":[[3,1],[0,2]]}}}}"#),
+        "out of order",
+    );
+    refused_for(
+        &hostile(r#"{"f":{"station_offsets":{"b":{"a":[[0,1],[0,2]]}}}}"#),
+        "out of order",
+    );
+    refused_for(
+        &hostile(r#"{"f":{"station_ids":{"b":{"a":[[1,"x"]],"sa":[[1,2,0,"y"]]}}}}"#),
+        "two elements at one place",
+    );
+    hostile(r#"{"f":{"station_offsets":{"b":{"a":[[0,1],[2,2]]}}}}"#)
+        .check_shape()
+        .unwrap();
+}
+
+/// Placing ascending additions in one pass gives what inserting them one by
+/// one gives, including past the end of what is kept.
+#[test]
+fn additions_merged_in_one_pass_land_where_inserts_would() {
+    let mut rng = Rng(0x5eed);
+    for _ in 0..500 {
+        let kept: Vec<u64> = (0..rng.below(8) as u64).collect();
+        let mut at = 0;
+        let mut additions = Vec::new();
+        for k in 0..rng.below(6) {
+            at += 1 + rng.below(3);
+            additions.push((at - 1, 100 + k as u64));
+        }
+        let mut inserted = kept.clone();
+        for (index, value) in &additions {
+            inserted.insert((*index).min(inserted.len()), *value);
+        }
+        assert_eq!(super::json::merge_additions(kept, additions), inserted);
+    }
+}
+
+/// Every row of a stored shot table copies its keys, so a key longer than
+/// any shot member is refused rather than copied a million times.
+#[test]
+fn a_shot_table_with_an_overlong_key_is_refused() {
+    let table = |key: &str| {
+        format!(
+            r#"{{"s":[1,[{{"k":[0,1]}},{{"n":{{"f":{{"id":5}},"s":[{{"p":[{{"t":{{"k":["{key}"],"r":[[0],[1]]}}}}]}}]}}}}]]}}"#
+        )
+    };
+    assert!(serde_json::from_str::<ProjectDelta>(&table("length")).is_ok());
+    assert!(serde_json::from_str::<ProjectDelta>(&table(&"k".repeat(65))).is_err());
+}

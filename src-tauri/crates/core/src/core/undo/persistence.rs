@@ -27,6 +27,23 @@ fn versioned(undo_data_json: &str) -> bool {
     digits > 0 && rest[digits..].starts_with('"')
 }
 
+/// Whether `undo_data_json` reads as a payload an earlier build wrote: JSON
+/// that is the string `"None"`, or an object whose one key is a variant name
+/// (`UpperCamelCase`, as the externally tagged `UndoData` wrote it).
+fn earlier_payload(undo_data_json: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(undo_data_json) {
+        Ok(serde_json::Value::String(tag)) => tag == "None",
+        Ok(serde_json::Value::Object(members)) => {
+            members.len() == 1
+                && members.keys().all(|key| {
+                    key.starts_with(|c: char| c.is_ascii_uppercase())
+                        && key.chars().all(|c| c.is_ascii_alphanumeric())
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Tally of the rows a load could not read, by why.
 #[derive(Default)]
 struct Unread {
@@ -36,13 +53,15 @@ struct Unread {
 
 impl Unread {
     /// Count a row this build could not read: an EARLIER version's when it
-    /// carries no versioned envelope (`{"v<digits>": ...}`) at all; damaged, or
-    /// a later version's, when it does.
+    /// reads as the payload an earlier build wrote - a bare `UndoData`, an
+    /// object with one variant name as its key, or `"None"` - and damaged
+    /// otherwise: truncated or garbage text, or an envelope this build cannot
+    /// read (a later version's included).
     fn note(&mut self, undo_data_json: &str) {
-        if versioned(undo_data_json) {
-            self.damaged += 1;
-        } else {
+        if !versioned(undo_data_json) && earlier_payload(undo_data_json) {
             self.earlier += 1;
+        } else {
+            self.damaged += 1;
         }
     }
 
@@ -144,11 +163,25 @@ impl UndoStack {
             _ => 0,
         };
 
-        entries
-            .iter()
-            .skip(skip)
-            .filter_map(Self::serialize_entry_with_timestamp)
-            .collect()
+        // Written from the live end outwards, and only as far as every entry
+        // writes: a compact entry is relative to the one nearer the live
+        // project, so an entry that cannot be written ends what the file can
+        // carry there, rather than leaving a hole the load would not see.
+        let mut rows = Vec::with_capacity(entries.len() - skip);
+        for entry in entries.iter().skip(skip).rev() {
+            let Some(row) = Self::serialize_entry_with_timestamp(entry) else {
+                tracing::warn!(
+                    command = %entry.command.description(),
+                    dropped_beyond = rows.len(),
+                    purpose = "save undo history",
+                    "An undo entry could not be serialized; the history is saved up to it"
+                );
+                break;
+            };
+            rows.push(row);
+        }
+        rows.reverse();
+        rows
     }
 
     /// Serialize an entry to JSON.

@@ -388,40 +388,75 @@ mod credit_runs {
         Out { c: pairs, r: rows }.serialize(serializer)
     }
 
+    /// What one stored credit edit may expand to once each run has its copy
+    /// of its pair: far past any real edit (a pair is a few hundred bytes, an
+    /// edit a run per line it touches), far short of what a crafted row could
+    /// otherwise ask for.
+    const MAX_EXPANDED_CREDIT_BYTES: usize = 64 << 20;
+
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<ShotCreditRun>, D::Error> {
+        // Each run carries its own copy of its credit pair, so a row of a few
+        // bytes per run could otherwise name one large pair a million times:
+        // what the runs expand to is held to a budget, each pair weighed once.
+        let weigh = |before: &SurveyCredit, after: &SurveyCredit| {
+            serde_json::to_string(&(before, after)).map_or(usize::MAX, |text| text.len())
+        };
+        let over_budget = |expanded: usize| {
+            (expanded > MAX_EXPANDED_CREDIT_BYTES).then(|| {
+                serde::de::Error::custom("a credit row expands past what one edit can hold")
+            })
+        };
         match In::deserialize(deserializer)? {
-            In::Runs { c, r } => r
-                .into_iter()
-                .map(|(line_id, start, len, anchor, pair)| {
-                    let (before, after) = c.get(pair).cloned().ok_or_else(|| {
-                        serde::de::Error::custom("a credit run names a credit pair past the list")
-                    })?;
-                    Ok(ShotCreditRun {
-                        line_id,
-                        start: (start != usize::MAX).then_some(start),
-                        len,
-                        anchor,
-                        before,
-                        after,
+            In::Runs { c, r } => {
+                let weights: Vec<usize> = c.iter().map(|(b, a)| weigh(b, a)).collect();
+                let expanded = r.iter().fold(0usize, |total, run| {
+                    total.saturating_add(weights.get(run.4).copied().unwrap_or(0))
+                });
+                if let Some(error) = over_budget(expanded) {
+                    return Err(error);
+                }
+                r.into_iter()
+                    .map(|(line_id, start, len, anchor, pair)| {
+                        let (before, after) = c.get(pair).cloned().ok_or_else(|| {
+                            serde::de::Error::custom(
+                                "a credit run names a credit pair past the list",
+                            )
+                        })?;
+                        Ok(ShotCreditRun {
+                            line_id,
+                            start: (start != usize::MAX).then_some(start),
+                            len,
+                            anchor,
+                            before,
+                            after,
+                        })
                     })
-                })
-                .collect(),
-            In::Legacy(groups) => Ok(groups
-                .into_iter()
-                .flat_map(|group| {
-                    let LegacyGroup { s, b, a, u } = group;
-                    u.into_iter().map(move |anchor| ShotCreditRun {
-                        line_id: s,
-                        start: None,
-                        len: 1,
-                        anchor,
-                        before: b.clone(),
-                        after: a.clone(),
+                    .collect()
+            }
+            In::Legacy(groups) => {
+                let expanded = groups.iter().fold(0usize, |total, group| {
+                    total.saturating_add(weigh(&group.b, &group.a).saturating_mul(group.u.len()))
+                });
+                if let Some(error) = over_budget(expanded) {
+                    return Err(error);
+                }
+                Ok(groups
+                    .into_iter()
+                    .flat_map(|group| {
+                        let LegacyGroup { s, b, a, u } = group;
+                        u.into_iter().map(move |anchor| ShotCreditRun {
+                            line_id: s,
+                            start: None,
+                            len: 1,
+                            anchor,
+                            before: b.clone(),
+                            after: a.clone(),
+                        })
                     })
-                })
-                .collect()),
+                    .collect())
+            }
         }
     }
 }
@@ -951,11 +986,16 @@ impl UndoData {
         let UndoData::CapturedPair(pair) = self else {
             return self;
         };
-        let text = |part: &ProjectText| part.text().unwrap_or_default();
-        UndoData::ProjectSnapshotPair {
-            before: text(&pair.before),
-            after: pair.after.as_ref().map(text).unwrap_or_default(),
-        }
+        // A half that cannot be written leaves nothing to restore: no entry,
+        // rather than one whose empty half refuses every step and seals off
+        // the entries under it.
+        let (Ok(before), Some(Ok(after))) = (
+            pair.before.text(),
+            pair.after.as_ref().map(ProjectText::text),
+        ) else {
+            return UndoData::None;
+        };
+        UndoData::ProjectSnapshotPair { before, after }
     }
 
     /// Return a short, safe variant name for logging (no payload data)
@@ -1912,6 +1952,87 @@ mod tests {
         assert_eq!(stack.redo_len(), 0);
     }
 
+    /// A row that cannot be read and does not read as an earlier build's
+    /// payload either (truncated or garbage text) is damaged, so the banner
+    /// says the history could not be read, not that it was an earlier one.
+    #[test]
+    fn a_garbage_row_is_reported_unreadable_not_earlier() {
+        let mut stack = UndoStack::new();
+        let valid = UndoStack::serialize_entry(&UndoEntry {
+            command_bytes: None,
+            command: test_create_line_command("Valid"),
+            undo_data: UndoData::InverseCommand(test_delete_line_command(1)),
+            timestamp: None,
+        })
+        .unwrap();
+        for garbage in ["{\"Proj", "", "null", "[1,2]", "{\"a\":1,\"b\":2}"] {
+            let dropped = stack
+                .load_from_persisted(vec![valid.clone(), (valid.0.clone(), garbage.to_string())]);
+            assert_eq!(dropped, Some(HistoryDropped::Unreadable), "{garbage:?}");
+        }
+        let earlier = stack.load_from_persisted(vec![(valid.0, "\"None\"".to_string())]);
+        assert_eq!(earlier, Some(HistoryDropped::EarlierVersion));
+    }
+
+    /// An entry that cannot be written ends what the file carries there: the
+    /// entries nearer the live project are saved, the ones beyond are not,
+    /// so the file never holds a history with a hole in it.
+    #[test]
+    fn a_history_is_saved_up_to_an_entry_that_cannot_be_written() {
+        let mut stack = UndoStack::new();
+        let entry = |data: UndoData| UndoEntry {
+            command_bytes: None,
+            command: test_create_line_command("Line"),
+            undo_data: data,
+            timestamp: None,
+        };
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(1))));
+        // A capture is never written (it is compacted before it is pushed);
+        // pushed raw here, it stands for any entry whose payload fails.
+        stack.push_undo(entry(UndoData::CapturedPair(Box::new(CapturedPair {
+            before: ProjectText::default(),
+            after: None,
+        }))));
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(2))));
+        stack.push_undo(entry(UndoData::InverseCommand(test_delete_line_command(3))));
+        let rows = stack.rows_to_persist(PersistStack::Undo, None);
+        assert_eq!(rows.len(), 2, "the two entries above the unwritable one");
+    }
+
+    /// A capture whose half cannot be written records no entry, rather than a
+    /// pair with an empty half that would refuse every step.
+    #[test]
+    fn a_capture_without_its_after_half_records_no_entry() {
+        let capture = UndoData::CapturedPair(Box::new(CapturedPair {
+            before: ProjectText::default(),
+            after: None,
+        }));
+        let stored = capture.compact(&test_create_line_command("Line"));
+        assert!(
+            matches!(stored, UndoData::None),
+            "{}",
+            stored.variant_name()
+        );
+    }
+
+    /// Each credit run carries its own copy of its pair, so a stored edit
+    /// that names one large pair from very many runs is refused.
+    #[test]
+    fn a_credit_row_that_would_expand_past_its_budget_is_refused() {
+        let big = format!(r#"{{"surveyors":[{{"name":"{}"}}]}}"#, "x".repeat(1 << 20));
+        let row = |runs: usize| {
+            let r: Vec<String> = (0..runs)
+                .map(|i| format!(r#"[1,{i},1,"u{i}",0]"#))
+                .collect();
+            format!(
+                r#"{{"ShotCredits":{{"changes":{{"c":[[{big},{{}}]],"r":[{}]}}}}}}"#,
+                r.join(",")
+            )
+        };
+        assert!(serde_json::from_str::<UndoData>(&row(8)).is_ok());
+        assert!(serde_json::from_str::<UndoData>(&row(100)).is_err());
+    }
+
     #[test]
     fn test_load_from_persisted_drops_a_history_with_an_unreadable_row() {
         let mut stack = UndoStack::new();
@@ -1971,10 +2092,7 @@ mod tests {
         // The same entry without the repeat is read.
         let fine = r#"{"v2":{"Delta":{"d":{"s":[1,[{"k":[0,1]}]]}}}}"#;
         assert_eq!(
-            stack.load_from_persisted(vec![
-                valid_entry.clone(),
-                (valid_entry.0.clone(), fine.to_string())
-            ]),
+            stack.load_from_persisted(vec![valid_entry.clone(), (valid_entry.0, fine.to_string())]),
             None
         );
         assert_eq!(stack.len(), 2);

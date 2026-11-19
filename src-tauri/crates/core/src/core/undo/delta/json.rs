@@ -406,15 +406,38 @@ pub(super) fn apply_bag(from: &[Value], del: &[Value], add: &[(usize, Value)]) -
             }
         }
     }
-    let mut out: Vec<Value> = from
+    let kept: Vec<Value> = from
         .iter()
         .zip(&removed)
         .filter(|(_, gone)| !**gone)
         .map(|(value, _)| value.clone())
         .collect();
-    for (index, value) in add {
-        out.insert((*index).min(out.len()), value.clone());
+    merge_additions(
+        kept,
+        add.iter().map(|(index, value)| (*index, value.clone())),
+    )
+}
+
+/// `kept` with each addition placed at its index in the result, the
+/// additions taken in ascending index order (`check_shape` holds a stored
+/// edit to that): what inserting them one by one would give, in one pass
+/// rather than a shift of the whole list per addition.
+pub(super) fn merge_additions<T>(
+    kept: Vec<T>,
+    additions: impl IntoIterator<Item = (usize, T)>,
+) -> Vec<T> {
+    let mut kept = kept.into_iter();
+    let mut out = Vec::with_capacity(kept.len());
+    for (index, value) in additions {
+        while out.len() < index {
+            let Some(next) = kept.next() else {
+                break;
+            };
+            out.push(next);
+        }
+        out.push(value);
     }
+    out.extend(kept);
     out
 }
 
